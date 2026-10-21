@@ -1,0 +1,29 @@
+[package]
+name = "picasso"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.95"
+description = "Fast local photo library and viewer in the style of Picasa"
+license = "MIT"
+
+[dependencies]
+chrono = "0.4"
+crossbeam-channel = "0.5"
+directories = "6"
+eframe = { version = "0.37", features = ["glow"] }
+kamadak-exif = "0.6"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp", "bmp", "tiff"] }
+notify = "8"
+open = "5"
+rfd = "0.15"
+rusqlite = { version = "0.40", features = ["bundled"] }
+rustface = "0.1.7"
+trash = "5"
+walkdir = "2"
+
+[profile.dev.package."*"]
+opt-level = 1
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

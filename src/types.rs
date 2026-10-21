@@ -228,6 +228,53 @@ where
             const DAYS: [&str; 7] = ["日", "月", "火", "水", "木", "金", "土"];
             format!("{year}年{month}月{day}日（{}）", DAYS[weekday])
         }
+        Lang::Korean => {
+            const DAYS: [&str; 7] = ["일", "월", "화", "수", "목", "금", "토"];
+            format!("{year}년 {month}월 {day}일 {}요일", DAYS[weekday])
+        }
+        Lang::German => {
+            const DAYS: [&str; 7] = ["Sonntag", "Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag"];
+            const MONTHS: [&str; 12] = [
+                "Januar", "Februar", "März", "April", "Mai", "Juni", "Juli", "August", "September", "Oktober", "November",
+                "Dezember",
+            ];
+            format!("{}, {day}. {} {year}", DAYS[weekday], MONTHS[month as usize - 1])
+        }
+        Lang::Spanish => {
+            const DAYS: [&str; 7] = ["domingo", "lunes", "martes", "miércoles", "jueves", "viernes", "sábado"];
+            const MONTHS: [&str; 12] = [
+                "enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre",
+                "noviembre", "diciembre",
+            ];
+            format!("{}, {day} de {} de {year}", DAYS[weekday], MONTHS[month as usize - 1])
+        }
+        Lang::French => {
+            const DAYS: [&str; 7] = ["dimanche", "lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi"];
+            const MONTHS: [&str; 12] = [
+                "janvier", "février", "mars", "avril", "mai", "juin", "juillet", "août", "septembre", "octobre",
+                "novembre", "décembre",
+            ];
+            let day = if day == 1 { "1er".to_string() } else { day.to_string() };
+            format!("{} {day} {} {year}", DAYS[weekday], MONTHS[month as usize - 1])
+        }
+        Lang::Italian => {
+            const DAYS: [&str; 7] = ["domenica", "lunedì", "martedì", "mercoledì", "giovedì", "venerdì", "sabato"];
+            const MONTHS: [&str; 12] = [
+                "gennaio", "febbraio", "marzo", "aprile", "maggio", "giugno", "luglio", "agosto", "settembre", "ottobre",
+                "novembre", "dicembre",
+            ];
+            format!("{} {day} {} {year}", DAYS[weekday], MONTHS[month as usize - 1])
+        }
+        Lang::Portuguese => {
+            const DAYS: [&str; 7] = [
+                "domingo", "segunda-feira", "terça-feira", "quarta-feira", "quinta-feira", "sexta-feira", "sábado",
+            ];
+            const MONTHS: [&str; 12] = [
+                "janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro",
+                "novembro", "dezembro",
+            ];
+            format!("{}, {day} de {} de {year}", DAYS[weekday], MONTHS[month as usize - 1])
+        }
     }
 }
 
@@ -271,6 +318,12 @@ mod tests {
         assert_eq!(long_date(&dt, Lang::English), "Wednesday, August 5, 2026");
         assert_eq!(long_date(&dt, Lang::TraditionalChinese), "2026年8月5日 星期三");
         assert_eq!(long_date(&dt, Lang::Japanese), "2026年8月5日（水）");
+        assert_eq!(long_date(&dt, Lang::Korean), "2026년 8월 5일 수요일");
+        assert_eq!(long_date(&dt, Lang::German), "Mittwoch, 5. August 2026");
+        assert_eq!(long_date(&dt, Lang::Spanish), "miércoles, 5 de agosto de 2026");
+        assert_eq!(long_date(&dt, Lang::French), "mercredi 5 août 2026");
+        assert_eq!(long_date(&dt, Lang::Italian), "mercoledì 5 agosto 2026");
+        assert_eq!(long_date(&dt, Lang::Portuguese), "quarta-feira, 5 de agosto de 2026");
     }
 
     #[test]

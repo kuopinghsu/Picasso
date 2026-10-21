@@ -69,7 +69,7 @@ The library database (`picasso.db`) lives in the app data directory. Thumbnails 
 - Background scan that picks up new photos, plus a folder watch. Folders are listed in parallel and unchanged files are skipped without being opened; new files are read once from their first 256 KB for size, date, camera, and GPS. Thumbnails for photos on screen are made right away; the rest are made after the scan, so the two don't compete for the disk. JPEGs are decoded at reduced size for thumbnails, and HEIC files use the thumbnail stored inside them.
 - Import of stars, captions, and rotation from a folder's `.picasa.ini`
 - Non-destructive editor modeled on Lightcraft's Develop module: light, tone curve, color mixer, color grading, detail, crop, masks, presets, and export to a new file
-- Light, dark, or system color theme, and four interface languages
+- Light, dark, or system color theme, and ten interface languages
 - About dialog with the version and build date: click the logo at the top left
 
 The app icon is `build/picasso.ico`, which holds every size from 16 to 256 px. At build time `build.rs` unpacks the 256 px image for the window and the in-app logo. On Windows it also embeds the icon in `picasso.exe` together with the version details. Without the Windows SDK, the build still succeeds and prints a warning, and the window still shows the icon. To change the icon, replace `build/picasso.ico` with one whose 256 px image is stored as a 32-bit bitmap rather than PNG, then rebuild.
@@ -112,9 +112,18 @@ The controls follow [Lightcraft](https://github.com/storytold/lightcraft)'s Deve
 
 ## Language
 
-Picasso is available in English, 繁體中文 (Traditional Chinese), 简体中文 (Simplified Chinese), and 日本語 (Japanese). On first launch it uses the system language: `zh-TW`, `zh-HK`, `zh-MO`, and `zh-Hant` give Traditional Chinese, any other Chinese locale gives Simplified Chinese, and anything else without a translation falls back to English. To choose a different one, use the language button at the top right. "System language" goes back to following the operating system. The choice is saved in the library.
+Picasso is available in English, 繁體中文 (Traditional Chinese), 简体中文 (Simplified Chinese), 日本語 (Japanese), 한국어 (Korean), Deutsch (German), Español (Spanish), Français (French), Italiano (Italian), and Português (Brazilian Portuguese).
 
-Translations live in `src/i18n.rs`, one row per English string. To add a language, add a column to `TABLE` and a variant to `Lang`.
+On first launch it uses the system language:
+
+- `zh-TW`, `zh-HK`, `zh-MO`, and `zh-Hant` give Traditional Chinese, and any other Chinese locale gives Simplified Chinese.
+- Every Portuguese locale, including `pt-PT`, gives Brazilian Portuguese.
+- The other languages match on the language alone, so `fr-CA` gives French and `es-MX` gives Spanish.
+- Anything else falls back to English.
+
+To choose a different language, use the language button at the top right. "System language" goes back to following the operating system. The choice is saved in the library. Dates in the library headings are written the way each language writes them.
+
+Translations live in `src/i18n/`, one file per language, as pairs of English text and its translation. To add a language, copy one of those files and translate the second column. Then add a variant to `Lang` in `src/i18n.rs`, and a date format to `long_date` in `src/types.rs`. The tests fail if a language is missing a string or drops a `{}` placeholder.
 
 ## Color theme
 

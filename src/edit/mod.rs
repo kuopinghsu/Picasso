@@ -157,7 +157,7 @@ pub fn edit_loop(jobs: Receiver<EditJob>, events: Sender<UiEvent>, ctx: eframe::
 
 fn load_preview(id: i64, path: &str) -> UiEvent {
     let path = Path::new(path);
-    let decoded = std::panic::catch_unwind(|| crate::image_io::load_oriented(path)).unwrap_or_else(|_| Err("decoder fault".into()));
+    let decoded = std::panic::catch_unwind(|| crate::image_io::load_at_least(path, PREVIEW_EDGE)).unwrap_or_else(|_| Err("decoder fault".into()));
     match decoded {
         Ok(image) => UiEvent::EditBase {
             id,

@@ -1,74 +1,231 @@
-//! Edit panel of the viewer. Each slider release, toggle, or reset becomes a
-//! step in the photo's history, saved in the library; the original file is
-//! never written. Steps can be undone and redone one at a time or all at
-//! once, and the result is exported to a new file.
+//! Editor session of the viewer. Every change becomes a step in the photo's
+//! history, saved in the library; the original file is never written.
+//! Steps can be undone and redone one at a time or all at once, copied to
+//! other photos, and the result exported to a new file.
 
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use eframe::egui::{self, Sense, Vec2};
+use eframe::egui;
 use image::RgbaImage;
 
-use crate::edit::{self, Control, EditJob, History, Settings, Step, GROUPS};
+use crate::edit::{self, presets, Control, EditJob, ExportOptions, Geometry, History, Kind, Options, Purpose, Settings};
 use crate::i18n::{tr, trf};
+use crate::photo_info::Histogram;
 use crate::types::Photo;
 use crate::worker::UiEvent;
 
-use super::theme::{self, ACCENT, VIEWER_MUTED, VIEWER_PANEL, WHITE};
+use super::editor_stage::StageDrag;
 use super::PicassoApp;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Tool {
+    Adjust,
+    Crop,
+    Mask,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum Compare {
+    Off,
+    /// The unedited photo in place of the edit.
+    Before,
+    SideBySide,
+    /// Before left of the divider, at this fraction of the width.
+    Split(f32),
+}
+
+/// Crop shapes: name and width over height. Zero is free, and a negative
+/// ratio keeps the photo's own shape.
+pub(super) const ASPECTS: [(&str, f32); 9] = [
+    ("Free", 0.0),
+    ("Original", -1.0),
+    ("1:1", 1.0),
+    ("4:5", 4.0 / 5.0),
+    ("5:7", 5.0 / 7.0),
+    ("2:3", 2.0 / 3.0),
+    ("3:4", 3.0 / 4.0),
+    ("9:16", 9.0 / 16.0),
+    ("10:16", 10.0 / 16.0),
+];
+
+pub(super) const GUIDES: [&str; 5] = ["Rule of thirds", "Golden ratio", "Grid", "Diagonals", "None"];
+
+pub(super) const EXPORT_FORMATS: [(&str, &str); 3] = [("JPEG", "jpg"), ("PNG", "png"), ("TIFF", "tif")];
+pub(super) const EXPORT_EDGES: [Option<u32>; 5] = [None, Some(4096), Some(2048), Some(1600), Some(1080)];
+
+/// A change still under the pointer. It becomes a step once the pointer
+/// is released.
+pub(super) struct Live {
+    pub kind: Kind,
+    pub settings: Settings,
+    /// Replace the newest step of the same kind instead of adding one.
+    pub amend: bool,
+}
 
 pub(super) struct EditSession {
     pub id: i64,
-    history: History,
-    /// Slider value while it is dragged; it becomes a step on release.
-    live: Option<(Control, f32)>,
-    base: Option<Arc<RgbaImage>>,
-    error: Option<String>,
+    pub history: History,
+    pub live: Option<Live>,
+    pub base: Option<Arc<RgbaImage>>,
+    pub error: Option<String>,
     preview: Option<egui::TextureHandle>,
-    original: Option<egui::TextureHandle>,
-    requested: Option<Settings>,
+    before: Option<egui::TextureHandle>,
+    pub histogram: Option<Box<Histogram>>,
+    requested: Option<(Settings, Options, bool)>,
+    before_requested: Option<(Settings, Options)>,
     seq: u64,
-    shown_seq: u64,
-    /// Show the original instead of the edit.
-    pub before: bool,
+    shown: [u64; 2],
+    pub tool: Tool,
+    pub compare: Compare,
+    pub clipping: bool,
+    /// The white balance eyedropper waits for a click on the photo.
+    pub picker: bool,
+    pub aspect: usize,
+    pub portrait: bool,
+    pub guide: usize,
+    pub mask: Option<usize>,
+    pub mask_overlay: bool,
+    pub point_curve: bool,
+    pub curve_channel: usize,
+    pub curve_drag: Option<usize>,
+    pub mix_part: usize,
+    pub preset_amount: f32,
+    pub preset_name: String,
+    pub export: ExportOptions,
+    pub export_format: usize,
+    pub drag: Option<StageDrag>,
     /// Steps changed during this session, so the full-size view is stale.
     changed: bool,
 }
 
 impl EditSession {
-    fn preview_settings(&self) -> Settings {
-        let mut settings = self.history.settings();
-        if let Some((control, value)) = self.live {
-            settings.set(control, value);
+    fn new(id: i64, history: History) -> EditSession {
+        EditSession {
+            id,
+            history,
+            live: None,
+            base: None,
+            error: None,
+            preview: None,
+            before: None,
+            histogram: None,
+            requested: None,
+            before_requested: None,
+            seq: 0,
+            shown: [0; 2],
+            tool: Tool::Adjust,
+            compare: Compare::Off,
+            clipping: false,
+            picker: false,
+            aspect: 0,
+            portrait: false,
+            guide: 0,
+            mask: None,
+            mask_overlay: true,
+            point_curve: false,
+            curve_channel: 0,
+            curve_drag: None,
+            mix_part: 0,
+            preset_amount: 1.0,
+            preset_name: String::new(),
+            export: ExportOptions::default(),
+            export_format: 0,
+            drag: None,
+            changed: false,
         }
-        settings
     }
 
-    /// Texture for the stage, when the editor has one ready.
-    pub fn texture(&self) -> Option<&egui::TextureHandle> {
-        if self.before {
-            self.original.as_ref()
+    /// Settings on screen: the applied steps plus any change in progress.
+    pub fn current(&self) -> Settings {
+        match &self.live {
+            Some(live) => live.settings.clone(),
+            None => self.history.settings(),
+        }
+    }
+
+    fn options(&self) -> Options {
+        Options {
+            crop: self.tool != Tool::Crop,
+            adjust: true,
+            clipping: self.clipping,
+            overlay: self.mask.filter(|_| self.tool == Tool::Mask && self.mask_overlay),
+        }
+    }
+
+    /// How the stage compares, after tools that need the edit alone.
+    pub fn compare(&self) -> Compare {
+        if self.tool == Tool::Adjust {
+            self.compare
         } else {
-            self.preview.as_ref()
+            Compare::Off
         }
     }
-}
 
-enum Action {
-    Push(Step),
-    Undo,
-    Redo,
-    UndoAll,
-    RedoAll,
-    Jump(usize),
-    Export,
-    Done,
+    pub fn preview(&self) -> Option<&egui::TextureHandle> {
+        self.preview.as_ref()
+    }
+
+    pub fn before(&self) -> Option<&egui::TextureHandle> {
+        self.before.as_ref().or(self.preview.as_ref())
+    }
+
+    /// Size of the canvas crops are measured on, in pixels.
+    pub fn canvas(&self, photo: &Photo) -> [f32; 2] {
+        match &self.base {
+            Some(base) => [base.width() as f32, base.height() as f32],
+            None => [photo.width.max(1) as f32, photo.height.max(1) as f32],
+        }
+    }
+
+    /// Width over height of the chosen crop shape in canvas pixels, or
+    /// `None` when free. `turns` is the catalog rotation in quarter turns.
+    pub fn aspect_ratio(&self, canvas: [f32; 2], turns: usize) -> Option<f32> {
+        let (_, ratio) = ASPECTS[self.aspect.min(ASPECTS.len() - 1)];
+        if ratio == 0.0 {
+            return None;
+        }
+        let odd = turns % 2 == 1;
+        let mut screen = if ratio < 0.0 {
+            let own = canvas[0] / canvas[1];
+            if odd {
+                1.0 / own
+            } else {
+                own
+            }
+        } else {
+            ratio
+        };
+        if self.portrait {
+            screen = 1.0 / screen;
+        }
+        Some(if odd { 1.0 / screen } else { screen })
+    }
 }
 
 impl PicassoApp {
     /// Settings thumbnails and full-size views of `id` are rendered with.
     pub(super) fn edit_settings(&self, id: i64) -> Settings {
-        self.edits.get(&id).copied().unwrap_or_default()
+        self.edits.get(&id).cloned().unwrap_or_default()
+    }
+
+    /// Size of `photo` on screen, after its crop and the catalog rotation.
+    /// The crop tool shows the whole canvas.
+    pub(super) fn shown_size(&self, photo: &Photo) -> (f32, f32) {
+        let session = self.edit.as_ref().filter(|session| session.id == photo.id);
+        let mut settings = match session {
+            Some(session) => session.current(),
+            None => self.edit_settings(photo.id),
+        };
+        if session.is_some_and(|session| session.tool == Tool::Crop) || photo.is_video() {
+            settings.set_crop(edit::FULL);
+        }
+        let (w, h) = edit::edited_size(&settings, photo.width.max(1), photo.height.max(1));
+        if photo.rotation.rem_euclid(180) == 90 {
+            (h as f32, w as f32)
+        } else {
+            (w as f32, h as f32)
+        }
     }
 
     pub(super) fn toggle_editing(&mut self) {
@@ -79,8 +236,8 @@ impl PicassoApp {
     }
 
     /// Opens a session for `photo` and keeps its preview rendered with the
-    /// current steps. `None` closes the session.
-    pub(super) fn sync_edit(&mut self, photo: Option<&Photo>) {
+    /// current settings. `None` closes the session.
+    pub(super) fn sync_edit(&mut self, ctx: &egui::Context, photo: Option<&Photo>) {
         let Some(photo) = photo.filter(|_| self.editing) else {
             self.end_edit_session();
             return;
@@ -96,33 +253,44 @@ impl PicassoApp {
                 id: photo.id,
                 path: photo.path.clone(),
             });
-            self.edit = Some(EditSession {
-                id: photo.id,
-                history,
-                live: None,
-                base: None,
-                error: None,
-                preview: None,
-                original: None,
-                requested: None,
-                seq: 0,
-                shown_seq: 0,
-                before: false,
-                changed: false,
-            });
+            self.edit = Some(EditSession::new(photo.id, history));
         }
+        let pointer_down = ctx.input(|input| input.pointer.any_down());
         let Some(session) = self.edit.as_mut() else { return };
-        let wanted = session.preview_settings();
-        if let Some(base) = session.base.clone() {
-            if session.requested != Some(wanted) {
+        let Some(base) = session.base.clone() else { return };
+        let wanted = (session.current(), session.options(), session.live.is_some() && pointer_down);
+        if session.requested.as_ref() != Some(&wanted) {
+            session.seq += 1;
+            let _ = self.edit_tx.send(EditJob::Render {
+                id: session.id,
+                seq: session.seq,
+                base: base.clone(),
+                settings: wanted.0.clone(),
+                options: wanted.1,
+                purpose: Purpose::Preview,
+                draft: wanted.2,
+            });
+            session.requested = Some(wanted);
+        }
+        if session.compare() != Compare::Off {
+            let geometry = Settings::default().with_geometry_of(&session.current());
+            let options = Options {
+                adjust: false,
+                ..Options::default()
+            };
+            let wanted = (geometry, options);
+            if session.before_requested.as_ref() != Some(&wanted) {
                 session.seq += 1;
-                session.requested = Some(wanted);
                 let _ = self.edit_tx.send(EditJob::Render {
                     id: session.id,
                     seq: session.seq,
                     base,
-                    settings: wanted,
+                    settings: wanted.0.clone(),
+                    options: wanted.1,
+                    purpose: Purpose::Before,
+                    draft: false,
                 });
+                session.before_requested = Some(wanted);
             }
         }
     }
@@ -140,25 +308,42 @@ impl PicassoApp {
         match event {
             UiEvent::EditBase { id, image } => {
                 let Some(session) = self.edit.as_mut().filter(|session| session.id == id) else { return };
-                session.original = Some(ctx.load_texture(format!("edit-original-{id}"), color_image(&image), egui::TextureOptions::LINEAR));
                 session.base = Some(image);
                 session.requested = None;
+                session.before_requested = None;
             }
             UiEvent::EditFailed { id, error } => {
                 if let Some(session) = self.edit.as_mut().filter(|session| session.id == id) {
                     session.error = Some(error);
                 }
             }
-            UiEvent::EditPreview { id, seq, w, h, rgba } => {
+            UiEvent::EditPreview {
+                id,
+                seq,
+                purpose,
+                w,
+                h,
+                rgba,
+                histogram,
+            } => {
                 let Some(session) = self.edit.as_mut().filter(|session| session.id == id) else { return };
-                if seq <= session.shown_seq || rgba.len() < w * h * 4 {
+                let slot = purpose as usize;
+                if seq <= session.shown[slot] || rgba.len() < w * h * 4 {
                     return;
                 }
-                session.shown_seq = seq;
+                session.shown[slot] = seq;
+                session.error = None;
+                if histogram.is_some() {
+                    session.histogram = histogram;
+                }
                 let image = egui::ColorImage::from_rgba_unmultiplied([w, h], &rgba[..w * h * 4]);
-                match session.preview.as_mut() {
+                let texture = match purpose {
+                    Purpose::Preview => &mut session.preview,
+                    Purpose::Before => &mut session.before,
+                };
+                match texture.as_mut() {
                     Some(texture) => texture.set(image, egui::TextureOptions::LINEAR),
-                    None => session.preview = Some(ctx.load_texture(format!("edit-{id}"), image, egui::TextureOptions::LINEAR)),
+                    None => *texture = Some(ctx.load_texture(format!("edit-{id}-{slot}"), image, egui::TextureOptions::LINEAR)),
                 }
             }
             UiEvent::Exported(result) => {
@@ -179,13 +364,7 @@ impl PicassoApp {
         self.edit_history(History::redo);
     }
 
-    pub(super) fn toggle_before(&mut self) {
-        if let Some(session) = self.edit.as_mut() {
-            session.before = !session.before;
-        }
-    }
-
-    fn edit_history(&mut self, change: impl FnOnce(&mut History)) {
+    pub(super) fn edit_history(&mut self, change: impl FnOnce(&mut History)) {
         let Some(session) = self.edit.as_mut() else { return };
         let before = session.history.clone();
         session.live = None;
@@ -195,12 +374,40 @@ impl PicassoApp {
         }
     }
 
+    /// Records `settings` as a step of `kind`.
+    pub(super) fn edit_commit(&mut self, kind: Kind, settings: &Settings, amend: bool) {
+        let Some(session) = self.edit.as_mut() else { return };
+        session.live = None;
+        let changed = if amend {
+            session.history.amend(kind, settings)
+        } else {
+            session.history.commit(kind, settings)
+        };
+        if changed {
+            self.edit_changed();
+        }
+    }
+
+    /// Turns the change in progress into a step once the pointer is up.
+    pub(super) fn finish_live(&mut self, ctx: &egui::Context) {
+        if ctx.input(|input| input.pointer.any_down()) {
+            return;
+        }
+        let Some(live) = self.edit.as_mut().and_then(|session| session.live.take()) else { return };
+        self.edit_commit(live.kind, &live.settings, live.amend);
+        ctx.request_repaint();
+    }
+
     /// Saves the steps and refreshes everything drawn from them.
     fn edit_changed(&mut self) {
         let Some(session) = self.edit.as_mut() else { return };
         session.changed = true;
         let id = session.id;
-        let history = &session.history;
+        let history = session.history.clone();
+        self.store_history(id, &history);
+    }
+
+    fn store_history(&mut self, id: i64, history: &History) {
         self.db
             .save_edit_history(id, &history.steps_json(), history.steps().len(), history.applied());
         let settings = history.settings();
@@ -212,18 +419,181 @@ impl PicassoApp {
         self.forget_thumb(id);
     }
 
-    fn export_edit(&mut self, ctx: &egui::Context) {
+    pub(super) fn toggle_compare(&mut self, mode: Compare) {
+        if let Some(session) = self.edit.as_mut() {
+            session.tool = Tool::Adjust;
+            let same = std::mem::discriminant(&session.compare) == std::mem::discriminant(&mode);
+            session.compare = if same { Compare::Off } else { mode };
+        }
+    }
+
+    pub(super) fn toggle_clipping(&mut self) {
+        if let Some(session) = self.edit.as_mut() {
+            session.clipping = !session.clipping;
+        }
+    }
+
+    pub(super) fn set_tool(&mut self, tool: Tool) {
+        if let Some(session) = self.edit.as_mut() {
+            session.tool = if session.tool == tool { Tool::Adjust } else { tool };
+            session.picker = false;
+            session.drag = None;
+            if session.tool == Tool::Mask && session.mask.is_none() && !session.current().masks.is_empty() {
+                session.mask = Some(0);
+            }
+        }
+    }
+
+    /// Esc inside the editor: leaves a tool or the eyedropper first.
+    /// Returns whether the key was used.
+    pub(super) fn edit_escape(&mut self) -> bool {
+        let Some(session) = self.edit.as_mut() else { return false };
+        if session.picker {
+            session.picker = false;
+            return true;
+        }
+        if session.tool != Tool::Adjust {
+            session.tool = Tool::Adjust;
+            session.drag = None;
+            return true;
+        }
+        if session.compare != Compare::Off {
+            session.compare = Compare::Off;
+            return true;
+        }
+        false
+    }
+
+    /// Copies the edit of the photo being edited, or of the selected photo
+    /// in the library, without its crop.
+    pub(super) fn copy_settings(&mut self, id: Option<i64>) {
+        let settings = match (&self.edit, id) {
+            (Some(session), _) => session.current(),
+            (None, Some(id)) => self.edit_settings(id),
+            (None, None) => return,
+        };
+        self.edit_clipboard = Some(settings.without_geometry());
+        self.activity = tr("Edit settings copied").into();
+    }
+
+    /// Pastes copied settings into the photo being edited, or into every
+    /// photo in `ids`.
+    pub(super) fn paste_settings(&mut self, ids: &[i64]) {
+        let Some(pasted) = self.edit_clipboard.clone() else {
+            self.activity = tr("Copy an edit first (Ctrl+Shift+C)").into();
+            return;
+        };
+        if let Some(session) = &self.edit {
+            let settings = pasted.with_geometry_of(&session.current());
+            self.edit_commit(Kind::Paste, &settings, false);
+            return;
+        }
+        for &id in ids {
+            let mut history = self
+                .db
+                .edit_history(id)
+                .map(|(steps, applied)| History::from_json(&steps, applied))
+                .unwrap_or_default();
+            let settings = pasted.with_geometry_of(&history.settings());
+            if history.commit(Kind::Paste, &settings) {
+                self.store_history(id, &history);
+                self.forget_display(id);
+            }
+        }
+        self.activity = trf("Pasted the edit into {} photos", &[&ids.len()]);
+    }
+
+    pub(super) fn auto_tone(&mut self) {
+        let Some(session) = self.edit.as_ref() else { return };
+        let Some(base) = session.base.clone() else { return };
+        let mut settings = session.current();
+        for (control, value) in edit::auto_tone(&base) {
+            settings.set(control, value);
+        }
+        self.edit_commit(Kind::AutoTone, &settings, false);
+    }
+
+    pub(super) fn white_balance_preset(&mut self, name: &str) {
+        let Some(session) = self.edit.as_ref() else { return };
+        let mut settings = session.current();
+        let (kind, temperature, tint) = if name == "Auto" {
+            let Some(base) = session.base.clone() else { return };
+            let (temperature, tint) = edit::auto_white_balance(&base);
+            (Kind::AutoWhiteBalance, temperature, tint)
+        } else {
+            let Some((_, temperature, tint)) = presets::WHITE_BALANCE.iter().find(|(preset, _, _)| *preset == name) else {
+                return;
+            };
+            (Kind::WhiteBalance(name.to_string()), *temperature, *tint)
+        };
+        settings.set(Control::TEMPERATURE, temperature);
+        settings.set(Control::TINT, tint);
+        self.edit_commit(kind, &settings, false);
+    }
+
+    /// Neutralizes the color under a click on the canvas, given in fractions.
+    pub(super) fn pick_white_balance(&mut self, at: [f32; 2]) {
+        let Some(session) = self.edit.as_mut() else { return };
+        session.picker = false;
+        let Some(base) = session.base.clone() else { return };
+        let mut settings = session.current();
+        let (w, h) = (base.width() as f32, base.height() as f32);
+        let (x, y) = Geometry::from_settings(&settings).canvas_to_source(at[0] * w, at[1] * h, w, h);
+        let (temperature, tint) = edit::white_balance_for(edit::sample(&base, x / w, y / h, 3));
+        settings.set(Control::TEMPERATURE, temperature);
+        settings.set(Control::TINT, tint);
+        self.edit_commit(Kind::Picker, &settings, false);
+    }
+
+    /// The patch of a built-in or saved preset.
+    pub(super) fn preset_patch(&self, name: &str) -> Option<serde_json::Map<String, serde_json::Value>> {
+        if let Some(preset) = self.user_presets.iter().find(|preset| preset.name == name) {
+            return Some(preset.patch.clone());
+        }
+        presets::builtin(name).map(presets::Preset::patch)
+    }
+
+    pub(super) fn apply_preset(&mut self, name: &str) {
+        let Some(patch) = self.preset_patch(name) else { return };
+        let Some(session) = self.edit.as_mut() else { return };
+        session.preset_amount = 1.0;
+        let settings = presets::apply(&session.current(), &patch, 1.0);
+        self.edit_commit(Kind::Preset(name.to_string()), &settings, false);
+    }
+
+    pub(super) fn save_user_preset(&mut self, name: String) {
+        let Some(session) = self.edit.as_ref() else { return };
+        let name = name.trim().to_string();
+        if name.is_empty() {
+            return;
+        }
+        let preset = presets::UserPreset::new(name.clone(), &session.current());
+        self.user_presets.retain(|existing| existing.name != name);
+        self.user_presets.push(preset);
+        self.db.set_setting("user_presets", &presets::user_presets_to_json(&self.user_presets));
+        self.activity = trf("Saved preset {}", &[&name]);
+    }
+
+    pub(super) fn delete_user_preset(&mut self, index: usize) {
+        if index < self.user_presets.len() {
+            self.user_presets.remove(index);
+            self.db.set_setting("user_presets", &presets::user_presets_to_json(&self.user_presets));
+        }
+    }
+
+    pub(super) fn export_edit(&mut self, ctx: &egui::Context) {
         let Some(session) = self.edit.as_ref() else { return };
         let Some(photo) = self.db.photo(session.id) else { return };
-        let settings = session.history.settings();
+        let settings = session.current();
+        let options = session.export;
+        let (format, extension) = EXPORT_FORMATS[session.export_format.min(EXPORT_FORMATS.len() - 1)];
         let source = PathBuf::from(&photo.path);
         let folder = PathBuf::from(photo.path.trim_start_matches(r"\\?\"));
+        let name = PathBuf::from(edit::export_name(&source)).with_extension(extension);
         let mut dialog = rfd::FileDialog::new()
             .set_title(tr("Export edited photo"))
-            .set_file_name(edit::export_name(&source))
-            .add_filter("JPEG", &["jpg", "jpeg"])
-            .add_filter("PNG", &["png"])
-            .add_filter("TIFF", &["tif", "tiff"]);
+            .set_file_name(name.to_string_lossy())
+            .add_filter(format, &[extension]);
         if let Some(dir) = folder.parent() {
             dialog = dialog.set_directory(dir);
         }
@@ -233,132 +603,14 @@ impl PicassoApp {
         let ctx = ctx.clone();
         let rotation = photo.rotation;
         let _ = std::thread::Builder::new().name("picasso-export".into()).spawn(move || {
-            let result = edit::export(&source, &target, &settings, rotation).map(|()| target);
+            let result = edit::export(&source, &target, &settings, rotation, options).map(|()| target);
             let _ = events.send(UiEvent::Exported(result));
             ctx.request_repaint();
         });
     }
 
-    pub(super) fn edit_panel(&mut self, ui: &mut egui::Ui, height: f32, photo: Option<&Photo>) {
-        let mut actions = Vec::new();
-        let frame = egui::Frame::new().fill(VIEWER_PANEL).inner_margin(egui::Margin::same(12));
-        frame.show(ui, |ui| {
-            ui.set_min_size(Vec2::new(276.0, height - 24.0));
-            ui.set_max_width(276.0);
-            // The viewer row lays out left to right; the panel stacks downward.
-            let layout = egui::Layout::top_down(egui::Align::Min);
-            ui.with_layout(layout, |ui| self.edit_panel_contents(ui, height, photo, &mut actions));
-        });
-        for action in actions {
-            match action {
-                Action::Push(step) => {
-                    if let Some(session) = self.edit.as_mut() {
-                        session.live = None;
-                        if session.history.push(step) {
-                            self.edit_changed();
-                        }
-                    }
-                }
-                Action::Undo => self.edit_history(History::undo),
-                Action::Redo => self.edit_history(History::redo),
-                Action::UndoAll => self.edit_history(History::undo_all),
-                Action::RedoAll => self.edit_history(History::redo_all),
-                Action::Jump(count) => self.edit_history(|history| history.jump(count)),
-                Action::Export => self.export_edit(ui.ctx()),
-                Action::Done => self.toggle_editing(),
-            }
-        }
-    }
-
-    fn edit_panel_contents(&mut self, ui: &mut egui::Ui, height: f32, photo: Option<&Photo>, actions: &mut Vec<Action>) {
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new(tr("Edit")).size(16.0).strong().color(WHITE));
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.button(tr("Done")).clicked() {
-                        actions.push(Action::Done);
-                    }
-                });
-            });
-            ui.add_space(6.0);
-            if photo.is_some_and(Photo::is_video) {
-                ui.label(egui::RichText::new(tr("Videos can't be edited")).color(VIEWER_MUTED));
-                return;
-            }
-            let Some(session) = self.edit.as_mut() else {
-                ui.label(egui::RichText::new(tr("Loading…")).color(VIEWER_MUTED));
-                return;
-            };
-            if let Some(error) = &session.error {
-                ui.label(egui::RichText::new(error).color(theme::DANGER));
-                return;
-            }
-            history_buttons(ui, &session.history, &mut actions);
-            ui.add_space(4.0);
-            ui.horizontal(|ui| {
-                ui.toggle_value(&mut session.before, tr("Before")).on_hover_text(tr("Show the original (\\)"));
-                let reset = ui.add_enabled(!session.history.settings().is_identity(), egui::Button::new(tr("Reset all")));
-                if reset.clicked() {
-                    actions.push(Action::Push(Step::Reset));
-                }
-            });
-            egui::ScrollArea::vertical()
-                .id_salt("edit-panel")
-                .auto_shrink([false, false])
-                .max_height((height - 180.0).max(120.0))
-                .show(ui, |ui| {
-                    for (title, controls) in GROUPS {
-                        section(ui, tr(title));
-                        for control in controls {
-                            slider_row(ui, session, *control, &mut actions);
-                        }
-                        if title == "Color" {
-                            let mut mono = session.history.settings().get(Control::Monochrome) >= 0.5;
-                            if ui.checkbox(&mut mono, tr(Control::Monochrome.label())).changed() {
-                                actions.push(Action::Push(Step::Set(Control::Monochrome, if mono { 1.0 } else { 0.0 })));
-                            }
-                        }
-                    }
-                    section(ui, tr("History"));
-                    history_list(ui, &session.history, &mut actions);
-                    ui.add_space(8.0);
-                    ui.label(
-                        egui::RichText::new(tr("Edits are saved as steps in the library. The original file is never changed."))
-                            .size(11.0)
-                            .color(VIEWER_MUTED),
-                    );
-                });
-            ui.add_space(8.0);
-            let export = ui
-                .add_sized([ui.available_width(), 30.0], theme::primary_button(tr("Export…")))
-                .on_hover_text(tr("Save the edited photo as a new file"));
-            if export.clicked() {
-                actions.push(Action::Export);
-            }
-        });
-        for action in actions {
-            match action {
-                Action::Push(step) => {
-                    if let Some(session) = self.edit.as_mut() {
-                        session.live = None;
-                        if session.history.push(step) {
-                            self.edit_changed();
-                        }
-                    }
-                }
-                Action::Undo => self.edit_history(History::undo),
-                Action::Redo => self.edit_history(History::redo),
-                Action::UndoAll => self.edit_history(History::undo_all),
-                Action::RedoAll => self.edit_history(History::redo_all),
-                Action::Jump(count) => self.edit_history(|history| history.jump(count)),
-                Action::Export => self.export_edit(ui.ctx()),
-                Action::Done => self.toggle_editing(),
-            }
-        }
-    }
-
     pub(super) fn forget_thumb(&mut self, id: i64) {
         self.thumbs.map.remove(&id);
-        self.thumbs.order.retain(|item| *item != id);
         self.thumb_failed.remove(&id);
     }
 
@@ -367,76 +619,4 @@ impl PicassoApp {
         self.display_inflight.remove(&id);
         self.display_failed.remove(&id);
     }
-}
-
-fn history_buttons(ui: &mut egui::Ui, history: &History, actions: &mut Vec<Action>) {
-    ui.columns(4, |columns| {
-        let buttons = [
-            (history.can_undo(), "Undo all", "Back to the original", Action::UndoAll),
-            (history.can_undo(), "Undo", "Undo (Ctrl+Z)", Action::Undo),
-            (history.can_redo(), "Redo", "Redo (Ctrl+Y)", Action::Redo),
-            (history.can_redo(), "Redo all", "Apply every step again", Action::RedoAll),
-        ];
-        for (column, (enabled, label, hint, action)) in columns.iter_mut().zip(buttons) {
-            let button = egui::Button::new(egui::RichText::new(tr(label)).size(12.0));
-            let response = column.add_enabled(enabled, button.min_size(Vec2::new(column.available_width(), 26.0)));
-            if response.on_hover_text(tr(hint)).clicked() {
-                actions.push(action);
-            }
-        }
-    });
-}
-
-fn slider_row(ui: &mut egui::Ui, session: &mut EditSession, control: Control, actions: &mut Vec<Action>) {
-    let committed = session.history.settings().get(control);
-    let mut value = session
-        .live
-        .filter(|(live, _)| *live == control)
-        .map_or(committed, |(_, value)| value);
-    ui.horizontal(|ui| {
-        let name = egui::Label::new(egui::RichText::new(tr(control.label())).size(12.5).color(WHITE)).sense(Sense::click());
-        if ui.add(name).on_hover_text(tr("Double-click to reset")).double_clicked() {
-            actions.push(Action::Push(Step::Set(control, 0.0)));
-        }
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let color = if value != 0.0 { ACCENT } else { VIEWER_MUTED };
-            ui.label(egui::RichText::new(control.format(value)).size(12.0).color(color));
-        });
-    });
-    let (min, max) = control.range();
-    ui.spacing_mut().slider_width = ui.available_width();
-    let step = if control == Control::Exposure { 0.01 } else { 1.0 };
-    let response = ui.add(egui::Slider::new(&mut value, min..=max).show_value(false).step_by(step));
-    if response.changed() {
-        session.live = Some((control, value));
-    }
-    if !response.dragged() {
-        if let Some((live, value)) = session.live.filter(|(live, _)| *live == control) {
-            session.live = None;
-            actions.push(Action::Push(Step::Set(live, value)));
-        }
-    }
-    ui.add_space(2.0);
-}
-
-fn history_list(ui: &mut egui::Ui, history: &History, actions: &mut Vec<Action>) {
-    let applied = history.applied();
-    let rows = std::iter::once(tr("Original").to_string()).chain(history.steps().iter().map(Step::label));
-    for (index, text) in rows.enumerate() {
-        let color = if index > applied { VIEWER_MUTED.gamma_multiply(0.7) } else { WHITE };
-        let label = egui::RichText::new(text).size(12.0).color(color);
-        if ui.selectable_label(index == applied, label).clicked() {
-            actions.push(Action::Jump(index));
-        }
-    }
-}
-
-fn section(ui: &mut egui::Ui, title: &str) {
-    ui.add_space(10.0);
-    ui.label(egui::RichText::new(title.to_uppercase()).size(11.0).strong().color(VIEWER_MUTED));
-    ui.add_space(2.0);
-}
-
-fn color_image(image: &RgbaImage) -> egui::ColorImage {
-    egui::ColorImage::from_rgba_unmultiplied([image.width() as usize, image.height() as usize], image.as_raw())
 }

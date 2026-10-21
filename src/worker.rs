@@ -2,18 +2,21 @@
 //!
 //! A folder scan runs as a small pipeline:
 //!
-//! 1. A walker thread lists the folder and compares each file's size and
-//!    modification time with the catalog. Unchanged files are skipped without
-//!    being opened.
-//! 2. A pool of probe threads reads dimensions and metadata from the files
-//!    that are new or changed.
+//! 1. A walker lists the folder, one directory per task on a small pool, and
+//!    compares each file's size and modification time, taken from the
+//!    listing, with the catalog. Unchanged files are skipped without being
+//!    opened.
+//! 2. A pool of probe threads reads dimensions and metadata from the head of
+//!    each file that is new or changed.
 //! 3. The index thread writes the results in batched transactions, so the
 //!    library fills in while the scan runs and every committed batch survives
 //!    a restart.
 //!
 //! A folder keeps its `scan_pending` flag until a scan reaches the end of it,
 //! so quitting mid-scan resumes that folder first on the next launch.
-//! Thumbnails decode on a separate pool of threads.
+//! Thumbnails decode on a separate pool of threads. Disk thumbnails for new
+//! photos are queued once the scans finish, so the two don't compete for the
+//! disk; the window asks for the thumbnails it shows straight away.
 
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
@@ -23,8 +26,6 @@ use std::time::{Duration, Instant};
 
 use crossbeam_channel::{bounded, Receiver, RecvTimeoutError, Select, Sender, TryRecvError};
 use image::RgbaImage;
-use walkdir::WalkDir;
-
 use crate::db::{Database, Known, ScanRecord};
 use crate::edit::{self, Settings};
 use crate::image_io::{self, Probe};
@@ -50,6 +51,9 @@ pub enum ThumbJob {
     /// `edit` is applied over the decoded pixels; the disk cache keeps the original.
     Thumb { id: i64, path: String, edit: Settings },
     Display { id: i64, path: String, nonce: u64, edit: Settings },
+    /// Writes the disk thumbnail during a scan without sending pixels to the
+    /// window, which asks for the ones it shows.
+    Cache { id: i64, path: String },
     /// EXIF rows only, without decoding pixels.
     Exif { id: i64, path: String },
 }
@@ -106,22 +110,31 @@ pub enum UiEvent {
     EditPreview {
         id: i64,
         seq: u64,
+        purpose: edit::Purpose,
         w: usize,
         h: usize,
         rgba: Vec<u8>,
+        /// Tones of the edited preview, without overlays.
+        histogram: Option<Box<Histogram>>,
     },
     Exported(Result<PathBuf, String>),
 }
 
-/// Number of threads that probe files during a scan.
+/// Number of threads that probe files during a scan. A probe mostly waits
+/// on the disk or on ffprobe, so there are more of them than cores.
 pub fn probe_threads() -> usize {
-    std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).clamp(2, 8)
+    (std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4) * 2).clamp(4, 16)
 }
 
 /// Number of threads that decode thumbnails and full-size views.
 pub fn thumb_threads() -> usize {
-    (std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4) / 2).clamp(2, 4)
+    (std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4) * 3 / 4).clamp(2, 8)
 }
+
+/// Long edge of a cached thumbnail.
+const THUMB_EDGE: u32 = 256;
+/// Long edge of the full-size view.
+const DISPLAY_EDGE: u32 = 2560;
 
 struct ProbeJob {
     path: PathBuf,
@@ -156,6 +169,11 @@ struct Indexer {
     events: Sender<UiEvent>,
     ctx: eframe::egui::Context,
     pending: VecDeque<i64>,
+    /// Disk thumbnails for photos found by the scans in progress. Making
+    /// them reads each whole file, which would compete with the scan for the
+    /// disk, so they are queued once every pending folder is done. Photos on
+    /// screen get theirs sooner because the window asks for them.
+    deferred: Vec<ThumbJob>,
 }
 
 pub fn index_loop(
@@ -184,6 +202,7 @@ pub fn index_loop(
         events,
         ctx,
         pending,
+        deferred: Vec::new(),
     };
     indexer.run();
 }
@@ -196,6 +215,9 @@ impl Indexer {
                     Outcome::Finished => continue,
                     Outcome::Stopped => return,
                 }
+            }
+            for job in self.deferred.drain(..) {
+                let _ = self.thumbs.send(job);
             }
             match self.commands.recv() {
                 Ok(Command::Scan(id)) => self.queue(id),
@@ -376,7 +398,7 @@ impl Indexer {
     }
 
     /// Commits the batch and queues background thumbnails for the written rows.
-    fn flush(&self, batch: &mut Vec<ScanRecord>, errors: &mut usize) -> usize {
+    fn flush(&mut self, batch: &mut Vec<ScanRecord>, errors: &mut usize) -> usize {
         if batch.is_empty() {
             return 0;
         }
@@ -390,14 +412,20 @@ impl Indexer {
             }
         };
         for (record, id) in batch.iter().zip(&written.ids) {
-            if record.existing.is_some() {
+            let (id, path) = (*id, record.photo.path.clone());
+            // A changed file's old thumbnail may be on screen, so it is sent
+            // again; new photos only need their disk thumbnail.
+            let job = if record.existing.is_some() {
                 let _ = std::fs::remove_file(self.cache.join("thumbs").join(format!("{id}.jpg")));
+                ThumbJob::Thumb { id, path, edit: Settings::default() }
+            } else {
+                ThumbJob::Cache { id, path }
+            };
+            if matches!(job, ThumbJob::Cache { .. }) {
+                self.deferred.push(job);
+            } else {
+                let _ = self.thumbs.send(job);
             }
-            let _ = self.thumbs.send(ThumbJob::Thumb {
-                id: *id,
-                path: record.photo.path.clone(),
-                edit: Settings::default(),
-            });
         }
         let count = batch.len();
         batch.clear();
@@ -406,6 +434,23 @@ impl Indexer {
     }
 }
 
+/// Shared state of one folder walk.
+struct Walk<'a> {
+    snapshot: HashMap<String, Known>,
+    jobs: Sender<ProbeJob>,
+    cancel: &'a AtomicBool,
+    checked: &'a AtomicUsize,
+    seen: Mutex<Vec<String>>,
+    errors: AtomicUsize,
+    /// Cleared when the root could not be listed or the walk stopped early,
+    /// so missing photos are not removed on the strength of a partial listing.
+    complete: AtomicBool,
+}
+
+/// Lists `root` with one task per directory on a small private pool, so
+/// directories on slow or network drives are read in parallel. Size and
+/// modification time come from the directory listing itself, which on
+/// Windows saves opening every file.
 fn walk_folder(
     root: &Path,
     snapshot: HashMap<String, Known>,
@@ -413,64 +458,104 @@ fn walk_folder(
     cancel: &AtomicBool,
     checked: &AtomicUsize,
 ) -> WalkSummary {
-    let mut summary = WalkSummary {
-        seen: Vec::with_capacity(snapshot.len()),
-        errors: 0,
-        complete: false,
+    let walk = Walk {
+        seen: Mutex::new(Vec::with_capacity(snapshot.len())),
+        snapshot,
+        jobs,
+        cancel,
+        checked,
+        errors: AtomicUsize::new(0),
+        complete: AtomicBool::new(true),
     };
-    let walk = WalkDir::new(root)
-        .follow_links(false)
-        .into_iter()
-        .filter_entry(|entry| entry.depth() == 0 || !entry.file_name().to_string_lossy().starts_with('.'));
-    for entry in walk {
-        if cancel.load(Ordering::Relaxed) {
-            return summary;
-        }
-        let entry = match entry {
-            Ok(entry) => entry,
-            Err(_) => {
-                summary.errors += 1;
-                continue;
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(walk_threads())
+        .thread_name(|index| format!("picasso-walk-{index}"))
+        .build();
+    match pool {
+        Ok(pool) => pool.scope(|scope| walk_dir(scope, root.to_path_buf(), true, &walk)),
+        Err(_) => rayon::scope(|scope| walk_dir(scope, root.to_path_buf(), true, &walk)),
+    }
+    let complete = walk.complete.load(Ordering::Relaxed) && !cancel.load(Ordering::Relaxed);
+    WalkSummary {
+        seen: walk.seen.into_inner().unwrap_or_default(),
+        errors: walk.errors.load(Ordering::Relaxed),
+        complete,
+    }
+}
+
+fn walk_threads() -> usize {
+    std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).clamp(2, 4)
+}
+
+fn walk_dir<'s>(scope: &rayon::Scope<'s>, dir: PathBuf, root: bool, walk: &'s Walk<'s>) {
+    if walk.cancel.load(Ordering::Relaxed) {
+        return;
+    }
+    let entries = match std::fs::read_dir(&dir) {
+        Ok(entries) => entries,
+        Err(_) => {
+            walk.errors.fetch_add(1, Ordering::Relaxed);
+            if root {
+                walk.complete.store(false, Ordering::Relaxed);
             }
+            return;
+        }
+    };
+    let mut seen = Vec::new();
+    let mut jobs = Vec::new();
+    for entry in entries {
+        let Ok(entry) = entry else {
+            walk.errors.fetch_add(1, Ordering::Relaxed);
+            continue;
         };
-        if !entry.file_type().is_file() && !entry.path_is_symlink() {
+        if entry.file_name().to_string_lossy().starts_with('.') {
             continue;
         }
+        let Ok(file_type) = entry.file_type() else {
+            walk.errors.fetch_add(1, Ordering::Relaxed);
+            continue;
+        };
         let path = entry.path();
-        if !is_media_path(path) {
+        if file_type.is_dir() {
+            scope.spawn(move |scope| walk_dir(scope, path, false, walk));
             continue;
         }
-        let meta = match std::fs::metadata(path) {
+        if !is_media_path(&path) {
+            continue;
+        }
+        // A link's own entry describes the link, so follow it to the file.
+        let meta = if file_type.is_symlink() { std::fs::metadata(&path) } else { entry.metadata() };
+        let meta = match meta {
             Ok(meta) if meta.is_file() => meta,
             _ => continue,
         };
-        checked.fetch_add(1, Ordering::Relaxed);
+        walk.checked.fetch_add(1, Ordering::Relaxed);
         let path_text = path.to_string_lossy().into_owned();
         let modified_at = image_io::file_mtime(&meta);
         let bytes = meta.len();
-        let known = snapshot.get(&path_text).copied();
-        summary.seen.push(path_text.clone());
+        let known = walk.snapshot.get(&path_text).copied();
+        seen.push(path_text.clone());
         if known.is_some_and(|known| known.current(modified_at, bytes)) {
             continue;
         }
-        let filename = path
-            .file_name()
-            .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_else(|| path_text.clone());
-        let job = ProbeJob {
-            path: path.to_path_buf(),
+        jobs.push(ProbeJob {
+            filename: entry.file_name().to_string_lossy().into_owned(),
+            path,
             path_text,
-            filename,
             modified_at,
             bytes,
             existing: known.map(|known| known.id),
-        };
-        if jobs.send(job).is_err() {
-            return summary;
+        });
+    }
+    if let Ok(mut all) = walk.seen.lock() {
+        all.extend(seen);
+    }
+    for job in jobs {
+        if walk.cancel.load(Ordering::Relaxed) || walk.jobs.send(job).is_err() {
+            walk.complete.store(false, Ordering::Relaxed);
+            return;
         }
     }
-    summary.complete = true;
-    summary
 }
 
 fn probe_loop(jobs: Receiver<ProbeJob>, done: Sender<ProbeResult>, cancel: &AtomicBool) {
@@ -545,18 +630,21 @@ fn recv_thumb(urgent: &Receiver<ThumbJob>, normal: &Receiver<ThumbJob>) -> Optio
 
 fn run_thumb(cache: &Path, gate: &DisplayGate, job: ThumbJob) -> Option<UiEvent> {
     match job {
+        ThumbJob::Cache { id, path } => {
+            let cached = cache.join("thumbs").join(format!("{id}.jpg"));
+            if !cached.exists() {
+                if let Ok(rgba) = make_thumb(Path::new(&path)) {
+                    let _ = image_io::save_jpeg(&cached, &rgba, 80);
+                }
+            }
+            None
+        }
         ThumbJob::Thumb { id, path, edit } => {
             let cached = cache.join("thumbs").join(format!("{id}.jpg"));
             let mut rgba = match open_rgba(&cached) {
                 Some(rgba) => rgba,
                 None => {
-                    let path = Path::new(&path);
-                    let rgba = if is_video_path(path) {
-                        video::poster(path, 256).map(|(rgba, _)| rgba)
-                    } else {
-                        image_io::load_oriented(path).map(|image| image_io::thumbnail_rgba(&image, 256))
-                    };
-                    let Ok(rgba) = rgba else {
+                    let Ok(rgba) = make_thumb(Path::new(&path)) else {
                         return Some(UiEvent::ThumbFailed { id });
                     };
                     let _ = image_io::save_jpeg(&cached, &rgba, 80);
@@ -570,9 +658,9 @@ fn run_thumb(cache: &Path, gate: &DisplayGate, job: ThumbJob) -> Option<UiEvent>
         ThumbJob::Display { id, path, nonce, edit } => {
             let file = Path::new(&path);
             let decoded = if is_video_path(file) {
-                video::poster(file, 2560).map(|(rgba, info)| (rgba, video::rows(&info)))
+                video::poster(file, DISPLAY_EDGE).map(|(rgba, info)| (rgba, video::rows(&info)))
             } else {
-                image_io::load_oriented(file).map(|image| (image_io::limit_rgba(image, 2560), Vec::new()))
+                image_io::load_at_least(file, DISPLAY_EDGE).map(|image| (image_io::limit_rgba(image, DISPLAY_EDGE), Vec::new()))
             };
             if stale_display(id, nonce, gate) {
                 return None;
@@ -604,10 +692,61 @@ fn run_thumb(cache: &Path, gate: &DisplayGate, job: ThumbJob) -> Option<UiEvent>
     }
 }
 
+/// Decodes a photo or video poster at thumbnail size.
+fn make_thumb(path: &Path) -> Result<RgbaImage, String> {
+    if is_video_path(path) {
+        return video::poster(path, THUMB_EDGE).map(|(rgba, _)| rgba);
+    }
+    std::panic::catch_unwind(|| image_io::load_at_least(path, THUMB_EDGE))
+        .unwrap_or_else(|_| Err("decoder fault".into()))
+        .map(|image| image_io::thumbnail_rgba(&image, THUMB_EDGE))
+}
+
+/// Reads a cached thumbnail in one read and decodes it from memory.
 fn open_rgba(path: &Path) -> Option<RgbaImage> {
-    image::open(path).ok().map(|image| image.to_rgba8())
+    let bytes = std::fs::read(path).ok()?;
+    image::load_from_memory_with_format(&bytes, image::ImageFormat::Jpeg).ok().map(|image| image.to_rgba8())
 }
 
 fn raw_rgba(image: &RgbaImage) -> (usize, usize, Vec<u8>) {
     (image.width() as usize, image.height() as usize, image.as_raw().clone())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn walk_skips_hidden_unchanged_and_other_files() {
+        let root = std::env::temp_dir().join(format!("picasso-walk-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        for dir in ["a/b", ".hidden"] {
+            std::fs::create_dir_all(root.join(dir)).unwrap();
+        }
+        for file in ["top.jpg", "a/one.png", "a/b/two.heic", "a/notes.txt", ".hidden/three.jpg"] {
+            std::fs::write(root.join(file), b"x").unwrap();
+        }
+        let top = root.join("top.jpg");
+        let meta = std::fs::metadata(&top).unwrap();
+        let known = Known {
+            id: 7,
+            modified_at: image_io::file_mtime(&meta),
+            bytes: meta.len(),
+            version: crate::db::INDEX_VERSION,
+        };
+        let snapshot = HashMap::from([(top.to_string_lossy().into_owned(), known)]);
+
+        let (tx, rx) = bounded::<ProbeJob>(4);
+        let drain = std::thread::spawn(move || rx.iter().map(|job| job.filename).collect::<Vec<_>>());
+        let (cancel, checked) = (AtomicBool::new(false), AtomicUsize::new(0));
+        let summary = walk_folder(&root, snapshot, tx, &cancel, &checked);
+        let mut probed = drain.join().unwrap();
+        probed.sort();
+        let _ = std::fs::remove_dir_all(&root);
+
+        assert!(summary.complete);
+        assert_eq!(summary.seen.len(), 3);
+        assert_eq!(checked.load(Ordering::Relaxed), 3);
+        assert_eq!(probed, ["one.png", "two.heic"]);
+    }
 }

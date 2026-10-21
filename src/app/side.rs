@@ -9,7 +9,7 @@ use crate::i18n::{tr, trf};
 use crate::types::{displayed_size, folder_label, format_bytes, format_timestamp, Photo};
 
 use super::places::MapView;
-use super::theme::{self, ACCENT, MUTED, TEXT, WHITE};
+use super::theme::{self, ACCENT, WHITE};
 use super::PicassoApp;
 
 #[derive(Clone, Copy, PartialEq)]
@@ -67,16 +67,16 @@ impl PicassoApp {
         ui.horizontal(|ui| {
             for (panel, label) in [(SidePanel::Info, "Info"), (SidePanel::Map, "Map")] {
                 let on = self.side == panel;
-                let text = egui::RichText::new(tr(label)).color(if on { ACCENT } else { TEXT });
+                let text = egui::RichText::new(tr(label)).color(if on { ACCENT } else { theme::text() });
                 let button = egui::Button::new(text)
-                    .fill(if on { theme::SELECT } else { Color32::TRANSPARENT })
+                    .fill(if on { theme::select() } else { Color32::TRANSPARENT })
                     .stroke(Stroke::NONE);
                 if ui.add(button).clicked() && !on {
                     self.toggle_side(panel);
                 }
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let close = egui::Button::new(egui::RichText::new("×").size(18.0).color(MUTED)).frame(false);
+                let close = egui::Button::new(egui::RichText::new("×").size(18.0).color(theme::muted())).frame(false);
                 if ui.add(close).on_hover_text(tr("Close panel")).clicked() {
                     self.toggle_side(self.side);
                 }
@@ -87,13 +87,13 @@ impl PicassoApp {
         let Some(photo) = self.side_photo() else {
             ui.add_space(40.0);
             ui.vertical_centered(|ui| {
-                ui.label(egui::RichText::new(tr("Select a photo to see its details.")).color(MUTED));
+                ui.label(egui::RichText::new(tr("Select a photo to see its details.")).color(theme::muted()));
             });
             return;
         };
         if self.selection.len() > 1 {
             let text = trf("{} photos selected · showing one", &[&self.selection.len()]);
-            ui.label(egui::RichText::new(text).size(12.0).color(MUTED));
+            ui.label(egui::RichText::new(text).size(12.0).color(theme::muted()));
             ui.add_space(4.0);
         }
         egui::ScrollArea::vertical()
@@ -109,9 +109,9 @@ impl PicassoApp {
         self.ensure_thumb(photo.id, &photo.path);
         let width = ui.available_width();
         let (frame, _) = ui.allocate_exact_size(Vec2::new(width, (width * 0.7).min(240.0)), Sense::hover());
-        ui.painter().rect_filled(frame, theme::THUMB_RADIUS, theme::PLACEHOLDER);
+        ui.painter().rect_filled(frame, theme::THUMB_RADIUS, theme::placeholder());
         if let Some((texture, _, _)) = self.thumb_texture(photo.id) {
-            let (w, h) = displayed_size(photo);
+            let (w, h) = self.shown_size(photo);
             let scale = (frame.width() / w).min(frame.height() / h);
             let rect = Rect::from_center_size(frame.center(), Vec2::new(w * scale, h * scale));
             let full = Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
@@ -122,10 +122,10 @@ impl PicassoApp {
     fn side_info(&mut self, ui: &mut egui::Ui, photo: &Photo) {
         self.side_preview(ui, photo);
         ui.add_space(10.0);
-        ui.add(egui::Label::new(egui::RichText::new(&photo.filename).size(15.0).strong().color(TEXT)).wrap());
+        ui.add(egui::Label::new(egui::RichText::new(&photo.filename).size(15.0).strong().color(theme::text())).wrap());
         if let Some(parent) = std::path::Path::new(&photo.path).parent() {
             let folder = parent.to_string_lossy();
-            ui.add(egui::Label::new(egui::RichText::new(folder.trim_start_matches(r"\\?\")).size(11.5).color(MUTED)).wrap());
+            ui.add(egui::Label::new(egui::RichText::new(folder.trim_start_matches(r"\\?\")).size(11.5).color(theme::muted())).wrap());
         }
         if !photo.caption.is_empty() {
             ui.add_space(4.0);
@@ -165,7 +165,7 @@ impl PicassoApp {
             None => {
                 ui.horizontal(|ui| {
                     ui.add(egui::Spinner::new().size(12.0));
-                    ui.label(egui::RichText::new(tr("Reading EXIF…")).size(12.0).color(MUTED));
+                    ui.label(egui::RichText::new(tr("Reading EXIF…")).size(12.0).color(theme::muted()));
                 });
             }
             Some(exif) => {
@@ -174,7 +174,7 @@ impl PicassoApp {
                     .filter(|(label, _)| *label != "Taken" && !(*label == "Camera" && !photo.camera.is_empty()))
                     .collect();
                 if rows.is_empty() {
-                    ui.label(egui::RichText::new(tr("No EXIF data in this file")).size(12.0).color(MUTED));
+                    ui.label(egui::RichText::new(tr("No EXIF data in this file")).size(12.0).color(theme::muted()));
                 } else {
                     property_grid(ui, ("exif", photo.id), &rows);
                 }
@@ -216,12 +216,12 @@ impl PicassoApp {
             self.side_preview(ui, photo);
             ui.add_space(16.0);
             ui.vertical_centered(|ui| {
-                ui.label(egui::RichText::new(tr("No GPS location")).size(15.0).strong().color(TEXT));
+                ui.label(egui::RichText::new(tr("No GPS location")).size(15.0).strong().color(theme::text()));
                 ui.add_space(4.0);
                 ui.label(
                     egui::RichText::new(tr("This photo's EXIF has no GPS coordinates."))
                         .size(12.0)
-                        .color(MUTED),
+                        .color(theme::muted()),
                 );
                 ui.add_space(10.0);
                 if ui.button(tr("Geotag it in Places")).clicked() {
@@ -278,7 +278,7 @@ impl PicassoApp {
             }
         }
         paint_pin(&painter, rect.center() + self.side_pan);
-        painter.rect_stroke(rect, theme::THUMB_RADIUS, Stroke::new(1.0, theme::HAIRLINE), egui::StrokeKind::Inside);
+        painter.rect_stroke(rect, theme::THUMB_RADIUS, Stroke::new(1.0, theme::hairline()), egui::StrokeKind::Inside);
         painter.text(
             rect.right_bottom() + Vec2::new(-6.0, -4.0),
             Align2::RIGHT_BOTTOM,
@@ -290,10 +290,10 @@ impl PicassoApp {
         let buttons = Rect::from_min_size(rect.right_top() + Vec2::new(-36.0, 8.0), Vec2::new(28.0, 60.0));
         let mut overlay = ui.new_child(egui::UiBuilder::new().max_rect(buttons));
         overlay.spacing_mut().item_spacing.y = 4.0;
-        if overlay.add_sized([28.0, 28.0], egui::Button::new("+").fill(WHITE)).clicked() {
+        if overlay.add_sized([28.0, 28.0], egui::Button::new("+").fill(theme::bg())).clicked() {
             zoom_by = 1;
         }
-        if overlay.add_sized([28.0, 28.0], egui::Button::new("−").fill(WHITE)).clicked() {
+        if overlay.add_sized([28.0, 28.0], egui::Button::new("−").fill(theme::bg())).clicked() {
             zoom_by = -1;
         }
         if zoom_by != 0 {
@@ -307,8 +307,8 @@ impl PicassoApp {
 
         ui.add_space(8.0);
         let kind = tr(if photo.pinned() { "Pinned in Picasso" } else { "From camera GPS" });
-        ui.label(egui::RichText::new(format!("{lat:.5}, {lon:.5}")).color(TEXT));
-        ui.label(egui::RichText::new(kind).size(12.0).color(MUTED));
+        ui.label(egui::RichText::new(format!("{lat:.5}, {lon:.5}")).color(theme::text()));
+        ui.label(egui::RichText::new(kind).size(12.0).color(theme::muted()));
         ui.add_space(8.0);
         ui.horizontal_wrapped(|ui| {
             if ui.button(tr("Open in OpenStreetMap")).clicked() {
@@ -323,7 +323,7 @@ impl PicassoApp {
 
 fn section(ui: &mut egui::Ui, title: &str) {
     ui.add_space(14.0);
-    ui.label(egui::RichText::new(title.to_uppercase()).size(11.0).strong().color(MUTED));
+    ui.label(egui::RichText::new(title.to_uppercase()).size(11.0).strong().color(theme::muted()));
     ui.add_space(2.0);
 }
 
@@ -335,8 +335,8 @@ fn property_grid(ui: &mut egui::Ui, id: (&str, i64), rows: &[(&'static str, Stri
         .min_col_width(70.0)
         .show(ui, |ui| {
             for (label, value) in rows {
-                ui.label(egui::RichText::new(tr(label)).size(12.0).color(MUTED));
-                ui.add(egui::Label::new(egui::RichText::new(value).size(12.5).color(TEXT)).wrap());
+                ui.label(egui::RichText::new(tr(label)).size(12.0).color(theme::muted()));
+                ui.add(egui::Label::new(egui::RichText::new(value).size(12.5).color(theme::text())).wrap());
                 ui.end_row();
             }
         });
@@ -361,14 +361,14 @@ pub(super) fn tray_icon(ui: &mut egui::Ui, icon: TrayIcon, on: bool) -> egui::Re
     let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
     let painter = ui.painter();
     let background = if on {
-        theme::SELECT
+        theme::select()
     } else if response.hovered() {
-        theme::HOVER
+        theme::hover()
     } else {
-        theme::TRAY
+        theme::tray()
     };
     painter.rect_filled(rect, theme::RADIUS, background);
-    let color = if on { ACCENT } else { TEXT };
+    let color = if on { ACCENT } else { theme::text() };
     let c = rect.center();
     match icon {
         TrayIcon::Info => {

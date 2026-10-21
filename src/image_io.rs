@@ -1,13 +1,28 @@
 //! Image decode, EXIF orientation, and thumbnail encoding.
 
 use std::fs::File;
-use std::io::BufReader;
-use std::path::Path;
+use std::io::{BufReader, Cursor, Read};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use image::codecs::jpeg::JpegEncoder;
-use image::{DynamicImage, ExtendedColorType, GenericImageView, ImageBuffer, Rgba};
+use image::{DynamicImage, ExtendedColorType, GenericImageView, ImageBuffer, ImageReader, Rgba};
 
 use crate::types::{is_heic_path, is_raw_path, is_video_path, unix_now};
+
+/// Bytes read from the start of a file to probe it. JPEG EXIF fits in one
+/// 64 KB segment and the frame header follows it; HEIC and TIFF-based RAW
+/// files keep their boxes and IFDs near the start too.
+const HEAD_BYTES: usize = 256 * 1024;
+
+/// The first `limit` bytes of `path` in one read, and the file's length.
+fn read_head(path: &Path, limit: usize) -> Result<(Vec<u8>, u64), String> {
+    let file = File::open(path).map_err(|err| err.to_string())?;
+    let len = file.metadata().map_err(|err| err.to_string())?.len();
+    let mut head = Vec::with_capacity(limit.min(len as usize));
+    file.take(limit as u64).read_to_end(&mut head).map_err(|err| err.to_string())?;
+    Ok((head, len))
+}
 
 pub struct Probe {
     pub width: u32,
@@ -31,21 +46,25 @@ pub fn probe(path: &Path, modified_at: i64) -> Result<Probe, String> {
     if is_raw_path(path) {
         return probe_raw(path, modified_at);
     }
-    let (mut width, mut height) = image::image_dimensions(path).map_err(|err| err.to_string())?;
-    let exif = read_exif(path);
-    if matches!(exif.orientation, 5 | 6 | 7 | 8) {
-        std::mem::swap(&mut width, &mut height);
-    }
-    Ok(Probe {
-        width,
-        height,
-        taken_at: exif.taken_at.unwrap_or(modified_at),
-        camera: exif.camera,
-        gps_lat: exif.gps_lat,
-        gps_lon: exif.gps_lon,
-        duration: 0.0,
-        complete: true,
-    })
+    // One read of the head usually answers both questions; the file is only
+    // opened again when the head ends before the frame header or the EXIF.
+    let (head, len) = read_head(path, HEAD_BYTES)?;
+    let whole = head.len() as u64 >= len;
+    let dimensions = ImageReader::new(Cursor::new(&head))
+        .with_guessed_format()
+        .ok()
+        .and_then(|reader| reader.into_dimensions().ok());
+    let (width, height) = match dimensions {
+        Some(size) => size,
+        None => image::image_dimensions(path).map_err(|err| err.to_string())?,
+    };
+    let exif = match exif::Reader::new().read_from_container(&mut Cursor::new(&head)) {
+        Ok(exif) => bits_from_exif(&exif),
+        Err(exif::Error::NotFound(_)) => ExifBits::empty(),
+        Err(_) if !whole => read_exif(path),
+        Err(_) => ExifBits::empty(),
+    };
+    Ok(exif.probe(width, height, modified_at))
 }
 
 pub fn load_oriented(path: &Path) -> Result<DynamicImage, String> {
@@ -55,9 +74,86 @@ pub fn load_oriented(path: &Path) -> Result<DynamicImage, String> {
     if is_raw_path(path) {
         return load_raw(path);
     }
-    let image = image::open(path).map_err(|err| err.to_string())?;
-    let orientation = read_exif(path).orientation;
+    let bytes = std::fs::read(path).map_err(|err| err.to_string())?;
+    decode_oriented(path, &bytes)
+}
+
+/// Decodes `path` with its long edge at least `edge` where that is cheaper
+/// than a full decode, upright. JPEGs are scaled by 1/2, 1/4, or 1/8 inside
+/// the decoder, and HEIC uses its embedded thumbnail when it is big enough.
+/// The result can still be larger than `edge`.
+pub fn load_at_least(path: &Path, edge: u32) -> Result<DynamicImage, String> {
+    if is_raw_path(path) {
+        return load_raw(path);
+    }
+    let bytes = std::fs::read(path).map_err(|err| err.to_string())?;
+    if is_heic_path(path) {
+        if let Some(image) = heic_thumbnail(&bytes, edge) {
+            return Ok(image);
+        }
+        return heic_image(&bytes);
+    }
+    if let Some(image) = jpeg_scaled(&bytes, edge) {
+        return Ok(image);
+    }
+    decode_oriented(path, &bytes)
+}
+
+/// Decodes a whole file already in memory, falling back to the decoder the
+/// extension names when the content is not recognized.
+fn decode_oriented(path: &Path, bytes: &[u8]) -> Result<DynamicImage, String> {
+    let decoded = ImageReader::new(Cursor::new(bytes))
+        .with_guessed_format()
+        .ok()
+        .and_then(|reader| reader.decode().ok());
+    let image = match decoded {
+        Some(image) => image,
+        None => image::open(path).map_err(|err| err.to_string())?,
+    };
+    let orientation = exif::Reader::new()
+        .read_from_container(&mut Cursor::new(bytes))
+        .ok()
+        .and_then(|exif| short_field(&exif, exif::Tag::Orientation))
+        .unwrap_or(1);
     Ok(apply_orientation(image, orientation))
+}
+
+/// A baseline or progressive JPEG decoded straight to the smallest of 1/8,
+/// 1/4, or 1/2 size that still covers `edge`. `None` for other files, CMYK,
+/// 16-bit, and images too small to gain from it.
+fn jpeg_scaled(bytes: &[u8], edge: u32) -> Option<DynamicImage> {
+    if !bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        return None;
+    }
+    let edge = edge.clamp(1, u32::from(u16::MAX)) as u16;
+    let decode = std::panic::AssertUnwindSafe(|| {
+        let mut decoder = jpeg_decoder::Decoder::new(bytes);
+        decoder.read_info().ok()?;
+        let info = decoder.info()?;
+        if info.width.max(info.height) / 2 < edge {
+            return None;
+        }
+        let gray = match info.pixel_format {
+            jpeg_decoder::PixelFormat::L8 => true,
+            jpeg_decoder::PixelFormat::RGB24 => false,
+            _ => return None,
+        };
+        let (w, h) = decoder.scale(edge, edge).ok()?;
+        let pixels = decoder.decode().ok()?;
+        let (w, h) = (u32::from(w), u32::from(h));
+        let image = if gray {
+            DynamicImage::ImageLuma8(ImageBuffer::from_raw(w, h, pixels)?)
+        } else {
+            DynamicImage::ImageRgb8(ImageBuffer::from_raw(w, h, pixels)?)
+        };
+        let orientation = decoder
+            .exif_data()
+            .and_then(|tiff| exif::Reader::new().read_raw(tiff.to_vec()).ok())
+            .and_then(|exif| short_field(&exif, exif::Tag::Orientation))
+            .unwrap_or(1);
+        Some(apply_orientation(image, orientation))
+    });
+    std::panic::catch_unwind(decode).ok().flatten()
 }
 
 fn apply_orientation(image: DynamicImage, orientation: u16) -> DynamicImage {
@@ -91,21 +187,26 @@ pub fn limit_rgba(image: DynamicImage, max_edge: u32) -> ImageBuffer<Rgba<u8>, V
         .to_rgba8()
 }
 
+/// Encodes in memory and writes the file in one go. The bytes go to a
+/// temporary name first, so a reader never sees half a file.
 pub fn save_jpeg(path: &Path, rgba: &ImageBuffer<Rgba<u8>, Vec<u8>>, quality: u8) -> Result<(), String> {
+    static NEXT: AtomicU64 = AtomicU64::new(0);
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|err| err.to_string())?;
     }
     let rgb = DynamicImage::ImageRgba8(rgba.clone()).into_rgb8();
-    let mut file = File::create(path).map_err(|err| err.to_string())?;
-    let mut encoder = JpegEncoder::new_with_quality(&mut file, quality);
-    encoder
-        .encode(
-            rgb.as_raw(),
-            rgb.width(),
-            rgb.height(),
-            ExtendedColorType::Rgb8,
-        )
-        .map_err(|err| err.to_string())
+    let mut encoded = Vec::with_capacity(rgb.as_raw().len() / 8);
+    JpegEncoder::new_with_quality(&mut encoded, quality)
+        .encode(rgb.as_raw(), rgb.width(), rgb.height(), ExtendedColorType::Rgb8)
+        .map_err(|err| err.to_string())?;
+    let mut temporary = path.as_os_str().to_owned();
+    temporary.push(format!(".{}-{}.tmp", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
+    let temporary = PathBuf::from(temporary);
+    std::fs::write(&temporary, &encoded).map_err(|err| err.to_string())?;
+    std::fs::rename(&temporary, path).map_err(|err| {
+        let _ = std::fs::remove_file(&temporary);
+        err.to_string()
+    })
 }
 
 pub fn file_mtime(meta: &std::fs::Metadata) -> i64 {
@@ -196,11 +297,27 @@ fn oriented_size(width: u32, height: u32, orientation: u16) -> (u32, u32) {
     }
 }
 
+/// Reads the container from the head of the file. The whole file is read
+/// only when the head ends before the `meta` box or the EXIF item.
 fn probe_heic(path: &Path, modified_at: i64) -> Result<Probe, String> {
-    let bytes = std::fs::read(path).map_err(|err| err.to_string())?;
+    let (head, len) = read_head(path, HEAD_BYTES)?;
+    if let Some(probe) = heic_probe_bytes(&head, modified_at) {
+        return Ok(probe);
+    }
+    let bytes = if head.len() as u64 >= len { head } else { std::fs::read(path).map_err(|err| err.to_string())? };
     let info = heic_rs::probe(&bytes).map_err(|err| err.to_string())?;
-    let bits = heic_exif(&bytes);
-    Ok(Probe {
+    let bits = heic_exif(&bytes).unwrap_or_else(ExifBits::empty);
+    Ok(heic_probe(&info, bits, modified_at))
+}
+
+fn heic_probe_bytes(bytes: &[u8], modified_at: i64) -> Option<Probe> {
+    let info = heic_rs::probe(bytes).ok()?;
+    let bits = heic_exif(bytes)?;
+    Some(heic_probe(&info, bits, modified_at))
+}
+
+fn heic_probe(info: &heic_rs::ImageInfo, bits: ExifBits, modified_at: i64) -> Probe {
+    Probe {
         width: info.width,
         height: info.height,
         taken_at: bits.taken_at.unwrap_or(modified_at),
@@ -209,53 +326,114 @@ fn probe_heic(path: &Path, modified_at: i64) -> Result<Probe, String> {
         gps_lon: bits.gps_lon,
         duration: 0.0,
         complete: true,
-    })
+    }
 }
 
 fn load_heic(path: &Path) -> Result<DynamicImage, String> {
     let bytes = std::fs::read(path).map_err(|err| err.to_string())?;
+    heic_image(&bytes)
+}
+
+fn heic_image(bytes: &[u8]) -> Result<DynamicImage, String> {
     let options = heic_rs::DecodeOptions {
         layout: heic_rs::PixelLayout::Rgba8,
         ..heic_rs::DecodeOptions::default()
     };
-    let image = heic_rs::decode(&bytes, &options).map_err(|err| err.to_string())?;
+    let image = heic_rs::decode(bytes, &options).map_err(|err| err.to_string())?;
     let buffer = image::ImageBuffer::<Rgba<u8>, Vec<u8>>::from_raw(image.width, image.height, image.data)
         .ok_or_else(|| "HEIC decode returned an unexpected pixel buffer".to_string())?;
     Ok(DynamicImage::ImageRgba8(buffer))
 }
 
-fn heic_exif(bytes: &[u8]) -> ExifBits {
-    let Ok(context) = heic_rs::context::Context::open(bytes) else {
-        return ExifBits::empty();
-    };
-    let Ok(Some(tiff)) = context.exif(context.meta.primary) else {
-        return ExifBits::empty();
-    };
-    exif::Reader::new()
-        .read_raw(tiff.to_vec())
-        .map(|exif| bits_from_exif(&exif))
-        .unwrap_or_else(|_| ExifBits::empty())
+/// The thumbnail item stored beside the primary image (320 px wide on an
+/// iPhone), turned like the primary. `None` when there is none, it is
+/// smaller than `edge`, or its shape does not match the photo.
+fn heic_thumbnail(bytes: &[u8], edge: u32) -> Option<DynamicImage> {
+    use heic_rs::meta::iref::RefKind;
+    use heic_rs::Transform;
+    let decode = std::panic::AssertUnwindSafe(|| {
+        let context = heic_rs::context::Context::open(bytes).ok()?;
+        let primary = context.meta.primary;
+        let thumb = context
+            .meta
+            .refs
+            .iter()
+            .find(|reference| reference.kind == RefKind::Thmb && reference.to.contains(&primary))?
+            .from;
+        let props = context.props(thumb).ok()?;
+        let hvcc = props.hvcc.as_ref()?;
+        let data = context.item_data(thumb).ok()?;
+        let nals = hvcc.split_nals(&data).ok()?;
+        let frame = heic_rs::hevc::decode_still(&hvcc.parameter_sets(), &nals).ok()?;
+        let nclx = props.nclx.unwrap_or_default();
+        let image = heic_rs::color::convert(&frame, None, nclx, heic_rs::PixelLayout::Rgba8, heic_rs::DEFAULT_MAX_PIXELS, Some(1)).ok()?;
+        // Encoders attach `irot`/`imir` to the thumbnail as well; when one
+        // does not, the primary's turn still applies, but not its crop.
+        let transforms: Vec<Transform> = if props.transforms.is_empty() {
+            let primary_props = context.props(primary).ok()?;
+            primary_props.transforms.into_iter().filter(|transform| !matches!(transform, Transform::Crop(_))).collect()
+        } else {
+            props.transforms.clone()
+        };
+        let image = heic_rs::transform::apply_all(image, &transforms).ok()?;
+        if image.width.max(image.height) < edge {
+            return None;
+        }
+        let info = heic_rs::probe(bytes).ok()?;
+        let photo = info.width as f32 / info.height.max(1) as f32;
+        let small = image.width as f32 / image.height.max(1) as f32;
+        if (photo / small - 1.0).abs() > 0.03 {
+            return None;
+        }
+        let buffer = ImageBuffer::<Rgba<u8>, Vec<u8>>::from_raw(image.width, image.height, image.data)?;
+        Some(DynamicImage::ImageRgba8(buffer))
+    });
+    std::panic::catch_unwind(decode).ok().flatten()
+}
+
+/// EXIF of the primary item. `None` when the item lies past the end of
+/// `bytes`, so a truncated read can ask for more.
+fn heic_exif(bytes: &[u8]) -> Option<ExifBits> {
+    let context = heic_rs::context::Context::open(bytes).ok()?;
+    match context.exif(context.meta.primary) {
+        Ok(Some(tiff)) => Some(
+            exif::Reader::new()
+                .read_raw(tiff.to_vec())
+                .map(|exif| bits_from_exif(&exif))
+                .unwrap_or_else(|_| ExifBits::empty()),
+        ),
+        Ok(None) => Some(ExifBits::empty()),
+        Err(_) => None,
+    }
 }
 
 /// Reads RAW dimensions and metadata from the file headers. The decoder runs
 /// in dummy mode, so the sensor data stays on disk and a probe takes
 /// milliseconds; the slower full decode is only used as a fallback.
 fn probe_raw(path: &Path, modified_at: i64) -> Result<Probe, String> {
-    let owned = path.to_path_buf();
-    let quick = std::panic::catch_unwind(move || -> Result<(usize, usize, ExifBits), String> {
-        let source = rawler::rawsource::RawSource::new(&owned).map_err(|err| err.to_string())?;
-        let decoder = rawler::get_decoder(&source).map_err(|err| err.to_string())?;
-        let params = rawler::decoders::RawDecodeParams::default();
-        let bits = decoder
-            .raw_metadata(&source, &params)
-            .map(|metadata| bits_from_raw(&metadata))
-            .unwrap_or_else(|_| ExifBits::empty());
-        let raw = decoder.raw_image(&source, &params, true).map_err(|err| err.to_string())?;
-        let (width, height) = match raw.crop_area {
-            Some(area) if area.d.w > 0 && area.d.h > 0 => (area.d.w, area.d.h),
-            _ => (raw.width, raw.height),
+    // TIFF-based RAW files keep their IFDs and EXIF before the sensor data,
+    // so only the head is read. The decoder still checks that the sensor
+    // data's range exists, so the head sits in a zeroed buffer of the file's
+    // length; the OS hands out those zero pages without touching them.
+    if let Ok((head, len)) = read_head(path, RAW_HEAD_BYTES) {
+        let source = match usize::try_from(len) {
+            Ok(len) if len > head.len() => {
+                let mut padded = vec![0u8; len];
+                padded[..head.len()].copy_from_slice(&head);
+                rawler::rawsource::RawSource::new_from_shared_vec(std::sync::Arc::new(padded))
+            }
+            _ => rawler::rawsource::RawSource::new_from_slice(&head),
         };
-        Ok((width, height, bits))
+        if let Ok(Ok((width, height, bits))) = std::panic::catch_unwind(|| raw_quick(&source)) {
+            if width > 0 && height > 0 && bits.taken_at.is_some() {
+                return Ok(bits.probe(width as u32, height as u32, modified_at));
+            }
+        }
+    }
+    let owned = path.to_path_buf();
+    let quick = std::panic::catch_unwind(move || {
+        let source = rawler::rawsource::RawSource::new(&owned).map_err(|err| err.to_string())?;
+        raw_quick(&source)
     });
     if let Ok(Ok((width, height, bits))) = quick {
         if width > 0 && height > 0 {
@@ -264,6 +442,26 @@ fn probe_raw(path: &Path, modified_at: i64) -> Result<Probe, String> {
     }
     let (image, bits) = raw_picture(path)?;
     Ok(bits.probe(image.width(), image.height(), modified_at))
+}
+
+/// Head read for RAW probes; maker notes make their IFDs larger than a JPEG's.
+const RAW_HEAD_BYTES: usize = 1024 * 1024;
+
+/// Dimensions and metadata with the decoder in dummy mode, so the sensor
+/// data is not read.
+fn raw_quick(source: &rawler::rawsource::RawSource) -> Result<(usize, usize, ExifBits), String> {
+    let decoder = rawler::get_decoder(source).map_err(|err| err.to_string())?;
+    let params = rawler::decoders::RawDecodeParams::default();
+    let bits = decoder
+        .raw_metadata(source, &params)
+        .map(|metadata| bits_from_raw(&metadata))
+        .unwrap_or_else(|_| ExifBits::empty());
+    let raw = decoder.raw_image(source, &params, true).map_err(|err| err.to_string())?;
+    let (width, height) = match raw.crop_area {
+        Some(area) if area.d.w > 0 && area.d.h > 0 => (area.d.w, area.d.h),
+        _ => (raw.width, raw.height),
+    };
+    Ok((width, height, bits))
 }
 
 fn load_raw(path: &Path) -> Result<DynamicImage, String> {
@@ -431,5 +629,45 @@ mod tests {
         ];
         let degrees = dms_to_deg(&values).unwrap();
         assert!((degrees - 37.5).abs() < 1e-9);
+    }
+
+    fn jpeg(width: u32, height: u32) -> Vec<u8> {
+        let rgb = image::RgbImage::from_fn(width, height, |x, y| image::Rgb([(x % 256) as u8, (y % 256) as u8, 90]));
+        let mut bytes = Vec::new();
+        JpegEncoder::new_with_quality(&mut bytes, 85)
+            .encode(rgb.as_raw(), width, height, ExtendedColorType::Rgb8)
+            .unwrap();
+        bytes
+    }
+
+    #[test]
+    fn jpeg_decodes_at_the_smallest_scale_that_covers_the_edge() {
+        let bytes = jpeg(2048, 1024);
+        let image = jpeg_scaled(&bytes, 256).unwrap();
+        assert_eq!(image.dimensions(), (256, 128));
+        let image = jpeg_scaled(&bytes, 300).unwrap();
+        assert_eq!(image.dimensions(), (512, 256));
+        // Less than half the size: a full decode is as fast.
+        assert!(jpeg_scaled(&bytes, 1500).is_none());
+        assert!(jpeg_scaled(b"not a jpeg", 256).is_none());
+    }
+
+    #[test]
+    fn probe_and_save_round_trip_through_the_head() {
+        let dir = std::env::temp_dir().join(format!("picasso-io-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let source = dir.join("photo.jpg");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(&source, jpeg(640, 480)).unwrap();
+        let probe = probe(&source, 42).unwrap();
+        assert_eq!((probe.width, probe.height, probe.taken_at), (640, 480, 42));
+
+        let thumb = thumbnail_rgba(&load_at_least(&source, 256).unwrap(), 256);
+        let target = dir.join("thumbs").join("1.jpg");
+        save_jpeg(&target, &thumb, 80).unwrap();
+        let names: Vec<_> = std::fs::read_dir(target.parent().unwrap()).unwrap().flatten().map(|e| e.file_name()).collect();
+        assert_eq!(names, ["1.jpg"]);
+        assert_eq!(image::image_dimensions(&target).unwrap(), (256, 192));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

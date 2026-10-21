@@ -7,7 +7,7 @@ use eframe::egui::{self, Color32, Rect, Shape, Stroke, Vec2};
 
 use crate::types::{folder_label, Folder, Nav};
 
-use super::theme::{self, MUTED, TEXT};
+use super::theme::{self};
 use super::PicassoApp;
 
 const INDENT: f32 = 14.0;
@@ -179,9 +179,9 @@ fn tree_line(ui: &mut egui::Ui, row: &Row, selected: bool) -> (egui::Response, b
     let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
     let painter = ui.painter();
     if selected {
-        painter.rect_filled(rect, theme::RADIUS, theme::SELECT);
+        painter.rect_filled(rect, theme::RADIUS, theme::select());
     } else if response.hovered() {
-        painter.rect_filled(rect, theme::RADIUS, theme::HOVER);
+        painter.rect_filled(rect, theme::RADIUS, theme::hover());
     }
     let indent = row.depth as f32 * INDENT;
     let arrow_x = rect.left() + 6.0 + indent;
@@ -192,7 +192,7 @@ fn tree_line(ui: &mut egui::Ui, row: &Row, selected: bool) -> (egui::Response, b
         } else {
             vec![egui::pos2(arrow_x + 1.0, cy - 4.0), egui::pos2(arrow_x + 6.0, cy), egui::pos2(arrow_x + 1.0, cy + 4.0)]
         };
-        painter.add(Shape::convex_polygon(points, MUTED, Stroke::NONE));
+        painter.add(Shape::convex_polygon(points, theme::muted(), Stroke::NONE));
     }
     let icon = egui::pos2(arrow_x + 14.0, cy - 7.0);
     painter.rect_filled(Rect::from_min_size(icon + Vec2::new(0.0, 1.0), Vec2::new(7.0, 4.0)), 2, Color32::from_rgb(0xD9, 0x9A, 0x1E));
@@ -203,7 +203,7 @@ fn tree_line(ui: &mut egui::Ui, row: &Row, selected: bool) -> (egui::Response, b
         egui::Align2::RIGHT_CENTER,
         row.count.to_string(),
         egui::FontId::proportional(12.0),
-        MUTED,
+        theme::muted(),
     );
     let clip = Rect::from_min_max(rect.min, egui::pos2(count_rect.left() - 8.0, rect.max.y));
     painter.with_clip_rect(clip).text(
@@ -211,7 +211,7 @@ fn tree_line(ui: &mut egui::Ui, row: &Row, selected: bool) -> (egui::Response, b
         egui::Align2::LEFT_CENTER,
         &row.label,
         egui::FontId::proportional(13.5),
-        if selected { theme::ACCENT } else { TEXT },
+        if selected { theme::ACCENT } else { theme::text() },
     );
 
     let toggled = row.open.is_some()

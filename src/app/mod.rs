@@ -2,6 +2,8 @@
 
 mod about;
 mod editor;
+mod editor_panel;
+mod editor_stage;
 mod library;
 mod places;
 mod side;
@@ -9,7 +11,7 @@ mod theme;
 mod tree;
 mod viewer;
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -25,7 +27,7 @@ use crate::worker::{self, Command, DisplayGate, ThumbJob, UiEvent};
 
 use library::CachedLayout;
 use side::{SidePanel, TrayIcon};
-use theme::{MUTED, TEXT, TOOLBAR, TRAY, VIEWER_BG};
+use theme::ThemeMode;
 
 #[derive(Clone, Copy, PartialEq)]
 enum Mode {
@@ -58,38 +60,42 @@ struct ThumbTex {
     texture: TextureHandle,
     w: usize,
     h: usize,
+    /// Value of [`ThumbCache::clock`] when last drawn.
+    used: u64,
 }
 
+/// Thumbnail textures, least recently drawn first out.
 struct ThumbCache {
     map: HashMap<i64, ThumbTex>,
-    order: VecDeque<i64>,
+    clock: u64,
 }
 
 impl ThumbCache {
+    const CAPACITY: usize = 600;
+
     fn new() -> Self {
         Self {
             map: HashMap::new(),
-            order: VecDeque::new(),
+            clock: 0,
         }
     }
 
     fn get(&mut self, id: i64) -> Option<(TextureHandle, usize, usize)> {
-        let tex = self.map.get(&id)?;
-        let out = (tex.texture.clone(), tex.w, tex.h);
-        if let Some(pos) = self.order.iter().position(|item| *item == id) {
-            self.order.remove(pos);
-            self.order.push_back(id);
-        }
-        Some(out)
+        self.clock += 1;
+        let tex = self.map.get_mut(&id)?;
+        tex.used = self.clock;
+        Some((tex.texture.clone(), tex.w, tex.h))
     }
 
-    fn insert(&mut self, id: i64, tex: ThumbTex) {
-        if !self.map.contains_key(&id) {
-            self.order.push_back(id);
-        }
+    fn insert(&mut self, id: i64, mut tex: ThumbTex) {
+        self.clock += 1;
+        tex.used = self.clock;
         self.map.insert(id, tex);
-        while self.order.len() > 360 {
-            if let Some(old) = self.order.pop_front() {
+        if self.map.len() > Self::CAPACITY {
+            // Evict in chunks so the scan for the oldest runs rarely.
+            let mut ages: Vec<(u64, i64)> = self.map.iter().map(|(id, tex)| (tex.used, *id)).collect();
+            ages.sort_unstable();
+            for (_, old) in ages.into_iter().take(Self::CAPACITY / 10) {
                 self.map.remove(&old);
             }
         }
@@ -164,12 +170,16 @@ pub struct PicassoApp {
     caption_photo: Option<i64>,
     /// Language picked in the header, or `None` to follow the system.
     language: Option<Lang>,
+    theme_mode: ThemeMode,
     /// Applied edit of every edited photo.
     edits: HashMap<i64, crate::edit::Settings>,
     /// Edit panel open in the viewer.
     editing: bool,
     edit: Option<editor::EditSession>,
     edit_tx: Sender<crate::edit::EditJob>,
+    /// Settings copied with Ctrl+Shift+C, without crop.
+    edit_clipboard: Option<crate::edit::Settings>,
+    user_presets: Vec<crate::edit::presets::UserPreset>,
     events_tx: Sender<UiEvent>,
     slideshow: Option<Slideshow>,
     activity: String,
@@ -193,7 +203,6 @@ pub struct PicassoApp {
 
 impl PicassoApp {
     pub fn new(ctx: &egui::Context, args: Vec<PathBuf>) -> Self {
-        theme::apply(ctx);
         let (data_dir, cache) = db::app_dirs();
         let _ = std::fs::create_dir_all(&data_dir);
         let _ = std::fs::create_dir_all(cache.join("thumbs"));
@@ -201,6 +210,8 @@ impl PicassoApp {
         // Face crops from older builds are no longer used.
         let _ = std::fs::remove_dir_all(cache.join("faces"));
         let database = Database::open(&data_dir.join("picasso.db")).expect("open Picasso library");
+        let theme_mode = ThemeMode::from_code(&database.setting("theme").unwrap_or_default());
+        theme::apply(ctx, theme_mode.is_dark(system_dark(ctx)));
         let language = database.setting("language").as_deref().and_then(Lang::from_code);
         i18n::set(language.unwrap_or_else(i18n::system));
         let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
@@ -307,10 +318,13 @@ impl PicassoApp {
             caption_buf: String::new(),
             caption_photo: None,
             language,
+            theme_mode,
             edits: HashMap::new(),
             editing: false,
             edit: None,
             edit_tx,
+            edit_clipboard: None,
+            user_presets: Vec::new(),
             events_tx,
             slideshow: None,
             activity: String::new(),
@@ -366,14 +380,11 @@ impl PicassoApp {
                 app.edits.insert(id, settings);
             }
         }
+        app.user_presets = crate::edit::presets::user_presets_from_json(&app.db.setting("user_presets").unwrap_or_default());
         app.show_info = app.db.setting("viewer_info").as_deref() != Some("0");
         app.side = SidePanel::from_setting(app.db.setting("side_panel").as_deref());
         app.reload();
         app.sync_watches();
-        if let Some(index) = std::env::var("PICASSO_TMP_EDIT").ok().and_then(|value| value.parse().ok()) {
-            app.open_at(index);
-            app.editing = true;
-        }
         app
     }
 
@@ -469,7 +480,7 @@ impl PicassoApp {
                     return;
                 }
                 if let Some(texture) = upload(ctx, &format!("thumb-{id}"), w, h, &rgba) {
-                    self.thumbs.insert(id, ThumbTex { texture, w, h });
+                    self.thumbs.insert(id, ThumbTex { texture, w, h, used: 0 });
                 } else {
                     self.thumb_failed.insert(id);
                 }
@@ -646,7 +657,9 @@ impl PicassoApp {
                 return;
             }
             if self.editing && self.mode == Mode::View {
-                self.toggle_editing();
+                if !self.edit_escape() {
+                    self.toggle_editing();
+                }
                 return;
             }
             if self.mode == Mode::View {
@@ -683,15 +696,49 @@ impl PicassoApp {
         if plain(Key::F1) {
             self.modal = Modal::Help;
         }
-        if self.editing && self.mode == Mode::View {
-            let redo = ctx.input_mut(|input| input.consume_key(Modifiers::COMMAND | Modifiers::SHIFT, Key::Z));
+        let command_shift = |key| ctx.input_mut(|input| input.consume_key(Modifiers::COMMAND | Modifiers::SHIFT, key));
+        if command_shift(Key::C) {
+            let index = match self.mode {
+                Mode::Browse => self.primary_index(),
+                Mode::View => Some(self.viewer_index),
+            };
+            let id = index.and_then(|index| self.photos.get(index)).map(|photo| photo.id);
+            self.copy_settings(id);
+        }
+        if command_shift(Key::V) {
+            let ids: Vec<i64> = match self.mode {
+                Mode::Browse => self.selection.iter().copied().collect(),
+                Mode::View => Vec::new(),
+            };
+            if self.edit.is_some() || !ids.is_empty() {
+                self.paste_settings(&ids);
+            }
+        }
+        if self.editing && self.mode == Mode::View && self.edit.is_some() {
+            let redo = command_shift(Key::Z);
             if redo || command(Key::Y) {
                 self.edit_redo();
             } else if command(Key::Z) {
                 self.edit_undo();
             }
+            // Plain shortcuts also match with Shift held, so Shift+Y goes first.
+            if shift(Key::Y) {
+                self.toggle_compare(editor::Compare::Split(0.5));
+            } else if plain(Key::Y) {
+                self.toggle_compare(editor::Compare::SideBySide);
+            }
             if plain(Key::Backslash) {
-                self.toggle_before();
+                self.toggle_compare(editor::Compare::Before);
+            }
+            if plain(Key::J) {
+                self.toggle_clipping();
+            }
+            if plain(Key::C) {
+                self.set_tool(editor::Tool::Crop);
+            }
+            let cropping = self.edit.as_ref().is_some_and(|session| session.tool == editor::Tool::Crop);
+            if cropping && plain(Key::Enter) {
+                self.set_tool(editor::Tool::Crop);
             }
         }
         if plain(Key::E) {
@@ -808,7 +855,7 @@ impl PicassoApp {
         ui.horizontal(|ui| {
             let (rect, icon) = ui.allocate_exact_size(Vec2::splat(28.0), egui::Sense::click());
             theme::paint_logo(ui.painter(), &self.logo, rect);
-            let name = ui.add(egui::Label::new(egui::RichText::new("Picasso").size(17.0).strong().color(TEXT)).sense(egui::Sense::click()));
+            let name = ui.add(egui::Label::new(egui::RichText::new("Picasso").size(17.0).strong().color(theme::text())).sense(egui::Sense::click()));
             let brand = icon.union(name).on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(tr("About Picasso"));
             if brand.clicked() {
                 self.modal = Modal::About;
@@ -826,6 +873,7 @@ impl PicassoApp {
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 self.language_menu(ui);
+                self.theme_menu(ui);
                 if ui.button(tr("Slideshow")).on_hover_text(tr("Play Fullscreen Slideshow")).clicked() {
                     self.start_slideshow();
                 }
@@ -867,6 +915,33 @@ impl PicassoApp {
         response.response.on_hover_text(tr("Language"));
     }
 
+    /// Header menu that picks the color theme for every page.
+    fn theme_menu(&mut self, ui: &mut egui::Ui) {
+        let response = ui.menu_button("     ", |ui| {
+            for mode in ThemeMode::ALL {
+                if ui.radio(self.theme_mode == mode, tr(mode.label())).clicked() {
+                    self.set_theme_mode(ui.ctx(), mode);
+                    ui.close();
+                }
+            }
+        });
+        let rect = response.response.rect;
+        theme::paint_theme_icon(ui.painter(), rect.center(), theme::is_dark(), theme::text());
+        response.response.on_hover_text(tr("Color theme"));
+    }
+
+    fn set_theme_mode(&mut self, ctx: &egui::Context, mode: ThemeMode) {
+        self.theme_mode = mode;
+        self.db.set_setting("theme", mode.code());
+        theme::set_dark(ctx, mode.is_dark(system_dark(ctx)));
+    }
+
+    /// Flips between the light and dark themes from the viewer toolbar.
+    pub(super) fn toggle_theme(&mut self, ctx: &egui::Context) {
+        let mode = if theme::is_dark() { ThemeMode::Light } else { ThemeMode::Dark };
+        self.set_theme_mode(ctx, mode);
+    }
+
     fn set_language(&mut self, language: Option<Lang>) {
         self.language = language;
         self.db.set_setting("language", language.map_or("auto", Lang::code));
@@ -877,7 +952,7 @@ impl PicassoApp {
 
     fn status(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            ui.label(egui::RichText::new(tr("Photo Tray")).strong().size(12.0).color(MUTED));
+            ui.label(egui::RichText::new(tr("Photo Tray")).strong().size(12.0).color(theme::muted()));
             let held: Vec<(i64, String, i32)> = self
                 .photos
                 .iter()
@@ -892,7 +967,7 @@ impl PicassoApp {
                 if let Some((texture, w, h)) = self.thumb_texture(*id) {
                     theme::paint_image_rounded(ui.painter(), &texture, rect, theme::cover_uv(w, h), *rotation, 5.0);
                 } else {
-                    ui.painter().rect_filled(rect, 5, theme::PLACEHOLDER);
+                    ui.painter().rect_filled(rect, 5, theme::placeholder());
                 }
                 ui.painter().rect_stroke(rect, 5, egui::Stroke::new(1.0, Color32::from_black_alpha(20)), egui::StrokeKind::Inside);
                 if response.double_clicked() {
@@ -907,7 +982,7 @@ impl PicassoApp {
                 }
             }
             if extra > 0 {
-                ui.label(egui::RichText::new(format!("+{extra}")).color(MUTED).size(12.0));
+                ui.label(egui::RichText::new(format!("+{extra}")).color(theme::muted()).size(12.0));
             }
             if !self.selection.is_empty() {
                 if ui.button(tr("Clear")).on_hover_text(tr("Clear items from the selection")).clicked() {
@@ -924,7 +999,7 @@ impl PicassoApp {
                 text.push_str("  ·  ");
                 text.push_str(&self.activity);
             }
-            ui.label(egui::RichText::new(text).color(MUTED).size(12.0));
+            ui.label(egui::RichText::new(text).color(theme::muted()).size(12.0));
             if self.scans > 0 {
                 ui.add(egui::Spinner::new().size(12.0));
             }
@@ -938,10 +1013,10 @@ impl PicassoApp {
                     self.toggle_side(SidePanel::Info);
                 }
                 ui.add_space(12.0);
-                ui.label(egui::RichText::new("▮").size(16.0).color(MUTED));
+                ui.label(egui::RichText::new("▮").size(16.0).color(theme::muted()));
                 let mut size = self.thumb_size;
                 ui.add(egui::Slider::new(&mut size, 96.0..=220.0).show_value(false));
-                ui.label(egui::RichText::new("▮").size(10.0).color(MUTED));
+                ui.label(egui::RichText::new("▮").size(10.0).color(theme::muted()));
                 if (size - self.thumb_size).abs() > 0.1 {
                     self.thumb_size = size;
                 }
@@ -985,7 +1060,7 @@ impl PicassoApp {
                 });
             }
             if ui
-                .add(egui::Button::new(egui::RichText::new(tr("+  New album")).color(MUTED)).frame(false))
+                .add(egui::Button::new(egui::RichText::new(tr("+  New album")).color(theme::muted())).frame(false))
                 .clicked()
             {
                 self.modal = Modal::NewAlbum {
@@ -1003,9 +1078,9 @@ impl PicassoApp {
         let (rect, response) = ui.allocate_exact_size(Vec2::new(width, 30.0), egui::Sense::click());
         let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
         if selected {
-            ui.painter().rect_filled(rect, theme::RADIUS, theme::SELECT);
+            ui.painter().rect_filled(rect, theme::RADIUS, theme::select());
         } else if response.hovered() {
-            ui.painter().rect_filled(rect, theme::RADIUS, theme::HOVER);
+            ui.painter().rect_filled(rect, theme::RADIUS, theme::hover());
         }
         paint_glyph(ui.painter(), rect.left_center() + Vec2::new(10.0, 0.0), glyph);
         let mut text_right = rect.right() - 10.0;
@@ -1015,7 +1090,7 @@ impl PicassoApp {
                 egui::Align2::RIGHT_CENTER,
                 count.to_string(),
                 egui::FontId::proportional(12.0),
-                MUTED,
+                theme::muted(),
             );
             text_right = count_rect.left() - 8.0;
         }
@@ -1025,7 +1100,7 @@ impl PicassoApp {
             egui::Align2::LEFT_CENTER,
             label,
             egui::FontId::proportional(13.5),
-            if selected { theme::ACCENT } else { TEXT },
+            if selected { theme::ACCENT } else { theme::text() },
         );
         response
     }
@@ -1071,6 +1146,8 @@ impl PicassoApp {
                             "Rotation is saved in the library; photo files are never changed",
                             "I — details, histogram, and EXIF",
                             "E — edit     Ctrl+Z / Ctrl+Y — undo / redo     \\ — before",
+                            "Y — side by side     Shift+Y — split     J — clipping     C — crop",
+                            "Ctrl+Shift+C / Ctrl+Shift+V — copy / paste edit settings",
                             "+ / − zoom     0 fit     1 actual size",
                             "Delete — trash     F5 — rescan     F11 — fullscreen",
                         ] {
@@ -1612,6 +1689,10 @@ impl eframe::App for PicassoApp {
     }
 
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        let dark = self.theme_mode.is_dark(system_dark(ctx));
+        if dark != theme::is_dark() {
+            theme::set_dark(ctx, dark);
+        }
         self.pump(ctx);
         self.pump_tiles(ctx);
         self.pump_watch(ctx);
@@ -1635,21 +1716,21 @@ impl eframe::App for PicassoApp {
         }
         if viewing {
             egui::CentralPanel::default()
-                .frame(egui::Frame::new().fill(VIEWER_BG))
+                .frame(egui::Frame::new().fill(theme::stage()))
                 .show(ui, |ui| self.viewer_ui(ui));
         } else {
             egui::Panel::top("header")
-                .frame(theme::toolbar_frame(TOOLBAR).inner_margin(egui::Margin::symmetric(16, 10)))
+                .frame(theme::toolbar_frame(theme::toolbar()).inner_margin(egui::Margin::symmetric(16, 10)))
                 .show(ui, |ui| self.header(ui));
             egui::Panel::bottom("tray")
-                .frame(theme::toolbar_frame(TRAY))
+                .frame(theme::toolbar_frame(theme::tray()))
                 .show(ui, |ui| self.status(ui));
             egui::Panel::left("nav")
                 .resizable(true)
                 .default_size(232.0)
                 .min_size(190.0)
                 .max_size(340.0)
-                .frame(theme::toolbar_frame(theme::SIDEBAR).inner_margin(egui::Margin::symmetric(10, 6)))
+                .frame(theme::toolbar_frame(theme::sidebar()).inner_margin(egui::Margin::symmetric(10, 6)))
                 .show(ui, |ui| self.sidebar(ui));
             if self.side != SidePanel::None {
                 egui::Panel::right("side")
@@ -1657,11 +1738,11 @@ impl eframe::App for PicassoApp {
                     .default_size(300.0)
                     .min_size(250.0)
                     .max_size(520.0)
-                    .frame(theme::toolbar_frame(theme::SIDEBAR).inner_margin(egui::Margin::symmetric(14, 10)))
+                    .frame(theme::toolbar_frame(theme::sidebar()).inner_margin(egui::Margin::symmetric(14, 10)))
                     .show(ui, |ui| self.side_ui(ui));
             }
             egui::CentralPanel::default()
-                .frame(theme::frame(theme::BG))
+                .frame(theme::frame(theme::bg()))
                 .show(ui, |ui| self.library_ui(ui));
         }
         self.modals(ui.ctx());
@@ -1676,6 +1757,11 @@ fn upload(ctx: &egui::Context, name: &str, w: usize, h: usize, rgba: &[u8]) -> O
     Some(ctx.load_texture(name, image, TextureOptions::LINEAR))
 }
 
+/// True when the operating system asks for dark mode. Unknown counts as light.
+fn system_dark(ctx: &egui::Context) -> bool {
+    ctx.system_theme() == Some(egui::Theme::Dark)
+}
+
 /// "1 photo" or "N photos" in the current language.
 fn photo_count(count: usize) -> String {
     trf(if count == 1 { "{} photo" } else { "{} photos" }, &[&count])
@@ -1685,7 +1771,7 @@ fn tree_section(ui: &mut egui::Ui, title: &str) {
     ui.add_space(14.0);
     ui.horizontal(|ui| {
         ui.add_space(10.0);
-        ui.label(egui::RichText::new(title.to_uppercase()).size(11.0).strong().color(MUTED));
+        ui.label(egui::RichText::new(title.to_uppercase()).size(11.0).strong().color(theme::muted()));
     });
     ui.add_space(4.0);
 }

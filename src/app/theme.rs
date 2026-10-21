@@ -1,106 +1,255 @@
-//! Modern light library chrome with a dark photo viewer.
+//! Light and dark color themes shared by every page.
+//!
+//! Colors that depend on the theme are read through functions such as
+//! [`text`] and [`panel`]; the constants below look the same in both.
+
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use eframe::egui::{self, Color32, CornerRadius, FontId, Pos2, Rect, Shadow, Stroke, TextStyle, Vec2};
 
-pub const BG: Color32 = Color32::from_rgb(0xFF, 0xFF, 0xFF);
-pub const TOOLBAR: Color32 = Color32::from_rgb(0xFF, 0xFF, 0xFF);
-pub const TRAY: Color32 = Color32::from_rgb(0xFA, 0xFA, 0xFB);
-pub const SIDEBAR: Color32 = Color32::from_rgb(0xF6, 0xF7, 0xF9);
 pub const ACCENT: Color32 = Color32::from_rgb(0x2F, 0x6F, 0xEB);
-pub const SELECT: Color32 = Color32::from_rgb(0xE4, 0xED, 0xFD);
-pub const HOVER: Color32 = Color32::from_rgb(0xEC, 0xEE, 0xF2);
-pub const PLACEHOLDER: Color32 = Color32::from_rgb(0xEE, 0xF0, 0xF3);
-pub const TEXT: Color32 = Color32::from_rgb(0x1F, 0x23, 0x28);
-pub const MUTED: Color32 = Color32::from_rgb(0x6B, 0x72, 0x80);
-pub const HAIRLINE: Color32 = Color32::from_rgb(0xE4, 0xE6, 0xEB);
 pub const STAR: Color32 = Color32::from_rgb(0xF5, 0xB4, 0x00);
 pub const FOLDER: Color32 = Color32::from_rgb(0xF2, 0xB5, 0x3B);
 pub const ALBUM: Color32 = Color32::from_rgb(0x8B, 0x5C, 0xF6);
 pub const DANGER: Color32 = Color32::from_rgb(0xD9, 0x3A, 0x3A);
-pub const VIEWER_BG: Color32 = Color32::from_rgb(0x0E, 0x0F, 0x11);
-pub const VIEWER_BAR: Color32 = Color32::from_rgb(0x17, 0x18, 0x1B);
-pub const VIEWER_PANEL: Color32 = Color32::from_rgb(0x1B, 0x1C, 0x20);
-pub const VIEWER_MUTED: Color32 = Color32::from_rgb(0x9A, 0xA0, 0xA8);
+/// Marks drawn over a photo or on a dark badge, in either theme.
 pub const WHITE: Color32 = Color32::from_rgb(0xFF, 0xFF, 0xFF);
 
 pub const RADIUS: u8 = 6;
 pub const THUMB_RADIUS: u8 = 8;
 
-pub fn apply(ctx: &egui::Context) {
-    ctx.set_theme(egui::ThemePreference::Light);
+/// The theme the user picked. `System` follows the operating system.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ThemeMode {
+    System,
+    Light,
+    Dark,
+}
+
+impl ThemeMode {
+    pub const ALL: [ThemeMode; 3] = [ThemeMode::System, ThemeMode::Light, ThemeMode::Dark];
+
+    pub fn code(self) -> &'static str {
+        match self {
+            ThemeMode::System => "system",
+            ThemeMode::Light => "light",
+            ThemeMode::Dark => "dark",
+        }
+    }
+
+    pub fn from_code(code: &str) -> ThemeMode {
+        match code {
+            "light" => ThemeMode::Light,
+            "dark" => ThemeMode::Dark,
+            _ => ThemeMode::System,
+        }
+    }
+
+    /// English label, translated with `tr` where shown.
+    pub fn label(self) -> &'static str {
+        match self {
+            ThemeMode::System => "System theme",
+            ThemeMode::Light => "Light theme",
+            ThemeMode::Dark => "Dark theme",
+        }
+    }
+
+    /// True when this mode shows the dark palette on a system that is dark
+    /// when `system_dark` is.
+    pub fn is_dark(self, system_dark: bool) -> bool {
+        match self {
+            ThemeMode::System => system_dark,
+            ThemeMode::Light => false,
+            ThemeMode::Dark => true,
+        }
+    }
+}
+
+struct Palette {
+    /// Library page and dialogs.
+    bg: Color32,
+    /// Header and viewer toolbar.
+    toolbar: Color32,
+    /// Status bar at the bottom of the library.
+    tray: Color32,
+    /// Folder list, side panels, and the editor.
+    sidebar: Color32,
+    /// Behind the photo in the viewer.
+    stage: Color32,
+    /// Inset areas such as the histogram and the curve graph.
+    well: Color32,
+    select: Color32,
+    hover: Color32,
+    placeholder: Color32,
+    text: Color32,
+    muted: Color32,
+    hairline: Color32,
+}
+
+const LIGHT: Palette = Palette {
+    bg: Color32::from_rgb(0xFF, 0xFF, 0xFF),
+    toolbar: Color32::from_rgb(0xFF, 0xFF, 0xFF),
+    tray: Color32::from_rgb(0xFA, 0xFA, 0xFB),
+    sidebar: Color32::from_rgb(0xF6, 0xF7, 0xF9),
+    stage: Color32::from_rgb(0xE9, 0xEB, 0xEE),
+    well: Color32::from_rgb(0xEC, 0xEE, 0xF2),
+    select: Color32::from_rgb(0xE4, 0xED, 0xFD),
+    hover: Color32::from_rgb(0xEC, 0xEE, 0xF2),
+    placeholder: Color32::from_rgb(0xEE, 0xF0, 0xF3),
+    text: Color32::from_rgb(0x1F, 0x23, 0x28),
+    muted: Color32::from_rgb(0x6B, 0x72, 0x80),
+    hairline: Color32::from_rgb(0xE4, 0xE6, 0xEB),
+};
+
+const DARK: Palette = Palette {
+    bg: Color32::from_rgb(0x13, 0x14, 0x17),
+    toolbar: Color32::from_rgb(0x17, 0x18, 0x1B),
+    tray: Color32::from_rgb(0x17, 0x18, 0x1B),
+    sidebar: Color32::from_rgb(0x1B, 0x1C, 0x20),
+    stage: Color32::from_rgb(0x0E, 0x0F, 0x11),
+    well: Color32::from_rgb(0x24, 0x26, 0x2A),
+    select: Color32::from_rgb(0x22, 0x36, 0x5E),
+    hover: Color32::from_rgb(0x2A, 0x2C, 0x31),
+    placeholder: Color32::from_rgb(0x26, 0x28, 0x2C),
+    text: Color32::from_rgb(0xE8, 0xEA, 0xED),
+    muted: Color32::from_rgb(0x9A, 0xA0, 0xA8),
+    hairline: Color32::from_rgb(0x2C, 0x2E, 0x33),
+};
+
+static DARK_ACTIVE: AtomicBool = AtomicBool::new(false);
+
+fn palette() -> &'static Palette {
+    if DARK_ACTIVE.load(Ordering::Relaxed) {
+        &DARK
+    } else {
+        &LIGHT
+    }
+}
+
+pub fn is_dark() -> bool {
+    DARK_ACTIVE.load(Ordering::Relaxed)
+}
+
+pub fn bg() -> Color32 {
+    palette().bg
+}
+pub fn toolbar() -> Color32 {
+    palette().toolbar
+}
+pub fn tray() -> Color32 {
+    palette().tray
+}
+pub fn sidebar() -> Color32 {
+    palette().sidebar
+}
+pub fn stage() -> Color32 {
+    palette().stage
+}
+pub fn well() -> Color32 {
+    palette().well
+}
+pub fn select() -> Color32 {
+    palette().select
+}
+pub fn hover() -> Color32 {
+    palette().hover
+}
+pub fn placeholder() -> Color32 {
+    palette().placeholder
+}
+pub fn text() -> Color32 {
+    palette().text
+}
+pub fn muted() -> Color32 {
+    palette().muted
+}
+pub fn hairline() -> Color32 {
+    palette().hairline
+}
+
+/// Translucent tint that stands out from the current background: white on
+/// the dark theme, black on the light one.
+pub fn overlay(alpha: u8) -> Color32 {
+    if is_dark() {
+        Color32::from_white_alpha(alpha)
+    } else {
+        Color32::from_black_alpha(alpha)
+    }
+}
+
+/// Fonts and spacing, set once at startup.
+pub fn apply(ctx: &egui::Context, dark: bool) {
     ctx.all_styles_mut(|style| {
         style.text_styles.insert(TextStyle::Body, FontId::proportional(13.5));
         style.text_styles.insert(TextStyle::Button, FontId::proportional(13.5));
         style.text_styles.insert(TextStyle::Small, FontId::proportional(11.0));
         style.text_styles.insert(TextStyle::Heading, FontId::proportional(20.0));
-
-        let visuals = &mut style.visuals;
-        visuals.panel_fill = BG;
-        visuals.window_fill = WHITE;
-        visuals.window_stroke = Stroke::new(1.0, HAIRLINE);
-        visuals.window_corner_radius = CornerRadius::same(12);
-        visuals.window_shadow = Shadow {
-            offset: [0, 10],
-            blur: 28,
-            spread: 0,
-            color: Color32::from_black_alpha(36),
-        };
-        visuals.popup_shadow = Shadow {
-            offset: [0, 6],
-            blur: 16,
-            spread: 0,
-            color: Color32::from_black_alpha(28),
-        };
-        visuals.menu_corner_radius = CornerRadius::same(8);
-        visuals.extreme_bg_color = WHITE;
-        visuals.faint_bg_color = SIDEBAR;
-        visuals.selection.bg_fill = SELECT;
-        visuals.selection.stroke = Stroke::new(1.0, ACCENT);
-        visuals.hyperlink_color = ACCENT;
-        visuals.slider_trailing_fill = true;
-
-        let widgets = &mut visuals.widgets;
-        widgets.noninteractive.bg_stroke = Stroke::new(1.0, HAIRLINE);
-        widgets.noninteractive.fg_stroke = Stroke::new(1.0, TEXT);
-        widgets.inactive.weak_bg_fill = Color32::from_rgb(0xF3, 0xF4, 0xF6);
-        widgets.inactive.bg_fill = Color32::from_rgb(0xE4, 0xE6, 0xEB);
-        widgets.inactive.bg_stroke = Stroke::new(1.0, Color32::from_rgb(0xDA, 0xDD, 0xE2));
-        widgets.inactive.fg_stroke = Stroke::new(1.0, TEXT);
-        widgets.hovered.weak_bg_fill = HOVER;
-        widgets.hovered.bg_fill = HOVER;
-        widgets.hovered.bg_stroke = Stroke::new(1.0, Color32::from_rgb(0xC9, 0xCE, 0xD6));
-        widgets.hovered.fg_stroke = Stroke::new(1.0, TEXT);
-        widgets.active.weak_bg_fill = Color32::from_rgb(0xDF, 0xE3, 0xE9);
-        widgets.active.bg_fill = Color32::from_rgb(0xDF, 0xE3, 0xE9);
-        widgets.active.bg_stroke = Stroke::new(1.0, Color32::from_rgb(0xB9, 0xC0, 0xCA));
-        widgets.active.fg_stroke = Stroke::new(1.0, TEXT);
-        widgets.open.weak_bg_fill = HOVER;
-        round_widgets(visuals);
-
         style.spacing.item_spacing = egui::vec2(8.0, 6.0);
         style.spacing.button_padding = egui::vec2(12.0, 5.0);
         style.spacing.interact_size.y = 28.0;
         style.spacing.menu_margin = egui::Margin::same(6);
         style.spacing.window_margin = egui::Margin::same(18);
     });
+    set_dark(ctx, dark);
 }
 
-/// Dark style for the photo viewer, so the chrome recedes behind the picture.
-pub fn viewer_visuals() -> egui::Visuals {
-    let mut visuals = egui::Visuals::dark();
-    visuals.panel_fill = VIEWER_BG;
-    visuals.extreme_bg_color = Color32::from_rgb(0x22, 0x24, 0x28);
-    visuals.faint_bg_color = Color32::from_rgb(0x22, 0x24, 0x28);
-    visuals.selection.bg_fill = Color32::from_rgb(0x2B, 0x4C, 0x8F);
+/// Switches every page to the light or dark palette.
+pub fn set_dark(ctx: &egui::Context, dark: bool) {
+    DARK_ACTIVE.store(dark, Ordering::Relaxed);
+    ctx.set_theme(if dark { egui::ThemePreference::Dark } else { egui::ThemePreference::Light });
+    ctx.all_styles_mut(|style| style.visuals = visuals(dark));
+}
+
+fn visuals(dark: bool) -> egui::Visuals {
+    let p = if dark { &DARK } else { &LIGHT };
+    let mut visuals = if dark { egui::Visuals::dark() } else { egui::Visuals::light() };
+    visuals.panel_fill = p.bg;
+    visuals.window_fill = if dark { p.sidebar } else { WHITE };
+    visuals.window_stroke = Stroke::new(1.0, p.hairline);
+    visuals.window_corner_radius = CornerRadius::same(12);
+    visuals.window_shadow = Shadow {
+        offset: [0, 10],
+        blur: 28,
+        spread: 0,
+        color: Color32::from_black_alpha(if dark { 110 } else { 36 }),
+    };
+    visuals.popup_shadow = Shadow {
+        offset: [0, 6],
+        blur: 16,
+        spread: 0,
+        color: Color32::from_black_alpha(if dark { 90 } else { 28 }),
+    };
+    visuals.menu_corner_radius = CornerRadius::same(8);
+    visuals.extreme_bg_color = if dark { Color32::from_rgb(0x22, 0x24, 0x28) } else { WHITE };
+    visuals.faint_bg_color = if dark { Color32::from_rgb(0x22, 0x24, 0x28) } else { p.sidebar };
+    visuals.selection.bg_fill = if dark { Color32::from_rgb(0x2B, 0x4C, 0x8F) } else { p.select };
     visuals.selection.stroke = Stroke::new(1.0, ACCENT);
+    visuals.hyperlink_color = if dark { Color32::from_rgb(0x6C, 0xA6, 0xFF) } else { ACCENT };
     visuals.slider_trailing_fill = true;
+
+    // Fill and outline of buttons and fields: resting, hovered, pressed.
+    let [rest, rest_fill, rest_line, over, over_line, press, press_line] = if dark {
+        [(0x26, 0x28, 0x2C), (0x30, 0x32, 0x37), (0x30, 0x32, 0x37), (0x32, 0x35, 0x3A), (0x41, 0x45, 0x4C), (0x3B, 0x3F, 0x45), (0x4A, 0x4F, 0x57)]
+    } else {
+        [(0xF3, 0xF4, 0xF6), (0xE4, 0xE6, 0xEB), (0xDA, 0xDD, 0xE2), (0xEC, 0xEE, 0xF2), (0xC9, 0xCE, 0xD6), (0xDF, 0xE3, 0xE9), (0xB9, 0xC0, 0xCA)]
+    }
+    .map(|(r, g, b)| Color32::from_rgb(r, g, b));
     let widgets = &mut visuals.widgets;
-    widgets.noninteractive.bg_stroke = Stroke::new(1.0, Color32::from_rgb(0x2C, 0x2E, 0x33));
-    widgets.inactive.weak_bg_fill = Color32::from_rgb(0x26, 0x28, 0x2C);
-    widgets.inactive.bg_stroke = Stroke::new(1.0, Color32::from_rgb(0x30, 0x32, 0x37));
-    widgets.hovered.weak_bg_fill = Color32::from_rgb(0x32, 0x35, 0x3A);
-    widgets.hovered.bg_stroke = Stroke::new(1.0, Color32::from_rgb(0x41, 0x45, 0x4C));
-    widgets.active.weak_bg_fill = Color32::from_rgb(0x3B, 0x3F, 0x45);
+    widgets.noninteractive.bg_stroke = Stroke::new(1.0, p.hairline);
+    widgets.noninteractive.fg_stroke = Stroke::new(1.0, p.text);
+    widgets.inactive.weak_bg_fill = rest;
+    widgets.inactive.bg_fill = rest_fill;
+    widgets.inactive.bg_stroke = Stroke::new(1.0, rest_line);
+    widgets.inactive.fg_stroke = Stroke::new(1.0, p.text);
+    widgets.hovered.weak_bg_fill = over;
+    widgets.hovered.bg_fill = over;
+    widgets.hovered.bg_stroke = Stroke::new(1.0, over_line);
+    widgets.hovered.fg_stroke = Stroke::new(1.0, p.text);
+    widgets.active.weak_bg_fill = press;
+    widgets.active.bg_fill = press;
+    widgets.active.bg_stroke = Stroke::new(1.0, press_line);
+    widgets.active.fg_stroke = Stroke::new(1.0, p.text);
+    widgets.open.weak_bg_fill = over;
     round_widgets(&mut visuals);
     visuals
 }
@@ -138,7 +287,7 @@ pub fn card_shadow() -> Shadow {
         offset: [0, 4],
         blur: 14,
         spread: 0,
-        color: Color32::from_black_alpha(40),
+        color: Color32::from_black_alpha(if is_dark() { 120 } else { 40 }),
     }
 }
 
@@ -170,6 +319,51 @@ pub fn paint_pin(painter: &egui::Painter, center: Pos2, radius: f32, color: Colo
     ));
     painter.circle_filled(head, radius, color);
     painter.circle_filled(head, 0.36 * radius, hole);
+}
+
+/// Theme glyph about 14 points wide: a crescent moon when `moon`, otherwise
+/// a sun with eight rays.
+pub fn paint_theme_icon(painter: &egui::Painter, center: Pos2, moon: bool, color: Color32) {
+    if !moon {
+        painter.circle_filled(center, 3.4, color);
+        for step in 0..8 {
+            let angle = step as f32 * std::f32::consts::FRAC_PI_4;
+            let dir = Vec2::angled(angle);
+            painter.line_segment([center + dir * 5.3, center + dir * 7.0], Stroke::new(1.5, color));
+        }
+        return;
+    }
+    // Disc of `radius` minus the same disc shifted right by `cut`, swept
+    // top to bottom as a triangle strip and tilted toward the upper right.
+    let (radius, cut, rows) = (6.5_f32, 4.6_f32, 24);
+    let tilt = Vec2::angled(-std::f32::consts::FRAC_PI_4);
+    let place = |x: f32, y: f32| center + Vec2::new(x * tilt.x - y * tilt.y, x * tilt.y + y * tilt.x);
+    let mut mesh = egui::Mesh::default();
+    for row in 0..=rows {
+        let y = -radius + 2.0 * radius * row as f32 / rows as f32;
+        let half = (radius * radius - y * y).max(0.0).sqrt();
+        mesh.colored_vertex(place(-half, y), color);
+        mesh.colored_vertex(place(half.min(cut - half), y), color);
+        if row > 0 {
+            let i = mesh.vertices.len() as u32;
+            mesh.add_triangle(i - 4, i - 3, i - 2);
+            mesh.add_triangle(i - 3, i - 2, i - 1);
+        }
+    }
+    painter.add(egui::Shape::mesh(mesh));
+}
+
+/// Badge for an edited photo: three slider tracks with knobs on a dark disc
+/// of `radius`.
+pub fn paint_edit_mark(painter: &egui::Painter, center: Pos2, radius: f32) {
+    painter.circle_filled(center, radius, Color32::from_black_alpha(110));
+    let half = radius * 0.5;
+    let track = Stroke::new((radius * 0.12).max(1.0), WHITE);
+    for (row, knob) in [(-1.0, -0.4), (0.0, 0.45), (1.0, -0.1)] {
+        let y = center.y + row * radius * 0.36;
+        painter.line_segment([Pos2::new(center.x - half, y), Pos2::new(center.x + half, y)], track);
+        painter.circle_filled(Pos2::new(center.x + knob * half, y), radius * 0.17, WHITE);
+    }
 }
 
 /// Draws `uv` of the texture into `rect`, turned `rotation` degrees clockwise.

@@ -1,5 +1,8 @@
 //! Picasso — a local photo library and viewer.
 
+// Release builds on Windows open no console window next to the app.
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+
 mod app;
 mod db;
 mod edit;
@@ -12,7 +15,7 @@ mod types;
 mod video;
 mod worker;
 
-/// Edge of the application icon drawn by `build.rs`.
+/// Edge of the application icon unpacked by `build.rs`.
 pub const ICON_SIZE: usize = 256;
 /// Straight-alpha RGBA pixels of the application icon.
 pub static ICON_RGBA: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/icon-256.rgba"));

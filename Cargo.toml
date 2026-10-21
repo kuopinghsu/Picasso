@@ -1,10 +1,11 @@
 [package]
 name = "picasso"
-version = "0.1.0"
+version = "0.9.0"
 edition = "2021"
 rust-version = "1.95"
 description = "Fast local photo library and viewer in the style of Picasa"
 license = "MIT"
+repository = "https://github.com/kuopinghsu/picasso"
 
 [dependencies]
 chrono = "0.4"
@@ -21,7 +22,11 @@ rfd = "0.15"
 rusqlite = { version = "0.40", features = ["bundled"] }
 trash = "5"
 ureq = "3.1"
-walkdir = "2"
+rodio = { version = "0.23.0", default-features = false, features = ["playback"] }
+serde_json = "1.0.154"
+sys-locale = "0.3.2"
+rayon = "1.12.0"
+jpeg-decoder = { version = "0.3", default-features = false }
 
 [profile.dev.package."*"]
 opt-level = 1
@@ -29,3 +34,6 @@ opt-level = 1
 [profile.release]
 lto = "thin"
 codegen-units = 1
+
+[build-dependencies]
+winresource = "0.1.34"

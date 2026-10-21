@@ -5,7 +5,7 @@ use eframe::egui::{self, Align2, Color32, FontId, Pos2, Rect, Sense, Vec2};
 use crate::i18n::{tr, trf};
 use crate::types::{format_day, Nav, Photo, Sort};
 
-use super::theme::{self, ACCENT, MUTED, PLACEHOLDER, STAR, TEXT, THUMB_RADIUS, WHITE};
+use super::theme::{self, ACCENT, STAR, THUMB_RADIUS, WHITE};
 use super::PicassoApp;
 
 const GAP: f32 = 14.0;
@@ -111,7 +111,7 @@ impl PicassoApp {
                             Align2::LEFT_BOTTOM,
                             title,
                             FontId::proportional(15.0),
-                            TEXT,
+                            theme::text(),
                         );
                     }
                     GridRow::Photos { indices, y, h: _ } => {
@@ -151,8 +151,8 @@ impl PicassoApp {
 
     fn library_toolbar(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            ui.label(egui::RichText::new(self.view_title()).size(22.0).strong().color(TEXT));
-            ui.label(egui::RichText::new(super::photo_count(self.photos.len())).size(13.0).color(MUTED));
+            ui.label(egui::RichText::new(self.view_title()).size(22.0).strong().color(theme::text()));
+            ui.label(egui::RichText::new(super::photo_count(self.photos.len())).size(13.0).color(theme::muted()));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let mut sort = self.sort;
                 egui::ComboBox::from_id_salt("sort")
@@ -242,7 +242,7 @@ impl PicassoApp {
         if response.hovered() {
             painter.add(theme::card_shadow().as_shape(image_rect, THUMB_RADIUS));
         }
-        painter.rect_filled(image_rect, THUMB_RADIUS, PLACEHOLDER);
+        painter.rect_filled(image_rect, THUMB_RADIUS, theme::placeholder());
         if let Some((texture, w, h)) = self.thumb_texture(photo.id) {
             theme::paint_image_rounded(
                 ui.painter(),
@@ -299,12 +299,17 @@ impl PicassoApp {
             painter.circle_filled(place_rect.center(), 11.0, Color32::from_black_alpha(110));
             theme::paint_pin(painter, place_rect.center(), 4.6, WHITE, Color32::from_black_alpha(110));
         }
+        let edit_rect = Rect::from_center_size(image_rect.right_top() + Vec2::new(-14.0, 14.0), Vec2::splat(22.0));
+        let edited = self.edits.contains_key(&photo.id);
+        if edited {
+            theme::paint_edit_mark(painter, edit_rect.center(), 11.0);
+        }
         painter.text(
             Pos2::new(image_rect.center().x, image_rect.bottom() + 5.0),
             Align2::CENTER_TOP,
             elide(&photo.filename, ((thumb / 7.0) as usize).max(8)),
             FontId::proportional(11.5),
-            MUTED,
+            theme::muted(),
         );
         let star_rect = Rect::from_min_size(image_rect.right_bottom() + Vec2::new(-22.0, -22.0), Vec2::splat(22.0));
         let on_star = response
@@ -312,9 +317,12 @@ impl PicassoApp {
             .map(|pos| star_rect.contains(pos) && photo.starred)
             .unwrap_or(false);
         let over_place = |pos: Option<Pos2>| photo.place().is_some() && pos.is_some_and(|pos| place_rect.contains(pos));
+        let over_edit = |pos: Option<Pos2>| edited && pos.is_some_and(|pos| edit_rect.contains(pos));
         let response = if over_place(response.hover_pos()) {
             let text = if photo.pinned() { "Geotagged in Picasso — show on map" } else { "Has GPS location — show on map" };
             response.on_hover_text(tr(text))
+        } else if over_edit(response.hover_pos()) {
+            response.on_hover_text(tr("Edited — open in the editor"))
         } else {
             response
         };
@@ -322,6 +330,9 @@ impl PicassoApp {
             let modifiers = ui.input(|input| input.modifiers);
             if on_star {
                 self.toggle_star(photo.id);
+            } else if over_edit(response.interact_pointer_pos()) {
+                self.open_at(index);
+                self.editing = true;
             } else if over_place(response.interact_pointer_pos()) {
                 self.select_click(index, egui::Modifiers::NONE);
                 if self.side != super::SidePanel::Map {
@@ -352,6 +363,19 @@ impl PicassoApp {
                 self.rotate_from_menu(id, -90);
                 ui.close();
             }
+            if self.edits.contains_key(&id) && ui.button(tr("Copy edit settings")).clicked() {
+                self.copy_settings(Some(id));
+                ui.close();
+            }
+            if self.edit_clipboard.is_some() && ui.button(tr("Paste settings")).clicked() {
+                let ids: Vec<i64> = if self.selection.contains(&id) {
+                    self.selection.iter().copied().collect()
+                } else {
+                    vec![id]
+                };
+                self.paste_settings(&ids);
+                ui.close();
+            }
             if ui.button(tr("Show in folder")).clicked() {
                 if let Some(parent) = std::path::Path::new(&path).parent() {
                     let _ = open::that(parent);
@@ -376,9 +400,9 @@ impl PicassoApp {
             theme::paint_logo(ui.painter(), &self.logo, rect);
             ui.add_space(16.0);
             let title = if self.search.trim().is_empty() { "No photos found" } else { "No results found" };
-            ui.label(egui::RichText::new(tr(title)).size(20.0).strong().color(TEXT));
+            ui.label(egui::RichText::new(tr(title)).size(20.0).strong().color(theme::text()));
             ui.add_space(6.0);
-            ui.label(egui::RichText::new(tr("Import a folder and Picasso scans it for pictures.")).color(MUTED));
+            ui.label(egui::RichText::new(tr("Import a folder and Picasso scans it for pictures.")).color(theme::muted()));
             ui.add_space(16.0);
             if ui.add(theme::primary_button(tr("+  Import folder"))).clicked() {
                 self.modal = super::Modal::AddFolder {

@@ -58,7 +58,7 @@ jobs:
 
           New-Item -ItemType Directory -Force -Path dist, "staging/$name" | Out-Null
           Copy-Item target/release/picasso.exe "dist/$name.exe"
-          Copy-Item target/release/picasso.exe, README.md "staging/$name/"
+          Copy-Item target/release/picasso.exe, README.md, LICENSE "staging/$name/"
           Compress-Archive -Path "staging/$name" -DestinationPath "dist/$name.zip"
           Get-ChildItem dist -File | ForEach-Object {
             "$((Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower())  $($_.Name)"

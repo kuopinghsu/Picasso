@@ -7,7 +7,7 @@ use crate::geo::{self, TileJob, TILE_PX};
 use crate::i18n::{tr, trf};
 use crate::types::Photo;
 
-use super::theme::{ACCENT, MUTED, STAR, TEXT};
+use super::theme::{self, ACCENT, STAR};
 use super::PicassoApp;
 
 /// Center, zoom level, and unbaked drag offset of a map.
@@ -41,7 +41,7 @@ impl PicassoApp {
             if ui.button(tr("Open map")).on_hover_text(tr("Open this view in OpenStreetMap")).clicked() {
                 open_osm(self.map_lat, self.map_lon, self.map_zoom);
             }
-            ui.label(egui::RichText::new("© OpenStreetMap").size(11.0).color(MUTED));
+            ui.label(egui::RichText::new("© OpenStreetMap").size(11.0).color(theme::muted()));
         });
         ui.add_space(4.0);
 
@@ -106,7 +106,7 @@ impl PicassoApp {
                 Align2::CENTER_CENTER,
                 tr("No geotagged photos yet. Select photos, press Geotag, then click the map."),
                 FontId::proportional(14.0),
-                TEXT,
+                theme::text(),
             );
         }
     }
@@ -223,7 +223,7 @@ impl PicassoApp {
                     Align2::LEFT_CENTER,
                     &photo.filename,
                     FontId::proportional(11.0),
-                    TEXT,
+                    theme::text(),
                 );
             }
             if let Some(pointer) = pointer {

@@ -539,7 +539,7 @@ fn process(frame: &Frame, s: &Settings) -> RgbaImage {
                 let current = (luminance(rgb) + LOG_FLOOR).log2();
                 let detail = l0 - base.sample(fx, fy);
                 let b = current - detail;
-                let lift = (shadows + local[LOCAL_SHADOWS]) * 1.6 * (1.0 - smoothstep(-6.0, -1.5, b));
+                let lift = (shadows + local[LOCAL_SHADOWS]) * 2.2 * (1.0 - smoothstep(-6.5, -1.5, b));
                 let recover = (highlights + local[LOCAL_HIGHLIGHTS]) * 1.4 * smoothstep(-2.5, 0.0, b);
                 let mid = (1.0 - ((b + 2.5) / 5.0).powi(2)).clamp(0.0, 1.0);
                 delta += lift + recover + (clarity + local[LOCAL_CLARITY]) * 0.6 * detail * mid;

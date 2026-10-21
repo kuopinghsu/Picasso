@@ -352,14 +352,19 @@ fn crop_overlay(ui: &mut egui::Ui, session: &mut EditSession, stage: Rect, image
 }
 
 fn paint_guides(painter: &egui::Painter, frame: Rect, guide: usize) {
-    let stroke = Stroke::new(1.0, Color32::from_white_alpha(110));
+    let shadow = Stroke::new(2.0, Color32::from_black_alpha(90));
+    let stroke = Stroke::new(1.0, Color32::from_white_alpha(150));
+    let line = |a: Pos2, b: Pos2| {
+        painter.line_segment([a, b], shadow);
+        painter.line_segment([a, b], stroke);
+    };
     let vertical = |t: f32| {
         let x = frame.left() + frame.width() * t;
-        painter.line_segment([Pos2::new(x, frame.top()), Pos2::new(x, frame.bottom())], stroke);
+        line(Pos2::new(x, frame.top()), Pos2::new(x, frame.bottom()));
     };
     let horizontal = |t: f32| {
         let y = frame.top() + frame.height() * t;
-        painter.line_segment([Pos2::new(frame.left(), y), Pos2::new(frame.right(), y)], stroke);
+        line(Pos2::new(frame.left(), y), Pos2::new(frame.right(), y));
     };
     match guide {
         0 => {
@@ -381,8 +386,8 @@ fn paint_guides(painter: &egui::Painter, frame: Rect, guide: usize) {
             }
         }
         3 => {
-            painter.line_segment([frame.left_top(), frame.right_bottom()], stroke);
-            painter.line_segment([frame.right_top(), frame.left_bottom()], stroke);
+            line(frame.left_top(), frame.right_bottom());
+            line(frame.right_top(), frame.left_bottom());
         }
         _ => {}
     }

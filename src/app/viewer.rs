@@ -7,7 +7,7 @@ use crate::photo_info::Histogram;
 use crate::types::{displayed_size, folder_label, format_bytes, format_duration, format_timestamp, Photo};
 use crate::video::Player;
 
-use super::theme::{self, ACCENT, VIEWER_BAR, VIEWER_BG, VIEWER_MUTED, VIEWER_PANEL, WHITE};
+use super::theme::{self, ACCENT, WHITE};
 use super::{PicassoApp, Zoom};
 
 /// The video on screen in the viewer, with its latest decoded frame.
@@ -25,14 +25,13 @@ impl PicassoApp {
             self.close_viewer();
             return;
         }
-        *ui.visuals_mut() = theme::viewer_visuals();
         self.request_neighbors();
         let slideshow = self.slideshow.is_some();
         let photo = self.photos.get(self.viewer_index).cloned();
         let current = photo.clone().filter(|photo| photo.is_video() && !slideshow);
         self.sync_video(ui.ctx(), current.as_ref());
         let editable = photo.clone().filter(|photo| !photo.is_video() && !slideshow);
-        self.sync_edit(editable.as_ref());
+        self.sync_edit(ui.ctx(), editable.as_ref());
         self.viewer_bar(ui, slideshow);
         let film_h = 96.0;
         let controls_h = if self.video.is_some() { 44.0 } else { 0.0 };
@@ -46,7 +45,8 @@ impl PicassoApp {
         };
         let stage_h = (ui.available_height() - film_h - controls_h).max(120.0);
         ui.horizontal(|ui| {
-            let stage_w = (ui.available_width() - side_w).max(80.0);
+            let gap = if side_w > 0.0 { ui.spacing().item_spacing.x } else { 0.0 };
+            let stage_w = (ui.available_width() - side_w - gap).max(80.0);
             ui.vertical(|ui| {
                 let (stage_rect, _) = ui.allocate_exact_size(Vec2::new(stage_w, stage_h), Sense::hover());
                 self.paint_stage(ui, stage_rect, slideshow);
@@ -102,7 +102,7 @@ impl PicassoApp {
 
     fn video_controls(&mut self, ui: &mut egui::Ui) {
         let Some(view) = self.video.as_mut() else { return };
-        let bar = egui::Frame::new().fill(VIEWER_BAR).inner_margin(egui::Margin::symmetric(12, 6));
+        let bar = egui::Frame::new().fill(theme::toolbar()).inner_margin(egui::Margin::symmetric(12, 6));
         bar.show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.horizontal(|ui| {
@@ -114,7 +114,7 @@ impl PicassoApp {
                 let duration = view.player.duration();
                 let shown = view.scrub.unwrap_or_else(|| view.player.position());
                 let time = format!("{} / {}", format_duration(shown), format_duration(duration));
-                ui.label(egui::RichText::new(time).color(WHITE).size(12.5));
+                ui.label(egui::RichText::new(time).color(theme::text()).size(12.5));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if view.player.has_audio() {
                         ui.spacing_mut().slider_width = 80.0;
@@ -137,15 +137,22 @@ impl PicassoApp {
     }
 
     fn viewer_bar(&mut self, ui: &mut egui::Ui, slideshow: bool) {
-        let bar = egui::Frame::new().fill(VIEWER_BAR).inner_margin(egui::Margin::symmetric(12, 8));
+        let bar = egui::Frame::new().fill(theme::toolbar()).inner_margin(egui::Margin::symmetric(12, 8));
         bar.show(ui, |ui| {
             ui.horizontal(|ui| {
                 if ui.button(tr("‹  Library")).on_hover_text(tr("Return to organized thumbnails")).clicked() {
                     self.close_viewer();
                 }
                 ui.add_space(6.0);
-                ui.label(egui::RichText::new(self.viewer_heading()).color(WHITE).strong());
+                ui.label(egui::RichText::new(self.viewer_heading()).color(theme::text()).strong());
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let dark = theme::is_dark();
+                    let tip = if dark { "Switch to the light theme" } else { "Switch to the dark theme" };
+                    let toggle = ui.button("     ");
+                    theme::paint_theme_icon(ui.painter(), toggle.rect.center(), !dark, theme::text());
+                    if toggle.on_hover_text(tr(tip)).clicked() {
+                        self.toggle_theme(ui.ctx());
+                    }
                     if ui.button(tr(if slideshow { "Exit Slideshow" } else { "Slideshow" })).clicked() {
                         if slideshow {
                             self.slideshow = None;
@@ -202,10 +209,10 @@ impl PicassoApp {
                         }
                     }
                     if let Some(photo) = self.photos.get(self.viewer_index) {
-                        let (w, h) = displayed_size(photo);
+                        let (w, h) = self.shown_size(photo);
                         let scale = self.scale_for(w, h, self.stage_rect.size());
                         let pct = scale * ui.ctx().pixels_per_point() * 100.0;
-                        ui.label(egui::RichText::new(format!("{pct:.0}%")).color(VIEWER_MUTED));
+                        ui.label(egui::RichText::new(format!("{pct:.0}%")).color(theme::muted()));
                     }
                     if slideshow {
                         let playing = self.slideshow.as_ref().map(|s| s.playing).unwrap_or(false);
@@ -226,26 +233,22 @@ impl PicassoApp {
 
     fn paint_stage(&mut self, ui: &mut egui::Ui, stage: Rect, slideshow: bool) {
         self.stage_rect = stage;
-        ui.painter().rect_filled(stage, 0, VIEWER_BG);
+        ui.painter().rect_filled(stage, 0, theme::stage());
         let Some(photo) = self.photos.get(self.viewer_index).cloned() else {
             return;
         };
-        let (img_w, img_h) = displayed_size(&photo);
+        let (img_w, img_h) = self.shown_size(&photo);
         let scale = self.scale_for(img_w, img_h, stage.size());
         let size = Vec2::new(img_w * scale, img_h * scale);
         let image_rect = Rect::from_center_size(stage.center() + self.pan, size);
-        let mut response = ui.interact(stage, egui::Id::unique("stage"), Sense::click_and_drag());
+        let response = ui.interact(stage, egui::Id::unique("stage"), Sense::click_and_drag());
         let video = self.video.as_ref().filter(|view| view.id == photo.id);
         let video_frame = video.and_then(|view| view.texture.clone());
-        let edit_frame = self
-            .edit
-            .as_ref()
-            .filter(|session| session.id == photo.id)
-            .and_then(|session| session.texture().cloned());
+        let editing = self.edit.as_ref().is_some_and(|session| session.id == photo.id);
         if let Some(texture) = video_frame {
             theme::paint_image(ui.painter(), &texture, image_rect, full_uv(), photo.rotation);
-        } else if let Some(texture) = edit_frame {
-            theme::paint_image(ui.painter(), &texture, image_rect, full_uv(), photo.rotation);
+        } else if editing && self.paint_edit_stage(ui, stage, image_rect, &photo) {
+            self.edit_overlay(ui, stage, image_rect, &photo);
         } else if let Some((texture, _, _)) = self.display_texture(photo.id) {
             theme::paint_image(ui.painter(), &texture, image_rect, full_uv(), photo.rotation);
         } else if let Some((texture, _w, _h)) = self.thumb_texture(photo.id) {
@@ -257,7 +260,7 @@ impl PicassoApp {
                 Align2::CENTER_CENTER,
                 tr("Loading…"),
                 FontId::proportional(16.0),
-                Color32::from_gray(180),
+                theme::muted(),
             );
         }
 
@@ -302,10 +305,15 @@ impl PicassoApp {
             }
         }
         if !matches!(self.zoom, Zoom::Fit) {
-            response = response.on_hover_cursor(egui::CursorIcon::Grab);
+            response.on_hover_cursor(egui::CursorIcon::Grab);
         }
 
-        if response.hovered() || slideshow {
+        // The arrows take the hover from the stage once the pointer is on
+        // them, so they key off the pointer position rather than `hovered`.
+        let handles = self.edit.as_ref().is_some_and(|session| {
+            session.id == photo.id && matches!(session.tool, super::editor::Tool::Crop | super::editor::Tool::Mask)
+        });
+        if (ui.rect_contains_pointer(stage) && !handles) || slideshow {
             let mid_y = stage.center().y;
             let left = Rect::from_center_size(Pos2::new(stage.left() + 36.0, mid_y), Vec2::splat(44.0));
             let right = Rect::from_center_size(Pos2::new(stage.right() - 36.0, mid_y), Vec2::splat(44.0));
@@ -331,7 +339,7 @@ impl PicassoApp {
     }
 
     fn info_panel(&mut self, ui: &mut egui::Ui, height: f32) {
-        let frame = egui::Frame::new().fill(VIEWER_PANEL).inner_margin(egui::Margin::same(12));
+        let frame = egui::Frame::new().fill(theme::sidebar()).inner_margin(egui::Margin::same(12));
         frame.show(ui, |ui| {
             ui.set_min_size(Vec2::new(256.0, height - 24.0));
             ui.set_max_width(256.0);
@@ -357,13 +365,13 @@ impl PicassoApp {
                 Some((histogram, _)) => paint_histogram(ui, histogram),
                 None => {
                     let (rect, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), HISTOGRAM_H), Sense::hover());
-                    ui.painter().rect_filled(rect, 2, Color32::from_gray(0x2A));
+                    ui.painter().rect_filled(rect, 2, theme::well());
                     ui.painter().text(
                         rect.center(),
                         Align2::CENTER_CENTER,
                         tr("Loading…"),
                         FontId::proportional(12.0),
-                        Color32::from_gray(160),
+                        theme::muted(),
                     );
                 }
             }
@@ -395,7 +403,7 @@ impl PicassoApp {
             ui.add_space(4.0);
             match &info {
                 None => {
-                    ui.label(egui::RichText::new(tr("Loading…")).color(VIEWER_MUTED).size(12.0));
+                    ui.label(egui::RichText::new(tr("Loading…")).color(theme::muted()).size(12.0));
                 }
                 Some((_, rows)) => {
                     // Camera and date already appear under Details.
@@ -404,7 +412,7 @@ impl PicassoApp {
                         .filter(|(label, _)| *label != "Taken" && !(*label == "Camera" && !photo.camera.is_empty()))
                         .collect();
                     if rows.is_empty() {
-                        ui.label(egui::RichText::new(tr("No EXIF data in this file")).color(VIEWER_MUTED).size(12.0));
+                        ui.label(egui::RichText::new(tr("No EXIF data in this file")).color(theme::muted()).size(12.0));
                     } else {
                         egui::Grid::new(("exif", photo.id))
                             .num_columns(2)
@@ -412,7 +420,7 @@ impl PicassoApp {
                             .spacing(Vec2::new(10.0, 3.0))
                             .show(ui, |ui| {
                                 for (label, value) in rows {
-                                    ui.label(egui::RichText::new(tr(label)).color(VIEWER_MUTED).size(12.0));
+                                    ui.label(egui::RichText::new(tr(label)).color(theme::muted()).size(12.0));
                                     ui.add(egui::Label::new(egui::RichText::new(value).size(12.0)).wrap());
                                     ui.end_row();
                                 }
@@ -456,7 +464,7 @@ impl PicassoApp {
     }
 
     fn filmstrip(&mut self, ui: &mut egui::Ui, height: f32) {
-        let bg = egui::Frame::new().fill(VIEWER_BAR).inner_margin(egui::Margin::same(8));
+        let bg = egui::Frame::new().fill(theme::toolbar()).inner_margin(egui::Margin::same(8));
         bg.show(ui, |ui| {
             let cell = 72.0;
             let gap = 6.0;
@@ -485,13 +493,16 @@ impl PicassoApp {
                         if let Some((texture, w, h)) = self.thumb_texture(id) {
                             theme::paint_image_rounded(ui.painter(), &texture, rect, theme::cover_uv(w, h), rotation, 5.0);
                         } else {
-                            ui.painter().rect_filled(rect, 5, Color32::from_gray(40));
+                            ui.painter().rect_filled(rect, 5, theme::placeholder());
                         }
                         if is_video {
                             paint_play_button(ui.painter(), rect.center(), 11.0);
                         }
                         if index != current && !response.hovered() {
                             ui.painter().rect_filled(rect, 5, Color32::from_black_alpha(110));
+                        }
+                        if self.edits.contains_key(&id) {
+                            theme::paint_edit_mark(ui.painter(), rect.right_top() + Vec2::new(-10.0, 10.0), 7.5);
                         }
                         if index == current {
                             ui.painter().rect_stroke(rect, 6, egui::Stroke::new(2.0, ACCENT), egui::StrokeKind::Outside);
@@ -532,7 +543,7 @@ impl PicassoApp {
         let Some(photo) = self.photos.get(self.viewer_index).cloned() else {
             return;
         };
-        let (w, h) = displayed_size(&photo);
+        let (w, h) = self.shown_size(&photo);
         let stage = if self.stage_rect.width() > 2.0 {
             self.stage_rect
         } else {
@@ -591,20 +602,21 @@ fn control_button(ui: &mut egui::Ui, control: Control) -> egui::Response {
     let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
     let painter = ui.painter();
     if response.hovered() {
-        painter.rect_filled(rect, theme::RADIUS, Color32::from_white_alpha(24));
+        painter.rect_filled(rect, theme::RADIUS, theme::overlay(24));
     }
     let c = rect.center();
-    let stroke = egui::Stroke::new(1.8, WHITE);
+    let ink = theme::text();
+    let stroke = egui::Stroke::new(1.8, ink);
     match control {
-        Control::Play => paint_triangle(painter, c, 7.0, WHITE),
+        Control::Play => paint_triangle(painter, c, 7.0, ink),
         Control::Pause => {
             for dx in [-3.5, 3.5] {
-                painter.rect_filled(Rect::from_center_size(c + Vec2::new(dx, 0.0), Vec2::new(3.5, 13.0)), 1, WHITE);
+                painter.rect_filled(Rect::from_center_size(c + Vec2::new(dx, 0.0), Vec2::new(3.5, 13.0)), 1, ink);
             }
         }
         Control::Sound | Control::Muted => {
             let speaker = c + Vec2::new(-4.0, 0.0);
-            painter.rect_filled(Rect::from_center_size(speaker + Vec2::new(-3.0, 0.0), Vec2::new(4.0, 6.0)), 1, WHITE);
+            painter.rect_filled(Rect::from_center_size(speaker + Vec2::new(-3.0, 0.0), Vec2::new(4.0, 6.0)), 1, ink);
             painter.add(egui::Shape::convex_polygon(
                 vec![
                     speaker + Vec2::new(-1.0, -3.0),
@@ -612,7 +624,7 @@ fn control_button(ui: &mut egui::Ui, control: Control) -> egui::Response {
                     speaker + Vec2::new(4.0, 7.0),
                     speaker + Vec2::new(-1.0, 3.0),
                 ],
-                WHITE,
+                ink,
                 egui::Stroke::NONE,
             ));
             if matches!(control, Control::Muted) {
@@ -627,7 +639,7 @@ fn control_button(ui: &mut egui::Ui, control: Control) -> egui::Response {
                             speaker + Vec2::new(4.0 + radius * angle.cos(), radius * angle.sin())
                         })
                         .collect();
-                    painter.add(egui::Shape::line(arc, egui::Stroke::new(1.5, WHITE)));
+                    painter.add(egui::Shape::line(arc, egui::Stroke::new(1.5, ink)));
                 }
             }
         }
@@ -676,12 +688,12 @@ fn seek_bar(ui: &mut egui::Ui, width: f32, position: f64, duration: f64, scrub: 
     let shown = scrub.unwrap_or(position);
     let fraction = if duration > 0.0 { (shown / duration).clamp(0.0, 1.0) as f32 } else { 0.0 };
     let painter = ui.painter();
-    painter.rect_filled(track, 2, Color32::from_white_alpha(50));
+    painter.rect_filled(track, 2, theme::overlay(50));
     let played = Rect::from_min_max(track.min, Pos2::new(track.left() + track.width() * fraction, track.bottom()));
     painter.rect_filled(played, 2, ACCENT);
     let knob = Pos2::new(played.right(), track.center().y);
     let grow = response.hovered() || scrub.is_some();
-    painter.circle_filled(knob, if grow { 7.0 } else { 5.0 }, WHITE);
+    painter.circle_filled(knob, if grow { 7.0 } else { 5.0 }, theme::text());
     if let Some(hover) = response.hover_pos() {
         response.on_hover_text_at_pointer(format_duration(at(hover.x)));
     }
@@ -692,17 +704,17 @@ const HISTOGRAM_H: f32 = 96.0;
 
 /// Draws luminance as a filled gray area with the red, green, and blue
 /// channels as lines on top, plus the share of clipped shadows and highlights.
-fn paint_histogram(ui: &mut egui::Ui, histogram: &Histogram) {
+pub(super) fn paint_histogram(ui: &mut egui::Ui, histogram: &Histogram) {
     let (rect, response) = ui.allocate_exact_size(Vec2::new(ui.available_width(), HISTOGRAM_H), Sense::hover());
     let painter = ui.painter_at(rect);
-    painter.rect_filled(rect, 2, Color32::from_gray(0x2A));
+    painter.rect_filled(rect, 2, theme::well());
     let plot = rect.shrink2(Vec2::new(3.0, 4.0));
     let peak = histogram.peak() as f32;
     let x_at = |bin: usize| plot.left() + plot.width() * bin as f32 / 255.0;
     let y_at = |count: u32| plot.bottom() - plot.height() * (count as f32 / peak).min(1.0);
 
     let mut mesh = egui::Mesh::default();
-    let fill = Color32::from_gray(0x9A);
+    let fill = if theme::is_dark() { Color32::from_gray(0x9A) } else { Color32::from_gray(0xB4) };
     for (bin, &count) in histogram.bins[Histogram::LUMA].iter().enumerate() {
         let index = mesh.vertices.len() as u32;
         mesh.colored_vertex(Pos2::new(x_at(bin), plot.bottom()), fill);
@@ -731,7 +743,7 @@ fn paint_histogram(ui: &mut egui::Ui, histogram: &Histogram) {
         let x = plot.left() + plot.width() * quarter as f32 / 4.0;
         painter.line_segment(
             [Pos2::new(x, plot.top()), Pos2::new(x, plot.bottom())],
-            egui::Stroke::new(1.0, Color32::from_white_alpha(18)),
+            egui::Stroke::new(1.0, theme::overlay(18)),
         );
     }
 
@@ -740,7 +752,7 @@ fn paint_histogram(ui: &mut egui::Ui, histogram: &Histogram) {
         "Shadows clipped {}%   Highlights clipped {}%",
         &[&format!("{:.1}", shadows * 100.0), &format!("{:.1}", highlights * 100.0)],
     );
-    ui.label(egui::RichText::new(summary).color(VIEWER_MUTED).size(11.0));
+    ui.label(egui::RichText::new(summary).color(theme::muted()).size(11.0));
     if let Some(pos) = response.hover_pos() {
         let bin = (((pos.x - plot.left()) / plot.width()) * 255.0).round().clamp(0.0, 255.0) as usize;
         let total = histogram.total().max(1) as f32;
@@ -765,7 +777,7 @@ fn full_uv() -> Rect {
 
 fn detail(ui: &mut egui::Ui, label: &'static str, value: &str) {
     ui.horizontal(|ui| {
-        ui.label(egui::RichText::new(tr(label)).color(VIEWER_MUTED).size(12.0));
+        ui.label(egui::RichText::new(tr(label)).color(theme::muted()).size(12.0));
         ui.label(egui::RichText::new(value).size(12.0));
     });
 }

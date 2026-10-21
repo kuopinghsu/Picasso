@@ -1,59 +1,61 @@
-//! Background folder indexing, face detection, and thumbnail decode.
+//! Background folder indexing and thumbnail decode.
 //!
-//! Thumbnails run on their own thread so a face scan never blocks the grid.
-//! The indexer walks a folder a slice at a time and interleaves one face so the
-//! UI gets new photos before the whole library is done.
+//! A folder scan runs as a small pipeline:
+//!
+//! 1. A walker thread lists the folder and compares each file's size and
+//!    modification time with the catalog. Unchanged files are skipped without
+//!    being opened.
+//! 2. A pool of probe threads reads dimensions and metadata from the files
+//!    that are new or changed.
+//! 3. The index thread writes the results in batched transactions, so the
+//!    library fills in while the scan runs and every committed batch survives
+//!    a restart.
+//!
+//! A folder keeps its `scan_pending` flag until a scan reaches the end of it,
+//! so quitting mid-scan resumes that folder first on the next launch.
+//! Thumbnails decode on a separate pool of threads.
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use crossbeam_channel::{Receiver, RecvTimeoutError, Select, Sender, TryRecvError};
+use crossbeam_channel::{bounded, Receiver, RecvTimeoutError, Select, Sender, TryRecvError};
 use image::RgbaImage;
 use walkdir::WalkDir;
 
-use crate::db::{Database, NewFace, Upsert};
-use crate::faces::{self, Detection};
-use crate::geom::iou;
-use crate::image_io::{self, face_crop};
-use crate::picasa_ini::{IniPhoto, PicasaIni};
-use crate::types::{folder_label, is_image_path, unix_now, NewPhoto, RelRect};
+use crate::db::{Database, Known, ScanRecord};
+use crate::image_io::{self, Probe};
+use crate::photo_info::{self, Histogram};
+use crate::picasa_ini::PicasaIni;
+use crate::types::{folder_label, is_image_path, unix_now, NewPhoto};
 
 pub type DisplayGate = Arc<Mutex<HashMap<i64, u64>>>;
 
+/// Records written per transaction while a scan runs.
+const BATCH_SIZE: usize = 200;
+/// Longest wait before probed records are committed and shown.
+const BATCH_INTERVAL: Duration = Duration::from_millis(250);
+
 pub enum Command {
     Scan(i64),
-    Redetect(Vec<i64>),
     /// Ask the index thread to finish. Sent when the window closes.
     Stop,
 }
 
 pub enum ThumbJob {
-    Thumb {
-        id: i64,
-        path: String,
-        rotation: i32,
-    },
-    Display {
-        id: i64,
-        path: String,
-        rotation: i32,
-        nonce: u64,
-    },
-    Face {
-        id: i64,
-        path: String,
-        rotation: i32,
-        x: f32,
-        y: f32,
-        w: f32,
-        h: f32,
-    },
+    Thumb { id: i64, path: String },
+    Display { id: i64, path: String, nonce: u64 },
 }
 
 pub enum UiEvent {
     ScanStarted(String),
+    ScanProgress {
+        folder: String,
+        checked: usize,
+        indexed: usize,
+    },
     ScanFinished {
         errors: usize,
     },
@@ -66,37 +68,58 @@ pub enum UiEvent {
     },
     Display {
         id: i64,
-        rotation: i32,
         nonce: u64,
         w: usize,
         h: usize,
         rgba: Vec<u8>,
-    },
-    FaceThumb {
-        id: i64,
-        w: usize,
-        h: usize,
-        rgba: Vec<u8>,
-    },
-    Faces {
-        photo_id: i64,
-        count: i64,
+        histogram: Box<Histogram>,
+        exif: Vec<(&'static str, String)>,
     },
 }
 
-enum FaceJob {
-    Detect(i64),
-    Embed(i64),
+/// Number of threads that probe files during a scan.
+pub fn probe_threads() -> usize {
+    std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).clamp(2, 8)
 }
 
-struct ActiveScan {
-    folder_id: i64,
-    iter: Box<dyn Iterator<Item = walkdir::Result<walkdir::DirEntry>>>,
+/// Number of threads that decode thumbnails and full-size views.
+pub fn thumb_threads() -> usize {
+    (std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4) / 2).clamp(2, 4)
+}
+
+struct ProbeJob {
+    path: PathBuf,
+    path_text: String,
+    filename: String,
+    modified_at: i64,
+    bytes: u64,
+    existing: Option<i64>,
+}
+
+struct ProbeResult {
+    job: ProbeJob,
+    probe: Result<Probe, String>,
+}
+
+struct WalkSummary {
     seen: Vec<String>,
-    ini_cache: HashMap<PathBuf, PicasaIni>,
     errors: usize,
-    pending_library: usize,
-    again: bool,
+    complete: bool,
+}
+
+enum Outcome {
+    Finished,
+    Stopped,
+}
+
+struct Indexer {
+    db: Database,
+    cache: PathBuf,
+    commands: Receiver<Command>,
+    thumbs: Sender<ThumbJob>,
+    events: Sender<UiEvent>,
+    ctx: eframe::egui::Context,
+    pending: VecDeque<i64>,
 }
 
 pub fn index_loop(
@@ -115,177 +138,261 @@ pub fn index_loop(
             return;
         }
     };
-    let mut detector = match faces::open_detector() {
-        Ok(detector) => Some(detector),
-        Err(err) => {
-            eprintln!("picasso faces: {err}");
-            None
-        }
+    // Folders whose last scan did not reach the end go first.
+    let pending = db.pending_folders().into_iter().collect();
+    let mut indexer = Indexer {
+        db,
+        cache,
+        commands,
+        thumbs,
+        events,
+        ctx,
+        pending,
     };
-    let mut scan: Option<ActiveScan> = None;
-    let mut pending: VecDeque<i64> = VecDeque::new();
-    let mut faces_q: VecDeque<FaceJob> = VecDeque::new();
-    let mut face_ids: HashSet<i64> = HashSet::new();
+    indexer.run();
+}
 
-    loop {
-        let mut stop = false;
+impl Indexer {
+    fn run(&mut self) {
         loop {
-            match commands.try_recv() {
-                Ok(Command::Stop) => stop = true,
-                Ok(Command::Scan(id)) => queue_scan(&mut scan, &mut pending, id),
-                Ok(Command::Redetect(ids)) => {
-                    db.reset_detection(&ids);
-                    for id in ids {
-                        enqueue_face(&mut faces_q, &mut face_ids, FaceJob::Detect(id));
-                    }
-                    let _ = events.send(UiEvent::Library);
-                    ctx.request_repaint();
-                }
-                Err(TryRecvError::Empty) => break,
-                Err(TryRecvError::Disconnected) => return,
-            }
-        }
-        if stop {
-            return;
-        }
-
-        if scan.is_none() {
-            if let Some(id) = pending.pop_front() {
-                if let Some(path) = db.folder_path(id) {
-                    let root = PathBuf::from(&path);
-                    if root.is_dir() {
-                        let _ = events.send(UiEvent::ScanStarted(folder_label(&path)));
-                        ctx.request_repaint();
-                        scan = Some(ActiveScan {
-                            folder_id: id,
-                            iter: walk_images(&root),
-                            seen: Vec::new(),
-                            ini_cache: HashMap::new(),
-                            errors: 0,
-                            pending_library: 0,
-                            again: false,
-                        });
-                    }
+            if let Some(folder_id) = self.pending.pop_front() {
+                match self.scan_folder(folder_id) {
+                    Outcome::Finished => continue,
+                    Outcome::Stopped => return,
                 }
             }
+            match self.commands.recv() {
+                Ok(Command::Scan(id)) => self.queue(id),
+                Ok(Command::Stop) | Err(_) => return,
+            }
         }
+    }
 
-        let mut worked = false;
-        if let Some(active) = scan.as_mut() {
-            let finished = step_scan(active, &db, &cache, &thumbs, &events, &mut faces_q, &mut face_ids);
-            worked = true;
-            if active.pending_library > 0 {
-                active.pending_library = 0;
-                let _ = events.send(UiEvent::Library);
-                ctx.request_repaint();
+    fn queue(&mut self, id: i64) {
+        if !self.pending.contains(&id) {
+            self.pending.push_back(id);
+        }
+    }
+
+    fn notify(&self, event: UiEvent) {
+        let _ = self.events.send(event);
+        self.ctx.request_repaint();
+    }
+
+    fn scan_folder(&mut self, folder_id: i64) -> Outcome {
+        let Some(path) = self.db.folder_path(folder_id) else {
+            return Outcome::Finished;
+        };
+        let root = PathBuf::from(&path);
+        if !root.is_dir() {
+            // An unplugged drive keeps its photos and its pending flag.
+            return Outcome::Finished;
+        }
+        let label = folder_label(&path);
+        self.db.set_scan_pending(folder_id, true);
+        self.notify(UiEvent::ScanStarted(label.clone()));
+
+        let snapshot = self.db.folder_snapshot(folder_id, &path);
+        let cancel = Arc::new(AtomicBool::new(false));
+        let checked = Arc::new(AtomicUsize::new(0));
+        let (job_tx, job_rx) = bounded::<ProbeJob>(512);
+        let (done_tx, done_rx) = bounded::<ProbeResult>(512);
+
+        let walker = {
+            let cancel = cancel.clone();
+            let checked = checked.clone();
+            std::thread::Builder::new()
+                .name("picasso-walk".into())
+                .spawn(move || walk_folder(&root, snapshot, job_tx, &cancel, &checked))
+        };
+        let walker = match walker {
+            Ok(handle) => handle,
+            Err(err) => {
+                eprintln!("picasso index: {err}");
+                return Outcome::Finished;
+            }
+        };
+        for index in 0..probe_threads() {
+            let jobs = job_rx.clone();
+            let done = done_tx.clone();
+            let cancel = cancel.clone();
+            let _ = std::thread::Builder::new()
+                .name(format!("picasso-probe-{index}"))
+                .spawn(move || probe_loop(jobs, done, &cancel));
+        }
+        drop(job_rx);
+        drop(done_tx);
+
+        let mut ini_cache: HashMap<PathBuf, PicasaIni> = HashMap::new();
+        let mut batch: Vec<ScanRecord> = Vec::with_capacity(BATCH_SIZE);
+        let mut errors = 0usize;
+        let mut indexed = 0usize;
+        let mut again = false;
+        let mut last_flush = Instant::now();
+        let mut stopped = false;
+
+        loop {
+            loop {
+                match self.commands.try_recv() {
+                    Ok(Command::Scan(id)) if id == folder_id => again = true,
+                    Ok(Command::Scan(id)) => self.queue(id),
+                    Ok(Command::Stop) | Err(TryRecvError::Disconnected) => {
+                        stopped = true;
+                        break;
+                    }
+                    Err(TryRecvError::Empty) => break,
+                }
+            }
+            if stopped {
+                break;
+            }
+            let finished = match done_rx.recv_timeout(BATCH_INTERVAL) {
+                Ok(result) => {
+                    match self.record(folder_id, result, &mut ini_cache) {
+                        Some(record) => batch.push(record),
+                        None => errors += 1,
+                    }
+                    false
+                }
+                Err(RecvTimeoutError::Timeout) => false,
+                Err(RecvTimeoutError::Disconnected) => true,
+            };
+            let due = batch.len() >= BATCH_SIZE || last_flush.elapsed() >= BATCH_INTERVAL;
+            if finished || due {
+                indexed += self.flush(&mut batch, &mut errors);
+                last_flush = Instant::now();
+                self.notify(UiEvent::ScanProgress {
+                    folder: label.clone(),
+                    checked: checked.load(Ordering::Relaxed),
+                    indexed,
+                });
             }
             if finished {
-                let errors = active.errors;
-                let again = active.again;
-                let folder_id = active.folder_id;
-                scan = None;
-                let _ = events.send(UiEvent::ScanFinished { errors });
-                let _ = events.send(UiEvent::Library);
-                ctx.request_repaint();
-                if again {
-                    queue_scan(&mut scan, &mut pending, folder_id);
-                }
+                break;
             }
         }
 
-        if let Some(job) = faces_q.pop_front() {
-            let id = face_job_id(&job);
-            face_ids.remove(&id);
-            run_face(&db, &mut detector, &cache, job, &events);
-            let _ = events.send(UiEvent::Faces {
-                photo_id: id,
-                count: db.photo(id).map(|photo| photo.face_count).unwrap_or(0),
-            });
-            ctx.request_repaint();
-            worked = true;
+        if stopped {
+            // Keep what was probed so far; the folder stays pending and the
+            // next launch continues from the files that are still missing.
+            cancel.store(true, Ordering::Relaxed);
+            drop(done_rx);
+            self.flush(&mut batch, &mut errors);
+            return Outcome::Stopped;
         }
 
-        if worked {
-            continue;
+        let summary = walker.join().unwrap_or(WalkSummary {
+            seen: Vec::new(),
+            errors: 1,
+            complete: false,
+        });
+        errors += summary.errors;
+        if summary.complete {
+            self.db.remove_missing(folder_id, &summary.seen);
+            self.db.set_scan_pending(folder_id, false);
         }
-        match commands.recv_timeout(Duration::from_millis(300)) {
-            Ok(command) => match command {
-                Command::Stop => return,
-                Command::Scan(id) => queue_scan(&mut scan, &mut pending, id),
-                Command::Redetect(ids) => {
-                    db.reset_detection(&ids);
-                    for id in ids {
-                        enqueue_face(&mut faces_q, &mut face_ids, FaceJob::Detect(id));
-                    }
-                }
+        self.notify(UiEvent::ScanFinished { errors });
+        self.notify(UiEvent::Library);
+        if again {
+            self.pending.push_front(folder_id);
+        }
+        Outcome::Finished
+    }
+
+    fn record(
+        &self,
+        folder_id: i64,
+        result: ProbeResult,
+        ini_cache: &mut HashMap<PathBuf, PicasaIni>,
+    ) -> Option<ScanRecord> {
+        let ProbeResult { job, probe } = result;
+        let probe = probe.ok()?;
+        let (star, caption, rotation) = if job.existing.is_none() {
+            let parent = job.path.parent().unwrap_or(&job.path).to_path_buf();
+            let ini = ini_cache.entry(parent.clone()).or_insert_with(|| PicasaIni::load(&parent));
+            ini.get(&job.filename)
+                .map(|meta| (meta.star, meta.caption.clone(), meta.rotation))
+                .unwrap_or((None, None, None))
+        } else {
+            (None, None, None)
+        };
+        Some(ScanRecord {
+            photo: NewPhoto {
+                folder_id,
+                path: job.path_text,
+                filename: job.filename,
+                width: probe.width,
+                height: probe.height,
+                bytes: job.bytes,
+                taken_at: if probe.taken_at == 0 { unix_now() } else { probe.taken_at },
+                modified_at: job.modified_at,
+                camera: probe.camera,
+                gps_lat: probe.gps_lat,
+                gps_lon: probe.gps_lon,
             },
-            Err(RecvTimeoutError::Timeout) => continue,
-            Err(RecvTimeoutError::Disconnected) => return,
+            existing: job.existing,
+            star,
+            caption,
+            rotation,
+        })
+    }
+
+    /// Commits the batch and queues background thumbnails for the written rows.
+    fn flush(&self, batch: &mut Vec<ScanRecord>, errors: &mut usize) -> usize {
+        if batch.is_empty() {
+            return 0;
         }
-    }
-}
-
-fn queue_scan(scan: &mut Option<ActiveScan>, pending: &mut VecDeque<i64>, id: i64) {
-    if let Some(active) = scan.as_mut() {
-        if active.folder_id == id {
-            active.again = true;
-            return;
-        }
-    }
-    if !pending.contains(&id) {
-        pending.push_back(id);
-    }
-}
-
-fn enqueue_face(queue: &mut VecDeque<FaceJob>, ids: &mut HashSet<i64>, job: FaceJob) {
-    if ids.insert(face_job_id(&job)) {
-        queue.push_back(job);
-    }
-}
-
-fn face_job_id(job: &FaceJob) -> i64 {
-    match job {
-        FaceJob::Detect(id) | FaceJob::Embed(id) => *id,
-    }
-}
-
-fn walk_images(root: &Path) -> Box<dyn Iterator<Item = walkdir::Result<walkdir::DirEntry>>> {
-    Box::new(
-        WalkDir::new(root)
-            .follow_links(false)
-            .into_iter()
-            .filter_entry(|entry| {
-                entry.depth() == 0 || !entry.file_name().to_string_lossy().starts_with('.')
-            }),
-    )
-}
-
-fn step_scan(
-    scan: &mut ActiveScan,
-    db: &Database,
-    cache: &Path,
-    thumbs: &Sender<ThumbJob>,
-    events: &Sender<UiEvent>,
-    faces_q: &mut VecDeque<FaceJob>,
-    face_ids: &mut HashSet<i64>,
-) -> bool {
-    let mut checked = 0;
-    let mut indexed = 0;
-    loop {
-        if checked >= 500 || indexed >= 30 {
-            break;
-        }
-        checked += 1;
-        let entry = match scan.iter.next() {
-            None => {
-                finish_scan(scan, db);
-                return true;
+        let written = match self.db.write_batch(batch) {
+            Ok(result) => result,
+            Err(err) => {
+                eprintln!("picasso index: {err}");
+                *errors += batch.len();
+                batch.clear();
+                return 0;
             }
-            Some(Err(_)) => {
-                scan.errors += 1;
+        };
+        for (record, id) in batch.iter().zip(&written.ids) {
+            if record.existing.is_some() {
+                let _ = std::fs::remove_file(self.cache.join("thumbs").join(format!("{id}.jpg")));
+            }
+            let _ = self.thumbs.send(ThumbJob::Thumb {
+                id: *id,
+                path: record.photo.path.clone(),
+            });
+        }
+        let count = batch.len();
+        batch.clear();
+        self.notify(UiEvent::Library);
+        count
+    }
+}
+
+fn walk_folder(
+    root: &Path,
+    snapshot: HashMap<String, Known>,
+    jobs: Sender<ProbeJob>,
+    cancel: &AtomicBool,
+    checked: &AtomicUsize,
+) -> WalkSummary {
+    let mut summary = WalkSummary {
+        seen: Vec::with_capacity(snapshot.len()),
+        errors: 0,
+        complete: false,
+    };
+    let walk = WalkDir::new(root)
+        .follow_links(false)
+        .into_iter()
+        .filter_entry(|entry| entry.depth() == 0 || !entry.file_name().to_string_lossy().starts_with('.'));
+    for entry in walk {
+        if cancel.load(Ordering::Relaxed) {
+            return summary;
+        }
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(_) => {
+                summary.errors += 1;
                 continue;
             }
-            Some(Ok(entry)) => entry,
         };
         if !entry.file_type().is_file() && !entry.path_is_symlink() {
             continue;
@@ -298,215 +405,44 @@ fn step_scan(
             Ok(meta) if meta.is_file() => meta,
             _ => continue,
         };
-        indexed += 1;
+        checked.fetch_add(1, Ordering::Relaxed);
         let path_text = path.to_string_lossy().into_owned();
-        scan.seen.push(path_text.clone());
+        let modified_at = image_io::file_mtime(&meta);
+        let bytes = meta.len();
+        let known = snapshot.get(&path_text).copied();
+        summary.seen.push(path_text.clone());
+        if known.is_some_and(|known| known.current(modified_at, bytes)) {
+            continue;
+        }
         let filename = path
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_else(|| path_text.clone());
-        let modified_at = image_io::file_mtime(&meta);
-        let probe = match image_io::probe(path, modified_at) {
-            Ok(probe) => probe,
-            Err(_) => {
-                scan.errors += 1;
-                continue;
-            }
-        };
-        let record = NewPhoto {
-            folder_id: scan.folder_id,
-            path: path_text,
-            filename: filename.clone(),
-            width: probe.width,
-            height: probe.height,
-            bytes: meta.len(),
-            taken_at: if probe.taken_at == 0 { unix_now() } else { probe.taken_at },
+        let job = ProbeJob {
+            path: path.to_path_buf(),
+            path_text,
+            filename,
             modified_at,
-            camera: probe.camera,
+            bytes,
+            existing: known.map(|known| known.id),
         };
-        match db.upsert_photo(&record) {
-            Ok(Upsert::Unchanged(photo)) => {
-                if !photo.faces_scanned {
-                    let job = if db.has_manual_faces(photo.id) {
-                        FaceJob::Embed(photo.id)
-                    } else {
-                        FaceJob::Detect(photo.id)
-                    };
-                    enqueue_face(faces_q, face_ids, job);
-                }
-            }
-            Ok(Upsert::Changed(photo)) => {
-                for face_id in db.clear_faces(photo.id) {
-                    let _ = std::fs::remove_file(cache.join("faces").join(format!("{face_id}.jpg")));
-                }
-                let _ = std::fs::remove_file(cache.join("thumbs").join(format!("{}.jpg", photo.id)));
-                enqueue_face(faces_q, face_ids, FaceJob::Detect(photo.id));
-                let _ = thumbs.send(ThumbJob::Thumb {
-                    id: photo.id,
-                    path: photo.path.clone(),
-                    rotation: photo.rotation,
-                });
-                scan.pending_library += 1;
-            }
-            Ok(Upsert::Inserted(id)) => {
-                let parent = path.parent().unwrap_or(path);
-                let ini = scan
-                    .ini_cache
-                    .entry(parent.to_path_buf())
-                    .or_insert_with(|| PicasaIni::load(parent));
-                let meta = ini.get(&filename).cloned();
-                apply_new_photo(db, id, meta.as_ref(), faces_q, face_ids);
-                let rotation = db.photo(id).map(|photo| photo.rotation).unwrap_or(0);
-                let _ = thumbs.send(ThumbJob::Thumb {
-                    id,
-                    path: record.path,
-                    rotation,
-                });
-                scan.pending_library += 1;
-            }
-            Err(err) => {
-                eprintln!("picasso index: {err}");
-                scan.errors += 1;
-            }
+        if jobs.send(job).is_err() {
+            return summary;
         }
     }
-    let _ = events;
-    false
+    summary.complete = true;
+    summary
 }
 
-fn finish_scan(scan: &mut ActiveScan, db: &Database) {
-    let removed = db.remove_missing(scan.folder_id, &scan.seen);
-    if !removed.is_empty() {
-        scan.pending_library += 1;
-    }
-}
-
-fn apply_new_photo(
-    db: &Database,
-    id: i64,
-    meta: Option<&IniPhoto>,
-    faces_q: &mut VecDeque<FaceJob>,
-    face_ids: &mut HashSet<i64>,
-) {
-    let Some(meta) = meta else {
-        enqueue_face(faces_q, face_ids, FaceJob::Detect(id));
-        return;
-    };
-    db.set_user_meta(id, meta.star, meta.caption.as_deref(), meta.rotation);
-    match &meta.faces {
-        Some(faces) if faces.is_empty() => db.set_faces_scanned(id, true),
-        Some(faces) => {
-            for face in faces {
-                let person = db.person_for_contact(&face.contact, face.name.as_deref());
-                db.insert_face(
-                    id,
-                    &NewFace {
-                        person_id: person,
-                        rect: face.rect,
-                        score: 5.0,
-                        embedding: Vec::new(),
-                        confirmed: face.name.is_some(),
-                        manual: true,
-                    },
-                );
-            }
-            enqueue_face(faces_q, face_ids, FaceJob::Embed(id));
-        }
-        None => enqueue_face(faces_q, face_ids, FaceJob::Detect(id)),
-    }
-}
-
-fn run_face(
-    db: &Database,
-    detector: &mut Option<Box<dyn rustface::Detector>>,
-    cache: &Path,
-    job: FaceJob,
-    events: &Sender<UiEvent>,
-) {
-    let id = face_job_id(&job);
-    let Some(photo) = db.photo(id) else {
-        return;
-    };
-    if photo.faces_scanned && matches!(job, FaceJob::Detect(_)) {
-        return;
-    }
-    let image = match image_io::load_displayed(Path::new(&photo.path), photo.rotation) {
-        Ok(image) => image,
-        Err(err) => {
-            eprintln!("picasso decode {}: {err}", photo.filename);
-            db.set_faces_scanned(id, true);
+fn probe_loop(jobs: Receiver<ProbeJob>, done: Sender<ProbeResult>, cancel: &AtomicBool) {
+    for job in jobs.iter() {
+        if cancel.load(Ordering::Relaxed) {
             return;
         }
-    };
-    match job {
-        FaceJob::Embed(_) => embed_existing(db, cache, &photo.path, id, &image),
-        FaceJob::Detect(_) => {
-            let locked = db.faces_for_photo(id);
-            let found = detect_catch(detector, &image);
-            for detection in found {
-                if locked.iter().any(|face| iou(face.rect(), detection.rect) > 0.45) {
-                    continue;
-                }
-                store_detection(db, cache, id, &image, detection);
-            }
-            embed_existing(db, cache, &photo.path, id, &image);
-        }
-    }
-    let _ = events;
-}
-
-fn embed_existing(db: &Database, cache: &Path, _path: &str, photo_id: i64, image: &image::DynamicImage) {
-    let faces = db.faces_for_photo(photo_id);
-    for face in &faces {
-        if db.embedding(face.id).is_none() {
-            let emb = faces::embedding(image, face.rect());
-            db.set_embedding(face.id, &emb);
-            db.recompute_centroid(face.person_id);
-        }
-        write_crop(cache, image, face.id, face.rect());
-    }
-    db.set_faces_scanned(photo_id, true);
-}
-
-fn store_detection(db: &Database, cache: &Path, photo_id: i64, image: &image::DynamicImage, detection: Detection) {
-    let person_id = db.assign_person(&detection.embedding);
-    let face_id = db.insert_face(
-        photo_id,
-        &NewFace {
-            person_id,
-            rect: detection.rect,
-            score: detection.score,
-            embedding: detection.embedding,
-            confirmed: false,
-            manual: false,
-        },
-    );
-    write_crop(cache, image, face_id, detection.rect);
-}
-
-fn write_crop(cache: &Path, image: &image::DynamicImage, face_id: i64, rect: RelRect) {
-    let path = cache.join("faces").join(format!("{face_id}.jpg"));
-    if path.is_file() {
-        return;
-    }
-    let crop = face_crop(image, rect, 160);
-    let _ = image_io::save_jpeg(&path, &crop, 85);
-}
-
-fn detect_catch(
-    slot: &mut Option<Box<dyn rustface::Detector>>,
-    image: &image::DynamicImage,
-) -> Vec<Detection> {
-    let Some(detector) = slot.as_mut() else {
-        return Vec::new();
-    };
-    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| faces::detect(&mut **detector, image)));
-    match outcome {
-        Ok(found) => found,
-        Err(_) => {
-            eprintln!("picasso: face detector reset after a fault");
-            *slot = faces::open_detector().ok();
-            Vec::new()
+        let probe = std::panic::catch_unwind(|| image_io::probe(&job.path, job.modified_at))
+            .unwrap_or_else(|_| Err("decoder fault".into()));
+        if done.send(ProbeResult { job, probe }).is_err() {
+            return;
         }
     }
 }
@@ -537,7 +473,11 @@ fn skip_stale(job: &ThumbJob, gate: &DisplayGate) -> bool {
     let ThumbJob::Display { id, nonce, .. } = job else {
         return false;
     };
-    gate.lock().ok().and_then(|guard| guard.get(id).copied()) != Some(*nonce)
+    stale_display(*id, *nonce, gate)
+}
+
+fn stale_display(id: i64, nonce: u64, gate: &DisplayGate) -> bool {
+    gate.lock().ok().and_then(|guard| guard.get(&id).copied()) != Some(nonce)
 }
 
 fn recv_thumb(urgent: &Receiver<ThumbJob>, normal: &Receiver<ThumbJob>) -> Option<ThumbJob> {
@@ -566,12 +506,12 @@ fn recv_thumb(urgent: &Receiver<ThumbJob>, normal: &Receiver<ThumbJob>) -> Optio
 
 fn run_thumb(cache: &Path, gate: &DisplayGate, job: ThumbJob) -> Option<UiEvent> {
     match job {
-        ThumbJob::Thumb { id, path, rotation } => {
+        ThumbJob::Thumb { id, path } => {
             let cached = cache.join("thumbs").join(format!("{id}.jpg"));
             let rgba = if let Some(rgba) = open_rgba(&cached) {
                 rgba
             } else {
-                let image = image_io::load_displayed(Path::new(&path), rotation).ok()?;
+                let image = image_io::load_oriented(Path::new(&path)).ok()?;
                 let rgba = image_io::thumbnail_rgba(&image, 256);
                 let _ = image_io::save_jpeg(&cached, &rgba, 80);
                 rgba
@@ -579,54 +519,24 @@ fn run_thumb(cache: &Path, gate: &DisplayGate, job: ThumbJob) -> Option<UiEvent>
             let (w, h, rgba) = raw_rgba(&rgba);
             Some(UiEvent::Thumb { id, w, h, rgba })
         }
-        ThumbJob::Display {
-            id,
-            path,
-            rotation,
-            nonce,
-        } => {
-            if skip_stale(&ThumbJob::Display { id, path: path.clone(), rotation, nonce }, gate) {
-                return None;
-            }
-            let image = image_io::load_displayed(Path::new(&path), rotation).ok()?;
-            if skip_stale(&ThumbJob::Display { id, path, rotation, nonce }, gate) {
+        ThumbJob::Display { id, path, nonce } => {
+            let image = image_io::load_oriented(Path::new(&path)).ok()?;
+            if stale_display(id, nonce, gate) {
                 return None;
             }
             let rgba = image_io::limit_rgba(image, 2560);
+            let histogram = Box::new(Histogram::from_rgba(rgba.as_raw()));
+            let exif = photo_info::exif_rows(Path::new(&path));
             let (w, h, rgba) = raw_rgba(&rgba);
             Some(UiEvent::Display {
                 id,
-                rotation,
                 nonce,
                 w,
                 h,
                 rgba,
+                histogram,
+                exif,
             })
-        }
-        ThumbJob::Face {
-            id,
-            path,
-            rotation,
-            x,
-            y,
-            w,
-            h,
-        } => {
-            let cached = cache.join("faces").join(format!("{id}.jpg"));
-            let rgba = if let Some(rgba) = open_rgba(&cached) {
-                rgba
-            } else {
-                let image = image_io::load_displayed(Path::new(&path), rotation).ok()?;
-                let rgba = face_crop(
-                    &image,
-                    RelRect { x, y, w, h },
-                    160,
-                );
-                let _ = image_io::save_jpeg(&cached, &rgba, 85);
-                rgba
-            };
-            let (w, h, rgba) = raw_rgba(&rgba);
-            Some(UiEvent::FaceThumb { id, w, h, rgba })
         }
     }
 }
@@ -636,9 +546,5 @@ fn open_rgba(path: &Path) -> Option<RgbaImage> {
 }
 
 fn raw_rgba(image: &RgbaImage) -> (usize, usize, Vec<u8>) {
-    (
-        image.width() as usize,
-        image.height() as usize,
-        image.as_raw().clone(),
-    )
+    (image.width() as usize, image.height() as usize, image.as_raw().clone())
 }

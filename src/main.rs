@@ -2,9 +2,9 @@
 
 mod app;
 mod db;
-mod faces;
-mod geom;
+mod geo;
 mod image_io;
+mod photo_info;
 mod picasa_ini;
 mod types;
 mod worker;

@@ -11,14 +11,16 @@ chrono = "0.4"
 crossbeam-channel = "0.5"
 directories = "6"
 eframe = { version = "0.37", features = ["glow"] }
+heic-rs = "0.1"
 kamadak-exif = "0.6"
+rawler = "0.8"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp", "bmp", "tiff"] }
 notify = "8"
 open = "5"
 rfd = "0.15"
 rusqlite = { version = "0.40", features = ["bundled"] }
-rustface = "0.1.7"
 trash = "5"
+ureq = "3.1"
 walkdir = "2"
 
 [profile.dev.package."*"]

@@ -3,7 +3,18 @@
 use std::path::Path;
 
 /// Image extensions Picasso indexes. Matching is case-insensitive.
-pub const IMAGE_EXTS: &[&str] = &["jpg", "jpeg", "png", "gif", "webp", "bmp", "tif", "tiff"];
+pub const IMAGE_EXTS: &[&str] = &[
+    "jpg", "jpeg", "png", "gif", "webp", "bmp", "tif", "tiff", "heic", "heif", "hif", "3fr", "ari", "arw", "cr2", "cr3",
+    "crm", "crw", "dcr", "dcs", "dng", "erf", "fff", "iiq", "kdc", "mef", "mos", "mrw", "nef", "nrw", "orf", "ori", "pef",
+    "qtk", "raf", "raw", "rw2", "rwl", "srw", "x3f",
+];
+
+const HEIC_EXTS: &[&str] = &["heic", "heif", "hif"];
+
+const RAW_EXTS: &[&str] = &[
+    "3fr", "ari", "arw", "cr2", "cr3", "crm", "crw", "dcr", "dcs", "dng", "erf", "fff", "iiq", "kdc", "mef", "mos", "mrw",
+    "nef", "nrw", "orf", "ori", "pef", "qtk", "raf", "raw", "rw2", "rwl", "srw", "x3f",
+];
 
 #[derive(Clone, Debug)]
 pub struct Folder {
@@ -20,18 +31,6 @@ pub struct Album {
 }
 
 #[derive(Clone, Debug)]
-pub struct Person {
-    pub id: i64,
-    pub name: Option<String>,
-    pub photo_count: i64,
-    pub face_count: i64,
-    pub cover_face_id: i64,
-    pub cover_path: String,
-    pub cover_rotation: i32,
-    pub cover: RelRect,
-}
-
-#[derive(Clone, Debug)]
 pub struct Photo {
     pub id: i64,
     pub folder_id: i64,
@@ -44,45 +43,36 @@ pub struct Photo {
     pub modified_at: i64,
     pub starred: bool,
     pub caption: String,
-    pub rotation: i32,
     pub camera: String,
-    pub faces_scanned: bool,
-    pub face_count: i64,
+    pub gps_lat: Option<f64>,
+    pub gps_lon: Option<f64>,
+    pub pin_lat: Option<f64>,
+    pub pin_lon: Option<f64>,
+    /// Clockwise turn chosen in Picasso: 0, 90, 180, or 270 degrees. Stored
+    /// only in the catalog and applied on screen; the file is never rewritten.
+    pub rotation: i32,
 }
 
-#[derive(Clone, Debug)]
-pub struct Face {
-    pub id: i64,
-    pub photo_id: i64,
-    pub person_id: i64,
-    pub person_name: Option<String>,
-    pub x: f32,
-    pub y: f32,
-    pub w: f32,
-    pub h: f32,
-    pub score: f32,
-    pub confirmed: bool,
-    pub manual: bool,
+/// Adds `delta` degrees to a rotation and normalizes it to 0, 90, 180, or 270.
+pub fn turn(rotation: i32, delta: i32) -> i32 {
+    (rotation + delta).div_euclid(90).rem_euclid(4) * 90
 }
 
-impl Face {
-    pub fn rect(&self) -> RelRect {
-        RelRect {
-            x: self.x,
-            y: self.y,
-            w: self.w,
-            h: self.h,
+impl Photo {
+    /// User pin if one was placed, otherwise the camera GPS coordinate.
+    pub fn place(&self) -> Option<(f64, f64)> {
+        match (self.pin_lat, self.pin_lon) {
+            (Some(lat), Some(lon)) => Some((lat, lon)),
+            _ => match (self.gps_lat, self.gps_lon) {
+                (Some(lat), Some(lon)) => Some((lat, lon)),
+                _ => None,
+            },
         }
     }
-}
 
-/// Face or crop rectangle in displayed-image space, each edge in `0..1`.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct RelRect {
-    pub x: f32,
-    pub y: f32,
-    pub w: f32,
-    pub h: f32,
+    pub fn pinned(&self) -> bool {
+        self.pin_lat.is_some() && self.pin_lon.is_some()
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -98,8 +88,7 @@ pub enum Nav {
     Starred,
     Folder(i64),
     Album(i64),
-    People,
-    Person(i64),
+    Places,
 }
 
 #[derive(Clone, Debug)]
@@ -113,12 +102,26 @@ pub struct NewPhoto {
     pub taken_at: i64,
     pub modified_at: i64,
     pub camera: String,
+    pub gps_lat: Option<f64>,
+    pub gps_lon: Option<f64>,
 }
 
 pub fn is_image_path(path: &Path) -> bool {
+    extension_in(path, IMAGE_EXTS)
+}
+
+pub fn is_heic_path(path: &Path) -> bool {
+    extension_in(path, HEIC_EXTS)
+}
+
+pub fn is_raw_path(path: &Path) -> bool {
+    extension_in(path, RAW_EXTS)
+}
+
+fn extension_in(path: &Path, extensions: &[&str]) -> bool {
     path.extension()
         .and_then(|ext| ext.to_str())
-        .map(|ext| IMAGE_EXTS.iter().any(|known| ext.eq_ignore_ascii_case(known)))
+        .map(|ext| extensions.iter().any(|known| ext.eq_ignore_ascii_case(known)))
         .unwrap_or(false)
 }
 
@@ -130,13 +133,14 @@ pub fn folder_label(path: &str) -> String {
         .unwrap_or_else(|| path.to_string())
 }
 
-/// Pixel size of a photo after the user's rotation is applied.
+/// Pixel size of a photo as displayed: camera orientation first, then the
+/// rotation stored in the catalog.
 pub fn displayed_size(photo: &Photo) -> (f32, f32) {
     let (w, h) = (photo.width.max(1) as f32, photo.height.max(1) as f32);
-    if photo.rotation % 180 == 0 {
-        (w, h)
-    } else {
+    if photo.rotation.rem_euclid(180) == 90 {
         (h, w)
+    } else {
+        (w, h)
     }
 }
 
@@ -181,4 +185,29 @@ pub fn unix_now() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn recognizes_heic_and_camera_raw() {
+        assert!(is_image_path(Path::new("IMG_0001.HEIC")));
+        assert!(is_heic_path(Path::new("photo.heif")));
+        assert!(is_image_path(Path::new("DSC_0001.NEF")));
+        assert!(is_image_path(Path::new("B0001234.3fr")));
+        assert!(is_raw_path(Path::new("capture.FFF")));
+        assert!(is_raw_path(Path::new("compact.NRW")));
+        assert!(!is_raw_path(Path::new("picture.jpg")));
+        assert!(!is_heic_path(Path::new("picture.jpg")));
+    }
+
+    #[test]
+    fn rotation_wraps_in_quarter_turns() {
+        assert_eq!(turn(0, 90), 90);
+        assert_eq!(turn(270, 90), 0);
+        assert_eq!(turn(0, -90), 270);
+        assert_eq!(turn(180, -450), 90);
+    }
 }

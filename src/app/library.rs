@@ -1,11 +1,11 @@
-//! Library grid, people tiles, and the browse toolbar.
+//! Library grid and the browse toolbar.
 
 use eframe::egui::{self, Align2, Color32, FontId, Pos2, Rect, Sense, Vec2};
 
-use crate::types::{format_day, Nav, Person, Photo, Sort};
+use crate::types::{format_day, Nav, Photo, Sort};
 
 use super::theme::{self, ACCENT, HAIRLINE, MUTED, STAR, TEXT, WHITE};
-use super::{Mode, PicassoApp};
+use super::PicassoApp;
 
 const GAP: f32 = 16.0;
 const LABEL_H: f32 = 16.0;
@@ -67,8 +67,8 @@ impl PicassoApp {
     pub(super) fn library_ui(&mut self, ui: &mut egui::Ui) {
         self.library_toolbar(ui);
         ui.add_space(4.0);
-        if self.nav == Nav::People && self.search.trim().is_empty() {
-            self.people_home(ui);
+        if self.nav == Nav::Places {
+            self.places_ui(ui);
             return;
         }
         if self.photos.is_empty() {
@@ -179,9 +179,15 @@ impl PicassoApp {
                 if ui.button("★").on_hover_text("Select starred photos").clicked() {
                     self.select_starred();
                 }
-                if self.nav != Nav::People && !self.selection.is_empty() {
+                if !self.selection.is_empty() {
                     if ui.button(if self.primary_starred() { "Unstar" } else { "Star" }).clicked() {
                         self.toggle_star_selection();
+                    }
+                    if ui.button("Rotate Right").on_hover_text("Rotate clockwise (Ctrl+])").clicked() {
+                        self.rotate_current(90);
+                    }
+                    if ui.button("Rotate Left").on_hover_text("Rotate counterclockwise (Ctrl+[)").clicked() {
+                        self.rotate_current(-90);
                     }
                     self.album_menu(ui);
                     if matches!(self.nav, Nav::Album(_)) && ui.button("Remove from Album").clicked() {
@@ -227,14 +233,14 @@ impl PicassoApp {
         let Some(photo) = self.photos.get(index).cloned() else {
             return;
         };
-        self.ensure_thumb(photo.id, &photo.path, photo.rotation);
+        self.ensure_thumb(photo.id, &photo.path);
         let selected = self.selection.contains(&photo.id);
         let thumb = rect.width();
         let image_rect = Rect::from_min_size(rect.min, Vec2::splat(thumb));
         let response = ui.interact(rect, egui::Id::unique(("photo", photo.id)), Sense::click());
         ui.painter().rect_filled(image_rect, 0, WHITE);
         if let Some((texture, w, h)) = self.thumb_texture(photo.id) {
-            theme::paint_image(ui.painter(), &texture, image_rect, theme::cover_uv(w, h));
+            theme::paint_image(ui.painter(), &texture, image_rect, theme::cover_uv(w, h), photo.rotation);
         } else {
             ui.painter().rect_filled(image_rect, 0, Color32::from_rgb(0xF0, 0xF0, 0xF0));
         }
@@ -289,11 +295,11 @@ impl PicassoApp {
                 ui.close();
             }
             if ui.button("Rotate Clockwise").clicked() {
-                self.rotate_ids(&[id], 90);
+                self.rotate_from_menu(id, 90);
                 ui.close();
             }
             if ui.button("Rotate Counterclockwise").clicked() {
-                self.rotate_ids(&[id], -90);
+                self.rotate_from_menu(id, -90);
                 ui.close();
             }
             if ui.button("Show in folder").clicked() {
@@ -302,97 +308,12 @@ impl PicassoApp {
                 }
                 ui.close();
             }
+            if ui.button("Show on map").clicked() {
+                self.show_on_map(id);
+                ui.close();
+            }
             if ui.button("Move to trash").clicked() {
                 self.modal = super::Modal::Trash { ids: vec![id] };
-                ui.close();
-            }
-        });
-    }
-
-    fn people_home(&mut self, ui: &mut egui::Ui) {
-        if self.people.is_empty() {
-            ui.vertical_centered(|ui| {
-                ui.add_space(72.0);
-                ui.label(egui::RichText::new("No People Albums").size(18.0).strong().color(TEXT));
-                ui.label(egui::RichText::new("Faces appear here as the folder scan finishes.").color(MUTED));
-            });
-            return;
-        }
-        let cards: Vec<Person> = self.people.clone();
-        let width = ui.available_width();
-        let cell = 132.0;
-        let cols = ((width - 16.0) / (cell + GAP)).floor().max(1.0) as usize;
-        let rows = cards.len().div_ceil(cols);
-        egui::ScrollArea::vertical()
-            .auto_shrink([false, false])
-            .show_rows(ui, cell + 40.0, rows, |ui, range| {
-                for row in range {
-                    ui.horizontal(|ui| {
-                        for col in 0..cols {
-                            let index = row * cols + col;
-                            let Some(person) = cards.get(index) else { break };
-                            self.person_card(ui, person, cell);
-                        }
-                    });
-                }
-            });
-    }
-
-    fn person_card(&mut self, ui: &mut egui::Ui, person: &Person, cell: f32) {
-        self.ensure_face_thumb(
-            person.cover_face_id,
-            &person.cover_path,
-            person.cover_rotation,
-            person.cover,
-        );
-        let (rect, response) = ui.allocate_exact_size(Vec2::new(cell, cell + 36.0), Sense::click());
-        let image = Rect::from_min_size(rect.min + Vec2::new(4.0, 0.0), Vec2::splat(cell - 8.0));
-        ui.painter().rect_filled(image, 0, Color32::from_rgb(0xF0, 0xF0, 0xF0));
-        if let Some(texture) = self.face_thumbs.get(&person.cover_face_id).cloned() {
-            theme::paint_image(
-                ui.painter(),
-                &texture,
-                image,
-                Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
-            );
-        }
-        ui.painter().rect_stroke(image, 0, egui::Stroke::new(1.0, HAIRLINE), egui::StrokeKind::Inside);
-        let named = person.name.clone().filter(|name| !name.is_empty());
-        let name = named.clone().unwrap_or_else(|| "Add a name".into());
-        ui.painter().text(
-            Pos2::new(image.center().x, image.bottom() + 2.0),
-            Align2::CENTER_TOP,
-            name.clone(),
-            FontId::proportional(12.0),
-            if named.is_some() { TEXT } else { MUTED },
-        );
-        ui.painter().text(
-            Pos2::new(image.center().x, image.bottom() + 16.0),
-            Align2::CENTER_TOP,
-            format!("{} photos, {} faces", person.photo_count, person.face_count),
-            FontId::proportional(11.0),
-            MUTED,
-        );
-        if response.clicked() {
-            self.nav = Nav::Person(person.id);
-            self.mode = Mode::Browse;
-            self.search.clear();
-            self.reload();
-        }
-        let person_id = person.id;
-        let name_buf = name;
-        response.context_menu(|ui| {
-            if ui.button("Rename").clicked() {
-                self.modal = super::Modal::RenamePerson {
-                    id: person_id,
-                    name: if name_buf == "Add a name" { String::new() } else { name_buf },
-                };
-                ui.close();
-            }
-            if ui.button("Find more photos").clicked() {
-                let matched = self.db.rematch(person_id);
-                self.activity = format!("Matched {matched} more faces");
-                self.reload();
                 ui.close();
             }
         });
@@ -408,7 +329,7 @@ impl PicassoApp {
             };
             ui.label(egui::RichText::new(title).size(18.0).strong().color(TEXT));
             ui.add_space(6.0);
-            ui.label(egui::RichText::new("Import a folder and Picasso scans it for pictures and faces.").color(MUTED));
+            ui.label(egui::RichText::new("Import a folder and Picasso scans it for pictures.").color(MUTED));
             ui.add_space(12.0);
             if ui.button("Import").clicked() {
                 self.modal = super::Modal::AddFolder {

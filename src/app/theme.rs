@@ -14,7 +14,6 @@ pub const MUTED: Color32 = Color32::from_rgb(0x66, 0x66, 0x66);
 pub const HAIRLINE: Color32 = Color32::from_rgb(0xC6, 0xC6, 0xC6);
 pub const STAR: Color32 = Color32::from_rgb(0xF5, 0xC4, 0x18);
 pub const FOLDER: Color32 = Color32::from_rgb(0xF0, 0xC1, 0x3A);
-pub const FACE: Color32 = Color32::from_rgb(0xFF, 0xFF, 0xFF);
 pub const VIEWER_BG: Color32 = Color32::from_rgb(0x3C, 0x3C, 0x3C);
 pub const VIEWER_BAR: Color32 = Color32::from_rgb(0x2A, 0x2A, 0x2A);
 pub const WHITE: Color32 = Color32::from_rgb(0xFF, 0xFF, 0xFF);
@@ -52,8 +51,31 @@ pub fn paint_logo(painter: &egui::Painter, center: Pos2, radius: f32) {
     painter.circle_filled(center, radius * 0.22, WHITE);
 }
 
-pub fn paint_image(painter: &egui::Painter, texture: &egui::TextureHandle, rect: egui::Rect, uv: egui::Rect) {
-    painter.image(texture.id(), rect, uv, WHITE);
+/// Draws `uv` of the texture into `rect`, turned `rotation` degrees clockwise.
+///
+/// Rotation is applied to the texture coordinates while drawing, so decoded
+/// pixels, cached thumbnails, and the photo file all stay as they are. `rect`
+/// is the on-screen box, already in the rotated aspect ratio.
+pub fn paint_image(painter: &egui::Painter, texture: &egui::TextureHandle, rect: egui::Rect, uv: egui::Rect, rotation: i32) {
+    let turns = rotation.div_euclid(90).rem_euclid(4) as usize;
+    if turns == 0 {
+        painter.image(texture.id(), rect, uv, WHITE);
+        return;
+    }
+    // Corners in clockwise order: top-left, top-right, bottom-right, bottom-left.
+    let screen = [rect.left_top(), rect.right_top(), rect.right_bottom(), rect.left_bottom()];
+    let tex = [uv.left_top(), uv.right_top(), uv.right_bottom(), uv.left_bottom()];
+    let mut mesh = egui::Mesh::with_texture(texture.id());
+    for (corner, pos) in screen.into_iter().enumerate() {
+        mesh.vertices.push(egui::epaint::Vertex {
+            pos,
+            uv: tex[(corner + 4 - turns) % 4],
+            color: WHITE,
+        });
+    }
+    mesh.add_triangle(0, 1, 2);
+    mesh.add_triangle(0, 2, 3);
+    painter.add(egui::Shape::mesh(mesh));
 }
 
 pub fn cover_uv(width: usize, height: usize) -> egui::Rect {

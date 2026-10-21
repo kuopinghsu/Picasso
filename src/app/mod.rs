@@ -1,6 +1,7 @@
 //! Picasso application state: library navigation, viewer, and background jobs.
 
 mod library;
+mod places;
 mod theme;
 mod viewer;
 
@@ -10,12 +11,11 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use crossbeam_channel::{Receiver, Sender, TryRecvError};
-use eframe::egui::{self, Color32, Key, Modifiers, Pos2, Rect, TextureHandle, TextureOptions, Vec2};
+use eframe::egui::{self, Color32, Key, Modifiers, Rect, TextureHandle, TextureOptions, Vec2};
 use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
 
 use crate::db::{self, Database};
-use crate::faces::cosine;
-use crate::types::{folder_label, Nav, Photo, RelRect, Sort};
+use crate::types::{folder_label, turn, Nav, Photo, Sort};
 use crate::worker::{self, Command, DisplayGate, ThumbJob, UiEvent};
 
 use library::CachedLayout;
@@ -44,17 +44,7 @@ enum Modal {
     AddFolder { path: String, error: String },
     NewAlbum { name: String, error: String },
     Trash { ids: Vec<i64> },
-    RenamePerson { id: i64, name: String },
     Help,
-}
-
-#[derive(Clone)]
-struct Naming {
-    face_id: i64,
-    person_id: i64,
-    text: String,
-    pos: Pos2,
-    suggestions: Vec<(i64, String, f32)>,
 }
 
 struct ThumbTex {
@@ -97,26 +87,19 @@ impl ThumbCache {
             }
         }
     }
-
-    fn remove(&mut self, id: i64) {
-        self.map.remove(&id);
-        if let Some(pos) = self.order.iter().position(|item| *item == id) {
-            self.order.remove(pos);
-        }
-    }
 }
 
 struct DisplayTex {
     id: i64,
-    rotation: i32,
     texture: TextureHandle,
     w: usize,
     h: usize,
+    histogram: Box<crate::photo_info::Histogram>,
+    exif: Vec<(&'static str, String)>,
 }
 
 pub struct PicassoApp {
     db: Database,
-    cache: PathBuf,
     data_dir: PathBuf,
     cmd_tx: Sender<Command>,
     urgent_tx: Sender<ThumbJob>,
@@ -129,7 +112,6 @@ pub struct PicassoApp {
 
     folders: Vec<crate::types::Folder>,
     albums: Vec<crate::types::Album>,
-    people: Vec<crate::types::Person>,
     photos: Vec<Photo>,
     nav: Nav,
     sort: Sort,
@@ -147,28 +129,34 @@ pub struct PicassoApp {
     thumbs: ThumbCache,
     thumb_waiting: HashSet<i64>,
     thumb_failed: HashSet<i64>,
-    face_thumbs: HashMap<i64, TextureHandle>,
-    face_waiting: HashSet<i64>,
     displays: Vec<DisplayTex>,
     display_nonce: HashMap<i64, u64>,
-    display_inflight: HashMap<i64, (i32, u64)>,
+    display_inflight: HashMap<i64, u64>,
     nonce_seq: u64,
 
     zoom: Zoom,
     pan: Vec2,
     stage_rect: Rect,
-    show_faces: bool,
     show_info: bool,
-    viewer_faces: Vec<crate::types::Face>,
     caption_buf: String,
     caption_photo: Option<i64>,
     slideshow: Option<Slideshow>,
     activity: String,
-    face_done: i64,
-    face_total: i64,
     scans: i32,
+    /// The catalog changed in the background and the view should be re-read.
+    library_dirty: bool,
+    last_reload: Instant,
     modal: Modal,
-    naming: Option<Naming>,
+    map_lat: f64,
+    map_lon: f64,
+    map_zoom: u8,
+    map_pan: Vec2,
+    map_place: bool,
+    tiles: HashMap<(u8, u32, u32), TextureHandle>,
+    tile_tx: Sender<crate::geo::TileJob>,
+    tile_rx: Receiver<crate::geo::TileDone>,
+    tile_wait: HashSet<(u8, u32, u32)>,
+    tile_fail: HashSet<(u8, u32, u32)>,
 }
 
 impl PicassoApp {
@@ -177,23 +165,28 @@ impl PicassoApp {
         let (data_dir, cache) = db::app_dirs();
         let _ = std::fs::create_dir_all(&data_dir);
         let _ = std::fs::create_dir_all(cache.join("thumbs"));
-        let _ = std::fs::create_dir_all(cache.join("faces"));
+        let _ = std::fs::create_dir_all(cache.join("tiles"));
+        // Face crops from older builds are no longer used.
+        let _ = std::fs::remove_dir_all(cache.join("faces"));
         let database = Database::open(&data_dir.join("picasso.db")).expect("open Picasso library");
         let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
         let (urgent_tx, urgent_rx) = crossbeam_channel::unbounded();
         let (normal_tx, normal_rx) = crossbeam_channel::unbounded();
         let (ev_tx, ev_rx) = crossbeam_channel::unbounded();
         let display_gate = Arc::new(Mutex::new(HashMap::new()));
-        {
+        for index in 0..worker::thumb_threads() {
             let ctx = ctx.clone();
             let cache = cache.clone();
             let gate = display_gate.clone();
             let events = ev_tx.clone();
+            let urgent = urgent_rx.clone();
+            let normal = normal_rx.clone();
             std::thread::Builder::new()
-                .name("picasso-thumbs".into())
-                .spawn(move || worker::thumb_loop(urgent_rx, normal_rx, events, ctx, cache, gate))
+                .name(format!("picasso-thumbs-{index}"))
+                .spawn(move || worker::thumb_loop(urgent, normal, events, ctx, cache, gate))
                 .expect("thumb thread");
         }
+        drop((urgent_rx, normal_rx));
         {
             let ctx = ctx.clone();
             let db_path = data_dir.join("picasso.db");
@@ -203,6 +196,15 @@ impl PicassoApp {
                 .spawn(move || worker::index_loop(db_path, cache, cmd_rx, normal_tx, ev_tx, ctx))
                 .expect("index thread");
         }
+        let (tile_tx, tile_job_rx) = crossbeam_channel::unbounded();
+        let (tile_done_tx, tile_rx) = crossbeam_channel::unbounded();
+        {
+            let cache = cache.clone();
+            std::thread::Builder::new()
+                .name("picasso-tiles".into())
+                .spawn(move || crate::geo::tile_loop(tile_job_rx, tile_done_tx, cache))
+                .expect("tile thread");
+        }
         let (watch_tx, watch_rx) = crossbeam_channel::unbounded();
         let watcher = notify::recommended_watcher(move |result| {
             let _ = watch_tx.send(result);
@@ -211,7 +213,6 @@ impl PicassoApp {
 
         let mut app = Self {
             db: database,
-            cache,
             data_dir,
             cmd_tx,
             urgent_tx,
@@ -223,7 +224,6 @@ impl PicassoApp {
             watch_deadline: HashMap::new(),
             folders: Vec::new(),
             albums: Vec::new(),
-            people: Vec::new(),
             photos: Vec::new(),
             nav: Nav::Library,
             sort: Sort::DateNewest,
@@ -240,8 +240,6 @@ impl PicassoApp {
             thumbs: ThumbCache::new(),
             thumb_waiting: HashSet::new(),
             thumb_failed: HashSet::new(),
-            face_thumbs: HashMap::new(),
-            face_waiting: HashSet::new(),
             displays: Vec::new(),
             display_nonce: HashMap::new(),
             display_inflight: HashMap::new(),
@@ -249,18 +247,25 @@ impl PicassoApp {
             zoom: Zoom::Fit,
             pan: Vec2::ZERO,
             stage_rect: Rect::NOTHING,
-            show_faces: true,
             show_info: false,
-            viewer_faces: Vec::new(),
             caption_buf: String::new(),
             caption_photo: None,
             slideshow: None,
             activity: String::new(),
-            face_done: 0,
-            face_total: 0,
             scans: 0,
+            library_dirty: false,
+            last_reload: Instant::now(),
             modal: Modal::None,
-            naming: None,
+            map_lat: 20.0,
+            map_lon: 0.0,
+            map_zoom: 2,
+            map_pan: Vec2::ZERO,
+            map_place: false,
+            tiles: HashMap::new(),
+            tile_tx,
+            tile_rx,
+            tile_wait: HashSet::new(),
+            tile_fail: HashSet::new(),
         };
 
         let seeded = app.db.setting("seeded").is_some();
@@ -285,10 +290,14 @@ impl PicassoApp {
             }
         }
         if seeded {
+            // The index thread resumes unfinished folders on its own; every
+            // other folder is checked for files that changed while Picasso
+            // was closed. Unchanged files are skipped by size and date.
             for folder in app.db.folders() {
                 let _ = app.cmd_tx.send(Command::Scan(folder.id));
             }
         }
+        app.show_info = app.db.setting("viewer_info").as_deref() != Some("0");
         app.reload();
         app.sync_watches();
         app
@@ -296,9 +305,10 @@ impl PicassoApp {
 
     fn reload(&mut self) {
         let keep = self.photos.get(self.viewer_index).map(|photo| photo.id);
+        self.library_dirty = false;
+        self.last_reload = Instant::now();
         self.folders = self.db.folders();
         self.albums = self.db.albums();
-        self.people = self.db.people();
         self.photos = self.db.photos(&self.nav, &self.search, self.sort);
         self.view_epoch = self.view_epoch.wrapping_add(1);
         if let Some(id) = keep {
@@ -314,30 +324,28 @@ impl PicassoApp {
         } else {
             self.viewer_index = self.viewer_index.min(self.photos.len() - 1);
         }
-        self.selection.retain(|id| self.photos.iter().any(|photo| photo.id == *id));
-        let (done, total) = self.db.face_progress();
-        self.face_done = done;
-        self.face_total = total;
+        if matches!(self.nav, Nav::Places) {
+            self.selection.retain(|id| self.db.photo(*id).is_some());
+        } else {
+            self.selection.retain(|id| self.photos.iter().any(|photo| photo.id == *id));
+        }
         if self.mode == Mode::View {
-            self.load_viewer_faces();
+            self.sync_caption();
         }
     }
 
-    fn load_viewer_faces(&mut self) {
+    fn sync_caption(&mut self) {
         let Some(photo) = self.photos.get(self.viewer_index) else {
-            self.viewer_faces.clear();
             return;
         };
-        let id = photo.id;
-        if self.caption_photo != Some(id) {
+        if self.caption_photo != Some(photo.id) {
             self.caption_buf = photo.caption.clone();
-            self.caption_photo = Some(id);
+            self.caption_photo = Some(photo.id);
         }
-        self.viewer_faces = self.db.faces_for_photo(id);
     }
 
     fn pump(&mut self, ctx: &egui::Context) {
-        for _ in 0..8 {
+        for _ in 0..16 {
             match self.events.try_recv() {
                 Ok(event) => self.on_event(event, ctx),
                 Err(TryRecvError::Empty) | Err(TryRecvError::Disconnected) => break,
@@ -346,6 +354,16 @@ impl PicassoApp {
         if !self.events.is_empty() {
             ctx.request_repaint();
         }
+        // While a scan streams in batches, re-read the view at most twice a
+        // second so a large library stays responsive.
+        if self.library_dirty {
+            let wait = Duration::from_millis(500);
+            if self.scans == 0 || self.last_reload.elapsed() >= wait {
+                self.reload();
+            } else {
+                ctx.request_repaint_after(wait.saturating_sub(self.last_reload.elapsed()));
+            }
+        }
     }
 
     fn on_event(&mut self, event: UiEvent, ctx: &egui::Context) {
@@ -353,6 +371,9 @@ impl PicassoApp {
             UiEvent::ScanStarted(name) => {
                 self.scans += 1;
                 self.activity = format!("Scanning {name}");
+            }
+            UiEvent::ScanProgress { folder, checked, indexed } => {
+                self.activity = format!("Scanning {folder} · {checked} checked · {indexed} updated");
             }
             UiEvent::ScanFinished { errors } => {
                 self.scans = self.scans.saturating_sub(1);
@@ -363,9 +384,9 @@ impl PicassoApp {
                         String::new()
                     };
                 }
-                self.reload();
+                self.library_dirty = true;
             }
-            UiEvent::Library => self.reload(),
+            UiEvent::Library => self.library_dirty = true,
             UiEvent::Thumb { id, w, h, rgba } => {
                 self.thumb_waiting.remove(&id);
                 if let Some(texture) = upload(ctx, &format!("thumb-{id}"), w, h, &rgba) {
@@ -374,40 +395,32 @@ impl PicassoApp {
                     self.thumb_failed.insert(id);
                 }
             }
-            UiEvent::Display { id, rotation, nonce, w, h, rgba } => {
+            UiEvent::Display {
+                id,
+                nonce,
+                w,
+                h,
+                rgba,
+                histogram,
+                exif,
+            } => {
                 if self.display_nonce.get(&id) != Some(&nonce) {
                     return;
                 }
                 self.display_inflight.remove(&id);
                 if let Some(texture) = upload(ctx, &format!("full-{id}-{nonce}"), w, h, &rgba) {
                     self.displays.retain(|item| item.id != id);
-                    self.displays.push(DisplayTex { id, rotation, texture, w, h });
+                    self.displays.push(DisplayTex {
+                        id,
+                        texture,
+                        w,
+                        h,
+                        histogram,
+                        exif,
+                    });
                     if self.displays.len() > 4 {
                         self.displays.remove(0);
                     }
-                }
-            }
-            UiEvent::FaceThumb { id, w, h, rgba } => {
-                self.face_waiting.remove(&id);
-                if let Some(texture) = upload(ctx, &format!("face-{id}"), w, h, &rgba) {
-                    self.face_thumbs.insert(id, texture);
-                    if self.face_thumbs.len() > 400 {
-                        self.face_thumbs.clear();
-                        self.face_waiting.clear();
-                    }
-                }
-            }
-            UiEvent::Faces { photo_id, count } => {
-                if let Some(photo) = self.photos.iter_mut().find(|photo| photo.id == photo_id) {
-                    photo.face_count = count;
-                    photo.faces_scanned = true;
-                }
-                self.people = self.db.people();
-                let (done, total) = self.db.face_progress();
-                self.face_done = done;
-                self.face_total = total;
-                if self.photos.get(self.viewer_index).map(|photo| photo.id) == Some(photo_id) {
-                    self.viewer_faces = self.db.faces_for_photo(photo_id);
                 }
             }
         }
@@ -520,10 +533,6 @@ impl PicassoApp {
     fn handle_keys(&mut self, ctx: &egui::Context) {
         let escape = ctx.input_mut(|input| input.consume_key(Modifiers::NONE, Key::Escape));
         if escape {
-            if self.naming.is_some() {
-                self.naming = None;
-                return;
-            }
             if !matches!(self.modal, Modal::None) {
                 self.modal = Modal::None;
                 return;
@@ -542,7 +551,7 @@ impl PicassoApp {
             }
             return;
         }
-        if ctx.egui_wants_keyboard_input() || !matches!(self.modal, Modal::None) || self.naming.is_some() {
+        if ctx.egui_wants_keyboard_input() || !matches!(self.modal, Modal::None) {
             return;
         }
         let command = |key| ctx.input_mut(|input| input.consume_key(Modifiers::COMMAND, key));
@@ -643,17 +652,14 @@ impl PicassoApp {
                 self.toggle_star_selection();
             }
         }
-        if plain(Key::R) {
+        if command(Key::CloseBracket) || plain(Key::R) {
             self.rotate_current(90);
         }
-        if shift(Key::R) {
+        if command(Key::OpenBracket) || shift(Key::R) {
             self.rotate_current(-90);
         }
         if plain(Key::I) && self.mode == Mode::View {
-            self.show_info = !self.show_info;
-        }
-        if plain(Key::F) && self.mode == Mode::View {
-            self.show_faces = !self.show_faces;
+            self.toggle_info();
         }
         let _ = command;
     }
@@ -700,10 +706,10 @@ impl PicassoApp {
                 .collect();
             let extra = self.selection.len().saturating_sub(held.len());
             for (id, path, rotation) in &held {
-                self.ensure_thumb(*id, path, *rotation);
+                self.ensure_thumb(*id, path);
                 let (rect, response) = ui.allocate_exact_size(Vec2::new(46.0, 34.0), egui::Sense::click());
                 if let Some((texture, w, h)) = self.thumb_texture(*id) {
-                    theme::paint_image(ui.painter(), &texture, rect, theme::cover_uv(w, h));
+                    theme::paint_image(ui.painter(), &texture, rect, theme::cover_uv(w, h), *rotation);
                 } else {
                     ui.painter().rect_filled(rect, 0, Color32::from_rgb(0xDD, 0xDD, 0xDD));
                 }
@@ -740,9 +746,8 @@ impl PicassoApp {
                 text.push_str(&self.activity);
             }
             ui.label(egui::RichText::new(text).color(MUTED).size(12.0));
-            if self.face_total > 0 && self.face_done < self.face_total {
-                let frac = self.face_done as f32 / self.face_total as f32;
-                ui.add(egui::ProgressBar::new(frac).desired_width(90.0).show_percentage());
+            if self.scans > 0 {
+                ui.add(egui::Spinner::new().size(12.0));
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.label(egui::RichText::new("▮").size(16.0).color(MUTED));
@@ -765,23 +770,8 @@ impl PicassoApp {
             if self.tree_row(ui, "Starred Photos", Glyph::Star, self.nav == Nav::Starred, 4.0).clicked() {
                 self.set_nav(Nav::Starred);
             }
-            if self.tree_row(ui, "People", Glyph::People, self.nav == Nav::People, 4.0).clicked() {
-                self.set_nav(Nav::People);
-            }
-            let people: Vec<(i64, String)> = self
-                .people
-                .iter()
-                .map(|person| {
-                    (
-                        person.id,
-                        person.name.clone().filter(|name| !name.is_empty()).unwrap_or_else(|| "Add a name".into()),
-                    )
-                })
-                .collect();
-            for (id, name) in people {
-                if self.tree_row(ui, &name, Glyph::People, self.nav == Nav::Person(id), 18.0).clicked() {
-                    self.set_nav(Nav::Person(id));
-                }
+            if self.tree_row(ui, "Places", Glyph::Pin, self.nav == Nav::Places, 4.0).clicked() {
+                self.set_nav(Nav::Places);
             }
             tree_section(ui, "Albums");
             let albums: Vec<(i64, String, i64)> = self
@@ -840,10 +830,6 @@ impl PicassoApp {
                     }
                 });
             }
-            ui.add_space(8.0);
-            if ui.button("Detect faces again").clicked() {
-                self.redetect_view();
-            }
         });
     }
 
@@ -867,12 +853,19 @@ impl PicassoApp {
     }
 
     fn set_nav(&mut self, nav: Nav) {
+        let keep_selection = matches!(nav, Nav::Places);
+        let kept = self.selection.clone();
         self.nav = nav;
         self.mode = Mode::Browse;
         self.slideshow = None;
         self.search.clear();
-        self.selection.clear();
         self.reload();
+        if keep_selection {
+            self.selection = kept;
+            self.frame_map();
+        } else {
+            self.selection.clear();
+        }
     }
 
     fn modals(&mut self, ctx: &egui::Context) {
@@ -886,7 +879,7 @@ impl PicassoApp {
                     .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
                     .open(&mut open)
                     .show(ctx, |ui| {
-                        ui.label("A local photo library. Folders are scanned on this computer, including faces.");
+                        ui.label("A local photo library. Folders are scanned on this computer.");
                         ui.add_space(8.0);
                         ui.label(format!("Library: {}", self.data_dir.display()));
                         ui.add_space(8.0);
@@ -894,11 +887,13 @@ impl PicassoApp {
                             "Enter — open    Esc — back",
                             "Arrows — move or previous / next",
                             "Space — slideshow     S — star",
-                            "R — rotate clockwise     Shift+R — other way",
-                            "F — face boxes     I — details",
+                            "Places — geotag on the OpenStreetMap",
+                            "HEIC and camera RAW, including NEF and 3FR",
+                            "Ctrl+] or R — rotate clockwise     Ctrl+[ or Shift+R — counterclockwise",
+                            "Rotation is saved in the library; photo files are never changed",
+                            "I — details, histogram, and EXIF",
                             "+ / − zoom     0 fit     1 actual size",
                             "Delete — trash     F5 — rescan     F11 — fullscreen",
-                            "Click a face box to name the person",
                         ] {
                             ui.label(line);
                         }
@@ -910,7 +905,6 @@ impl PicassoApp {
             Modal::AddFolder { .. } => self.add_folder_modal(ctx),
             Modal::NewAlbum { .. } => self.new_album_modal(ctx),
             Modal::Trash { .. } => self.trash_modal(ctx),
-            Modal::RenamePerson { .. } => self.rename_modal(ctx),
         }
     }
 
@@ -926,7 +920,7 @@ impl PicassoApp {
             .resizable(false)
             .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
             .show(ctx, |ui| {
-                ui.label("Picasso watches this folder and finds faces in new photos.");
+                ui.label("Picasso watches this folder and adds new photos as they appear.");
                 ui.add_space(6.0);
                 ui.horizontal(|ui| {
                     let response = ui.add(
@@ -1051,186 +1045,6 @@ impl PicassoApp {
         }
     }
 
-    fn rename_modal(&mut self, ctx: &egui::Context) {
-        let Modal::RenamePerson { id, name } = &self.modal else { return };
-        let id = *id;
-        let mut name = name.clone();
-        let mut close = false;
-        let mut submit = false;
-        egui::Window::new("Rename person")
-            .collapsible(false)
-            .resizable(false)
-            .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
-            .show(ctx, |ui| {
-                let response = ui.add(egui::TextEdit::singleline(&mut name).desired_width(240.0));
-                if response.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) {
-                    submit = true;
-                }
-                ui.horizontal(|ui| {
-                    if ui.button("Cancel").clicked() {
-                        close = true;
-                    }
-                    if ui.button("Save").clicked() {
-                        submit = true;
-                    }
-                });
-            });
-        if close {
-            self.modal = Modal::None;
-        } else if submit {
-            self.apply_person_name(id, &name);
-            self.modal = Modal::None;
-        } else {
-            self.modal = Modal::RenamePerson { id, name };
-        }
-    }
-
-    fn naming_window(&mut self, ctx: &egui::Context) {
-        let Some(naming) = self.naming.clone() else { return };
-        let mut naming = naming;
-        let mut close = false;
-        let mut save = false;
-        let mut split = false;
-        let mut pick: Option<i64> = None;
-        egui::Window::new("Name")
-            .collapsible(false)
-            .resizable(false)
-            .fixed_pos(naming.pos)
-            .show(ctx, |ui| {
-                ui.label("Who is this?");
-                let response = ui.add(egui::TextEdit::singleline(&mut naming.text).desired_width(200.0));
-                if response.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) {
-                    save = true;
-                }
-                for (id, name, score) in &naming.suggestions {
-                    if ui.button(format!("{name}  ({:.0}%)", score * 100.0)).clicked() {
-                        pick = Some(*id);
-                    }
-                }
-                ui.horizontal(|ui| {
-                    if ui.button("Save").clicked() {
-                        save = true;
-                    }
-                    if ui.button("Not this person").clicked() {
-                        split = true;
-                    }
-                    if ui.button("Cancel").clicked() {
-                        close = true;
-                    }
-                });
-            });
-        self.naming = Some(naming);
-        if close {
-            self.naming = None;
-        } else if split {
-            let face_id = self.naming.as_ref().map(|n| n.face_id).unwrap_or(0);
-            self.naming = None;
-            self.db.split_face(face_id);
-            self.after_faces_changed();
-        } else if let Some(person_id) = pick {
-            let face_id = self.naming.as_ref().map(|n| n.face_id).unwrap_or(0);
-            self.naming = None;
-            self.db.move_face(face_id, person_id);
-            let matched = self.db.rematch(person_id);
-            self.activity = format!("Matched {matched} more faces");
-            self.after_faces_changed();
-        } else if save {
-            let naming = self.naming.clone().unwrap();
-            self.naming = None;
-            self.commit_name(&naming);
-        }
-    }
-
-    fn commit_name(&mut self, naming: &Naming) {
-        let text = naming.text.trim();
-        if text.is_empty() {
-            self.db.rename_person(naming.person_id, "");
-            self.db.confirm_face(naming.face_id);
-            self.activity = "Cleared the name".into();
-        } else if let Some(existing) = self.db.person_by_name(text) {
-            if existing == naming.person_id {
-                self.db.rename_person(naming.person_id, text);
-                self.db.confirm_face(naming.face_id);
-                let matched = self.db.rematch(naming.person_id);
-                self.activity = format!("Named {text}. Matched {matched} more faces.");
-            } else {
-                self.db.move_face(naming.face_id, existing);
-                let matched = self.db.rematch(existing);
-                self.activity = format!("Moved this face to {text}. Matched {matched} more.");
-            }
-        } else {
-            self.db.rename_person(naming.person_id, text);
-            self.db.confirm_face(naming.face_id);
-            let matched = self.db.rematch(naming.person_id);
-            self.activity = format!("Named {text}. Matched {matched} more faces.");
-        }
-        self.after_faces_changed();
-    }
-
-    fn apply_person_name(&mut self, person_id: i64, name: &str) {
-        let name = name.trim();
-        if name.is_empty() {
-            self.db.rename_person(person_id, "");
-        } else if let Some(existing) = self.db.person_by_name(name) {
-            if existing != person_id {
-                self.merge_people(person_id, existing);
-                let matched = self.db.rematch(existing);
-                self.activity = format!("Merged into {name}. Matched {matched} more faces.");
-            }
-        } else {
-            self.db.rename_person(person_id, name);
-            let matched = self.db.rematch(person_id);
-            self.activity = format!("Named {name}. Matched {matched} more faces.");
-        }
-        self.after_faces_changed();
-    }
-
-    fn merge_people(&mut self, from: i64, to: i64) {
-        let photos = self.db.photos(&Nav::Person(from), "", Sort::Name);
-        for photo in photos {
-            for face in self.db.faces_for_photo(photo.id) {
-                if face.person_id == from {
-                    self.db.move_face(face.id, to);
-                }
-            }
-        }
-    }
-
-    fn begin_naming(&mut self, face: &crate::types::Face, pos: Pos2) {
-        let mut suggestions = Vec::new();
-        if let Some(embedding) = self.db.embedding(face.id) {
-            for centroid in self.db.centroids() {
-                if centroid.person_id == face.person_id {
-                    continue;
-                }
-                let Some(name) = centroid.name else { continue };
-                let score = cosine(&embedding, &centroid.embedding);
-                if score >= 0.82 {
-                    suggestions.push((centroid.person_id, name, score));
-                }
-            }
-            suggestions.sort_by(|a, b| b.2.total_cmp(&a.2));
-            suggestions.truncate(5);
-        }
-        self.naming = Some(Naming {
-            face_id: face.id,
-            person_id: face.person_id,
-            text: face.person_name.clone().unwrap_or_default(),
-            pos,
-            suggestions,
-        });
-    }
-
-    fn after_faces_changed(&mut self) {
-        self.people = self.db.people();
-        if self.mode == Mode::View {
-            self.load_viewer_faces();
-        }
-        if matches!(self.nav, Nav::Person(_) | Nav::People) {
-            self.photos = self.db.photos(&self.nav, &self.search, self.sort);
-        }
-    }
-
     fn add_folder(&mut self, path: &Path) -> Result<(), String> {
         let id = self.db.add_folder(path)?;
         let _ = self.cmd_tx.send(Command::Scan(id));
@@ -1251,15 +1065,6 @@ impl PicassoApp {
         }
     }
 
-    fn redetect_view(&mut self) {
-        let ids: Vec<i64> = self.photos.iter().map(|photo| photo.id).collect();
-        if ids.is_empty() {
-            return;
-        }
-        let _ = self.cmd_tx.send(Command::Redetect(ids));
-        self.activity = "Detecting faces again".into();
-    }
-
     fn view_title(&self) -> String {
         if !self.search.trim().is_empty() {
             return format!("Search “{}”", self.search.trim());
@@ -1267,7 +1072,7 @@ impl PicassoApp {
         match &self.nav {
             Nav::Library => "Library".into(),
             Nav::Starred => "Starred Photos".into(),
-            Nav::People => "People".into(),
+            Nav::Places => "Places".into(),
             Nav::Folder(id) => self
                 .folders
                 .iter()
@@ -1280,12 +1085,6 @@ impl PicassoApp {
                 .find(|album| album.id == *id)
                 .map(|album| album.name.clone())
                 .unwrap_or_else(|| "Album".into()),
-            Nav::Person(id) => self
-                .people
-                .iter()
-                .find(|person| person.id == *id)
-                .map(|person| person.name.clone().unwrap_or_else(|| "Unnamed".into()))
-                .unwrap_or_else(|| "Person".into()),
         }
     }
 
@@ -1314,7 +1113,6 @@ impl PicassoApp {
     fn close_viewer(&mut self) {
         self.mode = Mode::Browse;
         self.slideshow = None;
-        self.naming = None;
     }
 
     fn set_index(&mut self, index: usize, reset_zoom: bool) {
@@ -1329,7 +1127,7 @@ impl PicassoApp {
             self.pan = Vec2::ZERO;
         }
         if changed {
-            self.load_viewer_faces();
+            self.sync_caption();
         }
         self.request_neighbors();
         if self.slideshow.is_some() {
@@ -1445,6 +1243,8 @@ impl PicassoApp {
         self.reload();
     }
 
+    /// Rotates the photo on screen in the viewer, or the selection in the
+    /// grid.
     fn rotate_current(&mut self, delta: i32) {
         let ids: Vec<i64> = if self.mode == Mode::View {
             self.photos.get(self.viewer_index).map(|photo| vec![photo.id]).unwrap_or_default()
@@ -1454,26 +1254,34 @@ impl PicassoApp {
         self.rotate_ids(&ids, delta);
     }
 
-    fn rotate_ids(&mut self, ids: &[i64], delta: i32) {
-        for id in ids {
-            self.db.rotate_photo(*id, delta);
-            self.invalidate_thumb(*id);
-        }
-        if !ids.is_empty() {
-            self.reload();
-            if self.mode == Mode::View {
-                self.request_neighbors();
-            }
-        }
+    /// A context-menu rotate applies to the whole selection when the clicked
+    /// photo is part of it, otherwise to that photo alone.
+    fn rotate_from_menu(&mut self, id: i64, delta: i32) {
+        let ids: Vec<i64> = if self.selection.contains(&id) {
+            self.selection.iter().copied().collect()
+        } else {
+            vec![id]
+        };
+        self.rotate_ids(&ids, delta);
     }
 
-    fn invalidate_thumb(&mut self, id: i64) {
-        self.thumbs.remove(id);
-        self.thumb_waiting.remove(&id);
-        self.thumb_failed.remove(&id);
-        let _ = std::fs::remove_file(self.cache.join("thumbs").join(format!("{id}.jpg")));
-        self.displays.retain(|item| item.id != id);
-        self.display_inflight.remove(&id);
+    /// Stores the new rotation in the catalog. Cached thumbnails and decoded
+    /// views are reused as they are and turned while drawing.
+    fn rotate_ids(&mut self, ids: &[i64], delta: i32) {
+        if ids.is_empty() {
+            return;
+        }
+        self.db.rotate(ids, delta);
+        for photo in self.photos.iter_mut().filter(|photo| ids.contains(&photo.id)) {
+            photo.rotation = turn(photo.rotation, delta);
+        }
+        if self.mode == Mode::View {
+            self.zoom = Zoom::Fit;
+            self.pan = Vec2::ZERO;
+        }
+        let noun = if ids.len() == 1 { "photo" } else { "photos" };
+        let way = if delta > 0 { "clockwise" } else { "counterclockwise" };
+        self.activity = format!("Rotated {} {noun} {way}", ids.len());
     }
 
     fn remove_selection_from_album(&mut self) {
@@ -1513,10 +1321,16 @@ impl PicassoApp {
             interval: 3.0,
             last: Instant::now(),
         });
-        self.show_info = false;
     }
 
-    fn ensure_thumb(&mut self, id: i64, path: &str, rotation: i32) {
+    /// Shows or hides the details, histogram, and EXIF panel. The choice is
+    /// remembered between sessions.
+    fn toggle_info(&mut self) {
+        self.show_info = !self.show_info;
+        self.db.set_setting("viewer_info", if self.show_info { "1" } else { "0" });
+    }
+
+    fn ensure_thumb(&mut self, id: i64, path: &str) {
         if self.thumbs.map.contains_key(&id) || self.thumb_waiting.contains(&id) || self.thumb_failed.contains(&id) {
             return;
         }
@@ -1524,28 +1338,11 @@ impl PicassoApp {
         let _ = self.urgent_tx.send(ThumbJob::Thumb {
             id,
             path: path.to_string(),
-            rotation,
         });
     }
 
     fn thumb_texture(&mut self, id: i64) -> Option<(TextureHandle, usize, usize)> {
         self.thumbs.get(id)
-    }
-
-    fn ensure_face_thumb(&mut self, id: i64, path: &str, rotation: i32, rect: RelRect) {
-        if self.face_thumbs.contains_key(&id) || self.face_waiting.contains(&id) {
-            return;
-        }
-        self.face_waiting.insert(id);
-        let _ = self.urgent_tx.send(ThumbJob::Face {
-            id,
-            path: path.to_string(),
-            rotation,
-            x: rect.x,
-            y: rect.y,
-            w: rect.w,
-            h: rect.h,
-        });
     }
 
     fn request_neighbors(&mut self) {
@@ -1564,37 +1361,39 @@ impl PicassoApp {
 
     fn request_display(&mut self, index: usize) {
         let Some(photo) = self.photos.get(index) else { return };
-        if self
-            .displays
-            .iter()
-            .any(|item| item.id == photo.id && item.rotation == photo.rotation)
-        {
-            return;
-        }
-        if self.display_inflight.get(&photo.id).map(|(rotation, _)| *rotation) == Some(photo.rotation) {
+        if self.displays.iter().any(|item| item.id == photo.id) || self.display_inflight.contains_key(&photo.id) {
             return;
         }
         self.nonce_seq = self.nonce_seq.wrapping_add(1);
         let nonce = self.nonce_seq;
         let id = photo.id;
-        let rotation = photo.rotation;
         self.display_nonce.insert(id, nonce);
-        self.display_inflight.insert(id, (rotation, nonce));
+        self.display_inflight.insert(id, nonce);
         if let Ok(mut gate) = self.display_gate.lock() {
             gate.insert(id, nonce);
         }
         let _ = self.urgent_tx.send(ThumbJob::Display {
             id,
             path: photo.path.clone(),
-            rotation,
             nonce,
         });
     }
 
-    fn display_texture(&self, id: i64, rotation: i32) -> Option<(TextureHandle, usize, usize)> {
-        self.displays.iter().rev().find(|item| item.id == id && item.rotation == rotation).map(|item| {
-            (item.texture.clone(), item.w, item.h)
-        })
+    /// Histogram and EXIF rows decoded with the full-size view of `id`.
+    fn display_info(&self, id: i64) -> Option<(crate::photo_info::Histogram, Vec<(&'static str, String)>)> {
+        self.displays
+            .iter()
+            .rev()
+            .find(|item| item.id == id)
+            .map(|item| ((*item.histogram).clone(), item.exif.clone()))
+    }
+
+    fn display_texture(&self, id: i64) -> Option<(TextureHandle, usize, usize)> {
+        self.displays
+            .iter()
+            .rev()
+            .find(|item| item.id == id)
+            .map(|item| (item.texture.clone(), item.w, item.h))
     }
 }
 
@@ -1605,10 +1404,10 @@ impl eframe::App for PicassoApp {
 
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.pump(ctx);
+        self.pump_tiles(ctx);
         self.pump_watch(ctx);
         self.tick_slideshow();
         let busy = self.scans > 0
-            || self.face_done < self.face_total
             || self.slideshow.as_ref().map(|show| show.playing).unwrap_or(false)
             || !self.thumb_waiting.is_empty()
             || !self.display_inflight.is_empty();
@@ -1644,7 +1443,6 @@ impl eframe::App for PicassoApp {
                 .show(ui, |ui| self.library_ui(ui));
         }
         self.modals(ui.ctx());
-        self.naming_window(ui.ctx());
     }
 }
 
@@ -1667,21 +1465,17 @@ enum Glyph {
     Library,
     Folder,
     Album,
-    People,
     Star,
+    Pin,
 }
 
-fn paint_glyph(painter: &egui::Painter, center_left: Pos2, glyph: Glyph) {
+fn paint_glyph(painter: &egui::Painter, center_left: egui::Pos2, glyph: Glyph) {
     let origin = center_left + Vec2::new(0.0, -6.0);
     match glyph {
         Glyph::Folder | Glyph::Album => {
             let body = theme::FOLDER;
             painter.rect_filled(Rect::from_min_size(origin + Vec2::new(0.0, 3.0), Vec2::new(12.0, 8.0)), 1, body);
             painter.rect_filled(Rect::from_min_size(origin, Vec2::new(6.0, 3.0)), 1, Color32::from_rgb(0xD7, 0xA4, 0x1E));
-        }
-        Glyph::People => {
-            painter.circle_filled(origin + Vec2::new(6.0, 3.0), 2.4, Color32::from_rgb(0x5B, 0x8D, 0xC8));
-            painter.circle_filled(origin + Vec2::new(6.0, 9.0), 3.6, Color32::from_rgb(0x5B, 0x8D, 0xC8));
         }
         Glyph::Star => {
             painter.text(
@@ -1698,6 +1492,10 @@ fn paint_glyph(painter: &egui::Painter, center_left: Pos2, glyph: Glyph) {
                 1,
                 theme::ACCENT,
             );
+        }
+        Glyph::Pin => {
+            painter.circle_filled(origin + Vec2::new(6.0, 5.0), 3.4, Color32::from_rgb(0xE0, 0x45, 0x3A));
+            painter.circle_filled(origin + Vec2::new(6.0, 4.2), 1.3, Color32::WHITE);
         }
     }
 }

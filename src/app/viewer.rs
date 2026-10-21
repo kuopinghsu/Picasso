@@ -1,10 +1,11 @@
-//! Single-photo stage, filmstrip, slideshow, and face naming targets.
+//! Single-photo stage, filmstrip, and slideshow.
 
 use eframe::egui::{self, Align2, Color32, FontId, Pos2, Rect, Sense, Vec2};
 
-use crate::types::{displayed_size, folder_label, format_bytes, format_timestamp, RelRect};
+use crate::photo_info::Histogram;
+use crate::types::{displayed_size, folder_label, format_bytes, format_timestamp};
 
-use super::theme::{self, FACE, MUTED, TEXT, TOOLBAR, VIEWER_BAR, VIEWER_BG, WHITE};
+use super::theme::{self, MUTED, TEXT, TOOLBAR, VIEWER_BAR, VIEWER_BG, WHITE};
 use super::{PicassoApp, Zoom};
 
 impl PicassoApp {
@@ -46,17 +47,23 @@ impl PicassoApp {
                             self.start_slideshow();
                         }
                     }
-                    if ui.button(if self.show_info { "Metadata" } else { "Metadata" }).clicked() {
-                        self.show_info = !self.show_info;
+                    if ui.button("Info").on_hover_text("Details, histogram, and EXIF (I)").clicked() {
+                        self.toggle_info();
                     }
-                    if ui.button(if self.show_faces { "Faces" } else { "Faces" }).clicked() {
-                        self.show_faces = !self.show_faces;
-                    }
-                    if ui.button("Rotate Clockwise").clicked() {
+                    if ui.button("Rotate Right").on_hover_text("Rotate clockwise (Ctrl+])").clicked() {
                         self.rotate_current(90);
                     }
-                    if ui.button("Rotate Left").clicked() {
+                    if ui.button("Rotate Left").on_hover_text("Rotate counterclockwise (Ctrl+[)").clicked() {
                         self.rotate_current(-90);
+                    }
+                    if ui.button("Open map").on_hover_text("Open this photo in OpenStreetMap").clicked() {
+                        if let Some(photo) = self.photos.get(self.viewer_index) {
+                            let (lat, lon, zoom) = match photo.place() {
+                                Some((lat, lon)) => (lat, lon, 14),
+                                None => (self.map_lat, self.map_lon, self.map_zoom.max(2)),
+                            };
+                            super::places::open_osm(lat, lon, zoom);
+                        }
                     }
                     if ui.button("Fit").clicked() {
                         self.zoom = Zoom::Fit;
@@ -113,12 +120,12 @@ impl PicassoApp {
         let size = Vec2::new(img_w * scale, img_h * scale);
         let image_rect = Rect::from_center_size(stage.center() + self.pan, size);
         let mut response = ui.interact(stage, egui::Id::unique("stage"), Sense::click_and_drag());
-        if let Some((texture, _, _)) = self.display_texture(photo.id, photo.rotation) {
-            theme::paint_image(ui.painter(), &texture, image_rect, full_uv());
+        if let Some((texture, _, _)) = self.display_texture(photo.id) {
+            theme::paint_image(ui.painter(), &texture, image_rect, full_uv(), photo.rotation);
         } else if let Some((texture, _w, _h)) = self.thumb_texture(photo.id) {
-            theme::paint_image(ui.painter(), &texture, image_rect, full_uv());
+            theme::paint_image(ui.painter(), &texture, image_rect, full_uv(), photo.rotation);
         } else {
-            self.ensure_thumb(photo.id, &photo.path, photo.rotation);
+            self.ensure_thumb(photo.id, &photo.path);
             ui.painter().text(
                 stage.center(),
                 Align2::CENTER_CENTER,
@@ -126,10 +133,6 @@ impl PicassoApp {
                 FontId::proportional(16.0),
                 Color32::from_gray(180),
             );
-        }
-
-        if self.show_faces {
-            self.paint_faces(ui, image_rect);
         }
 
         if response.hovered() {
@@ -173,25 +176,6 @@ impl PicassoApp {
         }
     }
 
-    fn paint_faces(&mut self, ui: &mut egui::Ui, image_rect: Rect) {
-        let faces = self.viewer_faces.clone();
-        for face in &faces {
-            let rect = map_face(face.x, face.y, face.w, face.h, image_rect);
-            let response = ui.interact(rect, egui::Id::unique(("face", face.id)), Sense::click());
-            ui.painter().rect_stroke(rect, 0, egui::Stroke::new(2.0, FACE), egui::StrokeKind::Outside);
-            let label = face.person_name.clone().unwrap_or_else(|| "Add a name".into());
-            let text_pos = Pos2::new(rect.left(), rect.bottom() + 2.0);
-            let galley = ui.painter().layout_no_wrap(label, FontId::proportional(12.0), Color32::BLACK);
-            let bg = Rect::from_min_size(text_pos, galley.size() + Vec2::new(8.0, 3.0));
-            ui.painter().rect_filled(bg, 0, FACE);
-            ui.painter().galley(text_pos + Vec2::new(4.0, 1.0), galley, Color32::BLACK);
-            if response.clicked() {
-                let pos = rect.left_bottom() + Vec2::new(0.0, 6.0);
-                self.begin_naming(face, pos);
-            }
-        }
-    }
-
     fn slideshow_click(&mut self, pos: Pos2, stage: Rect) {
         let rel = (pos.x - stage.left()) / stage.width().max(1.0);
         if rel < 0.33 {
@@ -209,25 +193,94 @@ impl PicassoApp {
             .fill(Color32::from_rgb(0xF8, 0xF9, 0xFA))
             .inner_margin(egui::Margin::same(12));
         frame.show(ui, |ui| {
-            ui.set_min_size(Vec2::new(268.0, height));
-            ui.set_max_width(268.0);
-            let Some(photo) = self.photos.get(self.viewer_index).cloned() else {
-                return;
-            };
+            ui.set_min_size(Vec2::new(256.0, height - 24.0));
+            ui.set_max_width(256.0);
+            egui::ScrollArea::vertical()
+                .id_salt("info-panel")
+                .auto_shrink([false, false])
+                .max_height(height - 24.0)
+                .show(ui, |ui| {
+                    ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| self.info_contents(ui));
+                });
+        });
+    }
+
+    fn info_contents(&mut self, ui: &mut egui::Ui) {
+        let Some(photo) = self.photos.get(self.viewer_index).cloned() else {
+            return;
+        };
+        let info = self.display_info(photo.id);
+        {
+            ui.label(egui::RichText::new("Histogram").strong());
+            ui.add_space(4.0);
+            match &info {
+                Some((histogram, _)) => paint_histogram(ui, histogram),
+                None => {
+                    let (rect, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), HISTOGRAM_H), Sense::hover());
+                    ui.painter().rect_filled(rect, 2, Color32::from_gray(0x2A));
+                    ui.painter().text(
+                        rect.center(),
+                        Align2::CENTER_CENTER,
+                        "Loading…",
+                        FontId::proportional(12.0),
+                        Color32::from_gray(160),
+                    );
+                }
+            }
+            ui.add_space(10.0);
             ui.label(egui::RichText::new("Details").strong());
             ui.add_space(6.0);
             detail(ui, "File", &photo.filename);
             detail(ui, "Taken", &format_timestamp(photo.taken_at));
+            if photo.modified_at != photo.taken_at {
+                detail(ui, "Modified", &format_timestamp(photo.modified_at));
+            }
             let (w, h) = displayed_size(&photo);
             detail(ui, "Size", &format!("{} × {}   {}", w as u32, h as u32, format_bytes(photo.bytes)));
             if !photo.camera.is_empty() {
                 detail(ui, "Camera", &photo.camera);
             }
-            detail(ui, "Faces", &photo.face_count.to_string());
+            if photo.rotation != 0 {
+                detail(ui, "Rotated", &format!("{}° clockwise in Picasso", photo.rotation));
+            }
             if let Some(folder) = self.folders.iter().find(|folder| folder.id == photo.folder_id) {
                 detail(ui, "Folder", &folder_label(&folder.path));
             }
-            ui.add_space(8.0);
+            if let Some((lat, lon)) = photo.place() {
+                let kind = if photo.pinned() { "pinned" } else { "camera" };
+                detail(ui, "Place", &format!("{lat:.5}, {lon:.5} ({kind})"));
+            }
+            ui.add_space(10.0);
+            ui.label(egui::RichText::new("EXIF").strong());
+            ui.add_space(4.0);
+            match &info {
+                None => {
+                    ui.label(egui::RichText::new("Loading…").color(MUTED).size(12.0));
+                }
+                Some((_, rows)) => {
+                    // Camera and date already appear under Details.
+                    let rows: Vec<&(&str, String)> = rows
+                        .iter()
+                        .filter(|(label, _)| *label != "Taken" && !(*label == "Camera" && !photo.camera.is_empty()))
+                        .collect();
+                    if rows.is_empty() {
+                        ui.label(egui::RichText::new("No EXIF data in this file").color(MUTED).size(12.0));
+                    } else {
+                        egui::Grid::new(("exif", photo.id))
+                            .num_columns(2)
+                            .striped(true)
+                            .spacing(Vec2::new(10.0, 3.0))
+                            .show(ui, |ui| {
+                                for (label, value) in rows {
+                                    ui.label(egui::RichText::new(*label).color(MUTED).size(12.0));
+                                    ui.add(egui::Label::new(egui::RichText::new(value).size(12.0)).wrap());
+                                    ui.end_row();
+                                }
+                            });
+                    }
+                }
+            }
+            ui.add_space(10.0);
             ui.label("Caption");
             let response = ui.add(
                 egui::TextEdit::multiline(&mut self.caption_buf)
@@ -246,27 +299,20 @@ impl PicassoApp {
                     let _ = open::that(parent);
                 }
             }
+            if ui.button("Show on map").clicked() {
+                self.show_on_map(photo.id);
+            }
+            if ui.button("Open map").clicked() {
+                let (lat, lon, zoom) = photo
+                    .place()
+                    .map(|(lat, lon)| (lat, lon, 14))
+                    .unwrap_or((self.map_lat, self.map_lon, self.map_zoom.max(2)));
+                super::places::open_osm(lat, lon, zoom);
+            }
             if ui.button("Move to trash").clicked() {
                 self.modal = super::Modal::Trash { ids: vec![photo.id] };
             }
-            ui.add_space(8.0);
-            ui.label(egui::RichText::new("People").strong());
-            for face in self.viewer_faces.clone() {
-                if face.photo_id != photo.id {
-                    continue;
-                }
-                let mut name = face.person_name.clone().unwrap_or_else(|| "Add a name".into());
-                if face.manual {
-                    name.push_str(" · manual");
-                } else if face.confirmed {
-                    name.push_str(" · confirmed");
-                }
-                let button = ui.button(name).on_hover_text(format!("score {:.1}", face.score));
-                if button.clicked() {
-                    self.begin_naming(&face, ui.cursor().min);
-                }
-            }
-        });
+        }
     }
 
     fn filmstrip(&mut self, ui: &mut egui::Ui, height: f32) {
@@ -293,10 +339,10 @@ impl PicassoApp {
                         let id = self.photos[index].id;
                         let path = self.photos[index].path.clone();
                         let rotation = self.photos[index].rotation;
-                        self.ensure_thumb(id, &path, rotation);
+                        self.ensure_thumb(id, &path);
                         let response = ui.interact(rect, egui::Id::unique(("film", id)), Sense::click());
                         if let Some((texture, w, h)) = self.thumb_texture(id) {
-                            theme::paint_image(ui.painter(), &texture, rect, theme::cover_uv(w, h));
+                            theme::paint_image(ui.painter(), &texture, rect, theme::cover_uv(w, h), rotation);
                         } else {
                             ui.painter().rect_filled(rect, 2, Color32::from_gray(40));
                         }
@@ -380,11 +426,72 @@ fn chevron(ui: &mut egui::Ui, rect: Rect, glyph: &str) -> bool {
     response.clicked()
 }
 
-fn map_face(x: f32, y: f32, w: f32, h: f32, image: Rect) -> Rect {
-    Rect::from_min_size(
-        Pos2::new(image.left() + x * image.width(), image.top() + y * image.height()),
-        Vec2::new(w * image.width(), h * image.height()),
-    )
+const HISTOGRAM_H: f32 = 96.0;
+
+/// Draws luminance as a filled gray area with the red, green, and blue
+/// channels as lines on top, plus the share of clipped shadows and highlights.
+fn paint_histogram(ui: &mut egui::Ui, histogram: &Histogram) {
+    let (rect, response) = ui.allocate_exact_size(Vec2::new(ui.available_width(), HISTOGRAM_H), Sense::hover());
+    let painter = ui.painter_at(rect);
+    painter.rect_filled(rect, 2, Color32::from_gray(0x2A));
+    let plot = rect.shrink2(Vec2::new(3.0, 4.0));
+    let peak = histogram.peak() as f32;
+    let x_at = |bin: usize| plot.left() + plot.width() * bin as f32 / 255.0;
+    let y_at = |count: u32| plot.bottom() - plot.height() * (count as f32 / peak).min(1.0);
+
+    let mut mesh = egui::Mesh::default();
+    let fill = Color32::from_gray(0x9A);
+    for (bin, &count) in histogram.bins[Histogram::LUMA].iter().enumerate() {
+        let index = mesh.vertices.len() as u32;
+        mesh.colored_vertex(Pos2::new(x_at(bin), plot.bottom()), fill);
+        mesh.colored_vertex(Pos2::new(x_at(bin), y_at(count)), fill);
+        if bin > 0 {
+            mesh.add_triangle(index - 2, index - 1, index);
+            mesh.add_triangle(index - 1, index, index + 1);
+        }
+    }
+    painter.add(egui::Shape::mesh(mesh));
+
+    let channels = [
+        (Histogram::RED, Color32::from_rgba_unmultiplied(0xFF, 0x5A, 0x50, 0xE0)),
+        (Histogram::GREEN, Color32::from_rgba_unmultiplied(0x5C, 0xD6, 0x5C, 0xE0)),
+        (Histogram::BLUE, Color32::from_rgba_unmultiplied(0x5A, 0x9C, 0xFF, 0xE0)),
+    ];
+    for (channel, color) in channels {
+        let points: Vec<Pos2> = histogram.bins[channel]
+            .iter()
+            .enumerate()
+            .map(|(bin, &count)| Pos2::new(x_at(bin), y_at(count)))
+            .collect();
+        painter.add(egui::Shape::line(points, egui::Stroke::new(1.0, color)));
+    }
+    for quarter in 1..4 {
+        let x = plot.left() + plot.width() * quarter as f32 / 4.0;
+        painter.line_segment(
+            [Pos2::new(x, plot.top()), Pos2::new(x, plot.bottom())],
+            egui::Stroke::new(1.0, Color32::from_white_alpha(18)),
+        );
+    }
+
+    let (shadows, highlights) = histogram.clipping();
+    let summary = format!(
+        "Shadows clipped {:.1}%   Highlights clipped {:.1}%",
+        shadows * 100.0,
+        highlights * 100.0
+    );
+    ui.label(egui::RichText::new(summary).color(MUTED).size(11.0));
+    if let Some(pos) = response.hover_pos() {
+        let bin = (((pos.x - plot.left()) / plot.width()) * 255.0).round().clamp(0.0, 255.0) as usize;
+        let total = histogram.total().max(1) as f32;
+        let share = |channel: usize| histogram.bins[channel][bin] as f32 / total * 100.0;
+        response.on_hover_text(format!(
+            "Level {bin}\nLuminance {:.2}%\nRed {:.2}%  Green {:.2}%  Blue {:.2}%",
+            share(Histogram::LUMA),
+            share(Histogram::RED),
+            share(Histogram::GREEN),
+            share(Histogram::BLUE)
+        ));
+    }
 }
 
 fn full_uv() -> Rect {
@@ -396,9 +503,4 @@ fn detail(ui: &mut egui::Ui, label: &str, value: &str) {
         ui.label(egui::RichText::new(label).color(MUTED).size(12.0));
         ui.label(egui::RichText::new(value).size(12.0));
     });
-}
-
-#[allow(dead_code)]
-fn _rect_ty(rect: RelRect) -> RelRect {
-    rect
 }

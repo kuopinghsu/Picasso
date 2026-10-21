@@ -2,12 +2,20 @@
 
 mod app;
 mod db;
+mod edit;
 mod geo;
+mod i18n;
 mod image_io;
 mod photo_info;
 mod picasa_ini;
 mod types;
+mod video;
 mod worker;
+
+/// Edge of the application icon drawn by `build.rs`.
+pub const ICON_SIZE: usize = 256;
+/// Straight-alpha RGBA pixels of the application icon.
+pub static ICON_RGBA: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/icon-256.rgba"));
 
 fn main() -> eframe::Result {
     let args: Vec<std::path::PathBuf> = std::env::args_os().skip(1).map(std::path::PathBuf::from).collect();
@@ -50,6 +58,11 @@ fn run(args: &[std::path::PathBuf], renderer: eframe::Renderer) -> eframe::Resul
             .with_inner_size([1280.0, 820.0])
             .with_min_inner_size([880.0, 560.0])
             .with_title("Picasso")
+            .with_icon(eframe::egui::IconData {
+                rgba: ICON_RGBA.to_vec(),
+                width: ICON_SIZE as u32,
+                height: ICON_SIZE as u32,
+            })
             .with_drag_and_drop(true),
         renderer,
         ..Default::default()

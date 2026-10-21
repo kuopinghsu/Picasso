@@ -26,10 +26,12 @@ use image::RgbaImage;
 use walkdir::WalkDir;
 
 use crate::db::{Database, Known, ScanRecord};
+use crate::edit::{self, Settings};
 use crate::image_io::{self, Probe};
 use crate::photo_info::{self, Histogram};
 use crate::picasa_ini::PicasaIni;
-use crate::types::{folder_label, is_image_path, unix_now, NewPhoto};
+use crate::types::{folder_label, is_media_path, is_video_path, unix_now, NewPhoto};
+use crate::video;
 
 pub type DisplayGate = Arc<Mutex<HashMap<i64, u64>>>;
 
@@ -45,8 +47,11 @@ pub enum Command {
 }
 
 pub enum ThumbJob {
-    Thumb { id: i64, path: String },
-    Display { id: i64, path: String, nonce: u64 },
+    /// `edit` is applied over the decoded pixels; the disk cache keeps the original.
+    Thumb { id: i64, path: String, edit: Settings },
+    Display { id: i64, path: String, nonce: u64, edit: Settings },
+    /// EXIF rows only, without decoding pixels.
+    Exif { id: i64, path: String },
 }
 
 pub enum UiEvent {
@@ -65,6 +70,14 @@ pub enum UiEvent {
         w: usize,
         h: usize,
         rgba: Vec<u8>,
+        edit: Settings,
+    },
+    ThumbFailed {
+        id: i64,
+    },
+    DisplayFailed {
+        id: i64,
+        nonce: u64,
     },
     Display {
         id: i64,
@@ -74,7 +87,30 @@ pub enum UiEvent {
         rgba: Vec<u8>,
         histogram: Box<Histogram>,
         exif: Vec<(&'static str, String)>,
+        edit: Settings,
     },
+    Exif {
+        id: i64,
+        rows: Vec<(&'static str, String)>,
+    },
+    /// The photo decoded at editor preview size.
+    EditBase {
+        id: i64,
+        image: Arc<RgbaImage>,
+    },
+    EditFailed {
+        id: i64,
+        error: String,
+    },
+    /// Preview with the edit applied, answering render request `seq`.
+    EditPreview {
+        id: i64,
+        seq: u64,
+        w: usize,
+        h: usize,
+        rgba: Vec<u8>,
+    },
+    Exported(Result<PathBuf, String>),
 }
 
 /// Number of threads that probe files during a scan.
@@ -329,11 +365,13 @@ impl Indexer {
                 camera: probe.camera,
                 gps_lat: probe.gps_lat,
                 gps_lon: probe.gps_lon,
+                duration: probe.duration,
             },
             existing: job.existing,
             star,
             caption,
             rotation,
+            complete: probe.complete,
         })
     }
 
@@ -358,6 +396,7 @@ impl Indexer {
             let _ = self.thumbs.send(ThumbJob::Thumb {
                 id: *id,
                 path: record.photo.path.clone(),
+                edit: Settings::default(),
             });
         }
         let count = batch.len();
@@ -398,7 +437,7 @@ fn walk_folder(
             continue;
         }
         let path = entry.path();
-        if !is_image_path(path) {
+        if !is_media_path(path) {
             continue;
         }
         let meta = match std::fs::metadata(path) {
@@ -506,27 +545,46 @@ fn recv_thumb(urgent: &Receiver<ThumbJob>, normal: &Receiver<ThumbJob>) -> Optio
 
 fn run_thumb(cache: &Path, gate: &DisplayGate, job: ThumbJob) -> Option<UiEvent> {
     match job {
-        ThumbJob::Thumb { id, path } => {
+        ThumbJob::Thumb { id, path, edit } => {
             let cached = cache.join("thumbs").join(format!("{id}.jpg"));
-            let rgba = if let Some(rgba) = open_rgba(&cached) {
-                rgba
-            } else {
-                let image = image_io::load_oriented(Path::new(&path)).ok()?;
-                let rgba = image_io::thumbnail_rgba(&image, 256);
-                let _ = image_io::save_jpeg(&cached, &rgba, 80);
-                rgba
+            let mut rgba = match open_rgba(&cached) {
+                Some(rgba) => rgba,
+                None => {
+                    let path = Path::new(&path);
+                    let rgba = if is_video_path(path) {
+                        video::poster(path, 256).map(|(rgba, _)| rgba)
+                    } else {
+                        image_io::load_oriented(path).map(|image| image_io::thumbnail_rgba(&image, 256))
+                    };
+                    let Ok(rgba) = rgba else {
+                        return Some(UiEvent::ThumbFailed { id });
+                    };
+                    let _ = image_io::save_jpeg(&cached, &rgba, 80);
+                    rgba
+                }
             };
+            edit::apply(&mut rgba, &edit);
             let (w, h, rgba) = raw_rgba(&rgba);
-            Some(UiEvent::Thumb { id, w, h, rgba })
+            Some(UiEvent::Thumb { id, w, h, rgba, edit })
         }
-        ThumbJob::Display { id, path, nonce } => {
-            let image = image_io::load_oriented(Path::new(&path)).ok()?;
+        ThumbJob::Display { id, path, nonce, edit } => {
+            let file = Path::new(&path);
+            let decoded = if is_video_path(file) {
+                video::poster(file, 2560).map(|(rgba, info)| (rgba, video::rows(&info)))
+            } else {
+                image_io::load_oriented(file).map(|image| (image_io::limit_rgba(image, 2560), Vec::new()))
+            };
             if stale_display(id, nonce, gate) {
                 return None;
             }
-            let rgba = image_io::limit_rgba(image, 2560);
+            let Ok((mut rgba, rows)) = decoded else {
+                return Some(UiEvent::DisplayFailed { id, nonce });
+            };
+            if !is_video_path(file) {
+                edit::apply(&mut rgba, &edit);
+            }
             let histogram = Box::new(Histogram::from_rgba(rgba.as_raw()));
-            let exif = photo_info::exif_rows(Path::new(&path));
+            let exif = if is_video_path(file) { rows } else { photo_info::exif_rows(file) };
             let (w, h, rgba) = raw_rgba(&rgba);
             Some(UiEvent::Display {
                 id,
@@ -536,8 +594,13 @@ fn run_thumb(cache: &Path, gate: &DisplayGate, job: ThumbJob) -> Option<UiEvent>
                 rgba,
                 histogram,
                 exif,
+                edit,
             })
         }
+        ThumbJob::Exif { id, path } => Some(UiEvent::Exif {
+            id,
+            rows: photo_info::exif_rows(Path::new(&path)),
+        }),
     }
 }
 

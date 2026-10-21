@@ -2,15 +2,16 @@
 
 use eframe::egui::{self, Align2, Color32, FontId, Pos2, Rect, Sense, Vec2};
 
+use crate::i18n::{tr, trf};
 use crate::types::{format_day, Nav, Photo, Sort};
 
-use super::theme::{self, ACCENT, HAIRLINE, MUTED, STAR, TEXT, WHITE};
+use super::theme::{self, ACCENT, MUTED, PLACEHOLDER, STAR, TEXT, THUMB_RADIUS, WHITE};
 use super::PicassoApp;
 
-const GAP: f32 = 16.0;
-const LABEL_H: f32 = 16.0;
-const HEADER_H: f32 = 26.0;
-const PAD: f32 = 10.0;
+const GAP: f32 = 14.0;
+const LABEL_H: f32 = 22.0;
+const HEADER_H: f32 = 40.0;
+const PAD: f32 = 2.0;
 
 pub(super) struct CachedLayout {
     pub epoch: u64,
@@ -105,17 +106,12 @@ impl PicassoApp {
             for row in &layout.rows[first..last] {
                 match row {
                     GridRow::Header { title, y, .. } => {
-                        let pos = origin + Vec2::new(PAD, *y + 4.0);
-                        let galley = ui.painter().layout_no_wrap(title.clone(), FontId::proportional(13.0), TEXT);
-                        let text_w = galley.size().x;
-                        ui.painter().galley(pos, galley, TEXT);
-                        let line_y = pos.y + 8.0;
-                        ui.painter().line_segment(
-                            [
-                                Pos2::new(pos.x + text_w + 10.0, line_y),
-                                Pos2::new(origin.x + width - PAD, line_y),
-                            ],
-                            egui::Stroke::new(1.0, HAIRLINE),
+                        ui.painter().text(
+                            origin + Vec2::new(PAD, *y + HEADER_H - 12.0),
+                            Align2::LEFT_BOTTOM,
+                            title,
+                            FontId::proportional(15.0),
+                            TEXT,
                         );
                     }
                     GridRow::Photos { indices, y, h: _ } => {
@@ -155,48 +151,50 @@ impl PicassoApp {
 
     fn library_toolbar(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            ui.label(egui::RichText::new(self.view_title()).size(16.0).strong().color(TEXT));
-            let count = self.photos.len();
-            let noun = if count == 1 { "photo" } else { "photos" };
-            ui.label(egui::RichText::new(format!("{count} {noun}")).size(12.0).color(MUTED));
+            ui.label(egui::RichText::new(self.view_title()).size(22.0).strong().color(TEXT));
+            ui.label(egui::RichText::new(super::photo_count(self.photos.len())).size(13.0).color(MUTED));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let mut sort = self.sort;
                 egui::ComboBox::from_id_salt("sort")
-                    .selected_text(match sort {
+                    .selected_text(tr(match sort {
                         Sort::DateNewest => "Sort by Date",
                         Sort::DateOldest => "Sort by Date, oldest",
                         Sort::Name => "Sort by Name",
-                    })
+                    }))
                     .show_ui(ui, |ui| {
-                        ui.selectable_value(&mut sort, Sort::DateNewest, "Sort by Date");
-                        ui.selectable_value(&mut sort, Sort::DateOldest, "Sort by Date, oldest");
-                        ui.selectable_value(&mut sort, Sort::Name, "Sort by Name");
+                        ui.selectable_value(&mut sort, Sort::DateNewest, tr("Sort by Date"));
+                        ui.selectable_value(&mut sort, Sort::DateOldest, tr("Sort by Date, oldest"));
+                        ui.selectable_value(&mut sort, Sort::Name, tr("Sort by Name"));
                     });
                 if sort != self.sort {
                     self.sort = sort;
                     self.reload();
                 }
-                if ui.button("★").on_hover_text("Select starred photos").clicked() {
+                if ui
+                    .button(egui::RichText::new("★").color(STAR))
+                    .on_hover_text(tr("Select starred photos"))
+                    .clicked()
+                {
                     self.select_starred();
                 }
                 if !self.selection.is_empty() {
-                    if ui.button(if self.primary_starred() { "Unstar" } else { "Star" }).clicked() {
+                    if ui.button(tr(if self.primary_starred() { "Unstar" } else { "Star" })).clicked() {
                         self.toggle_star_selection();
                     }
-                    if ui.button("Rotate Right").on_hover_text("Rotate clockwise (Ctrl+])").clicked() {
+                    if ui.button(tr("Rotate Right")).on_hover_text(tr("Rotate clockwise (Ctrl+])")).clicked() {
                         self.rotate_current(90);
                     }
-                    if ui.button("Rotate Left").on_hover_text("Rotate counterclockwise (Ctrl+[)").clicked() {
+                    if ui.button(tr("Rotate Left")).on_hover_text(tr("Rotate counterclockwise (Ctrl+[)")).clicked() {
                         self.rotate_current(-90);
                     }
                     self.album_menu(ui);
-                    if matches!(self.nav, Nav::Album(_)) && ui.button("Remove from Album").clicked() {
+                    if matches!(self.nav, Nav::Album(_)) && ui.button(tr("Remove from Album")).clicked() {
                         self.remove_selection_from_album();
                     }
                 }
             });
         });
-        ui.separator();
+        ui.add_space(6.0);
     }
 
     fn album_menu(&mut self, ui: &mut egui::Ui) {
@@ -204,14 +202,14 @@ impl PicassoApp {
         let mut create = false;
         let mut add: Option<i64> = None;
         egui::ComboBox::from_id_salt("add-album")
-            .selected_text("Add to Album")
+            .selected_text(tr("Add to Album"))
             .show_ui(ui, |ui| {
                 for (id, name) in &albums {
                     if ui.selectable_label(false, name).clicked() {
                         add = Some(*id);
                     }
                 }
-                if ui.button("New album…").clicked() {
+                if ui.button(tr("New album…")).clicked() {
                     create = true;
                 }
             });
@@ -219,7 +217,7 @@ impl PicassoApp {
             let photos: Vec<i64> = self.selection.iter().copied().collect();
             self.db.add_to_album(id, &photos);
             self.albums = self.db.albums();
-            self.activity = format!("Added {} to album", photos.len());
+            self.activity = trf("Added {} to album", &[&photos.len()]);
         }
         if create {
             self.modal = super::Modal::NewAlbum {
@@ -237,35 +235,75 @@ impl PicassoApp {
         let selected = self.selection.contains(&photo.id);
         let thumb = rect.width();
         let image_rect = Rect::from_min_size(rect.min, Vec2::splat(thumb));
-        let response = ui.interact(rect, egui::Id::unique(("photo", photo.id)), Sense::click());
-        ui.painter().rect_filled(image_rect, 0, WHITE);
-        if let Some((texture, w, h)) = self.thumb_texture(photo.id) {
-            theme::paint_image(ui.painter(), &texture, image_rect, theme::cover_uv(w, h), photo.rotation);
-        } else {
-            ui.painter().rect_filled(image_rect, 0, Color32::from_rgb(0xF0, 0xF0, 0xF0));
+        let response = ui
+            .interact(rect, egui::Id::unique(("photo", photo.id)), Sense::click())
+            .on_hover_cursor(egui::CursorIcon::PointingHand);
+        let painter = ui.painter();
+        if response.hovered() {
+            painter.add(theme::card_shadow().as_shape(image_rect, THUMB_RADIUS));
         }
-        let stroke = if selected {
-            egui::Stroke::new(3.0, ACCENT)
-        } else if response.hovered() {
-            egui::Stroke::new(1.0, Color32::from_rgb(0x8A, 0xB8, 0xE0))
-        } else {
-            egui::Stroke::new(1.0, HAIRLINE)
-        };
-        ui.painter().rect_stroke(image_rect, 0, stroke, egui::StrokeKind::Inside);
-        if photo.starred {
-            ui.painter().text(
-                image_rect.right_bottom() + Vec2::new(-4.0, -2.0),
-                Align2::RIGHT_BOTTOM,
-                "★",
-                FontId::proportional(16.0),
-                STAR,
+        painter.rect_filled(image_rect, THUMB_RADIUS, PLACEHOLDER);
+        if let Some((texture, w, h)) = self.thumb_texture(photo.id) {
+            theme::paint_image_rounded(
+                ui.painter(),
+                &texture,
+                image_rect,
+                theme::cover_uv(w, h),
+                photo.rotation,
+                THUMB_RADIUS as f32,
             );
         }
-        ui.painter().text(
-            Pos2::new(image_rect.center().x, image_rect.bottom() + 2.0),
+        let painter = ui.painter();
+        let stroke = if selected {
+            egui::Stroke::new(3.0, ACCENT)
+        } else {
+            egui::Stroke::new(1.0, Color32::from_black_alpha(18))
+        };
+        painter.rect_stroke(image_rect, THUMB_RADIUS, stroke, egui::StrokeKind::Inside);
+        if selected {
+            let center = image_rect.left_top() + Vec2::splat(15.0);
+            painter.circle_filled(center, 9.0, ACCENT);
+            painter.circle_stroke(center, 9.0, egui::Stroke::new(2.0, WHITE));
+            painter.add(egui::Shape::line(
+                vec![
+                    center + Vec2::new(-4.0, 0.0),
+                    center + Vec2::new(-1.0, 3.0),
+                    center + Vec2::new(4.0, -3.0),
+                ],
+                egui::Stroke::new(2.0, WHITE),
+            ));
+        }
+        if photo.starred {
+            let center = image_rect.right_bottom() + Vec2::new(-14.0, -14.0);
+            painter.circle_filled(center, 11.0, Color32::from_black_alpha(110));
+            painter.text(center, Align2::CENTER_CENTER, "★", FontId::proportional(14.0), STAR);
+        }
+        if photo.is_video() {
+            super::viewer::paint_play_button(painter, image_rect.center(), (thumb * 0.14).clamp(14.0, 24.0));
+            if photo.duration > 0.0 {
+                let galley = painter.layout_no_wrap(
+                    crate::types::format_duration(photo.duration),
+                    FontId::proportional(11.0),
+                    WHITE,
+                );
+                let pill = Rect::from_min_size(
+                    image_rect.right_top() + Vec2::new(-galley.size().x - 14.0, 6.0),
+                    galley.size() + Vec2::new(10.0, 4.0),
+                );
+                painter.rect_filled(pill, 5, Color32::from_black_alpha(150));
+                painter.galley(pill.min + Vec2::new(5.0, 2.0), galley, WHITE);
+            }
+        }
+        let place_rect = Rect::from_center_size(image_rect.left_bottom() + Vec2::new(14.0, -14.0), Vec2::splat(22.0));
+        if photo.place().is_some() {
+            painter.circle_filled(place_rect.center(), 11.0, Color32::from_black_alpha(110));
+            theme::paint_pin(painter, place_rect.center(), 4.6, WHITE, Color32::from_black_alpha(110));
+        }
+        painter.text(
+            Pos2::new(image_rect.center().x, image_rect.bottom() + 5.0),
             Align2::CENTER_TOP,
             elide(&photo.filename, ((thumb / 7.0) as usize).max(8)),
-            FontId::proportional(11.0),
+            FontId::proportional(11.5),
             MUTED,
         );
         let star_rect = Rect::from_min_size(image_rect.right_bottom() + Vec2::new(-22.0, -22.0), Vec2::splat(22.0));
@@ -273,10 +311,22 @@ impl PicassoApp {
             .interact_pointer_pos()
             .map(|pos| star_rect.contains(pos) && photo.starred)
             .unwrap_or(false);
+        let over_place = |pos: Option<Pos2>| photo.place().is_some() && pos.is_some_and(|pos| place_rect.contains(pos));
+        let response = if over_place(response.hover_pos()) {
+            let text = if photo.pinned() { "Geotagged in Picasso — show on map" } else { "Has GPS location — show on map" };
+            response.on_hover_text(tr(text))
+        } else {
+            response
+        };
         if response.clicked() {
             let modifiers = ui.input(|input| input.modifiers);
             if on_star {
                 self.toggle_star(photo.id);
+            } else if over_place(response.interact_pointer_pos()) {
+                self.select_click(index, egui::Modifiers::NONE);
+                if self.side != super::SidePanel::Map {
+                    self.toggle_side(super::SidePanel::Map);
+                }
             } else if response.double_clicked() {
                 self.open_at(index);
             } else {
@@ -286,33 +336,33 @@ impl PicassoApp {
         let path = photo.path.clone();
         let id = photo.id;
         response.context_menu(|ui| {
-            if ui.button("Open").clicked() {
+            if ui.button(tr("Open")).clicked() {
                 self.open_at(index);
                 ui.close();
             }
-            if ui.button(if photo.starred { "Unstar" } else { "Star" }).clicked() {
+            if ui.button(tr(if photo.starred { "Unstar" } else { "Star" })).clicked() {
                 self.toggle_star(id);
                 ui.close();
             }
-            if ui.button("Rotate Clockwise").clicked() {
+            if ui.button(tr("Rotate Clockwise")).clicked() {
                 self.rotate_from_menu(id, 90);
                 ui.close();
             }
-            if ui.button("Rotate Counterclockwise").clicked() {
+            if ui.button(tr("Rotate Counterclockwise")).clicked() {
                 self.rotate_from_menu(id, -90);
                 ui.close();
             }
-            if ui.button("Show in folder").clicked() {
+            if ui.button(tr("Show in folder")).clicked() {
                 if let Some(parent) = std::path::Path::new(&path).parent() {
                     let _ = open::that(parent);
                 }
                 ui.close();
             }
-            if ui.button("Show on map").clicked() {
+            if ui.button(tr("Show on map")).clicked() {
                 self.show_on_map(id);
                 ui.close();
             }
-            if ui.button("Move to trash").clicked() {
+            if ui.button(tr("Move to trash")).clicked() {
                 self.modal = super::Modal::Trash { ids: vec![id] };
                 ui.close();
             }
@@ -321,17 +371,16 @@ impl PicassoApp {
 
     fn empty_library(&mut self, ui: &mut egui::Ui) {
         ui.vertical_centered(|ui| {
-            ui.add_space(88.0);
-            let title = if self.search.trim().is_empty() {
-                "No photos found"
-            } else {
-                "No results found in this album"
-            };
-            ui.label(egui::RichText::new(title).size(18.0).strong().color(TEXT));
+            ui.add_space(96.0);
+            let (rect, _) = ui.allocate_exact_size(Vec2::splat(64.0), Sense::hover());
+            theme::paint_logo(ui.painter(), &self.logo, rect);
+            ui.add_space(16.0);
+            let title = if self.search.trim().is_empty() { "No photos found" } else { "No results found" };
+            ui.label(egui::RichText::new(tr(title)).size(20.0).strong().color(TEXT));
             ui.add_space(6.0);
-            ui.label(egui::RichText::new("Import a folder and Picasso scans it for pictures.").color(MUTED));
-            ui.add_space(12.0);
-            if ui.button("Import").clicked() {
+            ui.label(egui::RichText::new(tr("Import a folder and Picasso scans it for pictures.")).color(MUTED));
+            ui.add_space(16.0);
+            if ui.add(theme::primary_button(tr("+  Import folder"))).clicked() {
                 self.modal = super::Modal::AddFolder {
                     path: String::new(),
                     error: String::new(),

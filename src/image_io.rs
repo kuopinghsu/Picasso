@@ -7,7 +7,7 @@ use std::path::Path;
 use image::codecs::jpeg::JpegEncoder;
 use image::{DynamicImage, ExtendedColorType, GenericImageView, ImageBuffer, Rgba};
 
-use crate::types::{is_heic_path, is_raw_path, unix_now};
+use crate::types::{is_heic_path, is_raw_path, is_video_path, unix_now};
 
 pub struct Probe {
     pub width: u32,
@@ -16,9 +16,15 @@ pub struct Probe {
     pub camera: String,
     pub gps_lat: Option<f64>,
     pub gps_lon: Option<f64>,
+    pub duration: f64,
+    /// False when some metadata could not be read yet.
+    pub complete: bool,
 }
 
 pub fn probe(path: &Path, modified_at: i64) -> Result<Probe, String> {
+    if is_video_path(path) {
+        return Ok(crate::video::probe_file(path, modified_at));
+    }
     if is_heic_path(path) {
         return probe_heic(path, modified_at);
     }
@@ -37,6 +43,8 @@ pub fn probe(path: &Path, modified_at: i64) -> Result<Probe, String> {
         camera: exif.camera,
         gps_lat: exif.gps_lat,
         gps_lon: exif.gps_lon,
+        duration: 0.0,
+        complete: true,
     })
 }
 
@@ -162,6 +170,8 @@ impl ExifBits {
             camera: self.camera,
             gps_lat: self.gps_lat,
             gps_lon: self.gps_lon,
+            duration: 0.0,
+            complete: true,
         }
     }
 }
@@ -197,6 +207,8 @@ fn probe_heic(path: &Path, modified_at: i64) -> Result<Probe, String> {
         camera: bits.camera,
         gps_lat: bits.gps_lat,
         gps_lon: bits.gps_lon,
+        duration: 0.0,
+        complete: true,
     })
 }
 

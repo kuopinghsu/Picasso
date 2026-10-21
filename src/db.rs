@@ -14,7 +14,7 @@ pub const INDEX_VERSION: i64 = 1;
 const PHOTO_COLS: &str = "\
 p.id, p.folder_id, p.path, p.filename, p.width, p.height, p.bytes, \
 p.taken_at, p.modified_at, p.starred, p.caption, p.camera, \
-p.gps_lat, p.gps_lon, p.pin_lat, p.pin_lon, p.rotation";
+p.gps_lat, p.gps_lon, p.pin_lat, p.pin_lon, p.rotation, p.duration";
 
 pub struct Database {
     conn: Connection,
@@ -47,6 +47,9 @@ pub struct ScanRecord {
     pub caption: Option<String>,
     /// Clockwise rotation imported from `.picasa.ini` for a new file.
     pub rotation: Option<i32>,
+    /// False when the file could only be read in part (a video while FFmpeg
+    /// is missing), so the next scan probes it again.
+    pub complete: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -122,6 +125,12 @@ impl Database {
                     key TEXT PRIMARY KEY,
                     value TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS edits (
+                    photo_id INTEGER PRIMARY KEY REFERENCES photos(id) ON DELETE CASCADE,
+                    steps TEXT NOT NULL,
+                    applied INTEGER NOT NULL,
+                    updated_at INTEGER NOT NULL
+                );
                 CREATE INDEX IF NOT EXISTS idx_photos_folder ON photos(folder_id);
                 CREATE INDEX IF NOT EXISTS idx_photos_taken ON photos(taken_at);
                 DROP TABLE IF EXISTS faces;
@@ -136,6 +145,7 @@ impl Database {
             ("pin_lon", "REAL"),
             ("indexed_version", "INTEGER NOT NULL DEFAULT 0"),
             ("rotation", "INTEGER NOT NULL DEFAULT 0"),
+            ("duration", "REAL NOT NULL DEFAULT 0"),
         ] {
             self.ensure_column("photos", column, decl)?;
         }
@@ -173,6 +183,38 @@ impl Database {
         );
     }
 
+    /// Edit steps of a photo as JSON, and how many of them are applied.
+    pub fn edit_history(&self, photo_id: i64) -> Option<(String, usize)> {
+        self.conn
+            .query_row("SELECT steps, applied FROM edits WHERE photo_id=?1", [photo_id], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?.max(0) as usize))
+            })
+            .optional()
+            .ok()
+            .flatten()
+    }
+
+    /// Every photo that has edit steps, with the steps and applied count.
+    pub fn edit_histories(&self) -> Vec<(i64, String, usize)> {
+        self.map_rows("SELECT photo_id, steps, applied FROM edits", [], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get::<_, i64>(2)?.max(0) as usize))
+        })
+    }
+
+    /// Stores the edit steps of a photo; no steps removes its row.
+    pub fn save_edit_history(&self, photo_id: i64, steps: &str, count: usize, applied: usize) {
+        if count == 0 {
+            let _ = self.conn.execute("DELETE FROM edits WHERE photo_id=?1", [photo_id]);
+            return;
+        }
+        let _ = self.conn.execute(
+            "INSERT INTO edits(photo_id, steps, applied, updated_at) VALUES(?1, ?2, ?3, ?4)
+             ON CONFLICT(photo_id) DO UPDATE SET steps=excluded.steps, applied=excluded.applied,
+             updated_at=excluded.updated_at",
+            params![photo_id, steps, applied as i64, unix_now()],
+        );
+    }
+
     pub fn folders(&self) -> Vec<Folder> {
         let sql = "\
             SELECT f.id, f.path, COUNT(p.id)
@@ -189,12 +231,22 @@ impl Database {
         })
     }
 
+    /// Number of photos directly inside each directory that holds any.
+    pub fn photo_dirs(&self) -> Vec<(String, i64)> {
+        self.map_rows(
+            "SELECT substr(path, 1, length(path) - length(filename) - 1) AS dir, COUNT(*)
+             FROM photos GROUP BY dir",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+    }
+
     pub fn add_folder(&self, path: &Path) -> Result<i64, String> {
         let path = path
             .canonicalize()
-            .map_err(|err| format!("Can't open folder: {err}"))?;
+            .map_err(|err| crate::i18n::trf("Can't open folder: {}", &[&err]))?;
         if !path.is_dir() {
-            return Err("That path is not a folder".into());
+            return Err(crate::i18n::tr("That path is not a folder").into());
         }
         let text = path_text(&path);
         if let Some(id) = self.folder_id(&text) {
@@ -286,7 +338,7 @@ impl Database {
                 .prepare_cached(
                     "UPDATE photos SET folder_id=?1, filename=?2, width=?3, height=?4, bytes=?5,
                      taken_at=?6, modified_at=?7, camera=?8, gps_lat=?9, gps_lon=?10,
-                     indexed_version=?11
+                     indexed_version=?11, duration=?13
                      WHERE id=?12",
                 )
                 .map_err(|err| err.to_string())?;
@@ -294,18 +346,19 @@ impl Database {
                 .prepare_cached(
                     "INSERT INTO photos(
                         folder_id, path, filename, width, height, bytes, taken_at, modified_at,
-                        camera, gps_lat, gps_lon, indexed_version, starred, caption, rotation
-                     ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)
+                        camera, gps_lat, gps_lon, indexed_version, starred, caption, rotation, duration
+                     ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)
                      ON CONFLICT(path) DO UPDATE SET
                         width=excluded.width, height=excluded.height, bytes=excluded.bytes,
                         taken_at=excluded.taken_at, modified_at=excluded.modified_at,
                         camera=excluded.camera, gps_lat=excluded.gps_lat, gps_lon=excluded.gps_lon,
-                        indexed_version=excluded.indexed_version
+                        indexed_version=excluded.indexed_version, duration=excluded.duration
                      RETURNING id",
                 )
                 .map_err(|err| err.to_string())?;
             for record in records {
                 let photo = &record.photo;
+                let version = if record.complete { INDEX_VERSION } else { 0 };
                 match record.existing {
                     Some(id) => {
                         update
@@ -320,8 +373,9 @@ impl Database {
                                 photo.camera,
                                 photo.gps_lat,
                                 photo.gps_lon,
-                                INDEX_VERSION,
+                                version,
                                 id,
+                                photo.duration,
                             ])
                             .map_err(|err| err.to_string())?;
                         result.updated += 1;
@@ -341,10 +395,11 @@ impl Database {
                                 photo.camera,
                                 photo.gps_lat,
                                 photo.gps_lon,
-                                INDEX_VERSION,
+                                version,
                                 record.star.unwrap_or(false) as i64,
                                 record.caption.clone().unwrap_or_default(),
                                 crate::types::turn(record.rotation.unwrap_or(0), 0),
+                                photo.duration,
                             ], |row| row.get(0))
                             .map_err(|err| err.to_string())?;
                         result.inserted += 1;
@@ -413,6 +468,12 @@ impl Database {
             Nav::Folder(id) => {
                 let sql = format!("SELECT {PHOTO_COLS} FROM photos p WHERE p.folder_id=?1 ORDER BY {order}");
                 self.map_rows(&sql, [*id], read_photo)
+            }
+            Nav::Dir(dir) => {
+                let mut prefix = dir.trim_end_matches(std::path::MAIN_SEPARATOR).to_string();
+                prefix.push(std::path::MAIN_SEPARATOR);
+                let sql = format!("SELECT {PHOTO_COLS} FROM photos p WHERE substr(p.path, 1, ?2) = ?1 ORDER BY {order}");
+                self.map_rows(&sql, params![prefix, prefix.chars().count() as i64], read_photo)
             }
             Nav::Album(id) => {
                 let sql = format!(
@@ -504,7 +565,7 @@ impl Database {
     pub fn create_album(&self, name: &str) -> Result<i64, String> {
         let name = name.trim();
         if name.is_empty() {
-            return Err("Album name is empty".into());
+            return Err(crate::i18n::tr("Album name is empty").into());
         }
         self.conn
             .execute(
@@ -579,6 +640,7 @@ fn read_photo(row: &rusqlite::Row<'_>) -> rusqlite::Result<Photo> {
         pin_lat: row.get(14)?,
         pin_lon: row.get(15)?,
         rotation: row.get::<_, i64>(16)? as i32,
+        duration: row.get(17)?,
     })
 }
 
@@ -645,12 +707,42 @@ mod tests {
                 camera: "TestCam".into(),
                 gps_lat: Some(37.5),
                 gps_lon: Some(-122.4),
+                duration: 0.0,
             },
             existing: None,
             star: None,
             caption: None,
             rotation: None,
+            complete: true,
         }
+    }
+
+    #[test]
+    fn subfolders_count_and_list_recursively() {
+        let dir = temp_dir("dirs");
+        let db = Database::open(&dir.join("t.db")).unwrap();
+        let folder = dir.join("pics");
+        std::fs::create_dir_all(&folder).unwrap();
+        let id = db.add_folder(&folder).unwrap();
+        let folder = folder.canonicalize().unwrap();
+        let trip = folder.join("trip");
+        let day = trip.join("day1");
+        db.write_batch(&[
+            record(id, &folder, "a.jpg", 1),
+            record(id, &trip, "b.jpg", 1),
+            record(id, &day, "c.jpg", 1),
+            record(id, &day, "d.jpg", 1),
+        ])
+        .unwrap();
+        let text = |path: &Path| path.to_string_lossy().into_owned();
+        let mut dirs = db.photo_dirs();
+        dirs.sort();
+        let mut expected = vec![(text(&folder), 1), (text(&trip), 1), (text(&day), 2)];
+        expected.sort();
+        assert_eq!(dirs, expected);
+        assert_eq!(db.photos(&Nav::Dir(text(&trip)), "", Sort::Name).len(), 3);
+        assert_eq!(db.photos(&Nav::Dir(text(&day)), "", Sort::Name).len(), 2);
+        assert_eq!(db.photos(&Nav::Dir(format!("{}x", text(&trip))), "", Sort::Name).len(), 0);
     }
 
     #[test]
@@ -676,6 +768,11 @@ mod tests {
         assert_eq!(result.ids[0], photo_id);
         assert_eq!(db.photo(photo_id).unwrap().caption, "from ini");
         assert_eq!(db.photo(photo_id).unwrap().rotation, 270);
+        db.save_edit_history(photo_id, r#"[{"control":"exposure","value":0.5}]"#, 1, 1);
+        assert_eq!(db.edit_history(photo_id).map(|(_, applied)| applied), Some(1));
+        assert_eq!(db.edit_histories().len(), 1);
+        db.save_edit_history(photo_id, "[]", 0, 0);
+        assert!(db.edit_history(photo_id).is_none());
         db.rotate(&[photo_id], 90);
         assert_eq!(db.photo(photo_id).unwrap().rotation, 0);
         db.rotate(&[photo_id], -90);

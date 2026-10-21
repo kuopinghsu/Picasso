@@ -64,6 +64,12 @@ impl Histogram {
 
 /// Labeled EXIF values in display order. Empty when the file carries none.
 pub fn exif_rows(path: &Path) -> Vec<(&'static str, String)> {
+    if crate::types::is_video_path(path) {
+        return match crate::video::info(path) {
+            Ok(info) => crate::video::rows(&info),
+            Err(err) => vec![("Video", err)],
+        };
+    }
     if let Some(exif) = read_exif(path) {
         let rows = rows_from_exif(&exif);
         if !rows.is_empty() {
@@ -108,7 +114,7 @@ fn rows_from_exif(exif: &exif::Exif) -> Vec<(&'static str, String)> {
     let table: [(&'static str, Tag); 17] = [
         ("Lens", Tag::LensModel),
         ("Taken", Tag::DateTimeOriginal),
-        ("Exposure", Tag::ExposureTime),
+        ("Exposure time", Tag::ExposureTime),
         ("Aperture", Tag::FNumber),
         ("ISO", Tag::PhotographicSensitivity),
         ("Focal length", Tag::FocalLength),
@@ -157,7 +163,7 @@ fn rows_from_raw(path: &Path) -> Vec<(&'static str, String)> {
     }
     if let Some(r) = exif.exposure_time.as_ref() {
         if r.n > 0 && r.d > 0 {
-            rows.push(("Exposure", shutter_label(r.n, r.d)));
+            rows.push(("Exposure time", shutter_label(r.n, r.d)));
         }
     }
     if let Some(f) = exif.fnumber.as_ref().and_then(ratio) {
@@ -173,7 +179,7 @@ fn rows_from_raw(path: &Path) -> Vec<(&'static str, String)> {
         rows.push(("Exposure bias", format!("{:+.1} EV", bias.n as f64 / bias.d as f64)));
     }
     if let Some(flash) = exif.flash {
-        let fired = if flash & 1 == 1 { "Fired" } else { "Did not fire" };
+        let fired = crate::i18n::tr(if flash & 1 == 1 { "Fired" } else { "Did not fire" });
         rows.push(("Flash", fired.to_string()));
     }
     if let Some(artist) = exif.artist.clone().filter(|text| !text.trim().is_empty()) {

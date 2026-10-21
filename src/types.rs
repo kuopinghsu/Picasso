@@ -9,6 +9,11 @@ pub const IMAGE_EXTS: &[&str] = &[
     "qtk", "raf", "raw", "rw2", "rwl", "srw", "x3f",
 ];
 
+/// Video extensions Picasso indexes and plays through FFmpeg.
+pub const VIDEO_EXTS: &[&str] = &[
+    "mp4", "m4v", "mov", "qt", "avi", "mkv", "webm", "wmv", "asf", "flv", "mpg", "mpeg", "m2v", "mts", "m2ts", "3gp", "3g2", "vob", "ogv", "dv",
+];
+
 const HEIC_EXTS: &[&str] = &["heic", "heif", "hif"];
 
 const RAW_EXTS: &[&str] = &[
@@ -51,6 +56,8 @@ pub struct Photo {
     /// Clockwise turn chosen in Picasso: 0, 90, 180, or 270 degrees. Stored
     /// only in the catalog and applied on screen; the file is never rewritten.
     pub rotation: i32,
+    /// Running time in seconds for a video, 0 for a still photo.
+    pub duration: f64,
 }
 
 /// Adds `delta` degrees to a rotation and normalizes it to 0, 90, 180, or 270.
@@ -73,6 +80,10 @@ impl Photo {
     pub fn pinned(&self) -> bool {
         self.pin_lat.is_some() && self.pin_lon.is_some()
     }
+
+    pub fn is_video(&self) -> bool {
+        is_video_path(Path::new(&self.path))
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -87,6 +98,8 @@ pub enum Nav {
     Library,
     Starred,
     Folder(i64),
+    /// A subfolder inside an added folder, with everything below it.
+    Dir(String),
     Album(i64),
     Places,
 }
@@ -104,10 +117,31 @@ pub struct NewPhoto {
     pub camera: String,
     pub gps_lat: Option<f64>,
     pub gps_lon: Option<f64>,
+    pub duration: f64,
 }
 
 pub fn is_image_path(path: &Path) -> bool {
     extension_in(path, IMAGE_EXTS)
+}
+
+pub fn is_video_path(path: &Path) -> bool {
+    extension_in(path, VIDEO_EXTS)
+}
+
+/// Files the library indexes: photos and videos.
+pub fn is_media_path(path: &Path) -> bool {
+    is_image_path(path) || is_video_path(path)
+}
+
+/// `m:ss`, or `h:mm:ss` from one hour up.
+pub fn format_duration(seconds: f64) -> String {
+    let total = seconds.max(0.0).floor() as u64;
+    let (hours, minutes, secs) = (total / 3600, (total / 60) % 60, total % 60);
+    if hours > 0 {
+        format!("{hours}:{minutes:02}:{secs:02}")
+    } else {
+        format!("{minutes}:{secs:02}")
+    }
 }
 
 pub fn is_heic_path(path: &Path) -> bool {
@@ -162,22 +196,39 @@ pub fn format_bytes(bytes: u64) -> String {
 
 pub fn format_day(ts: i64) -> String {
     chrono::DateTime::from_timestamp(ts, 0)
-        .map(|dt| {
-            dt.with_timezone(&chrono::Local)
-                .format("%A, %B %-d, %Y")
-                .to_string()
-        })
-        .unwrap_or_else(|| "Unknown date".to_string())
+        .map(|dt| long_date(&dt.with_timezone(&chrono::Local), crate::i18n::current()))
+        .unwrap_or_else(|| crate::i18n::tr("Unknown date").to_string())
 }
 
 pub fn format_timestamp(ts: i64) -> String {
     chrono::DateTime::from_timestamp(ts, 0)
         .map(|dt| {
-            dt.with_timezone(&chrono::Local)
-                .format("%A, %B %-d, %Y  %H:%M")
-                .to_string()
+            let dt = dt.with_timezone(&chrono::Local);
+            format!("{}  {}", long_date(&dt, crate::i18n::current()), dt.format("%H:%M"))
         })
-        .unwrap_or_else(|| "Unknown date".to_string())
+        .unwrap_or_else(|| crate::i18n::tr("Unknown date").to_string())
+}
+
+/// Weekday and date, written the way the language writes dates.
+fn long_date<Tz: chrono::TimeZone>(dt: &chrono::DateTime<Tz>, lang: crate::i18n::Lang) -> String
+where
+    Tz::Offset: std::fmt::Display,
+{
+    use chrono::Datelike;
+    use crate::i18n::Lang;
+    let weekday = dt.weekday().num_days_from_sunday() as usize;
+    let (year, month, day) = (dt.year(), dt.month(), dt.day());
+    match lang {
+        Lang::English => dt.format("%A, %B %-d, %Y").to_string(),
+        Lang::TraditionalChinese | Lang::SimplifiedChinese => {
+            const DAYS: [&str; 7] = ["日", "一", "二", "三", "四", "五", "六"];
+            format!("{year}年{month}月{day}日 星期{}", DAYS[weekday])
+        }
+        Lang::Japanese => {
+            const DAYS: [&str; 7] = ["日", "月", "火", "水", "木", "金", "土"];
+            format!("{year}年{month}月{day}日（{}）", DAYS[weekday])
+        }
+    }
 }
 
 pub fn unix_now() -> i64 {
@@ -201,6 +252,25 @@ mod tests {
         assert!(is_raw_path(Path::new("compact.NRW")));
         assert!(!is_raw_path(Path::new("picture.jpg")));
         assert!(!is_heic_path(Path::new("picture.jpg")));
+        assert!(is_video_path(Path::new("clip.MOV")));
+        assert!(is_media_path(Path::new("clip.mp4")));
+        assert!(!is_image_path(Path::new("clip.mp4")));
+    }
+
+    #[test]
+    fn formats_durations() {
+        assert_eq!(format_duration(0.4), "0:00");
+        assert_eq!(format_duration(75.9), "1:15");
+        assert_eq!(format_duration(3725.0), "1:02:05");
+    }
+
+    #[test]
+    fn writes_dates_per_language() {
+        use crate::i18n::Lang;
+        let dt = chrono::DateTime::from_timestamp(1_785_888_000, 0).unwrap();
+        assert_eq!(long_date(&dt, Lang::English), "Wednesday, August 5, 2026");
+        assert_eq!(long_date(&dt, Lang::TraditionalChinese), "2026年8月5日 星期三");
+        assert_eq!(long_date(&dt, Lang::Japanese), "2026年8月5日（水）");
     }
 
     #[test]

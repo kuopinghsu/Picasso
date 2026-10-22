@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Picasso
+GenericName=Photo Library
+Comment=Fast local photo library, viewer, and editor
+Exec=picasso %F
+Icon=picasso
+Terminal=false
+StartupWMClass=picasso
+Categories=Graphics;Photography;Viewer;
+Keywords=photo;picture;image;album;viewer;editor;
+MimeType=inode/directory;image/jpeg;image/png;image/gif;image/webp;image/bmp;image/tiff;image/heic;image/heif;video/mp4;video/quicktime;video/x-matroska;video/webm;

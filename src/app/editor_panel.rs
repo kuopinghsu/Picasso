@@ -2,6 +2,8 @@
 //! sections. Widgets change a draft of the settings; the draft becomes the
 //! live change shown on the stage and a step once the pointer is released.
 
+use std::ops::RangeInclusive;
+
 use eframe::egui::{self, Color32, Pos2, RichText, Sense, Stroke, Vec2};
 use serde_json::{Map, Value};
 
@@ -18,7 +20,7 @@ use super::PicassoApp;
 
 const PANEL_W: f32 = 276.0;
 /// Height kept for the export controls under the sections.
-const EXPORT_H: f32 = 96.0;
+const EXPORT_H: f32 = 116.0;
 
 /// HSL hue of each color band's swatch.
 const BAND_SWATCH: [f32; 8] = [0.0, 30.0, 55.0, 120.0, 180.0, 220.0, 275.0, 315.0];
@@ -51,6 +53,8 @@ struct Draft {
     settings: Settings,
     kind: Option<Kind>,
     amend: bool,
+    /// Values Auto tone or Auto white balance set, badged while they stay.
+    auto: Vec<(Control, f32)>,
 }
 
 impl Draft {
@@ -251,6 +255,7 @@ fn panel_contents(ui: &mut egui::Ui, session: Option<&mut EditSession>, height: 
         settings: session.current(),
         kind: None,
         amend: false,
+        auto: session.history.auto_values(),
     };
     let used = ui.cursor().top() - top;
     egui::ScrollArea::vertical()
@@ -327,34 +332,128 @@ fn slider(ui: &mut egui::Ui, draft: &mut Draft, control: Control, kind: Kind) {
 fn slider_labeled(ui: &mut egui::Ui, draft: &mut Draft, control: Control, kind: Kind, label: &'static str, swatch: Option<Color32>) {
     let def = control.def();
     let mut value = draft.settings.get(control);
-    let mut reset = false;
-    ui.horizontal(|ui| {
-        if let Some(color) = swatch {
-            let (rect, _) = ui.allocate_exact_size(Vec2::splat(10.0), Sense::hover());
-            ui.painter().circle_filled(rect.center(), 4.5, color);
-        }
-        let name = egui::Label::new(RichText::new(tr(label)).size(12.0).color(theme::text())).sense(Sense::click());
-        if ui.add(name).on_hover_text(tr("Double-click to reset")).double_clicked() {
-            reset = true;
-        }
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let color = if value != control.neutral() { ACCENT } else { theme::muted() };
-            ui.label(RichText::new(control.format(value)).size(11.5).color(color));
-        });
-    });
-    ui.spacing_mut().slider_width = ui.available_width();
+    let neutral = control.neutral();
+    let auto = draft.auto.iter().any(|(other, set)| *other == control && *set == value);
+    let reset = slider_header(ui, tr(label), swatch, auto, &control.format(value), value != neutral);
     let step = match def.unit {
         Unit::Ev => 0.01,
         Unit::Radius | Unit::Degrees => 0.1,
         _ => 1.0,
     };
-    let response = ui.add(egui::Slider::new(&mut value, def.min..=def.max).show_value(false).step_by(step));
+    let response = develop_slider(ui, &mut value, def.min..=def.max, step, neutral);
     if reset || response.double_clicked() {
         value = control.neutral();
     }
     if reset || response.changed() || response.double_clicked() {
         draft.settings.set(control, value);
         draft.changed(kind);
+    }
+}
+
+/// Bold name, an "auto" badge when Auto tone or Auto white balance set the
+/// value, and the value at the right. True when the name is double-clicked.
+fn slider_header(ui: &mut egui::Ui, label: &str, swatch: Option<Color32>, auto: bool, value: &str, changed: bool) -> bool {
+    let mut reset = false;
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 6.0;
+        if let Some(color) = swatch {
+            let (rect, _) = ui.allocate_exact_size(Vec2::splat(10.0), Sense::hover());
+            ui.painter().circle_filled(rect.center(), 4.5, color);
+        }
+        let name = egui::Label::new(RichText::new(label).size(12.5).strong().color(theme::text())).sense(Sense::click());
+        if ui.add(name).on_hover_text(tr("Double-click to reset")).double_clicked() {
+            reset = true;
+        }
+        if auto {
+            egui::Frame::new()
+                .fill(badge_fill())
+                .corner_radius(4)
+                .inner_margin(egui::Margin::symmetric(5, 1))
+                .show(ui, |ui| ui.label(RichText::new(tr("Auto").to_lowercase()).size(10.0).color(theme::muted())));
+        }
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let color = if changed { theme::text() } else { theme::muted() };
+            ui.label(RichText::new(value).monospace().size(11.5).color(color));
+        });
+    });
+    reset
+}
+
+const RAIL_HEIGHT: f32 = 5.0;
+const SLIDER_HEIGHT: f32 = 20.0;
+
+/// Thick rail filled in the accent color from `anchor` to the value, with a
+/// round knob. egui's slider underneath, left invisible, handles the pointer
+/// and the arrow keys.
+fn develop_slider(ui: &mut egui::Ui, value: &mut f32, range: RangeInclusive<f32>, step: f64, anchor: f32) -> egui::Response {
+    let (min, max) = (*range.start(), *range.end());
+    let width = ui.available_width();
+    let response = ui
+        .scope(|ui| {
+            let spacing = ui.spacing_mut();
+            spacing.slider_width = width;
+            spacing.interact_size.y = SLIDER_HEIGHT;
+            let widgets = &mut ui.visuals_mut().widgets;
+            for state in [&mut widgets.inactive, &mut widgets.hovered, &mut widgets.active] {
+                state.bg_fill = Color32::TRANSPARENT;
+                state.fg_stroke = Stroke::NONE;
+            }
+            ui.add(egui::Slider::new(value, range).show_value(false).trailing_fill(false).step_by(step))
+        })
+        .inner;
+
+    let rect = response.rect;
+    // egui keeps the knob's center this far from each end.
+    let radius = rect.height() / 2.5;
+    let x_at = |at: f32| {
+        let t = if max > min { ((at - min) / (max - min)).clamp(0.0, 1.0) } else { 0.0 };
+        egui::lerp(rect.left() + radius..=rect.right() - radius, t)
+    };
+    let y = rect.center().y;
+    let rail = egui::Rect::from_x_y_ranges(rect.x_range(), y - RAIL_HEIGHT / 2.0..=y + RAIL_HEIGHT / 2.0);
+    let painter = ui.painter();
+    painter.rect_filled(rail, RAIL_HEIGHT / 2.0, rail_fill());
+
+    let knob = x_at(*value);
+    let start = if anchor <= min {
+        rail.left()
+    } else if anchor >= max {
+        rail.right()
+    } else {
+        x_at(anchor)
+    };
+    if (knob - start).abs() > 0.5 {
+        let fill = egui::Rect::from_x_y_ranges(start.min(knob)..=start.max(knob), rail.y_range());
+        painter.rect_filled(fill, RAIL_HEIGHT / 2.0, ACCENT);
+    }
+    let grow = if response.dragged() || response.hovered() { 1.0 } else { 0.0 };
+    let center = egui::pos2(knob, y);
+    painter.circle_filled(center + Vec2::new(0.0, 1.0), radius + grow, Color32::from_black_alpha(50));
+    painter.circle(center, radius + grow, knob_fill(), Stroke::new(1.0, theme::hairline()));
+    response
+}
+
+fn badge_fill() -> Color32 {
+    if theme::is_dark() {
+        Color32::from_gray(64)
+    } else {
+        Color32::from_gray(226)
+    }
+}
+
+fn rail_fill() -> Color32 {
+    if theme::is_dark() {
+        Color32::from_gray(72)
+    } else {
+        Color32::from_gray(212)
+    }
+}
+
+fn knob_fill() -> Color32 {
+    if theme::is_dark() {
+        Color32::from_gray(200)
+    } else {
+        WHITE
     }
 }
 
@@ -508,14 +607,8 @@ fn presets_section(ui: &mut egui::Ui, session: &mut EditSession, draft: &mut Dra
             ui.label(RichText::new(presets::display_name(name)).size(12.0).color(ACCENT));
         });
         let mut percent = session.preset_amount * 100.0;
-        ui.horizontal(|ui| {
-            ui.label(RichText::new(tr("Amount")).size(12.0).color(theme::text()));
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.label(RichText::new(format!("{percent:.0}%")).size(11.5).color(theme::muted()));
-            });
-        });
-        ui.spacing_mut().slider_width = ui.available_width();
-        let response = ui.add(egui::Slider::new(&mut percent, 0.0..=200.0).show_value(false).step_by(1.0));
+        slider_header(ui, tr("Amount"), None, false, &format!("{percent:.0}%"), true);
+        let response = develop_slider(ui, &mut percent, 0.0..=200.0, 1.0, 0.0);
         if response.changed() {
             session.preset_amount = percent / 100.0;
             let before = session.history.settings_at(session.history.applied().saturating_sub(1));
@@ -1005,9 +1098,8 @@ fn mask_section(ui: &mut egui::Ui, session: &mut EditSession, draft: &mut Draft)
     changed |= ui.checkbox(&mut mask.invert, tr("Invert")).changed();
     if let Shape::Radial { feather, .. } = &mut mask.shape {
         let mut percent = *feather * 100.0;
-        ui.label(RichText::new(tr("Feather")).size(12.0).color(theme::text()));
-        ui.spacing_mut().slider_width = ui.available_width();
-        if ui.add(egui::Slider::new(&mut percent, 0.0..=100.0).show_value(false)).changed() {
+        slider_header(ui, tr("Feather"), None, false, &format!("{percent:.0}"), true);
+        if develop_slider(ui, &mut percent, 0.0..=100.0, 1.0, 0.0).changed() {
             *feather = percent / 100.0;
             changed = true;
         }
@@ -1015,21 +1107,10 @@ fn mask_section(ui: &mut egui::Ui, session: &mut EditSession, draft: &mut Draft)
     for (local, name) in LOCALS.iter().enumerate() {
         let (min, max) = Mask::local_range(local);
         let mut value = mask.amounts[local];
-        let mut reset = false;
-        ui.horizontal(|ui| {
-            let label = egui::Label::new(RichText::new(tr(name)).size(12.0).color(theme::text())).sense(Sense::click());
-            if ui.add(label).on_hover_text(tr("Double-click to reset")).double_clicked() {
-                reset = true;
-            }
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let text = if local == 0 { format!("{value:+.2} EV") } else { format!("{value:+.0}") };
-                let color = if value != 0.0 { ACCENT } else { theme::muted() };
-                ui.label(RichText::new(text).size(11.5).color(color));
-            });
-        });
-        ui.spacing_mut().slider_width = ui.available_width();
+        let text = if local == 0 { format!("{value:+.2} EV") } else { format!("{value:+.0}") };
+        let reset = slider_header(ui, tr(name), None, false, &text, value != 0.0);
         let step = if local == 0 { 0.01 } else { 1.0 };
-        let response = ui.add(egui::Slider::new(&mut value, min..=max).show_value(false).step_by(step));
+        let response = develop_slider(ui, &mut value, min..=max, step, 0.0);
         if reset || response.double_clicked() {
             value = 0.0;
         }
@@ -1069,11 +1150,10 @@ fn export_section(ui: &mut egui::Ui, session: &mut EditSession, actions: &mut Ve
             .on_hover_text(tr("Long edge of the exported file"));
     });
     if session.export_format == 0 {
-        ui.horizontal(|ui| {
-            ui.label(RichText::new(tr("Quality")).size(12.0).color(theme::text()));
-            ui.spacing_mut().slider_width = (ui.available_width() - 40.0).max(60.0);
-            ui.add(egui::Slider::new(&mut session.export.quality, 50..=100));
-        });
+        let mut quality = f32::from(session.export.quality);
+        slider_header(ui, tr("Quality"), None, false, &format!("{quality:.0}"), true);
+        develop_slider(ui, &mut quality, 50.0..=100.0, 1.0, 50.0);
+        session.export.quality = quality.round().clamp(50.0, 100.0) as u8;
     }
     let export = ui
         .add_sized([ui.available_width(), 30.0], theme::primary_button(tr("Export…")))

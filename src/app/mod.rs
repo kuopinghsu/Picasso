@@ -432,7 +432,8 @@ impl PicassoApp {
         app.slideshow_interval = config.number("slideshow_interval").map_or(app.slideshow_interval, |secs| secs.clamp(1.0, 15.0));
         app.confirm_trash = config.flag("confirm_trash").unwrap_or(true);
         app.reload();
-        app.sync_watches();        app
+        app.sync_watches();
+        app
     }
 
     fn reload(&mut self) {

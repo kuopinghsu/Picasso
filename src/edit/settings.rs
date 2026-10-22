@@ -708,6 +708,26 @@ impl History {
         true
     }
 
+    /// Values set by Auto tone or Auto white balance that no later applied
+    /// step changed.
+    pub fn auto_values(&self) -> Vec<(Control, f32)> {
+        let mut auto: Vec<(Control, f32)> = Vec::new();
+        for step in self.steps.iter().take(self.applied) {
+            if step.kind == Kind::Reset {
+                auto.clear();
+            }
+            let by_auto = matches!(step.kind, Kind::AutoTone | Kind::AutoWhiteBalance);
+            for (key, value) in &step.patch {
+                let Some(control) = Control::from_key(key) else { continue };
+                auto.retain(|(other, _)| *other != control);
+                if let Some(value) = value.as_f64().filter(|_| by_auto) {
+                    auto.push((control, value as f32));
+                }
+            }
+        }
+        auto
+    }
+
     /// Name of the newest applied step when it is a preset nothing followed.
     pub fn last_preset(&self) -> Option<&str> {
         let step = self.steps.last().filter(|_| self.applied == self.steps.len())?;
@@ -860,6 +880,31 @@ mod tests {
         assert!(history.commit(Kind::Reset, &Settings::default()));
         assert!(history.settings().is_identity());
         assert_eq!(history.settings_at(2).get(Control::SHADOWS), 30.0);
+    }
+
+    #[test]
+    fn auto_values_last_until_changed_by_hand() {
+        let mut history = History::default();
+        let mut tone = with(Control::EXPOSURE, 0.4, &Settings::default());
+        tone.set(Control::CONTRAST, 12.0);
+        history.commit(Kind::AutoTone, &tone);
+        let balanced = with(Control::TEMPERATURE, -8.0, &tone);
+        history.commit(Kind::AutoWhiteBalance, &balanced);
+        let auto = |history: &History| {
+            let mut values = history.auto_values();
+            values.sort_by_key(|(control, _)| control.0);
+            values
+        };
+        let mut expected = vec![(Control::EXPOSURE, 0.4), (Control::CONTRAST, 12.0), (Control::TEMPERATURE, -8.0)];
+        expected.sort_by_key(|(control, _)| control.0);
+        assert_eq!(auto(&history), expected);
+        history.commit(Kind::Adjust, &with(Control::CONTRAST, 20.0, &balanced));
+        assert!(!auto(&history).iter().any(|(control, _)| *control == Control::CONTRAST));
+        assert_eq!(auto(&history).len(), 2);
+        history.undo();
+        assert_eq!(auto(&history), expected);
+        history.commit(Kind::Reset, &Settings::default());
+        assert!(history.auto_values().is_empty());
     }
 
     #[test]

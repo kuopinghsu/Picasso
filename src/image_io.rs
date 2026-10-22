@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use image::codecs::jpeg::JpegEncoder;
 use image::{DynamicImage, ExtendedColorType, GenericImageView, ImageBuffer, ImageReader, Rgba};
 
-use crate::types::{is_heic_path, is_raw_path, is_video_path, unix_now};
+use crate::types::{is_heic_path, is_raw_path, is_video_path, unix_now, EARLIEST_PHOTO};
 
 /// Bytes read from the start of a file to probe it. JPEG EXIF fits in one
 /// 64 KB segment and the frame header follows it; HEIC and TIFF-based RAW
@@ -86,13 +86,14 @@ pub fn load_at_least(path: &Path, edge: u32) -> Result<DynamicImage, String> {
     if is_raw_path(path) {
         return load_raw(path);
     }
-    let bytes = std::fs::read(path).map_err(|err| err.to_string())?;
     if is_heic_path(path) {
-        if let Some(image) = heic_thumbnail(&bytes, edge) {
+        if let Some(image) = heic_thumbnail_from_file(path, edge) {
             return Ok(image);
         }
+        let bytes = std::fs::read(path).map_err(|err| err.to_string())?;
         return heic_image(&bytes);
     }
+    let bytes = std::fs::read(path).map_err(|err| err.to_string())?;
     if let Some(image) = jpeg_scaled(&bytes, edge) {
         return Ok(image);
     }
@@ -194,11 +195,7 @@ pub fn save_jpeg(path: &Path, rgba: &ImageBuffer<Rgba<u8>, Vec<u8>>, quality: u8
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|err| err.to_string())?;
     }
-    let rgb = DynamicImage::ImageRgba8(rgba.clone()).into_rgb8();
-    let mut encoded = Vec::with_capacity(rgb.as_raw().len() / 8);
-    JpegEncoder::new_with_quality(&mut encoded, quality)
-        .encode(rgb.as_raw(), rgb.width(), rgb.height(), ExtendedColorType::Rgb8)
-        .map_err(|err| err.to_string())?;
+    let encoded = encode_jpeg(rgba, quality)?;
     let mut temporary = path.as_os_str().to_owned();
     temporary.push(format!(".{}-{}.tmp", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
     let temporary = PathBuf::from(temporary);
@@ -207,6 +204,16 @@ pub fn save_jpeg(path: &Path, rgba: &ImageBuffer<Rgba<u8>, Vec<u8>>, quality: u8
         let _ = std::fs::remove_file(&temporary);
         err.to_string()
     })
+}
+
+/// JPEG bytes of `rgba` with the alpha channel dropped.
+pub fn encode_jpeg(rgba: &ImageBuffer<Rgba<u8>, Vec<u8>>, quality: u8) -> Result<Vec<u8>, String> {
+    let rgb = DynamicImage::ImageRgba8(rgba.clone()).into_rgb8();
+    let mut encoded = Vec::with_capacity(rgb.as_raw().len() / 8);
+    JpegEncoder::new_with_quality(&mut encoded, quality)
+        .encode(rgb.as_raw(), rgb.width(), rgb.height(), ExtendedColorType::Rgb8)
+        .map_err(|err| err.to_string())?;
+    Ok(encoded)
 }
 
 pub fn file_mtime(meta: &std::fs::Metadata) -> i64 {
@@ -241,10 +248,9 @@ fn bits_from_exif(exif: &exif::Exif) -> ExifBits {
     let make = ascii_field(exif, exif::Tag::Make);
     ExifBits {
         orientation: short_field(exif, exif::Tag::Orientation).unwrap_or(1),
-        taken_at: ascii_field(exif, exif::Tag::DateTimeOriginal)
-            .or_else(|| ascii_field(exif, exif::Tag::DateTime))
-            .as_deref()
-            .and_then(parse_exif_time),
+        taken_at: [exif::Tag::DateTimeOriginal, exif::Tag::DateTimeDigitized, exif::Tag::DateTime]
+            .into_iter()
+            .find_map(|tag| parse_exif_time(&ascii_field(exif, tag)?)),
         camera: camera_name(make.as_deref().unwrap_or(""), model.as_deref().unwrap_or("")),
         gps_lat: gps_degrees(exif, exif::Tag::GPSLatitude, exif::Tag::GPSLatitudeRef),
         gps_lon: gps_degrees(exif, exif::Tag::GPSLongitude, exif::Tag::GPSLongitudeRef),
@@ -345,9 +351,69 @@ fn heic_image(bytes: &[u8]) -> Result<DynamicImage, String> {
     Ok(DynamicImage::ImageRgba8(buffer))
 }
 
-/// The thumbnail item stored beside the primary image (320 px wide on an
-/// iPhone), turned like the primary. `None` when there is none, it is
-/// smaller than `edge`, or its shape does not match the photo.
+/// Head read for HEIC; the `meta` box with the item locations comes first and
+/// takes a few kilobytes.
+const HEIC_HEAD_BYTES: usize = 256 * 1024;
+
+/// [`heic_thumbnail`] after reading only the head of the file and the
+/// thumbnail's bytes. A camera HEIC runs to tens of megabytes, and on a hard
+/// disk reading all of it takes far longer than decoding the thumbnail. The
+/// bytes sit in a zeroed buffer of the file's length, so offsets still hold;
+/// the OS hands out those zero pages without touching them.
+fn heic_thumbnail_from_file(path: &Path, edge: u32) -> Option<DynamicImage> {
+    use std::io::{Seek, SeekFrom};
+    let (head, len) = read_head(path, HEIC_HEAD_BYTES).ok()?;
+    let len = usize::try_from(len).ok()?;
+    if len <= head.len() {
+        return heic_thumbnail(&head, edge);
+    }
+    let ranges = heic_thumbnail_ranges(&head)?;
+    let mut sparse = vec![0u8; len];
+    sparse[..head.len()].copy_from_slice(&head);
+    let mut file = File::open(path).ok()?;
+    for (start, length) in ranges {
+        let start = usize::try_from(start).ok()?;
+        let end = start.checked_add(usize::try_from(length).ok()?)?;
+        if end > len {
+            return None;
+        }
+        file.seek(SeekFrom::Start(start as u64)).ok()?;
+        file.read_exact(&mut sparse[start..end]).ok()?;
+    }
+    heic_thumbnail(&sparse, edge)
+}
+
+/// File ranges, as start and length, holding the primary's thumbnail item.
+/// `None` when the `meta` box isn't within `head` or the item is stored some
+/// other way than as plain runs of the file.
+fn heic_thumbnail_ranges(head: &[u8]) -> Option<Vec<(u64, u64)>> {
+    use heic_rs::meta::iloc::Construction;
+    use heic_rs::meta::iref::RefKind;
+    let meta = heic_rs::meta::parse(head).ok()?;
+    let thumb = meta
+        .refs
+        .iter()
+        .find(|reference| reference.kind == RefKind::Thmb && reference.to.contains(&meta.primary))?
+        .from;
+    let location = meta.locations.iter().find(|location| location.id == thumb)?;
+    if !matches!(location.construction, Construction::File) {
+        return None;
+    }
+    location
+        .extents
+        .iter()
+        .map(|extent| {
+            let start = location.base_offset.checked_add(extent.offset)?;
+            (extent.length > 0).then_some((start, extent.length))
+        })
+        .collect()
+}
+
+/// The thumbnail item stored beside the primary image, turned like the
+/// primary. iPhones store a 320 px HEVC one; cameras such as Hasselblad
+/// store a JPEG of several thousand pixels, decoded here at reduced scale,
+/// which spares a full decode of a 100-megapixel tiled image. `None` when
+/// there is none, it is smaller than `edge`, or its shape does not match.
 fn heic_thumbnail(bytes: &[u8], edge: u32) -> Option<DynamicImage> {
     use heic_rs::meta::iref::RefKind;
     use heic_rs::Transform;
@@ -361,12 +427,24 @@ fn heic_thumbnail(bytes: &[u8], edge: u32) -> Option<DynamicImage> {
             .find(|reference| reference.kind == RefKind::Thmb && reference.to.contains(&primary))?
             .from;
         let props = context.props(thumb).ok()?;
-        let hvcc = props.hvcc.as_ref()?;
         let data = context.item_data(thumb).ok()?;
-        let nals = hvcc.split_nals(&data).ok()?;
-        let frame = heic_rs::hevc::decode_still(&hvcc.parameter_sets(), &nals).ok()?;
-        let nclx = props.nclx.unwrap_or_default();
-        let image = heic_rs::color::convert(&frame, None, nclx, heic_rs::PixelLayout::Rgba8, heic_rs::DEFAULT_MAX_PIXELS, Some(1)).ok()?;
+        let image = if &context.meta.item(thumb)?.item_type == b"jpeg" {
+            let decoded = jpeg_scaled(&data, edge)
+                .or_else(|| image::load_from_memory_with_format(&data, image::ImageFormat::Jpeg).ok())?
+                .into_rgba8();
+            heic_rs::Image {
+                width: decoded.width(),
+                height: decoded.height(),
+                data: decoded.into_raw(),
+                layout: heic_rs::PixelLayout::Rgba8,
+            }
+        } else {
+            let hvcc = props.hvcc.as_ref()?;
+            let nals = hvcc.split_nals(&data).ok()?;
+            let frame = heic_rs::hevc::decode_still(&hvcc.parameter_sets(), &nals).ok()?;
+            let nclx = props.nclx.unwrap_or_default();
+            heic_rs::color::convert(&frame, None, nclx, heic_rs::PixelLayout::Rgba8, heic_rs::DEFAULT_MAX_PIXELS, Some(1)).ok()?
+        };
         // Encoders attach `irot`/`imir` to the thumbnail as well; when one
         // does not, the primary's turn still applies, but not its crop.
         let transforms: Vec<Transform> = if props.transforms.is_empty() {
@@ -424,15 +502,17 @@ fn probe_raw(path: &Path, modified_at: i64) -> Result<Probe, String> {
             }
             _ => rawler::rawsource::RawSource::new_from_slice(&head),
         };
-        if let Ok(Ok((width, height, bits))) = std::panic::catch_unwind(|| raw_quick(&source)) {
-            if width > 0 && height > 0 && bits.taken_at.is_some() {
+        match std::panic::catch_unwind(|| raw_quick(&source)) {
+            Ok(Ok((width, height, bits))) if width > 0 && height > 0 && bits.taken_at.is_some() => {
                 return Ok(bits.probe(width as u32, height as u32, modified_at));
             }
+            Ok(Err(rawler::RawlerError::Unsupported { .. })) => return probe_unknown_raw(&head, modified_at),
+            _ => {}
         }
     }
     let owned = path.to_path_buf();
     let quick = std::panic::catch_unwind(move || {
-        let source = rawler::rawsource::RawSource::new(&owned).map_err(|err| err.to_string())?;
+        let source = rawler::rawsource::RawSource::new(&owned)?;
         raw_quick(&source)
     });
     if let Ok(Ok((width, height, bits))) = quick {
@@ -449,14 +529,14 @@ const RAW_HEAD_BYTES: usize = 1024 * 1024;
 
 /// Dimensions and metadata with the decoder in dummy mode, so the sensor
 /// data is not read.
-fn raw_quick(source: &rawler::rawsource::RawSource) -> Result<(usize, usize, ExifBits), String> {
-    let decoder = rawler::get_decoder(source).map_err(|err| err.to_string())?;
+fn raw_quick(source: &rawler::rawsource::RawSource) -> Result<(usize, usize, ExifBits), rawler::RawlerError> {
+    let decoder = rawler::get_decoder(source)?;
     let params = rawler::decoders::RawDecodeParams::default();
     let bits = decoder
         .raw_metadata(source, &params)
         .map(|metadata| bits_from_raw(&metadata))
         .unwrap_or_else(|_| ExifBits::empty());
-    let raw = decoder.raw_image(source, &params, true).map_err(|err| err.to_string())?;
+    let raw = decoder.raw_image(source, &params, true)?;
     let (width, height) = match raw.crop_area {
         Some(area) if area.d.w > 0 && area.d.h > 0 => (area.d.w, area.d.h),
         _ => (raw.width, raw.height),
@@ -471,7 +551,11 @@ fn load_raw(path: &Path) -> Result<DynamicImage, String> {
 
 fn raw_picture(path: &Path) -> Result<(DynamicImage, ExifBits), String> {
     let source = rawler::rawsource::RawSource::new(path).map_err(|err| err.to_string())?;
-    let decoder = rawler::get_decoder(&source).map_err(|err| err.to_string())?;
+    let decoder = match rawler::get_decoder(&source) {
+        Ok(decoder) => decoder,
+        Err(rawler::RawlerError::Unsupported { .. }) => return unknown_raw_picture(path),
+        Err(err) => return Err(err.to_string()),
+    };
     let params = rawler::decoders::RawDecodeParams::default();
     let bits = decoder
         .raw_metadata(&source, &params)
@@ -484,6 +568,34 @@ fn raw_picture(path: &Path) -> Result<(DynamicImage, ExifBits), String> {
         None => develop_raw(path)?,
     };
     Ok((image, bits))
+}
+
+/// Probes a TIFF-based RAW file from a camera the decoder doesn't know, from
+/// its directories and EXIF alone.
+fn probe_unknown_raw(head: &[u8], modified_at: i64) -> Result<Probe, String> {
+    let layout = crate::raw_tiff::layout(head).ok_or("This camera's raw files are not supported yet")?;
+    let (width, height) = layout.photo_size().ok_or("This camera's raw files are not supported yet")?;
+    Ok(raw_head_exif(head).probe(width, height, modified_at))
+}
+
+/// The preview JPEG a camera the decoder doesn't know embeds in its RAW
+/// files, upright.
+fn unknown_raw_picture(path: &Path) -> Result<(DynamicImage, ExifBits), String> {
+    let unsupported = || "This camera's raw files are not supported yet".to_string();
+    let (head, _) = read_head(path, RAW_HEAD_BYTES)?;
+    let preview = crate::raw_tiff::layout(&head).and_then(|layout| layout.preview).ok_or_else(unsupported)?;
+    let jpeg = crate::raw_tiff::read_preview(path, &preview).ok_or_else(unsupported)?;
+    let image = image::load_from_memory_with_format(&jpeg, image::ImageFormat::Jpeg).map_err(|err| err.to_string())?;
+    let bits = raw_head_exif(&head);
+    Ok((apply_orientation(image, bits.orientation), bits))
+}
+
+/// EXIF from the start of a TIFF-based RAW file.
+fn raw_head_exif(head: &[u8]) -> ExifBits {
+    exif::Reader::new()
+        .read_raw(head.to_vec())
+        .map(|exif| bits_from_exif(&exif))
+        .unwrap_or_else(|_| ExifBits::empty())
 }
 
 use rawler::decoders::Decoder;
@@ -517,12 +629,9 @@ fn bits_from_raw(metadata: &rawler::decoders::RawMetadata) -> ExifBits {
     let gps = metadata.exif.gps.as_ref();
     ExifBits {
         orientation: metadata.exif.orientation.unwrap_or(1),
-        taken_at: metadata
-            .exif
-            .date_time_original
-            .as_deref()
-            .or(metadata.exif.create_date.as_deref())
-            .and_then(parse_exif_time),
+        taken_at: [&metadata.exif.date_time_original, &metadata.exif.create_date]
+            .into_iter()
+            .find_map(|date| parse_exif_time(date.as_deref()?)),
         camera: camera_name(&metadata.make, &metadata.model),
         gps_lat: gps.and_then(raw_latitude),
         gps_lon: gps.and_then(raw_longitude),
@@ -577,13 +686,16 @@ fn ascii_field(exif: &exif::Exif, tag: exif::Tag) -> Option<String> {
     .filter(|text| !text.is_empty())
 }
 
+/// Reads an EXIF date such as `2025:11:03 06:06:57` as local time. Dates
+/// older than [`EARLIEST_PHOTO`] are placeholders, such as the
+/// `0001:01:01 00:00:00` some photo services write, and read as none.
 fn parse_exif_time(text: &str) -> Option<i64> {
     let naive = chrono::NaiveDateTime::parse_from_str(text.trim(), "%Y:%m:%d %H:%M:%S").ok()?;
-    naive
+    let stamp = naive
         .and_local_timezone(chrono::Local)
         .single()
-        .map(|dt| dt.timestamp())
-        .or_else(|| Some(naive.and_utc().timestamp()))
+        .map_or_else(|| naive.and_utc().timestamp(), |dt| dt.timestamp());
+    (stamp >= EARLIEST_PHOTO).then_some(stamp)
 }
 
 fn field_any<'a>(exif: &'a exif::Exif, tag: exif::Tag) -> Option<&'a exif::Field> {
@@ -629,6 +741,17 @@ mod tests {
         ];
         let degrees = dms_to_deg(&values).unwrap();
         assert!((degrees - 37.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn placeholder_exif_dates_read_as_none() {
+        assert!(parse_exif_time("2025:11:03 06:06:57").is_some());
+        assert!(parse_exif_time("1890:05:01 12:00:00").is_some());
+        assert_eq!(parse_exif_time("0001:01:01 00:00:00"), None);
+        assert_eq!(parse_exif_time("0000:00:00 00:00:00"), None);
+        assert_eq!(parse_exif_time("    :  :     :  :  "), None);
+        let earliest = chrono::NaiveDate::from_ymd_opt(1826, 1, 1).unwrap().and_hms_opt(0, 0, 0).unwrap();
+        assert_eq!(earliest.and_utc().timestamp(), EARLIEST_PHOTO);
     }
 
     fn jpeg(width: u32, height: u32) -> Vec<u8> {

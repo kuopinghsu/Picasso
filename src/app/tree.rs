@@ -157,12 +157,7 @@ impl PicassoApp {
                         ui.close();
                     }
                     if ui.button(crate::i18n::tr("Remove from Picasso…")).clicked() {
-                        self.db.remove_folder(id);
-                        if matches!(self.nav, Nav::Folder(_) | Nav::Dir(_)) {
-                            self.nav = Nav::Library;
-                        }
-                        self.reload();
-                        self.sync_watches();
+                        self.remove_folder(id);
                         ui.close();
                     }
                 }

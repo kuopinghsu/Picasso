@@ -153,6 +153,11 @@ impl PicassoApp {
                     if toggle.on_hover_text(tr(tip)).clicked() {
                         self.toggle_theme(ui.ctx());
                     }
+                    let help = ui.button("     ");
+                    theme::paint_help_icon(ui.painter(), help.rect.center(), theme::text());
+                    if help.on_hover_text(tr("Help & Shortcuts (F1)")).clicked() {
+                        self.modal = super::Modal::Help;
+                    }
                     if ui.button(tr(if slideshow { "Exit Slideshow" } else { "Slideshow" })).clicked() {
                         if slideshow {
                             self.slideshow = None;
@@ -222,9 +227,9 @@ impl PicassoApp {
                                 show.last = std::time::Instant::now();
                             }
                         }
-                        if let Some(show) = self.slideshow.as_mut() {
-                            ui.add(egui::Slider::new(&mut show.interval, 1.0..=15.0).suffix(" s").fixed_decimals(0));
-                        }
+                        let mut interval = self.slideshow_interval;
+                        let response = ui.add(egui::Slider::new(&mut interval, 1.0..=15.0).suffix(" s").fixed_decimals(0));
+                        self.set_slideshow_interval(interval, &response);
                     }
                 });
             });

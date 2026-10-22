@@ -4,7 +4,7 @@
 //! decode, so opening a photo never waits on them.
 
 use std::fs::File;
-use std::io::BufReader;
+use std::io::{BufReader, Read};
 use std::path::Path;
 
 use crate::types::{is_heic_path, is_raw_path};
@@ -90,9 +90,23 @@ fn read_exif(path: &Path) -> Option<exif::Exif> {
         let tiff = context.exif(context.meta.primary).ok()??;
         return exif::Reader::new().read_raw(tiff.to_vec()).ok();
     }
+    if is_raw_path(path) {
+        // TIFF-based RAW files keep their EXIF near the start, and reading
+        // the whole container would load the sensor data too.
+        let mut head = Vec::new();
+        File::open(path).ok()?.take(RAW_HEAD_BYTES).read_to_end(&mut head).ok()?;
+        if head.starts_with(b"II*\0") || head.starts_with(b"MM\0*") {
+            if let Ok(exif) = exif::Reader::new().read_raw(head) {
+                return Some(exif);
+            }
+        }
+    }
     let file = File::open(path).ok()?;
     exif::Reader::new().read_from_container(&mut BufReader::new(file)).ok()
 }
+
+/// Read from a RAW file for its EXIF.
+const RAW_HEAD_BYTES: u64 = 1024 * 1024;
 
 fn rows_from_exif(exif: &exif::Exif) -> Vec<(&'static str, String)> {
     use exif::Tag;
@@ -131,11 +145,18 @@ fn rows_from_exif(exif: &exif::Exif) -> Vec<(&'static str, String)> {
         ("Copyright", Tag::Copyright),
     ];
     for (label, tag) in table {
-        if let Some(value) = text(tag) {
+        let value = if tag == Tag::DateTimeOriginal { text(tag).and_then(real_date) } else { text(tag) };
+        if let Some(value) = value {
             rows.push((label, value));
         }
     }
     rows
+}
+
+/// `date` unless its year is a placeholder, such as `0001-01-01 00:00:00`.
+fn real_date(date: String) -> Option<String> {
+    let year: i32 = date.get(..4)?.parse().ok()?;
+    (year >= 1826).then_some(date)
 }
 
 fn rows_from_raw(path: &Path) -> Vec<(&'static str, String)> {
@@ -158,7 +179,7 @@ fn rows_from_raw(path: &Path) -> Vec<(&'static str, String)> {
     if let Some(lens) = exif.lens_model.clone().filter(|lens| !lens.trim().is_empty()) {
         rows.push(("Lens", lens));
     }
-    if let Some(taken) = exif.date_time_original.clone().or_else(|| exif.create_date.clone()) {
+    if let Some(taken) = [&exif.date_time_original, &exif.create_date].into_iter().find_map(|date| real_date(date.clone()?)) {
         rows.push(("Taken", taken));
     }
     if let Some(r) = exif.exposure_time.as_ref() {

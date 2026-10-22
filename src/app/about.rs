@@ -17,21 +17,11 @@ const FEATURES: [&str; 4] = [
 
 /// Draws the dialog. Returns true once it should close.
 pub(super) fn show(ctx: &egui::Context, logo: &egui::TextureHandle) -> bool {
-    let frame = egui::Frame::new()
-        .fill(theme::bg())
-        .corner_radius(CornerRadius::same(RADIUS))
-        .stroke(Stroke::new(1.0, theme::hairline()))
-        .shadow(Shadow {
-            offset: [0, 12],
-            blur: 32,
-            spread: 0,
-            color: Color32::from_black_alpha(if theme::is_dark() { 90 } else { 45 }),
-        });
     let mut close = false;
-    let response = egui::Modal::new(egui::Id::unique("about")).frame(frame).show(ctx, |ui| {
+    let response = egui::Modal::new(egui::Id::unique("about")).frame(dialog_frame()).show(ctx, |ui| {
         ui.set_width(620.0);
         ui.spacing_mut().item_spacing.y = 3.0;
-        title_bar(ui, logo, &mut close);
+        title_bar(ui, logo, tr("About Picasso"), &mut close);
         egui::Frame::new()
             .inner_margin(Margin {
                 left: 24,
@@ -51,7 +41,23 @@ pub(super) fn show(ctx: &egui::Context, logo: &egui::TextureHandle) -> bool {
     close || response.should_close()
 }
 
-fn title_bar(ui: &mut egui::Ui, logo: &egui::TextureHandle, close: &mut bool) {
+/// Card behind the About, Help & Shortcuts, and Settings dialogs.
+pub(super) fn dialog_frame() -> egui::Frame {
+    egui::Frame::new()
+        .fill(theme::bg())
+        .corner_radius(CornerRadius::same(RADIUS))
+        .stroke(Stroke::new(1.0, theme::hairline()))
+        .shadow(Shadow {
+            offset: [0, 12],
+            blur: 32,
+            spread: 0,
+            color: Color32::from_black_alpha(if theme::is_dark() { 90 } else { 45 }),
+        })
+}
+
+/// Window-style strip across the top of a dialog with the logo, `title`,
+/// and a close button that sets `close`.
+fn title_bar(ui: &mut egui::Ui, logo: &egui::TextureHandle, title: &str, close: &mut bool) {
     let corners = CornerRadius {
         nw: RADIUS,
         ne: RADIUS,
@@ -67,7 +73,7 @@ fn title_bar(ui: &mut egui::Ui, logo: &egui::TextureHandle, close: &mut bool) {
             ui.horizontal(|ui| {
                 let (rect, _) = ui.allocate_exact_size(Vec2::splat(18.0), Sense::hover());
                 theme::paint_logo(ui.painter(), logo, rect);
-                ui.label(RichText::new(tr("About Picasso")).size(13.0).color(theme::text()));
+                ui.label(RichText::new(title).size(13.0).color(theme::text()));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if close_button(ui).on_hover_text(tr("Close")).clicked() {
                         *close = true;

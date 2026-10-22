@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use rusqlite::{params, Connection, OptionalExtension};
 
-use crate::types::{unix_now, Album, Folder, Nav, NewPhoto, Photo, Sort};
+use crate::types::{unix_now, Album, Folder, Nav, NewPhoto, Photo, Sort, EARLIEST_PHOTO};
 
 /// Bumped whenever the scanner starts reading new metadata from files, so
 /// rows written by an older build are probed once more on the next scan.
@@ -150,6 +150,11 @@ impl Database {
             self.ensure_column("photos", column, decl)?;
         }
         self.ensure_column("folders", "scan_pending", "INTEGER NOT NULL DEFAULT 1")?;
+        // Older builds stored placeholder dates such as year 1. Those files
+        // are probed again on the next scan, which reads the real date.
+        self.conn
+            .execute("UPDATE photos SET indexed_version=0 WHERE taken_at < ?1", [EARLIEST_PHOTO])
+            .map_err(|err| err.to_string())?;
         Ok(())
     }
 
@@ -495,6 +500,11 @@ impl Database {
         }
     }
 
+    /// Id and path of every photo, newest first.
+    pub fn photo_paths(&self) -> Vec<(i64, String)> {
+        self.map_rows("SELECT id, path FROM photos ORDER BY taken_at DESC", [], |row| Ok((row.get(0)?, row.get(1)?)))
+    }
+
     fn search(&self, query: &str, sort: Sort) -> Vec<Photo> {
         let pattern = like_pattern(query);
         let order = order_sql(sort);
@@ -676,6 +686,14 @@ pub fn app_dirs() -> (PathBuf, PathBuf) {
     }
 }
 
+/// Folder for `settings.json`, the system's place for Picasso's settings.
+pub fn config_dir() -> PathBuf {
+    match directories::ProjectDirs::from("app", "Picasso", "picasso") {
+        Some(dirs) => dirs.config_dir().to_path_buf(),
+        None => PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".into())).join(".config/picasso"),
+    }
+}
+
 pub fn pictures_dir() -> Option<PathBuf> {
     directories::UserDirs::new()
         .and_then(|dirs| dirs.picture_dir().map(|path| path.to_path_buf()))
@@ -808,6 +826,29 @@ mod tests {
         let keep = vec![folder.join("a.jpg").to_string_lossy().into_owned()];
         assert_eq!(db.remove_missing(id, &keep), 1);
         assert_eq!(db.photos(&Nav::Library, "", Sort::Name).len(), 1);
+    }
+
+    #[test]
+    fn placeholder_dates_are_probed_again() {
+        let dir = temp_dir("placeholder");
+        let folder = dir.join("pics");
+        std::fs::create_dir_all(&folder).unwrap();
+        let path = |name: &str| folder.canonicalize().unwrap().join(name).to_string_lossy().into_owned();
+        {
+            let db = Database::open(&dir.join("t.db")).unwrap();
+            let id = db.add_folder(&folder).unwrap();
+            let folder = folder.canonicalize().unwrap();
+            let mut year_one = record(id, &folder, "year1.jpg", 10);
+            year_one.photo.taken_at = -62_135_625_600;
+            db.write_batch(&[year_one, record(id, &folder, "fine.jpg", 10)]).unwrap();
+            let snapshot = db.folder_snapshot(id, &folder.to_string_lossy());
+            assert!(snapshot[&path("year1.jpg")].current(10, 10));
+        }
+        let db = Database::open(&dir.join("t.db")).unwrap();
+        let id = db.folders()[0].id;
+        let snapshot = db.folder_snapshot(id, &folder.canonicalize().unwrap().to_string_lossy());
+        assert!(!snapshot[&path("year1.jpg")].current(10, 10));
+        assert!(snapshot[&path("fine.jpg")].current(10, 10));
     }
 
     #[test]

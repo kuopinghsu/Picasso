@@ -4,6 +4,7 @@
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
 mod app;
+mod config;
 mod db;
 mod edit;
 mod geo;
@@ -11,6 +12,8 @@ mod i18n;
 mod image_io;
 mod photo_info;
 mod picasa_ini;
+mod raw_tiff;
+mod thumbs;
 mod types;
 mod video;
 mod worker;
@@ -61,6 +64,8 @@ fn run(args: &[std::path::PathBuf], renderer: eframe::Renderer) -> eframe::Resul
             .with_inner_size([1280.0, 820.0])
             .with_min_inner_size([880.0, 560.0])
             .with_title("Picasso")
+            // Matches picasso.desktop, so Linux docks show the right icon.
+            .with_app_id("picasso")
             .with_icon(eframe::egui::IconData {
                 rgba: ICON_RGBA.to_vec(),
                 width: ICON_SIZE as u32,

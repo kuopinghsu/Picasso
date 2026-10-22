@@ -353,6 +353,26 @@ pub fn paint_theme_icon(painter: &egui::Painter, center: Pos2, moon: bool, color
     painter.add(egui::Shape::mesh(mesh));
 }
 
+/// Help glyph about 15 points wide: a question mark in a ring.
+pub fn paint_help_icon(painter: &egui::Painter, center: Pos2, color: Color32) {
+    painter.circle_stroke(center, 7.2, Stroke::new(1.4, color));
+    painter.text(center + Vec2::new(0.0, 0.5), egui::Align2::CENTER_CENTER, "?", FontId::proportional(11.0), color);
+}
+
+/// Gear outline with eight teeth, the same size as the help icon.
+pub fn paint_settings_icon(painter: &egui::Painter, center: Pos2, color: Color32) {
+    let (inner, outer) = (5.4_f32, 7.4_f32);
+    let mut outline = Vec::with_capacity(32);
+    for tooth in 0..8 {
+        let angle = tooth as f32 * std::f32::consts::FRAC_PI_4;
+        for (offset, radius) in [(-0.26, inner), (-0.15, outer), (0.15, outer), (0.26, inner)] {
+            outline.push(center + Vec2::angled(angle + offset) * radius);
+        }
+    }
+    painter.add(egui::Shape::closed_line(outline, Stroke::new(1.3, color)));
+    painter.circle_stroke(center, 2.3, Stroke::new(1.3, color));
+}
+
 /// Badge for an edited photo: three slider tracks with knobs on a dark disc
 /// of `radius`.
 pub fn paint_edit_mark(painter: &egui::Painter, center: Pos2, radius: f32) {

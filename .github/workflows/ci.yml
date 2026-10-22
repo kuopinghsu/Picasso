@@ -1,6 +1,8 @@
-# Builds and tests Picasso on Windows for every push and pull request, and
-# packages picasso.exe plus a .zip. Pushing a tag like `v0.9.0` also publishes
-# both files on a GitHub release. The tag must match the version in Cargo.toml.
+# Builds and tests Picasso on Windows and Linux for every push and pull
+# request, then packages it: picasso.exe plus a .zip for Windows, and a
+# .tar.gz plus a .deb for Linux. Pushing a tag like `v0.9.0` also publishes
+# every package on a GitHub release. The tag must match the version in
+# Cargo.toml.
 name: CI
 
 on:
@@ -25,8 +27,6 @@ jobs:
   windows:
     name: Windows x64
     runs-on: windows-latest
-    outputs:
-      name: ${{ steps.package.outputs.name }}
     steps:
       - uses: actions/checkout@v4
 
@@ -60,9 +60,6 @@ jobs:
           Copy-Item target/release/picasso.exe "dist/$name.exe"
           Copy-Item target/release/picasso.exe, README.md, LICENSE "staging/$name/"
           Compress-Archive -Path "staging/$name" -DestinationPath "dist/$name.zip"
-          Get-ChildItem dist -File | ForEach-Object {
-            "$((Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower())  $($_.Name)"
-          } | Set-Content dist/SHA256SUMS.txt
 
           Get-ChildItem dist | Format-Table Name, Length
           "name=$name" >> $env:GITHUB_OUTPUT
@@ -73,9 +70,91 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
+  linux:
+    name: Linux x64
+    # The oldest supported runner, so the binary runs on older glibc too.
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config libasound2-dev libxkbcommon-dev libgl1-mesa-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Test
+        run: cargo test --release --locked
+
+      - name: Build
+        run: cargo build --release --locked
+
+      - name: Package
+        id: package
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            if [ "$GITHUB_REF_NAME" != "v$version" ]; then
+              echo "::error::Tag $GITHUB_REF_NAME does not match version $version in Cargo.toml"
+              exit 1
+            fi
+            label=$version
+          else
+            label="$version-${GITHUB_SHA::7}"
+          fi
+          name="picasso-$label-linux-x64"
+          strip target/release/picasso
+          mkdir -p dist "staging/$name"
+
+          install -m 755 target/release/picasso "staging/$name/"
+          install -m 644 README.md LICENSE build/picasso.desktop build/picasso.png "staging/$name/"
+          tar -C staging -czf "dist/$name.tar.gz" "$name"
+
+          # Debian versions can't contain "-" without a revision; "~" also
+          # sorts a build or pre-release before the release it leads to.
+          deb_version=$(echo "$label" | tr '-' '~')
+          root=staging/deb
+          install -Dm 755 target/release/picasso "$root/usr/bin/picasso"
+          install -Dm 644 build/picasso.desktop "$root/usr/share/applications/picasso.desktop"
+          install -Dm 644 build/picasso.png "$root/usr/share/icons/hicolor/256x256/apps/picasso.png"
+          install -Dm 644 LICENSE "$root/usr/share/doc/picasso/copyright"
+          install -Dm 644 README.md "$root/usr/share/doc/picasso/README.md"
+          mkdir -p "$root/DEBIAN"
+          cat > "$root/DEBIAN/control" <<EOF
+          Package: picasso
+          Version: $deb_version
+          Architecture: amd64
+          Maintainer: ${GITHUB_REPOSITORY_OWNER} <${GITHUB_REPOSITORY_OWNER}@users.noreply.github.com>
+          Installed-Size: $(du -sk "$root/usr" | cut -f1)
+          Depends: libc6 (>= 2.35), libasound2 | libasound2t64, libgl1, libegl1, libxkbcommon0, libxkbcommon-x11-0, libx11-6, libxcursor1, libxrandr2, libxi6
+          Recommends: ffmpeg, xdg-desktop-portal
+          Section: graphics
+          Priority: optional
+          Homepage: https://github.com/${GITHUB_REPOSITORY}
+          Description: Fast local photo library and viewer in the style of Picasa
+           Picasso indexes local folders, shows a timeline, folders, albums, and
+           places on a map, and edits photos non-destructively.
+          EOF
+          dpkg-deb --build --root-owner-group "$root" "dist/$name.deb"
+          dpkg-deb --info "dist/$name.deb"
+
+          ls -l dist
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.package.outputs.name }}
+          path: dist/*
+          if-no-files-found: error
+
   release:
     name: GitHub release
-    needs: windows
+    needs: [windows, linux]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
@@ -83,8 +162,15 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: ${{ needs.windows.outputs.name }}
+          pattern: picasso-*
           path: dist
+          merge-multiple: true
+
+      - name: Checksums
+        working-directory: dist
+        run: |
+          sha256sum * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
 
       - uses: softprops/action-gh-release@v2
         with:
@@ -92,6 +178,8 @@ jobs:
           generate_release_notes: true
           prerelease: ${{ contains(github.ref_name, '-') }}
           body: |
-            **Windows x64:** download `picasso-*-windows-x64.exe` and run it, or unzip `picasso-*-windows-x64.zip`. Check downloads against `SHA256SUMS.txt`.
+            **Windows x64:** download `picasso-*-windows-x64.exe` and run it, or unzip `picasso-*-windows-x64.zip`.
 
-            Videos need [FFmpeg](https://ffmpeg.org) (`winget install Gyan.FFmpeg`). Photos work without it.
+            **Linux x64:** on Debian or Ubuntu, install `picasso-*-linux-x64.deb` with `sudo apt install ./picasso-*-linux-x64.deb`. On other distributions, extract `picasso-*-linux-x64.tar.gz` and run `picasso`.
+
+            Check downloads against `SHA256SUMS.txt`. Videos need [FFmpeg](https://ffmpeg.org) (`winget install Gyan.FFmpeg` on Windows, `sudo apt install ffmpeg` on Debian or Ubuntu). Photos work without it.

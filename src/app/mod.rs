@@ -4,8 +4,10 @@ mod about;
 mod editor;
 mod editor_panel;
 mod editor_stage;
+mod help;
 mod library;
 mod places;
+mod settings;
 mod side;
 mod theme;
 mod tree;
@@ -20,10 +22,12 @@ use crossbeam_channel::{Receiver, Sender, TryRecvError};
 use eframe::egui::{self, Color32, Key, Modifiers, Rect, TextureHandle, TextureOptions, Vec2};
 use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
 
+use crate::config::Config;
 use crate::db::{self, Database};
 use crate::i18n::{self, tr, trf, Lang};
-use crate::types::{folder_label, turn, Nav, Photo, Sort};
-use crate::worker::{self, Command, DisplayGate, ThumbJob, UiEvent};
+use crate::thumbs::{self, ThumbStore};
+use crate::types::{folder_label, turn, FileType, Nav, Photo, Sort};
+use crate::worker::{self, Command, DisplayGate, ThumbJob, ThumbWanted, UiEvent};
 
 use library::CachedLayout;
 use side::{SidePanel, TrayIcon};
@@ -54,6 +58,7 @@ enum Modal {
     Trash { ids: Vec<i64> },
     Help,
     About,
+    Settings,
 }
 
 struct ThumbTex {
@@ -68,6 +73,10 @@ struct ThumbTex {
 struct ThumbCache {
     map: HashMap<i64, ThumbTex>,
     clock: u64,
+    /// Thumbnails drawn or prefetched in the last frame. The cache holds at
+    /// least twice that many, so a large window with small thumbnails doesn't
+    /// evict what it is about to draw.
+    keep: usize,
 }
 
 impl ThumbCache {
@@ -77,6 +86,7 @@ impl ThumbCache {
         Self {
             map: HashMap::new(),
             clock: 0,
+            keep: 0,
         }
     }
 
@@ -91,11 +101,12 @@ impl ThumbCache {
         self.clock += 1;
         tex.used = self.clock;
         self.map.insert(id, tex);
-        if self.map.len() > Self::CAPACITY {
+        let capacity = Self::CAPACITY.max(2 * self.keep);
+        if self.map.len() > capacity {
             // Evict in chunks so the scan for the oldest runs rarely.
             let mut ages: Vec<(u64, i64)> = self.map.iter().map(|(id, tex)| (tex.used, *id)).collect();
             ages.sort_unstable();
-            for (_, old) in ages.into_iter().take(Self::CAPACITY / 10) {
+            for (_, old) in ages.into_iter().take(capacity / 10) {
                 self.map.remove(&old);
             }
         }
@@ -113,7 +124,10 @@ struct DisplayTex {
 
 pub struct PicassoApp {
     db: Database,
+    /// Settings shared by every library, in the system's settings folder.
+    config: Config,
     data_dir: PathBuf,
+    cache_dir: PathBuf,
     cmd_tx: Sender<Command>,
     urgent_tx: Sender<ThumbJob>,
     events: Receiver<UiEvent>,
@@ -139,12 +153,18 @@ pub struct PicassoApp {
     grid_cols: usize,
     thumb_size: f32,
     scroll_to: Option<i64>,
+    /// Last frame the library scroll bar was dragged, for its date bubble.
+    scroll_hint_at: Option<Instant>,
     view_epoch: u64,
     layout: Option<CachedLayout>,
 
     thumbs: ThumbCache,
     thumb_waiting: HashSet<i64>,
     thumb_failed: HashSet<i64>,
+    /// Thumbnails drawn or prefetched in the frame being built.
+    thumb_drawn: HashSet<i64>,
+    /// `thumb_drawn` of the last finished frame, shared with the decoders.
+    thumb_wanted: ThumbWanted,
     displays: Vec<DisplayTex>,
     display_nonce: HashMap<i64, u64>,
     display_inflight: HashMap<i64, u64>,
@@ -168,9 +188,14 @@ pub struct PicassoApp {
     side_map_photo: Option<i64>,
     caption_buf: String,
     caption_photo: Option<i64>,
-    /// Language picked in the header, or `None` to follow the system.
+    /// Language picked in Settings, or `None` to follow the system.
     language: Option<Lang>,
     theme_mode: ThemeMode,
+    /// Seconds each photo stays on screen in a slideshow.
+    slideshow_interval: f32,
+    /// Ask before moving photos to the system trash.
+    confirm_trash: bool,
+    settings: settings::SettingsState,
     /// Applied edit of every edited photo.
     edits: HashMap<i64, crate::edit::Settings>,
     /// Edit panel open in the viewer.
@@ -205,30 +230,41 @@ impl PicassoApp {
     pub fn new(ctx: &egui::Context, args: Vec<PathBuf>) -> Self {
         let (data_dir, cache) = db::app_dirs();
         let _ = std::fs::create_dir_all(&data_dir);
-        let _ = std::fs::create_dir_all(cache.join("thumbs"));
         let _ = std::fs::create_dir_all(cache.join("tiles"));
         // Face crops from older builds are no longer used.
         let _ = std::fs::remove_dir_all(cache.join("faces"));
+        // Created before the worker threads, so they don't race to set it up.
+        drop(ThumbStore::open(&cache));
+        let migrate_cache = cache.clone();
+        let _ = std::thread::Builder::new()
+            .name("picasso-thumbs-migrate".into())
+            .spawn(move || thumbs::migrate_files(&migrate_cache));
         let database = Database::open(&data_dir.join("picasso.db")).expect("open Picasso library");
-        let theme_mode = ThemeMode::from_code(&database.setting("theme").unwrap_or_default());
+        let config = Config::load(&db::config_dir(), &database);
+        FileType::set_enabled(&config.file_types());
+        let theme_mode = ThemeMode::from_code(config.text("theme").unwrap_or_default());
         theme::apply(ctx, theme_mode.is_dark(system_dark(ctx)));
-        let language = database.setting("language").as_deref().and_then(Lang::from_code);
+        let language = config.text("language").and_then(Lang::from_code);
         i18n::set(language.unwrap_or_else(i18n::system));
         let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
         let (urgent_tx, urgent_rx) = crossbeam_channel::unbounded();
         let (normal_tx, normal_rx) = crossbeam_channel::unbounded();
         let (ev_tx, ev_rx) = crossbeam_channel::unbounded();
         let display_gate = Arc::new(Mutex::new(HashMap::new()));
+        let thumb_wanted: ThumbWanted = Arc::new(Mutex::new(HashSet::new()));
         for index in 0..worker::thumb_threads() {
             let ctx = ctx.clone();
             let cache = cache.clone();
             let gate = display_gate.clone();
+            let wanted = thumb_wanted.clone();
             let events = ev_tx.clone();
             let urgent = urgent_rx.clone();
-            let normal = normal_rx.clone();
+            // The first thread serves only the window, so what is on screen
+            // never waits behind background thumbnails.
+            let normal = (index > 0).then(|| normal_rx.clone());
             std::thread::Builder::new()
                 .name(format!("picasso-thumbs-{index}"))
-                .spawn(move || worker::thumb_loop(urgent, normal, events, ctx, cache, gate))
+                .spawn(move || worker::thumb_loop(urgent, normal, events, ctx, cache, gate, wanted))
                 .expect("thumb thread");
         }
         drop((urgent_rx, normal_rx));
@@ -268,7 +304,9 @@ impl PicassoApp {
 
         let mut app = Self {
             db: database,
+            config,
             data_dir,
+            cache_dir: cache,
             cmd_tx,
             urgent_tx,
             events: ev_rx,
@@ -292,11 +330,14 @@ impl PicassoApp {
             grid_cols: 1,
             thumb_size: 144.0,
             scroll_to: None,
+            scroll_hint_at: None,
             view_epoch: 0,
             layout: None,
             thumbs: ThumbCache::new(),
             thumb_waiting: HashSet::new(),
             thumb_failed: HashSet::new(),
+            thumb_drawn: HashSet::new(),
+            thumb_wanted,
             displays: Vec::new(),
             display_nonce: HashMap::new(),
             display_inflight: HashMap::new(),
@@ -319,6 +360,9 @@ impl PicassoApp {
             caption_photo: None,
             language,
             theme_mode,
+            slideshow_interval: 3.0,
+            confirm_trash: true,
+            settings: settings::SettingsState::default(),
             edits: HashMap::new(),
             editing: false,
             edit: None,
@@ -383,9 +427,12 @@ impl PicassoApp {
         app.user_presets = crate::edit::presets::user_presets_from_json(&app.db.setting("user_presets").unwrap_or_default());
         app.show_info = app.db.setting("viewer_info").as_deref() != Some("0");
         app.side = SidePanel::from_setting(app.db.setting("side_panel").as_deref());
+        let config = &app.config;
+        app.thumb_size = config.number("thumb_size").map_or(app.thumb_size, |size| size.clamp(96.0, 220.0));
+        app.slideshow_interval = config.number("slideshow_interval").map_or(app.slideshow_interval, |secs| secs.clamp(1.0, 15.0));
+        app.confirm_trash = config.flag("confirm_trash").unwrap_or(true);
         app.reload();
-        app.sync_watches();
-        app
+        app.sync_watches();        app
     }
 
     fn reload(&mut self) {
@@ -520,6 +567,9 @@ impl PicassoApp {
             UiEvent::ThumbFailed { id } => {
                 self.thumb_waiting.remove(&id);
                 self.thumb_failed.insert(id);
+            }
+            UiEvent::ThumbSkipped { id } => {
+                self.thumb_waiting.remove(&id);
             }
             UiEvent::DisplayFailed { id, nonce } => {
                 if self.display_nonce.get(&id) == Some(&nonce) {
@@ -693,8 +743,11 @@ impl PicassoApp {
         if plain(Key::F5) {
             self.rescan();
         }
-        if plain(Key::F1) {
+        if plain(Key::F1) || plain(Key::Questionmark) {
             self.modal = Modal::Help;
+        }
+        if command(Key::Comma) {
+            self.open_settings(ctx);
         }
         let command_shift = |key| ctx.input_mut(|input| input.consume_key(Modifiers::COMMAND | Modifiers::SHIFT, key));
         if command_shift(Key::C) {
@@ -872,8 +925,16 @@ impl PicassoApp {
                 self.reload();
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                self.language_menu(ui);
-                self.theme_menu(ui);
+                let gear = ui.button("     ");
+                theme::paint_settings_icon(ui.painter(), gear.rect.center(), theme::text());
+                if gear.on_hover_text(tr("Settings")).clicked() {
+                    self.open_settings(ui.ctx());
+                }
+                let help = ui.button("     ");
+                theme::paint_help_icon(ui.painter(), help.rect.center(), theme::text());
+                if help.on_hover_text(tr("Help & Shortcuts (F1)")).clicked() {
+                    self.modal = Modal::Help;
+                }
                 if ui.button(tr("Slideshow")).on_hover_text(tr("Play Fullscreen Slideshow")).clicked() {
                     self.start_slideshow();
                 }
@@ -894,45 +955,9 @@ impl PicassoApp {
         });
     }
 
-    /// Header menu that picks the interface language. "System language"
-    /// follows the operating system each time Picasso starts.
-    fn language_menu(&mut self, ui: &mut egui::Ui) {
-        let system = i18n::system();
-        let response = ui.menu_button(i18n::current().native_name(), |ui| {
-            let auto = trf("System language ({})", &[&system.native_name()]);
-            if ui.radio(self.language.is_none(), auto).clicked() {
-                self.set_language(None);
-                ui.close();
-            }
-            ui.separator();
-            for lang in Lang::ALL {
-                if ui.radio(self.language == Some(lang), lang.native_name()).clicked() {
-                    self.set_language(Some(lang));
-                    ui.close();
-                }
-            }
-        });
-        response.response.on_hover_text(tr("Language"));
-    }
-
-    /// Header menu that picks the color theme for every page.
-    fn theme_menu(&mut self, ui: &mut egui::Ui) {
-        let response = ui.menu_button("     ", |ui| {
-            for mode in ThemeMode::ALL {
-                if ui.radio(self.theme_mode == mode, tr(mode.label())).clicked() {
-                    self.set_theme_mode(ui.ctx(), mode);
-                    ui.close();
-                }
-            }
-        });
-        let rect = response.response.rect;
-        theme::paint_theme_icon(ui.painter(), rect.center(), theme::is_dark(), theme::text());
-        response.response.on_hover_text(tr("Color theme"));
-    }
-
     fn set_theme_mode(&mut self, ctx: &egui::Context, mode: ThemeMode) {
         self.theme_mode = mode;
-        self.db.set_setting("theme", mode.code());
+        self.config.set("theme", mode.code());
         theme::set_dark(ctx, mode.is_dark(system_dark(ctx)));
     }
 
@@ -942,9 +967,10 @@ impl PicassoApp {
         self.set_theme_mode(ctx, mode);
     }
 
+    /// `None` follows the operating system each time Picasso starts.
     fn set_language(&mut self, language: Option<Lang>) {
         self.language = language;
-        self.db.set_setting("language", language.map_or("auto", Lang::code));
+        self.config.set("language", language.map_or("auto", Lang::code));
         i18n::set(language.unwrap_or_else(i18n::system));
         self.exif.clear();
         self.reload();
@@ -1015,11 +1041,9 @@ impl PicassoApp {
                 ui.add_space(12.0);
                 ui.label(egui::RichText::new("▮").size(16.0).color(theme::muted()));
                 let mut size = self.thumb_size;
-                ui.add(egui::Slider::new(&mut size, 96.0..=220.0).show_value(false));
+                let response = ui.add(egui::Slider::new(&mut size, 96.0..=220.0).show_value(false));
                 ui.label(egui::RichText::new("▮").size(10.0).color(theme::muted()));
-                if (size - self.thumb_size).abs() > 0.1 {
-                    self.thumb_size = size;
-                }
+                self.set_thumb_size(size, &response);
             });
         });
     }
@@ -1125,47 +1149,27 @@ impl PicassoApp {
         match self.modal {
             Modal::None => {}
             Modal::Help => {
-                let mut open = true;
-                egui::Window::new("Picasso")
-                    .collapsible(false)
-                    .resizable(false)
-                    .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
-                    .open(&mut open)
-                    .show(ctx, |ui| {
-                        ui.label(tr("A local photo library. Folders are scanned on this computer."));
-                        ui.add_space(8.0);
-                        ui.label(trf("Library: {}", &[&self.data_dir.display()]));
-                        ui.add_space(8.0);
-                        for line in [
-                            "Enter — open    Esc — back",
-                            "Arrows — move or previous / next",
-                            "Space — slideshow or video     M — mute     S — star",
-                            "Places — geotag on the OpenStreetMap",
-                            "HEIC, camera RAW (including NEF and 3FR), and video",
-                            "Ctrl+] or R — rotate clockwise     Ctrl+[ or Shift+R — counterclockwise",
-                            "Rotation is saved in the library; photo files are never changed",
-                            "I — details, histogram, and EXIF",
-                            "E — edit     Ctrl+Z / Ctrl+Y — undo / redo     \\ — before",
-                            "Y — side by side     Shift+Y — split     J — clipping     C — crop",
-                            "Ctrl+Shift+C / Ctrl+Shift+V — copy / paste edit settings",
-                            "+ / − zoom     0 fit     1 actual size",
-                            "Delete — trash     F5 — rescan     F11 — fullscreen",
-                        ] {
-                            ui.label(tr(line));
-                        }
-                    });
-                if !open {
+                if help::show(ctx, &self.data_dir) {
                     self.modal = Modal::None;
                 }
             }
             Modal::AddFolder { .. } => self.add_folder_modal(ctx),
             Modal::NewAlbum { .. } => self.new_album_modal(ctx),
+            Modal::Trash { ref ids } if !self.confirm_trash => {
+                let ids = ids.clone();
+                self.modal = Modal::None;
+                self.trash_ids(&ids);
+            }
             Modal::Trash { .. } => self.trash_modal(ctx),
+            Modal::Settings => self.settings_modal(ctx),
             Modal::About => {
                 if about::show(ctx, &self.logo) {
                     self.modal = Modal::None;
                 }
             }
+        }
+        if !matches!(self.modal, Modal::Settings) {
+            self.settings_closed();
         }
     }
 
@@ -1325,6 +1329,16 @@ impl PicassoApp {
         self.reload();
         self.sync_watches();
         Ok(())
+    }
+
+    /// Drops the folder and its photos from the catalog. The files stay.
+    fn remove_folder(&mut self, id: i64) {
+        self.db.remove_folder(id);
+        if matches!(self.nav, Nav::Folder(_) | Nav::Dir(_)) {
+            self.nav = Nav::Library;
+        }
+        self.reload();
+        self.sync_watches();
     }
 
     fn rescan(&mut self) {
@@ -1598,7 +1612,7 @@ impl PicassoApp {
         }
         self.slideshow = Some(Slideshow {
             playing: true,
-            interval: 3.0,
+            interval: self.slideshow_interval,
             last: Instant::now(),
         });
     }
@@ -1611,10 +1625,15 @@ impl PicassoApp {
     }
 
     fn ensure_thumb(&mut self, id: i64, path: &str) {
+        self.thumb_drawn.insert(id);
         if self.thumbs.map.contains_key(&id) || self.thumb_waiting.contains(&id) || self.thumb_failed.contains(&id) {
             return;
         }
         self.thumb_waiting.insert(id);
+        // Wanted before the frame ends, or a decoder could drop it at once.
+        if let Ok(mut wanted) = self.thumb_wanted.lock() {
+            wanted.insert(id);
+        }
         let _ = self.urgent_tx.send(ThumbJob::Thumb {
             id,
             path: path.to_string(),
@@ -1624,6 +1643,16 @@ impl PicassoApp {
 
     fn thumb_texture(&mut self, id: i64) -> Option<(TextureHandle, usize, usize)> {
         self.thumbs.get(id)
+    }
+
+    /// Hands this frame's thumbnails to the decoders, which drop queued
+    /// requests for any others.
+    fn publish_wanted_thumbs(&mut self) {
+        self.thumbs.keep = self.thumb_drawn.len();
+        if let Ok(mut wanted) = self.thumb_wanted.lock() {
+            std::mem::swap(&mut *wanted, &mut self.thumb_drawn);
+        }
+        self.thumb_drawn.clear();
     }
 
     fn request_neighbors(&mut self) {
@@ -1746,6 +1775,7 @@ impl eframe::App for PicassoApp {
                 .show(ui, |ui| self.library_ui(ui));
         }
         self.modals(ui.ctx());
+        self.publish_wanted_thumbs();
     }
 }
 

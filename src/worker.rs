@@ -15,10 +15,11 @@
 //! A folder keeps its `scan_pending` flag until a scan reaches the end of it,
 //! so quitting mid-scan resumes that folder first on the next launch.
 //! Thumbnails decode on a separate pool of threads. Disk thumbnails for new
-//! photos are queued once the scans finish, so the two don't compete for the
-//! disk; the window asks for the thumbnails it shows straight away.
+//! photos, and any others still missing, are queued once the scans finish,
+//! so the two don't compete for the disk; the window asks for the thumbnails
+//! it shows straight away, and one thread serves only those.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -31,10 +32,16 @@ use crate::edit::{self, Settings};
 use crate::image_io::{self, Probe};
 use crate::photo_info::{self, Histogram};
 use crate::picasa_ini::PicasaIni;
+use crate::thumbs::ThumbStore;
 use crate::types::{folder_label, is_media_path, is_video_path, unix_now, NewPhoto};
 use crate::video;
 
 pub type DisplayGate = Arc<Mutex<HashMap<i64, u64>>>;
+
+/// Photos whose thumbnails the window drew or asked for in its latest frame.
+/// Requests for anything else are dropped, so after a fast scroll the photos
+/// on screen don't wait behind the ones it went past.
+pub type ThumbWanted = Arc<Mutex<HashSet<i64>>>;
 
 /// Records written per transaction while a scan runs.
 const BATCH_SIZE: usize = 200;
@@ -77,6 +84,10 @@ pub enum UiEvent {
         edit: Settings,
     },
     ThumbFailed {
+        id: i64,
+    },
+    /// Dropped because the photo left the screen before its turn.
+    ThumbSkipped {
         id: i64,
     },
     DisplayFailed {
@@ -164,6 +175,7 @@ enum Outcome {
 struct Indexer {
     db: Database,
     cache: PathBuf,
+    thumb_store: ThumbStore,
     commands: Receiver<Command>,
     thumbs: Sender<ThumbJob>,
     events: Sender<UiEvent>,
@@ -174,6 +186,8 @@ struct Indexer {
     /// disk, so they are queued once every pending folder is done. Photos on
     /// screen get theirs sooner because the window asks for them.
     deferred: Vec<ThumbJob>,
+    /// Set once missing disk thumbnails have been queued this session.
+    backfilled: bool,
 }
 
 pub fn index_loop(
@@ -196,6 +210,7 @@ pub fn index_loop(
     let pending = db.pending_folders().into_iter().collect();
     let mut indexer = Indexer {
         db,
+        thumb_store: ThumbStore::open(&cache),
         cache,
         commands,
         thumbs,
@@ -203,6 +218,7 @@ pub fn index_loop(
         ctx,
         pending,
         deferred: Vec::new(),
+        backfilled: false,
     };
     indexer.run();
 }
@@ -219,10 +235,38 @@ impl Indexer {
             for job in self.deferred.drain(..) {
                 let _ = self.thumbs.send(job);
             }
+            if !self.backfilled {
+                self.backfilled = true;
+                self.backfill_thumbs();
+            }
             match self.commands.recv() {
                 Ok(Command::Scan(id)) => self.queue(id),
                 Ok(Command::Stop) | Err(_) => return,
             }
+        }
+    }
+
+    /// Queues disk thumbnails for every photo that has none, newest first, so
+    /// scrolling finds them ready. This also picks up the ones a previous
+    /// session queued but closed before making, and drops the thumbnails of
+    /// photos no longer in the library. The thumbnail store is read on a
+    /// separate thread so the index thread can take commands meanwhile.
+    fn backfill_thumbs(&self) {
+        let photos = self.db.photo_paths();
+        let cache = self.cache.clone();
+        let thumbs = self.thumbs.clone();
+        let spawned = std::thread::Builder::new().name("picasso-backfill".into()).spawn(move || {
+            let store = ThumbStore::open(&cache);
+            store.retain(&photos.iter().map(|(id, _)| *id).collect());
+            let cached = store.ids();
+            for (id, path) in photos {
+                if !cached.contains(&id) && thumbs.send(ThumbJob::Cache { id, path }).is_err() {
+                    return;
+                }
+            }
+        });
+        if let Err(err) = spawned {
+            eprintln!("picasso backfill: {err}");
         }
     }
 
@@ -416,7 +460,7 @@ impl Indexer {
             // A changed file's old thumbnail may be on screen, so it is sent
             // again; new photos only need their disk thumbnail.
             let job = if record.existing.is_some() {
-                let _ = std::fs::remove_file(self.cache.join("thumbs").join(format!("{id}.jpg")));
+                self.thumb_store.remove(id);
                 ThumbJob::Thumb { id, path, edit: Settings::default() }
             } else {
                 ThumbJob::Cache { id, path }
@@ -571,22 +615,87 @@ fn probe_loop(jobs: Receiver<ProbeJob>, done: Sender<ProbeResult>, cancel: &Atom
     }
 }
 
+/// Background thumbnails read whole photos, so at most this many run at
+/// once; on a hard disk more readers only seek against each other.
+const BACKGROUND_SLOTS: usize = 2;
+/// Background thumbnails wait this long after the window's last request, so
+/// while scrolling the disk serves what is on screen.
+const WINDOW_QUIET: Duration = Duration::from_millis(1500);
+
+static BACKGROUND_RUNNING: AtomicUsize = AtomicUsize::new(0);
+static WINDOW_LAST: Mutex<Option<Instant>> = Mutex::new(None);
+
+/// Claims a slot for one background job, unless the window asked for
+/// something lately or every slot is taken.
+fn take_background_slot() -> bool {
+    let quiet = WINDOW_LAST
+        .lock()
+        .map_or(true, |last| last.map_or(true, |at| at.elapsed() >= WINDOW_QUIET));
+    if !quiet {
+        return false;
+    }
+    if BACKGROUND_RUNNING.fetch_add(1, Ordering::SeqCst) < BACKGROUND_SLOTS {
+        true
+    } else {
+        BACKGROUND_RUNNING.fetch_sub(1, Ordering::SeqCst);
+        false
+    }
+}
+
+/// Runs thumbnail and display jobs. `normal` is `None` for a thread kept for
+/// the window's requests, so they never wait behind background work.
 pub fn thumb_loop(
     urgent: Receiver<ThumbJob>,
-    normal: Receiver<ThumbJob>,
+    normal: Option<Receiver<ThumbJob>>,
     events: Sender<UiEvent>,
     ctx: eframe::egui::Context,
     cache: PathBuf,
     gate: DisplayGate,
+    wanted: ThumbWanted,
 ) {
+    let store = ThumbStore::open(&cache);
     loop {
-        let Some(job) = recv_thumb(&urgent, &normal) else {
+        let slot = normal.is_some() && take_background_slot();
+        let next = match &normal {
+            Some(normal) if slot => recv_thumb(&urgent, normal),
+            // Without a slot, serve only the window, checking back now and then.
+            Some(_) => match urgent.recv_timeout(Duration::from_millis(200)) {
+                Ok(job) => Some((job, true)),
+                Err(RecvTimeoutError::Timeout) => continue,
+                Err(RecvTimeoutError::Disconnected) => None,
+            },
+            None => urgent.recv().ok().map(|job| (job, true)),
+        };
+        let release = || {
+            if slot {
+                BACKGROUND_RUNNING.fetch_sub(1, Ordering::SeqCst);
+            }
+        };
+        let Some((job, from_window)) = next else {
+            release();
             return;
         };
+        if from_window {
+            release();
+        }
         if skip_stale(&job, &gate) {
             continue;
         }
-        if let Some(event) = run_thumb(&cache, &gate, job) {
+        if from_window {
+            if let Some(id) = unwanted_thumb(&job, &wanted) {
+                let _ = events.send(UiEvent::ThumbSkipped { id });
+                ctx.request_repaint();
+                continue;
+            }
+            if let Ok(mut last) = WINDOW_LAST.lock() {
+                *last = Some(Instant::now());
+            }
+        }
+        let event = run_thumb(&store, &gate, job);
+        if !from_window {
+            release();
+        }
+        if let Some(event) = event {
             let _ = events.send(event);
             ctx.request_repaint();
         }
@@ -604,22 +713,34 @@ fn stale_display(id: i64, nonce: u64, gate: &DisplayGate) -> bool {
     gate.lock().ok().and_then(|guard| guard.get(&id).copied()) != Some(nonce)
 }
 
-fn recv_thumb(urgent: &Receiver<ThumbJob>, normal: &Receiver<ThumbJob>) -> Option<ThumbJob> {
+/// The photo of a thumbnail request the window no longer shows.
+fn unwanted_thumb(job: &ThumbJob, wanted: &ThumbWanted) -> Option<i64> {
+    let ThumbJob::Thumb { id, .. } = job else {
+        return None;
+    };
+    let shown = wanted.lock().map_or(true, |wanted| wanted.contains(id));
+    (!shown).then_some(*id)
+}
+
+/// Next job, preferring the window's. The flag is true for those.
+fn recv_thumb(urgent: &Receiver<ThumbJob>, normal: &Receiver<ThumbJob>) -> Option<(ThumbJob, bool)> {
+    let from_window = |job| (job, true);
+    let background = |job| (job, false);
     match urgent.try_recv() {
-        Ok(job) => Some(job),
-        Err(TryRecvError::Disconnected) => normal.recv().ok(),
+        Ok(job) => Some(from_window(job)),
+        Err(TryRecvError::Disconnected) => normal.recv().ok().map(background),
         Err(TryRecvError::Empty) => match normal.try_recv() {
-            Ok(job) => Some(job),
-            Err(TryRecvError::Disconnected) => urgent.recv().ok(),
+            Ok(job) => Some(background(job)),
+            Err(TryRecvError::Disconnected) => urgent.recv().ok().map(from_window),
             Err(TryRecvError::Empty) => {
                 let mut select = Select::new();
                 let u = select.recv(urgent);
                 let n = select.recv(normal);
                 let ready = select.select();
                 if ready.index() == u {
-                    ready.recv(urgent).ok().or_else(|| normal.recv().ok())
+                    ready.recv(urgent).ok().map(from_window).or_else(|| normal.recv().ok().map(background))
                 } else if ready.index() == n {
-                    ready.recv(normal).ok().or_else(|| urgent.recv().ok())
+                    ready.recv(normal).ok().map(background).or_else(|| urgent.recv().ok().map(from_window))
                 } else {
                     None
                 }
@@ -628,26 +749,24 @@ fn recv_thumb(urgent: &Receiver<ThumbJob>, normal: &Receiver<ThumbJob>) -> Optio
     }
 }
 
-fn run_thumb(cache: &Path, gate: &DisplayGate, job: ThumbJob) -> Option<UiEvent> {
+fn run_thumb(store: &ThumbStore, gate: &DisplayGate, job: ThumbJob) -> Option<UiEvent> {
     match job {
         ThumbJob::Cache { id, path } => {
-            let cached = cache.join("thumbs").join(format!("{id}.jpg"));
-            if !cached.exists() {
+            if !store.contains(id) {
                 if let Ok(rgba) = make_thumb(Path::new(&path)) {
-                    let _ = image_io::save_jpeg(&cached, &rgba, 80);
+                    save_thumb(store, id, &rgba);
                 }
             }
             None
         }
         ThumbJob::Thumb { id, path, edit } => {
-            let cached = cache.join("thumbs").join(format!("{id}.jpg"));
-            let mut rgba = match open_rgba(&cached) {
+            let mut rgba = match store.get(id).and_then(|jpeg| decode_jpeg(&jpeg)) {
                 Some(rgba) => rgba,
                 None => {
                     let Ok(rgba) = make_thumb(Path::new(&path)) else {
                         return Some(UiEvent::ThumbFailed { id });
                     };
-                    let _ = image_io::save_jpeg(&cached, &rgba, 80);
+                    save_thumb(store, id, &rgba);
                     rgba
                 }
             };
@@ -702,10 +821,14 @@ fn make_thumb(path: &Path) -> Result<RgbaImage, String> {
         .map(|image| image_io::thumbnail_rgba(&image, THUMB_EDGE))
 }
 
-/// Reads a cached thumbnail in one read and decodes it from memory.
-fn open_rgba(path: &Path) -> Option<RgbaImage> {
-    let bytes = std::fs::read(path).ok()?;
-    image::load_from_memory_with_format(&bytes, image::ImageFormat::Jpeg).ok().map(|image| image.to_rgba8())
+fn decode_jpeg(jpeg: &[u8]) -> Option<RgbaImage> {
+    image::load_from_memory_with_format(jpeg, image::ImageFormat::Jpeg).ok().map(|image| image.to_rgba8())
+}
+
+fn save_thumb(store: &ThumbStore, id: i64, rgba: &RgbaImage) {
+    if let Ok(jpeg) = image_io::encode_jpeg(rgba, 80) {
+        store.put(id, &jpeg);
+    }
 }
 
 fn raw_rgba(image: &RgbaImage) -> (usize, usize, Vec<u8>) {

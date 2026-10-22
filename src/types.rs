@@ -1,13 +1,7 @@
 //! Library records shared by the database, the scanner, and the UI.
 
 use std::path::Path;
-
-/// Image extensions Picasso indexes. Matching is case-insensitive.
-pub const IMAGE_EXTS: &[&str] = &[
-    "jpg", "jpeg", "png", "gif", "webp", "bmp", "tif", "tiff", "heic", "heif", "hif", "3fr", "ari", "arw", "cr2", "cr3",
-    "crm", "crw", "dcr", "dcs", "dng", "erf", "fff", "iiq", "kdc", "mef", "mos", "mrw", "nef", "nrw", "orf", "ori", "pef",
-    "qtk", "raf", "raw", "rw2", "rwl", "srw", "x3f",
-];
+use std::sync::atomic::{AtomicU32, Ordering};
 
 /// Video extensions Picasso indexes and plays through FFmpeg.
 pub const VIDEO_EXTS: &[&str] = &[
@@ -15,6 +9,10 @@ pub const VIDEO_EXTS: &[&str] = &[
 ];
 
 const HEIC_EXTS: &[&str] = &["heic", "heif", "hif"];
+
+/// 1826-01-01 UTC, before the oldest surviving photograph. An earlier date
+/// taken from a file is a placeholder, not when the photo was taken.
+pub const EARLIEST_PHOTO: i64 = -4_544_208_000;
 
 const RAW_EXTS: &[&str] = &[
     "3fr", "ari", "arw", "cr2", "cr3", "crm", "crw", "dcr", "dcs", "dng", "erf", "fff", "iiq", "kdc", "mef", "mos", "mrw",
@@ -120,17 +118,111 @@ pub struct NewPhoto {
     pub duration: f64,
 }
 
-pub fn is_image_path(path: &Path) -> bool {
-    extension_in(path, IMAGE_EXTS)
-}
-
 pub fn is_video_path(path: &Path) -> bool {
     extension_in(path, VIDEO_EXTS)
 }
 
-/// Files the library indexes: photos and videos.
+/// Files the library indexes: photos and videos of the types turned on in
+/// Settings.
 pub fn is_media_path(path: &Path) -> bool {
-    is_image_path(path) || is_video_path(path)
+    FileType::of(path).is_some_and(FileType::enabled)
+}
+
+/// Groups of the extensions Picasso indexes, each turned on or off in
+/// Settings. Matching is case-insensitive.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FileType {
+    Jpeg,
+    Png,
+    Gif,
+    Webp,
+    Bmp,
+    Tiff,
+    Heic,
+    Raw,
+    Video,
+}
+
+/// Bit per [`FileType`] that the scanner indexes; all of them by default.
+static ENABLED_TYPES: AtomicU32 = AtomicU32::new(u32::MAX);
+
+impl FileType {
+    pub const ALL: [FileType; 9] = [
+        FileType::Jpeg,
+        FileType::Png,
+        FileType::Gif,
+        FileType::Webp,
+        FileType::Bmp,
+        FileType::Tiff,
+        FileType::Heic,
+        FileType::Raw,
+        FileType::Video,
+    ];
+
+    /// Name kept in the settings file.
+    pub fn code(self) -> &'static str {
+        match self {
+            FileType::Jpeg => "jpeg",
+            FileType::Png => "png",
+            FileType::Gif => "gif",
+            FileType::Webp => "webp",
+            FileType::Bmp => "bmp",
+            FileType::Tiff => "tiff",
+            FileType::Heic => "heic",
+            FileType::Raw => "raw",
+            FileType::Video => "video",
+        }
+    }
+
+    pub fn from_code(code: &str) -> Option<FileType> {
+        FileType::ALL.into_iter().find(|kind| kind.code() == code)
+    }
+
+    /// English name, translated by the caller.
+    pub fn label(self) -> &'static str {
+        match self {
+            FileType::Jpeg => "JPEG",
+            FileType::Png => "PNG",
+            FileType::Gif => "GIF",
+            FileType::Webp => "WebP",
+            FileType::Bmp => "BMP",
+            FileType::Tiff => "TIFF",
+            FileType::Heic => "HEIC / HEIF",
+            FileType::Raw => "Camera RAW",
+            FileType::Video => "Videos",
+        }
+    }
+
+    pub fn extensions(self) -> &'static [&'static str] {
+        match self {
+            FileType::Jpeg => &["jpg", "jpeg"],
+            FileType::Png => &["png"],
+            FileType::Gif => &["gif"],
+            FileType::Webp => &["webp"],
+            FileType::Bmp => &["bmp"],
+            FileType::Tiff => &["tif", "tiff"],
+            FileType::Heic => HEIC_EXTS,
+            FileType::Raw => RAW_EXTS,
+            FileType::Video => VIDEO_EXTS,
+        }
+    }
+
+    pub fn of(path: &Path) -> Option<FileType> {
+        FileType::ALL.into_iter().find(|kind| extension_in(path, kind.extensions()))
+    }
+
+    fn bit(self) -> u32 {
+        1 << FileType::ALL.iter().position(|kind| *kind == self).unwrap_or(0)
+    }
+
+    pub fn enabled(self) -> bool {
+        ENABLED_TYPES.load(Ordering::Relaxed) & self.bit() != 0
+    }
+
+    /// Sets the types the scanner indexes from now on.
+    pub fn set_enabled(types: &[FileType]) {
+        ENABLED_TYPES.store(types.iter().fold(0, |bits, kind| bits | kind.bit()), Ordering::Relaxed);
+    }
 }
 
 /// `m:ss`, or `h:mm:ss` from one hour up.
@@ -291,17 +383,32 @@ mod tests {
 
     #[test]
     fn recognizes_heic_and_camera_raw() {
-        assert!(is_image_path(Path::new("IMG_0001.HEIC")));
+        assert_eq!(FileType::of(Path::new("IMG_0001.HEIC")), Some(FileType::Heic));
         assert!(is_heic_path(Path::new("photo.heif")));
-        assert!(is_image_path(Path::new("DSC_0001.NEF")));
-        assert!(is_image_path(Path::new("B0001234.3fr")));
+        assert_eq!(FileType::of(Path::new("DSC_0001.NEF")), Some(FileType::Raw));
+        assert_eq!(FileType::of(Path::new("B0001234.3fr")), Some(FileType::Raw));
         assert!(is_raw_path(Path::new("capture.FFF")));
         assert!(is_raw_path(Path::new("compact.NRW")));
         assert!(!is_raw_path(Path::new("picture.jpg")));
         assert!(!is_heic_path(Path::new("picture.jpg")));
         assert!(is_video_path(Path::new("clip.MOV")));
         assert!(is_media_path(Path::new("clip.mp4")));
-        assert!(!is_image_path(Path::new("clip.mp4")));
+        assert_eq!(FileType::of(Path::new("clip.mp4")), Some(FileType::Video));
+    }
+
+    #[test]
+    fn every_extension_has_one_file_type() {
+        let all: Vec<&str> = FileType::ALL.iter().flat_map(|kind| kind.extensions().iter().copied()).collect();
+        for ext in &all {
+            assert_eq!(all.iter().filter(|other| *other == ext).count(), 1, "{ext}");
+            assert_eq!(*ext, ext.to_ascii_lowercase());
+        }
+        assert_eq!(FileType::of(Path::new("B0000008.3FR")), Some(FileType::Raw));
+        assert_eq!(FileType::of(Path::new("a.JPEG")), Some(FileType::Jpeg));
+        assert_eq!(FileType::of(Path::new("notes.txt")), None);
+        for kind in FileType::ALL {
+            assert_eq!(FileType::from_code(kind.code()), Some(kind));
+        }
     }
 
     #[test]

@@ -37,7 +37,16 @@ Picasso draws with OpenGL. On WSL that uses the desktop GPU. Set `PICASSO_RENDER
 
 ## Releases
 
-GitHub Actions (`.github/workflows/ci.yml`) builds and tests Picasso on Windows for every push to `main` and every pull request. Each run keeps `picasso-<version>-<commit>-windows-x64.exe` and a `.zip` with the exe, this README, and the license as build artifacts.
+GitHub Actions (`.github/workflows/ci.yml`) builds and tests Picasso on Windows and Linux for every push to `main` and every pull request. Each run keeps these packages as build artifacts:
+
+| Package | Contents |
+| --- | --- |
+| `picasso-<version>-<commit>-windows-x64.exe` | The app, ready to run |
+| `picasso-<version>-<commit>-windows-x64.zip` | The exe, this README, and the license |
+| `picasso-<version>-<commit>-linux-x64.tar.gz` | The `picasso` binary, `picasso.desktop`, `picasso.png`, this README, and the license |
+| `picasso-<version>-<commit>-linux-x64.deb` | A Debian / Ubuntu package that installs the app, its menu entry, and its icon |
+
+The Linux packages are built on Ubuntu 22.04, so they run on that release and newer. Install the `.deb` with `sudo apt install ./picasso-<version>-linux-x64.deb`, which also pulls in the ALSA and OpenGL libraries. To use the `.tar.gz` instead, put `picasso` on your `PATH`, copy `picasso.desktop` to `~/.local/share/applications/`, and copy `picasso.png` to `~/.local/share/icons/hicolor/256x256/apps/`.
 
 To publish a release, set `version` in `Cargo.toml`, commit, then push a matching tag:
 
@@ -46,11 +55,11 @@ git tag v0.9.0
 git push origin v0.9.0
 ```
 
-The workflow then attaches `picasso-0.9.0-windows-x64.exe`, `picasso-0.9.0-windows-x64.zip`, and `SHA256SUMS.txt` to a new GitHub release. The run fails if the tag doesn't match the version in `Cargo.toml`. A tag with a hyphen, such as `v1.0.0-beta.1`, is marked as a pre-release. Release builds open no console window.
+The workflow then attaches all four packages (named `picasso-0.9.0-windows-x64.exe` and so on) and `SHA256SUMS.txt` to a new GitHub release. The run fails if the tag doesn't match the version in `Cargo.toml`. A tag with a hyphen, such as `v1.0.0-beta.1`, is marked as a pre-release. Release builds open no console window.
 
 ## Data
 
-The library database (`picasso.db`) lives in the app data directory. Thumbnails and map tiles live in the cache directory, which is safe to delete.
+The library database (`picasso.db`) lives in the app data directory. Thumbnails (`thumbs.db`) and map tiles live in the cache directory, which is safe to delete.
 
 | OS | Library | Cache |
 | --- | --- | --- |
@@ -58,9 +67,30 @@ The library database (`picasso.db`) lives in the app data directory. Thumbnails 
 | macOS | `~/Library/Application Support/app.Picasso.picasso` | `~/Library/Caches/app.Picasso.picasso` |
 | Linux | `~/.local/share/picasso` | `~/.cache/picasso` |
 
+**Settings → Storage** shows both folders and their sizes, opens either one, and clears the cache. Picasso makes thumbnails again as photos come on screen, and fills in the rest in the background the next time it starts.
+
+## Settings
+
+Click the gear at the top right, or press Ctrl+, (⌘, on macOS), to open **Settings**:
+
+- **General:** interface language, color theme, thumbnail size, slideshow interval, and whether to ask before moving photos to the trash
+- **Folders:** every folder Picasso watches, each with buttons to open it, rescan it, or remove it from the library (the files stay on disk), plus **Import** and **Rescan all folders**
+- **File types:** which files Picasso adds when it scans: JPEG, PNG, GIF, WebP, BMP, TIFF, HEIC/HEIF, camera RAW, and videos, with **Select all**. When the dialog closes, every folder is rescanned. Files of a type you turned off leave the library, with their stars, captions, and edits, but stay on disk.
+- **Storage:** where the library database and the cache live, how much space each takes, and **Clear cache**
+
+Settings apply right away and are saved in `settings.json` in the system's settings folder, so they stay the same whichever library you open:
+
+| OS | Settings file |
+| --- | --- |
+| Windows | `%APPDATA%\Picasso\picasso\config\settings.json` |
+| macOS | `~/Library/Application Support/app.Picasso.picasso/settings.json` |
+| Linux | `~/.config/picasso/settings.json` |
+
+The first time a new version starts, it copies the settings an older version kept in the library.
+
 ## What it does
 
-- Folder library with a date-grouped thumbnail grid, search, star filter, and sorting
+- Folder library with a date-grouped thumbnail grid, search, star filter, and sorting. Dragging the scroll bar shows the date in view, or the first file name when sorted by name.
 - Folder tree with photo counts, albums, starred photos, and Places, a map of every photo with GPS
 - Info and Map panel beside the grid with the photo's EXIF and location, and a details panel in the viewer with a histogram
 - Viewer with zoom, pan, filmstrip, rotate, slideshow, and video playback
@@ -72,7 +102,7 @@ The library database (`picasso.db`) lives in the app data directory. Thumbnails 
 - Light, dark, or system color theme, and ten interface languages
 - About dialog with the version and build date: click the logo at the top left
 
-The app icon is `build/picasso.ico`, which holds every size from 16 to 256 px. At build time `build.rs` unpacks the 256 px image for the window and the in-app logo. On Windows it also embeds the icon in `picasso.exe` together with the version details. Without the Windows SDK, the build still succeeds and prints a warning, and the window still shows the icon. To change the icon, replace `build/picasso.ico` with one whose 256 px image is stored as a 32-bit bitmap rather than PNG, then rebuild.
+The app icon is `build/picasso.ico`, which holds every size from 16 to 256 px. At build time `build.rs` unpacks the 256 px image for the window and the in-app logo. On Windows it also embeds the icon in `picasso.exe` together with the version details. Without the Windows SDK, the build still succeeds and prints a warning, and the window still shows the icon. To change the icon, replace `build/picasso.ico` with one whose 256 px image is stored as a 32-bit bitmap rather than PNG, then rebuild. The Linux packages use `build/picasso.png`, the same 256 px image, with `build/picasso.desktop`; update the PNG along with the `.ico`.
 
 ## Editing
 
@@ -121,15 +151,17 @@ On first launch it uses the system language:
 - The other languages match on the language alone, so `fr-CA` gives French and `es-MX` gives Spanish.
 - Anything else falls back to English.
 
-To choose a different language, use the language button at the top right. "System language" goes back to following the operating system. The choice is saved in the library. Dates in the library headings are written the way each language writes them.
+To choose a different language, open **Settings → General**. "System language" goes back to following the operating system. Dates in the library headings are written the way each language writes them.
 
 Translations live in `src/i18n/`, one file per language, as pairs of English text and its translation. To add a language, copy one of those files and translate the second column. Then add a variant to `Lang` in `src/i18n.rs`, and a date format to `long_date` in `src/types.rs`. The tests fail if a language is missing a string or drops a `{}` placeholder.
 
 ## Color theme
 
-Every page uses the same theme: the library, the viewer, the editor, the side panels, and the dialogs. Use the sun or moon button at the top right to pick **Light theme**, **Dark theme**, or **System theme**. System theme follows the operating system and switches when it does. The viewer toolbar also has a button that flips between light and dark. The choice is saved in the library.
+Every page uses the same theme: the library, the viewer, the editor, the side panels, and the dialogs. Pick **Light theme**, **Dark theme**, or **System theme** in **Settings → General**. System theme follows the operating system and switches when it does. The viewer toolbar also has a button that flips between light and dark.
 
 ## Shortcuts
+
+Press **F1** or **?**, or click the **?** button at the top right of the library or the viewer, to open **Help & Shortcuts**. It lists every keyboard shortcut (General, Library, Viewer, Video, and Editor) next to the mouse and trackpad gestures (Library, Viewer, Map, and Editor), and follows the app language and theme. Press F1 or ? again to close it.
 
 | Key | Action |
 | --- | --- |
@@ -153,13 +185,14 @@ Every page uses the same theme: the library, the viewer, the editor, the side pa
 | + / − | Zoom |
 | 0 / 1 | Fit / actual size |
 | Delete | Move to the system trash |
-| F1 | Keyboard shortcuts |
+| F1 / ? | Open or close Help & Shortcuts |
+| Ctrl+, | Settings |
 | F5 | Rescan |
 | F11 | Fullscreen |
 
 ## Formats
 
-JPEG, PNG, GIF, WebP, BMP, TIFF, HEIC/HEIF, and camera RAW (DNG, CR2, CR3, NEF, ARW, RAF, ORF, RW2, PEF, SRW, 3FR, IIQ, X3F, and more). Rotation is stored in the library and applied when you view the photo; the original file is not rewritten.
+JPEG, PNG, GIF, WebP, BMP, TIFF, HEIC/HEIF, and camera RAW (DNG, CR2, CR3, NEF, ARW, RAF, ORF, RW2, PEF, SRW, 3FR, IIQ, X3F, and more). RAW files from cameras newer than the RAW decoder, such as the Hasselblad X2D II, show the large JPEG preview the camera stores in the file. Turn types off in **Settings → File types**. Rotation is stored in the library and applied when you view the photo; the original file is not rewritten.
 
 Videos (MP4, MOV, M4V, AVI, MKV, WebM, WMV, MPEG, MTS/M2TS, 3GP, and more) show in the grid with a play badge and their length, and play inside the viewer with sound. Video needs FFmpeg; see [Prerequisites](#prerequisites). Videos found while FFmpeg is missing are indexed again once it is installed.
 

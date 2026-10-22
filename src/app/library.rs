@@ -1,5 +1,7 @@
 //! Library grid and the browse toolbar.
 
+use std::time::Instant;
+
 use eframe::egui::{self, Align2, Color32, FontId, Pos2, Rect, Sense, Vec2};
 
 use crate::i18n::{tr, trf};
@@ -12,6 +14,8 @@ const GAP: f32 = 14.0;
 const LABEL_H: f32 = 22.0;
 const HEADER_H: f32 = 40.0;
 const PAD: f32 = 2.0;
+/// Seconds the scroll bar bubble takes to fade after the drag ends.
+const SCROLL_HINT_FADE: f32 = 0.8;
 
 pub(super) struct CachedLayout {
     pub epoch: u64,
@@ -49,6 +53,25 @@ impl GridLayout {
     fn row_y(row: &GridRow) -> f32 {
         match row {
             GridRow::Header { y, .. } | GridRow::Photos { y, .. } => *y,
+        }
+    }
+
+    /// Where the view is when its top edge is at `top`: the date heading
+    /// above the first visible row, or with `Sort::Name` the file name of the
+    /// first photo in that row.
+    fn position_label(&self, photos: &[Photo], sort: Sort, top: f32) -> Option<String> {
+        let first = self.rows.partition_point(|row| Self::row_y(row) + Self::row_height(row) <= top + 1.0);
+        if sort == Sort::Name {
+            self.rows.get(first..)?.iter().find_map(|row| match row {
+                GridRow::Photos { indices, .. } => photos.get(*indices.first()?).map(|photo| photo.filename.clone()),
+                GridRow::Header { .. } => None,
+            })
+        } else {
+            let first = first.min(self.rows.len().checked_sub(1)?);
+            self.rows[..=first].iter().rev().find_map(|row| match row {
+                GridRow::Header { title, .. } => Some(title.clone()),
+                GridRow::Photos { .. } => None,
+            })
         }
     }
 
@@ -91,9 +114,7 @@ impl PicassoApp {
         if let Some(y) = pending {
             area = area.vertical_scroll_offset((y - 24.0).max(0.0));
         }
-        let epoch = self.view_epoch;
-        let _ = epoch;
-        area.show_viewport(ui, |ui, viewport| {
+        let output = area.show_viewport(ui, |ui, viewport| {
             ui.set_height(layout.height);
             let first = layout
                 .rows
@@ -126,7 +147,75 @@ impl PicassoApp {
                     }
                 }
             }
+            // Asked for after the visible cells, so those are decoded first.
+            let ahead = viewport.height();
+            let above = layout
+                .rows
+                .partition_point(|row| GridLayout::row_y(row) + GridLayout::row_height(row) < viewport.min.y - ahead / 2.0);
+            let below = layout
+                .rows
+                .partition_point(|row| GridLayout::row_y(row) < viewport.max.y + ahead)
+                .max(last);
+            for row in layout.rows[last..below].iter().chain(&layout.rows[above.min(first)..first]) {
+                if let GridRow::Photos { indices, .. } = row {
+                    for &index in indices {
+                        if let Some(photo) = self.photos.get(index) {
+                            let (id, path) = (photo.id, photo.path.clone());
+                            self.ensure_thumb(id, &path);
+                        }
+                    }
+                }
+            }
         });
+        self.scroll_hint(ui, &layout, &output);
+    }
+
+    /// Bubble beside the scroll bar handle while it is dragged, naming the
+    /// part of the library in view. It fades out after the drag ends.
+    fn scroll_hint(&mut self, ui: &egui::Ui, layout: &GridLayout, output: &egui::scroll_area::ScrollAreaOutput<()>) {
+        let ctx = ui.ctx();
+        if ctx.is_being_dragged(output.id.with(1)) {
+            self.scroll_hint_at = Some(Instant::now());
+        }
+        let Some(at) = self.scroll_hint_at else { return };
+        let alpha = 1.0 - (at.elapsed().as_secs_f32() / SCROLL_HINT_FADE).clamp(0.0, 1.0);
+        if alpha <= 0.0 {
+            self.scroll_hint_at = None;
+            return;
+        }
+        ctx.request_repaint();
+        let view = output.inner_rect;
+        let content = output.content_size.y;
+        if content <= view.height() {
+            return;
+        }
+        let offset = output.state.clamped_offset().y;
+        let Some(text) = layout.position_label(&self.photos, self.sort, offset) else { return };
+
+        // The handle as egui places it, so the bubble follows the pointer.
+        let style = &ui.spacing().scroll;
+        let handle = (view.height() * view.height() / content).max(style.handle_min_length);
+        let progress = offset / (content - view.height());
+        let handle_y = view.top() + handle / 2.0 + progress.clamp(0.0, 1.0) * (view.height() - handle);
+        let bar_left = view.right() - style.bar_outer_margin - style.bar_width;
+
+        let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::unique("scroll-hint")));
+        let color = theme::text().gamma_multiply(alpha);
+        let galley = painter.layout_no_wrap(text, FontId::proportional(14.0), color);
+        let size = galley.size() + Vec2::new(28.0, 16.0);
+        let top = (handle_y - size.y / 2.0).clamp(view.top() + 4.0, view.bottom() - size.y - 4.0);
+        let bubble = Rect::from_min_size(Pos2::new(bar_left - 10.0 - size.x, top), size);
+        let mut shadow = theme::card_shadow();
+        shadow.color = shadow.color.gamma_multiply(alpha);
+        painter.add(shadow.as_shape(bubble, 10));
+        painter.rect(
+            bubble,
+            10,
+            theme::bg().gamma_multiply(alpha),
+            egui::Stroke::new(1.0, theme::hairline().gamma_multiply(alpha)),
+            egui::StrokeKind::Inside,
+        );
+        painter.galley(bubble.min + Vec2::new(14.0, 8.0), galley, color);
     }
 
     fn ensure_layout(&mut self, width: f32) {
@@ -351,6 +440,11 @@ impl PicassoApp {
                 self.open_at(index);
                 ui.close();
             }
+            if !photo.is_video() && ui.button(tr("Edit")).clicked() {
+                self.open_at(index);
+                self.editing = true;
+                ui.close();
+            }
             if ui.button(tr(if photo.starred { "Unstar" } else { "Star" })).clicked() {
                 self.toggle_star(id);
                 ui.close();
@@ -465,5 +559,57 @@ fn elide(text: &str, max_chars: usize) -> String {
     } else {
         let trimmed: String = text.chars().take(max_chars.saturating_sub(1)).collect();
         format!("{trimmed}…")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn photo(name: &str, taken_at: i64) -> Photo {
+        Photo {
+            id: 0,
+            folder_id: 0,
+            path: String::new(),
+            filename: name.into(),
+            width: 0,
+            height: 0,
+            bytes: 0,
+            taken_at,
+            modified_at: 0,
+            starred: false,
+            caption: String::new(),
+            camera: String::new(),
+            gps_lat: None,
+            gps_lon: None,
+            pin_lat: None,
+            pin_lon: None,
+            rotation: 0,
+            duration: 0.0,
+        }
+    }
+
+    #[test]
+    fn labels_the_top_of_the_view() {
+        // Noon UTC, two days apart, so both stay separate days in any zone.
+        let (day_a, day_b) = (1_780_000_000 / 86_400 * 86_400 + 43_200, 1_780_000_000 / 86_400 * 86_400 - 129_600);
+        let photos: Vec<Photo> = ["a", "b", "c", "d", "e"]
+            .iter()
+            .enumerate()
+            .map(|(index, name)| photo(name, if index < 3 { day_a } else { day_b }))
+            .collect();
+        // Two columns of 100 px thumbnails; rows are 136 px and headers 40 px.
+        let dated = build_layout(&photos, Sort::DateNewest, 232.0, 100.0);
+        assert_eq!(dated.cols, 2);
+        let (title_a, title_b) = (format_day(day_a), format_day(day_b));
+        assert_eq!(dated.position_label(&photos, Sort::DateNewest, 0.0), Some(title_a.clone()));
+        assert_eq!(dated.position_label(&photos, Sort::DateNewest, 200.0), Some(title_a));
+        assert_eq!(dated.position_label(&photos, Sort::DateNewest, 330.0), Some(title_b.clone()));
+        assert_eq!(dated.position_label(&photos, Sort::DateNewest, 10_000.0), Some(title_b));
+
+        let named = build_layout(&photos, Sort::Name, 232.0, 100.0);
+        assert_eq!(named.position_label(&photos, Sort::Name, 0.0).as_deref(), Some("a"));
+        assert_eq!(named.position_label(&photos, Sort::Name, 150.0).as_deref(), Some("c"));
+        assert_eq!(named.position_label(&photos, Sort::Name, 10_000.0), None);
     }
 }

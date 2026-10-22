@@ -7,7 +7,7 @@ use eframe::egui::{self, Margin, RichText, Sense, Vec2};
 
 use crate::i18n::{self, tr, trf, Lang};
 use crate::thumbs::ThumbStore;
-use crate::types::format_bytes;
+use crate::types::{format_bytes, FileType};
 use crate::worker::Command;
 
 use super::theme::{self, ThemeMode};
@@ -22,16 +22,18 @@ enum Page {
     #[default]
     General,
     Folders,
+    FileTypes,
     Storage,
 }
 
 impl Page {
-    const ALL: [Page; 3] = [Page::General, Page::Folders, Page::Storage];
+    const ALL: [Page; 4] = [Page::General, Page::Folders, Page::FileTypes, Page::Storage];
 
     fn label(self) -> &'static str {
         match self {
             Page::General => "General",
             Page::Folders => "Folders",
+            Page::FileTypes => "File types",
             Page::Storage => "Storage",
         }
     }
@@ -54,13 +56,31 @@ pub(super) struct SettingsState {
     pending: Option<Receiver<Usage>>,
     clearing: bool,
     error: String,
+    /// File types ticked while the dialog is open, applied when it closes so
+    /// a box unticked by mistake removes nothing from the library.
+    file_types: Option<Vec<FileType>>,
 }
 
 impl PicassoApp {
     pub(super) fn open_settings(&mut self, ctx: &egui::Context) {
         self.settings.error.clear();
-        self.measure_storage(ctx, false);
+        self.settings.file_types = Some(self.config.file_types());        self.measure_storage(ctx, false);
         self.modal = Modal::Settings;
+    }
+
+    /// Saves the file types picked in a dialog that just closed and rescans
+    /// every folder, which adds files of new types and drops the others.
+    pub(super) fn settings_closed(&mut self) {
+        let Some(picked) = self.settings.file_types.take() else { return };
+        let picked: Vec<FileType> = FileType::ALL.into_iter().filter(|kind| picked.contains(kind)).collect();
+        if picked.is_empty() || picked == self.config.file_types() {
+            return;
+        }
+        FileType::set_enabled(&picked);
+        self.config.set_file_types(&picked);
+        for folder in &self.folders {
+            let _ = self.cmd_tx.send(Command::Scan(folder.id));
+        }
     }
 
     /// Measures the library and cache on a thread, first clearing the cache
@@ -133,6 +153,7 @@ impl PicassoApp {
                         match self.settings.page {
                             Page::General => self.general_page(ui),
                             Page::Folders => self.folders_page(ui),
+                            Page::FileTypes => self.file_types_page(ui),
                             Page::Storage => self.storage_page(ui),
                         }
                     });
@@ -198,7 +219,46 @@ impl PicassoApp {
         let mut confirm = self.confirm_trash;
         if ui.checkbox(&mut confirm, tr("Ask before moving photos to the trash")).changed() {
             self.confirm_trash = confirm;
-            self.db.set_setting("confirm_trash", if confirm { "1" } else { "0" });
+            self.config.set("confirm_trash", confirm);
+        }
+    }
+
+    fn file_types_page(&mut self, ui: &mut egui::Ui) {
+        let picked = self.settings.file_types.get_or_insert_with(|| FileType::ALL.to_vec());
+        heading(ui, tr("File types"));
+        note(ui, tr("Picasso adds files of the ticked types when it scans your folders."));
+        ui.add_space(2.0);
+
+        let mut all = picked.len() == FileType::ALL.len();
+        let some = !picked.is_empty() && !all;
+        if ui.add(egui::Checkbox::new(&mut all, RichText::new(tr("Select all")).strong()).indeterminate(some)).changed() {
+            *picked = if all { FileType::ALL.to_vec() } else { Vec::new() };
+        }
+        egui::Grid::new("settings-file-types").num_columns(2).spacing([24.0, 8.0]).show(ui, |ui| {
+            for kind in FileType::ALL {
+                let mut on = picked.contains(&kind);
+                ui.horizontal(|ui| {
+                    ui.add_space(18.0);
+                    if ui.checkbox(&mut on, tr(kind.label())).changed() {
+                        picked.retain(|other| *other != kind);
+                        if on {
+                            picked.push(kind);
+                        }
+                    }
+                });
+                ui.label(RichText::new(extension_list(kind)).size(12.0).color(theme::muted()));
+                ui.end_row();
+            }
+        });
+
+        ui.add_space(4.0);
+        if picked.is_empty() {
+            ui.label(RichText::new(tr("Select at least one file type.")).color(theme::DANGER));
+        } else {
+            note(
+                ui,
+                tr("Turning a type off removes those files from the library, with their stars, captions, and edits, when the dialog closes. The files stay on disk."),
+            );
         }
     }
 
@@ -301,7 +361,7 @@ impl PicassoApp {
             self.thumb_size = size;
         }
         if released(response) {
-            self.db.set_setting("thumb_size", &format!("{:.0}", self.thumb_size));
+            self.config.set("thumb_size", self.thumb_size.round());
         }
     }
 
@@ -311,7 +371,7 @@ impl PicassoApp {
             show.interval = interval;
         }
         if released(response) {
-            self.db.set_setting("slideshow_interval", &format!("{interval:.0}"));
+            self.config.set("slideshow_interval", interval.round());
         }
     }
 }
@@ -367,6 +427,17 @@ fn location(ui: &mut egui::Ui, path: &Path, size: &str) {
             });
         });
     });
+}
+
+/// `.jpg  .jpeg`, shortened for the long RAW and video lists.
+fn extension_list(kind: FileType) -> String {
+    const SHOWN: usize = 6;
+    let extensions = kind.extensions();
+    let mut text = extensions.iter().take(SHOWN).map(|ext| format!(".{ext}")).collect::<Vec<_>>().join("  ");
+    if extensions.len() > SHOWN {
+        text.push_str(&format!("  +{}", extensions.len() - SHOWN));
+    }
+    text
 }
 
 fn display_path(path: &Path) -> String {

@@ -6,6 +6,8 @@ A fast local photo library, viewer, and editor in the spirit of Picasa. It watch
 
 ![The Picasso library: folder tree on the left, thumbnail grid in the middle, and photo details on the right](images/picasso.png)
 
+![The Picasso library: image editor](images/editor.png)
+
 ## Prerequisites
 
 - [Rust](https://rustup.rs) 1.95 or newer (`rustup update stable`)

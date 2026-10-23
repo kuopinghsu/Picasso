@@ -243,4 +243,4 @@ Videos (MP4, MOV, M4V, AVI, MKV, WebM, WMV, MPEG, MTS/M2TS, 3GP, and more) show 
 
 ## License
 
-Picasso is released under the [MIT License](LICENSE).
+MIT. See [LICENSE](LICENSE).

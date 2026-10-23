@@ -1,0 +1,10 @@
+* text=auto
+
+# Used as-is by the Linux packages.
+build/AppRun text eol=lf
+scripts/package-appimage.sh text eol=lf
+*.desktop text eol=lf
+
+*.png binary
+*.ico binary
+*.jpg binary

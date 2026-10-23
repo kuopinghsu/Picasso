@@ -1,16 +1,22 @@
 //! Picasso application state: library navigation, viewer, and background jobs.
 
 mod about;
+mod dates;
+mod dupes;
 mod editor;
 mod editor_panel;
 mod editor_stage;
+mod export;
 mod help;
 mod library;
+mod loader;
 mod places;
 mod settings;
 mod side;
 mod theme;
 mod tree;
+mod unreadable;
+mod updates;
 mod viewer;
 
 use std::collections::{HashMap, HashSet};
@@ -24,6 +30,7 @@ use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
 
 use crate::config::Config;
 use crate::db::{self, Database};
+use crate::geo::MapSource;
 use crate::i18n::{self, tr, trf, Lang};
 use crate::thumbs::{self, ThumbStore};
 use crate::types::{folder_label, turn, FileType, Nav, Photo, Sort};
@@ -32,6 +39,13 @@ use crate::worker::{self, Command, DisplayGate, ThumbJob, ThumbWanted, UiEvent};
 use library::CachedLayout;
 use side::{SidePanel, TrayIcon};
 use theme::ThemeMode;
+
+/// How long the status bar offers to undo a Move to trash.
+const UNDO_TRASH_FOR: Duration = Duration::from_secs(120);
+/// Pause after the last keystroke before the search runs.
+const SEARCH_DELAY: Duration = Duration::from_millis(250);
+const SEARCH_HINT: &str =
+    "Finds every word in file and folder names, captions, cameras, and albums. Add a date such as 2019, 2019-05, or 2019-05-17.";
 
 #[derive(Clone, Copy, PartialEq)]
 enum Mode {
@@ -56,6 +70,14 @@ enum Modal {
     AddFolder { path: String, error: String },
     NewAlbum { name: String, error: String },
     Trash { ids: Vec<i64> },
+    /// Files the scans could not read; `confirm_all` while asking before
+    /// moving them all to the trash.
+    Unreadable { confirm_all: bool },
+    Export(export::ExportDialog),
+    AdjustDate(dates::DateDialog),
+    /// The duplicate search; `confirm_all` while asking before moving every
+    /// extra copy to the trash.
+    Duplicates { confirm_all: bool },
     Help,
     About,
     Settings,
@@ -138,14 +160,20 @@ pub struct PicassoApp {
     watch_deadline: HashMap<i64, Instant>,
 
     folders: Vec<crate::types::Folder>,
+    /// Folders left out of scanning, as (path, added folder id).
+    excluded: Vec<(String, i64)>,
     folder_tree: Vec<tree::FolderRoot>,
     /// Expanded or collapsed state of folder tree rows the user toggled.
     tree_open: HashMap<String, bool>,
     albums: Vec<crate::types::Album>,
     photos: Vec<Photo>,
+    /// Position of each photo in `photos`.
+    index_of: HashMap<i64, usize>,
     nav: Nav,
     sort: Sort,
     search: String,
+    /// When the typed search runs.
+    search_due: Option<Instant>,
     mode: Mode,
     viewer_index: usize,
     selection: HashSet<i64>,
@@ -153,6 +181,8 @@ pub struct PicassoApp {
     grid_cols: usize,
     thumb_size: f32,
     scroll_to: Option<i64>,
+    /// Grid scroll offset picked in the date strip.
+    jump_to: Option<f32>,
     /// Last frame the library scroll bar was dragged, for its date bubble.
     scroll_hint_at: Option<Instant>,
     view_epoch: u64,
@@ -169,6 +199,8 @@ pub struct PicassoApp {
     display_nonce: HashMap<i64, u64>,
     display_inflight: HashMap<i64, u64>,
     display_failed: HashSet<i64>,
+    /// Photo whose full-resolution view was asked for, at most one at a time.
+    sharp: Option<i64>,
     nonce_seq: u64,
     /// Player for the video on screen in the viewer.
     video: Option<viewer::VideoView>,
@@ -196,6 +228,7 @@ pub struct PicassoApp {
     /// Ask before moving photos to the system trash.
     confirm_trash: bool,
     settings: settings::SettingsState,
+    updates: updates::UpdateState,
     /// Applied edit of every edited photo.
     edits: HashMap<i64, crate::edit::Settings>,
     /// Edit panel open in the viewer.
@@ -208,10 +241,30 @@ pub struct PicassoApp {
     events_tx: Sender<UiEvent>,
     slideshow: Option<Slideshow>,
     activity: String,
+    /// When the latest Move to trash ran, and the path and folder of each
+    /// file in it, for Undo.
+    last_trashed: Option<(Instant, Vec<(String, i64)>)>,
+    /// What the latest scan of each folder could not read, by folder id.
+    unreadable: HashMap<i64, Vec<crate::types::Unreadable>>,
+    export_run: Option<export::ExportRun>,
+    dupes: Option<dupes::DupeScan>,
+    dupes_run: u64,
     scans: i32,
     /// The catalog changed in the background and the view should be re-read.
     library_dirty: bool,
     last_reload: Instant,
+    load_tx: Sender<loader::LoadJob>,
+    load_rx: Receiver<loader::Loaded>,
+    /// Number of the newest view asked of the loader.
+    load_seq: u64,
+    /// `db.changes()` when that view was asked for. A result read before a
+    /// later write from this window, such as a star, is asked for again.
+    load_changes: u64,
+    load_retries: u8,
+    /// The newest view hasn't arrived yet.
+    loading: bool,
+    /// Fit the map to the photos once the Places view arrives.
+    frame_after_load: bool,
     modal: Modal,
     logo: TextureHandle,
     map_lat: f64,
@@ -219,7 +272,9 @@ pub struct PicassoApp {
     map_zoom: u8,
     map_pan: Vec2,
     map_place: bool,
-    tiles: HashMap<(u8, u32, u32), TextureHandle>,
+    map_source: MapSource,
+    carto_key: String,
+    tiles: HashMap<(u8, u32, u32), places::MapTile>,
     tile_tx: Sender<crate::geo::TileJob>,
     tile_rx: Receiver<crate::geo::TileDone>,
     tile_wait: HashSet<(u8, u32, u32)>,
@@ -239,8 +294,17 @@ impl PicassoApp {
         let _ = std::thread::Builder::new()
             .name("picasso-thumbs-migrate".into())
             .spawn(move || thumbs::migrate_files(&migrate_cache));
+        let restored = crate::backup::apply_staged(&data_dir);
         let database = Database::open(&data_dir.join("picasso.db")).expect("open Picasso library");
-        let config = Config::load(&db::config_dir(), &database);
+        if crate::backup::due(&data_dir) {
+            let data_dir = data_dir.clone();
+            let _ = std::thread::Builder::new().name("picasso-backup".into()).spawn(move || {
+                if let Err(err) = crate::backup::create(&data_dir) {
+                    eprintln!("picasso backup: {err}");
+                }
+            });
+        }
+        let mut config = Config::load(&db::config_dir(), &database);
         FileType::set_enabled(&config.file_types());
         let theme_mode = ThemeMode::from_code(config.text("theme").unwrap_or_default());
         theme::apply(ctx, theme_mode.is_dark(system_dark(ctx)));
@@ -287,15 +351,20 @@ impl PicassoApp {
                 .spawn(move || worker::index_loop(db_path, cache, cmd_rx, normal_tx, ev_tx, ctx))
                 .expect("index thread");
         }
+        let (load_tx, load_rx) = loader::spawn(data_dir.join("picasso.db"), ctx.clone());
         let (tile_tx, tile_job_rx) = crossbeam_channel::unbounded();
         let (tile_done_tx, tile_rx) = crossbeam_channel::unbounded();
-        {
+        for index in 0..2 {
             let cache = cache.clone();
+            let jobs = tile_job_rx.clone();
+            let done = tile_done_tx.clone();
             std::thread::Builder::new()
-                .name("picasso-tiles".into())
-                .spawn(move || crate::geo::tile_loop(tile_job_rx, tile_done_tx, cache))
+                .name(format!("picasso-tiles-{index}"))
+                .spawn(move || crate::geo::tile_loop(jobs, done, cache))
                 .expect("tile thread");
         }
+        let map_source = config.text("map_source").and_then(MapSource::from_code).unwrap_or_default();
+        let carto_key = settings::load_carto_key(&mut config);
         let (watch_tx, watch_rx) = crossbeam_channel::unbounded();
         let watcher = notify::recommended_watcher(move |result| {
             let _ = watch_tx.send(result);
@@ -316,13 +385,16 @@ impl PicassoApp {
             watched: Vec::new(),
             watch_deadline: HashMap::new(),
             folders: Vec::new(),
+            excluded: Vec::new(),
             folder_tree: Vec::new(),
             tree_open: HashMap::new(),
             albums: Vec::new(),
             photos: Vec::new(),
+            index_of: HashMap::new(),
             nav: Nav::Library,
             sort: Sort::DateNewest,
             search: String::new(),
+            search_due: None,
             mode: Mode::Browse,
             viewer_index: 0,
             selection: HashSet::new(),
@@ -330,6 +402,7 @@ impl PicassoApp {
             grid_cols: 1,
             thumb_size: 144.0,
             scroll_to: None,
+            jump_to: None,
             scroll_hint_at: None,
             view_epoch: 0,
             layout: None,
@@ -342,6 +415,7 @@ impl PicassoApp {
             display_nonce: HashMap::new(),
             display_inflight: HashMap::new(),
             display_failed: HashSet::new(),
+            sharp: None,
             nonce_seq: 1,
             video: None,
             audio_out: None,
@@ -363,6 +437,7 @@ impl PicassoApp {
             slideshow_interval: 3.0,
             confirm_trash: true,
             settings: settings::SettingsState::default(),
+            updates: updates::UpdateState::default(),
             edits: HashMap::new(),
             editing: false,
             edit: None,
@@ -372,9 +447,21 @@ impl PicassoApp {
             events_tx,
             slideshow: None,
             activity: String::new(),
+            last_trashed: None,
+            unreadable: HashMap::new(),
+            export_run: None,
+            dupes: None,
+            dupes_run: 0,
             scans: 0,
             library_dirty: false,
             last_reload: Instant::now(),
+            load_tx,
+            load_rx,
+            load_seq: 0,
+            load_changes: 0,
+            load_retries: 0,
+            loading: false,
+            frame_after_load: false,
             modal: Modal::None,
             logo: theme::load_logo(ctx),
             map_lat: 20.0,
@@ -382,6 +469,8 @@ impl PicassoApp {
             map_zoom: 2,
             map_pan: Vec2::ZERO,
             map_place: false,
+            map_source,
+            carto_key,
             tiles: HashMap::new(),
             tile_tx,
             tile_rx,
@@ -431,24 +520,95 @@ impl PicassoApp {
         app.thumb_size = config.number("thumb_size").map_or(app.thumb_size, |size| size.clamp(96.0, 220.0));
         app.slideshow_interval = config.number("slideshow_interval").map_or(app.slideshow_interval, |secs| secs.clamp(1.0, 15.0));
         app.confirm_trash = config.flag("confirm_trash").unwrap_or(true);
+        for (folder, item) in app.db.unreadable() {
+            app.unreadable.entry(folder).or_default().push(item);
+        }
+        app.excluded = app.db.excluded_dirs();
+        app.load_update();
+        match restored {
+            Some(Ok(())) => app.activity = tr("The library was restored from the backup").to_string(),
+            Some(Err(err)) => app.activity = trf("Couldn't restore the backup: {}", &[&err]),
+            None => {}
+        }
         app.reload();
         app.sync_watches();
         app
     }
 
+    /// Re-reads the folders, their tree, and the albums, then the view.
     fn reload(&mut self) {
-        let keep = self.photos.get(self.viewer_index).map(|photo| photo.id);
         self.library_dirty = false;
         self.last_reload = Instant::now();
-        self.folders = self.db.folders();
-        self.folder_tree = tree::build(&self.folders, &self.db.photo_dirs());
-        self.albums = self.db.albums();
-        self.photos = self.db.photos(&self.nav, &self.search, self.sort);
-        self.view_epoch = self.view_epoch.wrapping_add(1);
-        if let Some(id) = keep {
-            if let Some(index) = self.photos.iter().position(|photo| photo.id == id) {
-                self.viewer_index = index;
+        self.request_load(true);
+    }
+
+    /// Re-reads the photos of the current view only. Use [`Self::reload`]
+    /// once photos were added, removed, or moved between albums, so the
+    /// counts in the side bar follow.
+    fn reload_view(&mut self) {
+        self.request_load(false);
+    }
+
+    /// Asks the loader thread for the current view; [`Self::pump_loads`]
+    /// shows it when it arrives.
+    fn request_load(&mut self, full: bool) {
+        self.load_seq += 1;
+        self.load_changes = self.db.changes();
+        self.loading = true;
+        let _ = self.load_tx.send(loader::LoadJob {
+            seq: self.load_seq,
+            full,
+            nav: self.nav.clone(),
+            search: self.search.clone(),
+            sort: self.sort,
+        });
+    }
+
+    fn pump_loads(&mut self) {
+        while let Ok(loaded) = self.load_rx.try_recv() {
+            if let Some(lists) = loaded.lists {
+                self.folders = lists.folders;
+                self.folder_tree = lists.tree;
+                self.albums = lists.albums;
             }
+            if loaded.seq != self.load_seq {
+                continue;
+            }
+            if self.db.changes() != self.load_changes && self.load_retries < 3 {
+                self.load_retries += 1;
+                self.request_load(false);
+                continue;
+            }
+            self.load_retries = 0;
+            self.loading = false;
+            let keep = self.photos.get(self.viewer_index).map(|photo| photo.id);
+            self.show_photos(loaded.photos, keep);
+            if std::mem::take(&mut self.frame_after_load) {
+                self.frame_map();
+            }
+        }
+    }
+
+    /// Takes `ids` out of the view at once, ahead of the reload that follows.
+    fn drop_from_view(&mut self, ids: &[i64]) {
+        let gone: HashSet<i64> = ids.iter().copied().collect();
+        let mut photos = std::mem::take(&mut self.photos);
+        let keep = photos.get(self.viewer_index).map(|photo| photo.id);
+        photos.retain(|photo| !gone.contains(&photo.id));
+        self.show_photos(photos, keep);
+    }
+
+    /// Makes `photos` the current view, keeping the photo `keep` open in the
+    /// viewer and the selection where they are still in it.
+    fn show_photos(&mut self, photos: Vec<Photo>, keep: Option<i64>) {
+        self.photos = photos;
+        if self.sort.edited_only() {
+            self.photos.retain(|photo| self.edits.contains_key(&photo.id));
+        }
+        self.index_of = self.photos.iter().enumerate().map(|(index, photo)| (photo.id, index)).collect();
+        self.view_epoch = self.view_epoch.wrapping_add(1);
+        if let Some(index) = keep.and_then(|id| self.index_of(id)) {
+            self.viewer_index = index;
         }
         if self.photos.is_empty() {
             self.viewer_index = 0;
@@ -461,11 +621,45 @@ impl PicassoApp {
         if matches!(self.nav, Nav::Places) {
             self.selection.retain(|id| self.db.photo(*id).is_some());
         } else {
-            self.selection.retain(|id| self.photos.iter().any(|photo| photo.id == *id));
+            self.selection.retain(|id| self.index_of.contains_key(id));
         }
         if self.mode == Mode::View {
             self.sync_caption();
         }
+    }
+
+    /// Position of photo `id` in the current view.
+    fn index_of(&self, id: i64) -> Option<usize> {
+        self.index_of.get(&id).copied()
+    }
+
+    /// Positions of the first `count` selected photos, in view order.
+    fn tray_indices(&self, count: usize) -> Vec<usize> {
+        if self.selection.len() * 4 > self.photos.len() {
+            // Most photos are selected, so the first few turn up at once.
+            return self
+                .photos
+                .iter()
+                .enumerate()
+                .filter(|(_, photo)| self.selection.contains(&photo.id))
+                .take(count)
+                .map(|(index, _)| index)
+                .collect();
+        }
+        let mut indices: Vec<usize> = self.selection.iter().filter_map(|id| self.index_of(*id)).collect();
+        if indices.len() > count {
+            indices.select_nth_unstable(count - 1);
+            indices.truncate(count);
+        }
+        indices.sort_unstable();
+        indices
+    }
+
+    /// The selected photos in view order; any no longer in view come last.
+    fn selection_in_order(&self) -> Vec<i64> {
+        let mut ids: Vec<i64> = self.selection.iter().copied().collect();
+        ids.sort_by_key(|id| self.index_of(*id).unwrap_or(usize::MAX));
+        ids
     }
 
     fn sync_caption(&mut self) {
@@ -479,6 +673,7 @@ impl PicassoApp {
     }
 
     fn pump(&mut self, ctx: &egui::Context) {
+        self.pump_loads();
         for _ in 0..16 {
             match self.events.try_recv() {
                 Ok(event) => self.on_event(event, ctx),
@@ -490,7 +685,10 @@ impl PicassoApp {
         }
         // While a scan streams in batches, re-read the view at most twice a
         // second so a large library stays responsive.
-        if self.library_dirty {
+        // Showing only edited photos, the view waits for the viewer to close,
+        // so a photo whose edits are reset doesn't vanish from under it.
+        let editing_view = self.sort.edited_only() && self.mode == Mode::View;
+        if self.library_dirty && !editing_view && !self.loading {
             let wait = Duration::from_millis(500);
             if self.scans == 0 || self.last_reload.elapsed() >= wait {
                 self.reload();
@@ -509,18 +707,34 @@ impl PicassoApp {
             UiEvent::ScanProgress { folder, checked, indexed } => {
                 self.activity = trf("Scanning {} · {} checked · {} updated", &[&folder, &checked, &indexed]);
             }
-            UiEvent::ScanFinished { errors } => {
+            UiEvent::ScanFinished { folder, unreadable } => {
                 self.scans = self.scans.saturating_sub(1);
                 if self.scans == 0 {
-                    self.activity = if errors > 0 {
-                        trf("{} files could not be read", &[&errors])
-                    } else {
-                        String::new()
-                    };
+                    self.activity.clear();
+                }
+                if unreadable.is_empty() {
+                    self.unreadable.remove(&folder);
+                } else {
+                    self.unreadable.insert(folder, unreadable);
                 }
                 self.library_dirty = true;
             }
             UiEvent::Library => self.library_dirty = true,
+            UiEvent::Restored(ids) => {
+                for id in ids {
+                    let settings = self
+                        .db
+                        .edit_history(id)
+                        .map(|(steps, applied)| crate::edit::History::from_json(&steps, applied).settings());
+                    match settings.filter(|settings| !settings.is_identity()) {
+                        Some(settings) => self.edits.insert(id, settings),
+                        None => self.edits.remove(&id),
+                    };
+                    self.forget_thumb(id);
+                    self.forget_display(id);
+                }
+                self.library_dirty = true;
+            }
             UiEvent::Thumb { id, w, h, rgba, edit } => {
                 self.thumb_waiting.remove(&id);
                 if edit != self.edit_settings(id) {
@@ -575,7 +789,10 @@ impl PicassoApp {
             UiEvent::DisplayFailed { id, nonce } => {
                 if self.display_nonce.get(&id) == Some(&nonce) {
                     self.display_inflight.remove(&id);
-                    self.display_failed.insert(id);
+                    // A full-resolution decode that fails leaves the usual view.
+                    if !(self.sharp == Some(id) && self.display_texture(id).is_some()) {
+                        self.display_failed.insert(id);
+                    }
                 }
             }
             UiEvent::Exif { id, rows } => {
@@ -589,6 +806,18 @@ impl PicassoApp {
             | UiEvent::EditFailed { .. }
             | UiEvent::EditPreview { .. }
             | UiEvent::Exported(_)) => self.on_edit_event(event, ctx),
+            UiEvent::BatchExported {
+                exported,
+                failed,
+                error,
+                finished,
+            } => self.on_batch_export(exported, failed, error, finished),
+            UiEvent::Duplicates {
+                run,
+                checked,
+                total,
+                groups,
+            } => self.on_duplicates(run, checked, total, groups),
         }
     }
 
@@ -602,6 +831,9 @@ impl PicassoApp {
                 continue;
             }
             for path in event.paths {
+                if self.excluded.iter().any(|(dir, _)| path.starts_with(dir)) {
+                    continue;
+                }
                 if let Some(id) = self.folder_for(&path) {
                     self.watch_deadline.insert(id, Instant::now() + Duration::from_millis(700));
                 }
@@ -922,8 +1154,19 @@ impl PicassoApp {
                     .margin(egui::Margin::symmetric(12, 6))
                     .desired_width(search_w),
             );
+            let response = response.on_hover_text(tr(SEARCH_HINT));
             if response.changed() {
-                self.reload();
+                self.search_due = Some(Instant::now() + SEARCH_DELAY);
+            }
+            let submitted = response.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
+            if let Some(due) = self.search_due {
+                let left = due.saturating_duration_since(Instant::now());
+                if submitted || left.is_zero() {
+                    self.search_due = None;
+                    self.reload_view();
+                } else {
+                    ui.ctx().request_repaint_after(left);
+                }
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let gear = ui.button("     ");
@@ -952,6 +1195,7 @@ impl PicassoApp {
                         error: String::new(),
                     };
                 }
+                self.update_link(ui);
             });
         });
     }
@@ -974,6 +1218,10 @@ impl PicassoApp {
         self.config.set("language", language.map_or("auto", Lang::code));
         i18n::set(language.unwrap_or_else(i18n::system));
         self.exif.clear();
+        // OpenFreeMap names are drawn in the app language.
+        if self.map_source == MapSource::OpenFreeMap {
+            self.reset_tiles();
+        }
         self.reload();
     }
 
@@ -981,10 +1229,9 @@ impl PicassoApp {
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new(tr("Photo Tray")).strong().size(12.0).color(theme::muted()));
             let held: Vec<(i64, String, i32)> = self
-                .photos
-                .iter()
-                .filter(|photo| self.selection.contains(&photo.id))
-                .take(16)
+                .tray_indices(16)
+                .into_iter()
+                .filter_map(|index| self.photos.get(index))
                 .map(|photo| (photo.id, photo.path.clone(), photo.rotation))
                 .collect();
             let extra = self.selection.len().saturating_sub(held.len());
@@ -998,7 +1245,7 @@ impl PicassoApp {
                 }
                 ui.painter().rect_stroke(rect, 5, egui::Stroke::new(1.0, Color32::from_black_alpha(20)), egui::StrokeKind::Inside);
                 if response.double_clicked() {
-                    if let Some(index) = self.photos.iter().position(|photo| photo.id == *id) {
+                    if let Some(index) = self.index_of(*id) {
                         self.open_at(index);
                     }
                 } else if response.clicked() {
@@ -1020,6 +1267,10 @@ impl PicassoApp {
                     let ids: Vec<i64> = self.selection.iter().copied().collect();
                     self.modal = Modal::Trash { ids };
                 }
+                if ui.button(tr("Export…")).on_hover_text(tr("Save the selected photos with their edits")).clicked() {
+                    let ids = self.selection_in_order();
+                    self.open_export(&ids);
+                }
             }
             let mut text = photo_count(self.photos.len());
             if !self.activity.is_empty() {
@@ -1027,6 +1278,28 @@ impl PicassoApp {
                 text.push_str(&self.activity);
             }
             ui.label(egui::RichText::new(text).color(theme::muted()).size(12.0));
+            let unreadable = self.unreadable_count();
+            if unreadable > 0 {
+                ui.label(egui::RichText::new("·").color(theme::muted()).size(12.0));
+                let note = trf("{} files could not be read", &[&unreadable]);
+                if ui.link(egui::RichText::new(note).size(12.0)).on_hover_text(tr("Show the files that could not be read")).clicked() {
+                    self.modal = Modal::Unreadable { confirm_all: false };
+                }
+            }
+            self.export_status(ui);
+            if let Some((at, files)) = &self.last_trashed {
+                let left = UNDO_TRASH_FOR.saturating_sub(at.elapsed());
+                if left.is_zero() {
+                    self.last_trashed = None;
+                } else {
+                    let note = trf("Moved {} to trash", &[&files.len()]);
+                    ui.label(egui::RichText::new(format!("·  {note}")).color(theme::muted()).size(12.0));
+                    if ui.link(egui::RichText::new(tr("Undo")).size(12.0)).on_hover_text(tr("Put these files back where they were")).clicked() {
+                        self.undo_trash();
+                    }
+                    ui.ctx().request_repaint_after(left);
+                }
+            }
             if self.scans > 0 {
                 ui.add(egui::Spinner::new().size(12.0));
             }
@@ -1061,6 +1334,15 @@ impl PicassoApp {
             }
             if self.tree_row(ui, tr("Places"), Glyph::Pin, self.nav == Nav::Places, None).clicked() {
                 self.set_nav(Nav::Places);
+            }
+            let showing = matches!(self.modal, Modal::Duplicates { .. });
+            let found = self.duplicate_groups().map(|groups| groups as i64);
+            if self
+                .tree_row(ui, tr("Duplicates"), Glyph::Copies, showing, found)
+                .on_hover_text(tr("Find files with identical copies"))
+                .clicked()
+            {
+                self.show_duplicates(ui.ctx());
             }
             tree_section(ui, tr("Albums"));
             let albums: Vec<(i64, String, i64)> = self
@@ -1131,19 +1413,18 @@ impl PicassoApp {
     }
 
     fn set_nav(&mut self, nav: Nav) {
-        let keep_selection = matches!(nav, Nav::Places);
-        let kept = self.selection.clone();
+        // Places keeps the selection, to show where those photos are.
+        let places = matches!(nav, Nav::Places);
         self.nav = nav;
         self.mode = Mode::Browse;
         self.slideshow = None;
         self.search.clear();
-        self.reload();
-        if keep_selection {
-            self.selection = kept;
-            self.frame_map();
-        } else {
+        self.search_due = None;
+        if !places {
             self.selection.clear();
         }
+        self.frame_after_load = places;
+        self.reload_view();
     }
 
     fn modals(&mut self, ctx: &egui::Context) {
@@ -1162,6 +1443,10 @@ impl PicassoApp {
                 self.trash_ids(&ids);
             }
             Modal::Trash { .. } => self.trash_modal(ctx),
+            Modal::Unreadable { .. } => self.unreadable_modal(ctx),
+            Modal::Export(_) => self.export_modal(ctx),
+            Modal::AdjustDate(_) => self.adjust_date_modal(ctx),
+            Modal::Duplicates { .. } => self.duplicates_modal(ctx),
             Modal::Settings => self.settings_modal(ctx),
             Modal::About => {
                 if about::show(ctx, &self.logo) {
@@ -1335,11 +1620,39 @@ impl PicassoApp {
     /// Drops the folder and its photos from the catalog. The files stay.
     fn remove_folder(&mut self, id: i64) {
         self.db.remove_folder(id);
+        self.unreadable.remove(&id);
+        self.excluded = self.db.excluded_dirs();
         if matches!(self.nav, Nav::Folder(_) | Nav::Dir(_)) {
             self.nav = Nav::Library;
         }
         self.reload();
         self.sync_watches();
+    }
+
+    /// Leaves a subfolder out of scanning and drops its photos from the
+    /// library. The files stay.
+    fn exclude_dir(&mut self, dir: &Path) -> Result<(), String> {
+        let (folder, dir) = self.db.exclude_dir(dir)?;
+        self.excluded = self.db.excluded_dirs();
+        if let Some(list) = self.unreadable.get_mut(&folder) {
+            list.retain(|item| !Path::new(&item.path).starts_with(&dir));
+        }
+        if let Nav::Dir(ref path) = self.nav {
+            if Path::new(path).starts_with(&dir) {
+                self.nav = Nav::Folder(folder);
+            }
+        }
+        self.activity = trf("Picasso no longer scans {}", &[&settings::display_path(Path::new(&dir))]);
+        self.reload();
+        Ok(())
+    }
+
+    fn include_dir(&mut self, dir: &str) {
+        if let Some(folder) = self.db.include_dir(dir) {
+            let _ = self.cmd_tx.send(Command::Scan(folder));
+            self.activity = trf("Picasso scans {} again", &[&settings::display_path(Path::new(dir))]);
+        }
+        self.excluded = self.db.excluded_dirs();
     }
 
     fn rescan(&mut self) {
@@ -1447,9 +1760,7 @@ impl PicassoApp {
         };
         if modifiers.shift {
             let anchor = self.anchor.unwrap_or(id);
-            let start = self.photos.iter().position(|photo| photo.id == anchor);
-            let end = self.photos.iter().position(|photo| photo.id == id);
-            if let (Some(start), Some(end)) = (start, end) {
+            if let (Some(start), Some(end)) = (self.index_of(anchor), Some(index)) {
                 let (lo, hi) = (start.min(end), start.max(end));
                 self.selection.clear();
                 for photo in &self.photos[lo..=hi] {
@@ -1482,14 +1793,12 @@ impl PicassoApp {
     }
 
     fn primary_index(&self) -> Option<usize> {
-        if let Some(anchor) = self.anchor {
-            if self.selection.contains(&anchor) {
-                if let Some(index) = self.photos.iter().position(|photo| photo.id == anchor) {
-                    return Some(index);
-                }
+        if let Some(anchor) = self.anchor.filter(|anchor| self.selection.contains(anchor)) {
+            if let Some(index) = self.index_of(anchor) {
+                return Some(index);
             }
         }
-        self.photos.iter().position(|photo| self.selection.contains(&photo.id))
+        self.selection.iter().filter_map(|id| self.index_of(*id)).min()
     }
 
     fn primary_starred(&self) -> bool {
@@ -1500,13 +1809,13 @@ impl PicassoApp {
     }
 
     fn toggle_star(&mut self, id: i64) {
-        if let Some(photo) = self.photos.iter_mut().find(|photo| photo.id == id) {
+        if let Some(photo) = self.index_of(id).and_then(|index| self.photos.get_mut(index)) {
             photo.starred = !photo.starred;
             let starred = photo.starred;
             self.db.set_star(id, starred);
-        }
-        if self.nav == Nav::Starred {
-            self.reload();
+            if self.nav == Nav::Starred && !starred {
+                self.drop_from_view(&[id]);
+            }
         }
     }
 
@@ -1523,15 +1832,19 @@ impl PicassoApp {
             return;
         }
         let make = !self
-            .photos
-            .iter()
-            .find(|photo| photo.id == ids[0])
-            .map(|photo| photo.starred)
-            .unwrap_or(false);
-        for id in ids {
-            self.db.set_star(id, make);
+            .index_of(ids[0])
+            .and_then(|index| self.photos.get(index))
+            .is_some_and(|photo| photo.starred);
+        self.db.set_stars(&ids, make);
+        if self.nav == Nav::Starred && !make {
+            self.drop_from_view(&ids);
+            return;
         }
-        self.reload();
+        for id in &ids {
+            if let Some(photo) = self.index_of.get(id).and_then(|&index| self.photos.get_mut(index)) {
+                photo.starred = make;
+            }
+        }
     }
 
     /// Rotates the photo on screen in the viewer, or the selection in the
@@ -1563,7 +1876,8 @@ impl PicassoApp {
             return;
         }
         self.db.rotate(ids, delta);
-        for photo in self.photos.iter_mut().filter(|photo| ids.contains(&photo.id)) {
+        let turned: HashSet<i64> = ids.iter().copied().collect();
+        for photo in self.photos.iter_mut().filter(|photo| turned.contains(&photo.id)) {
             photo.rotation = turn(photo.rotation, delta);
         }
         if self.mode == Mode::View {
@@ -1584,22 +1898,59 @@ impl PicassoApp {
         let ids: Vec<i64> = self.selection.iter().copied().collect();
         self.db.remove_from_album(album, &ids);
         self.selection.clear();
+        self.drop_from_view(&ids);
         self.reload();
     }
 
-    fn trash_ids(&mut self, ids: &[i64]) {
+    /// Moves photos to the system trash; returns those that went.
+    fn trash_ids(&mut self, ids: &[i64]) -> Vec<i64> {
+        let photos: Vec<crate::types::Photo> = ids.iter().filter_map(|id| self.db.photo(*id)).collect();
+        if photos.is_empty() {
+            return Vec::new();
+        }
+        // One call for all files: the system trash is slow file by file.
+        let result = trash::delete_all(photos.iter().map(|photo| photo.path.as_str()));
         let mut removed = Vec::new();
-        for id in ids {
-            let Some(photo) = self.db.photo(*id) else { continue };
-            match trash::delete(&photo.path) {
-                Ok(()) => removed.push(*id),
-                Err(err) => self.activity = trf("Couldn't trash {}: {}", &[&photo.filename, &err]),
+        let mut trashed = Vec::new();
+        for photo in photos {
+            if Path::new(&photo.path).exists() {
+                if let Err(err) = &result {
+                    self.activity = trf("Couldn't trash {}: {}", &[&photo.filename, err]);
+                }
+            } else {
+                removed.push(photo.id);
+                trashed.push((photo.path, photo.folder_id));
             }
         }
         if !removed.is_empty() {
             self.db.delete_photos(&removed);
-            self.activity = trf("Moved {} to trash", &[&removed.len()]);
+            if crate::shell::CAN_RESTORE {
+                // The status bar says so next to its Undo button.
+                if removed.len() == ids.len() {
+                    self.activity.clear();
+                }
+                self.last_trashed = Some((Instant::now(), trashed));
+            } else {
+                self.activity = trf("Moved {} to trash", &[&removed.len()]);
+            }
+            self.drop_from_view(&removed);
             self.reload();
+        }
+        removed
+    }
+
+    /// Puts the latest batch moved to the trash back, then rescans its
+    /// folders, which gives the photos their stars and edits back.
+    fn undo_trash(&mut self) {
+        let Some((_, trashed)) = self.last_trashed.take() else { return };
+        let paths: Vec<String> = trashed.iter().map(|(path, _)| path.clone()).collect();
+        match crate::shell::restore(&paths) {
+            Ok(count) => self.activity = trf("Put {} back from the trash", &[&count]),
+            Err(err) => self.activity = trf("Couldn't restore from the trash: {}", &[&err]),
+        }
+        let folders: HashSet<i64> = trashed.iter().map(|(_, folder)| *folder).collect();
+        for folder in folders {
+            let _ = self.cmd_tx.send(Command::Scan(folder));
         }
     }
 
@@ -1692,7 +2043,47 @@ impl PicassoApp {
             path: photo.path.clone(),
             nonce,
             edit,
+            edge: worker::DISPLAY_EDGE,
         });
+    }
+
+    /// Asks for photo `index` decoded at full resolution, up to the largest
+    /// texture the GPU takes, once it is drawn larger than its view.
+    fn request_sharp(&mut self, index: usize, drawn: Vec2, max_side: usize) {
+        let Some(photo) = self.photos.get(index) else { return };
+        if self.sharp == Some(photo.id) || crate::types::is_video_path(Path::new(&photo.path)) {
+            return;
+        }
+        let Some((_, w, h)) = self.display_texture(photo.id) else { return };
+        let have = w.max(h) as f32;
+        let edge = photo.width.max(photo.height).min(max_side as u32);
+        if drawn.max_elem() <= have * 1.02 || edge as f32 <= have * 1.02 {
+            return;
+        }
+        let (id, path) = (photo.id, photo.path.clone());
+        self.sharp = Some(id);
+        self.nonce_seq = self.nonce_seq.wrapping_add(1);
+        let nonce = self.nonce_seq;
+        self.display_nonce.insert(id, nonce);
+        self.display_inflight.insert(id, nonce);
+        if let Ok(mut gate) = self.display_gate.lock() {
+            gate.insert(id, nonce);
+        }
+        let edit = self.edit_settings(id);
+        let _ = self.urgent_tx.send(ThumbJob::Display { id, path, nonce, edit, edge });
+    }
+
+    /// Frees the full-resolution view unless it belongs to `keep`. The
+    /// photo decodes at the usual size when shown again.
+    fn drop_sharp(&mut self, keep: Option<i64>) {
+        let Some(id) = self.sharp.filter(|id| Some(*id) != keep) else { return };
+        self.sharp = None;
+        self.displays.retain(|item| item.id != id);
+        self.display_nonce.remove(&id);
+        self.display_inflight.remove(&id);
+        if let Ok(mut gate) = self.display_gate.lock() {
+            gate.remove(&id);
+        }
     }
 
     /// Histogram and EXIF rows decoded with the full-size view of `id`.
@@ -1726,6 +2117,7 @@ impl eframe::App for PicassoApp {
         self.pump(ctx);
         self.pump_tiles(ctx);
         self.pump_watch(ctx);
+        self.pump_update(ctx);
         self.tick_slideshow();
         let busy = self.scans > 0
             || self.slideshow.as_ref().map(|show| show.playing).unwrap_or(false)
@@ -1743,6 +2135,7 @@ impl eframe::App for PicassoApp {
         if !viewing {
             self.video = None;
             self.end_edit_session();
+            self.drop_sharp(None);
         }
         if viewing {
             egui::CentralPanel::default()
@@ -1813,6 +2206,7 @@ enum Glyph {
     Album,
     Star,
     Pin,
+    Copies,
 }
 
 fn paint_glyph(painter: &egui::Painter, center_left: egui::Pos2, glyph: Glyph) {
@@ -1840,6 +2234,13 @@ fn paint_glyph(painter: &egui::Painter, center_left: egui::Pos2, glyph: Glyph) {
         Glyph::Pin => {
             painter.circle_filled(origin + Vec2::new(7.0, 6.0), 4.5, Color32::from_rgb(0xE0, 0x45, 0x3A));
             painter.circle_filled(origin + Vec2::new(7.0, 6.0), 1.6, Color32::WHITE);
+        }
+        Glyph::Copies => {
+            let stroke = egui::Stroke::new(1.5, theme::muted());
+            let back = Rect::from_min_size(origin + Vec2::new(4.0, 0.0), Vec2::new(10.0, 10.0));
+            painter.rect_stroke(back, 2, stroke, egui::StrokeKind::Inside);
+            let front = Rect::from_min_size(origin + Vec2::new(0.0, 4.0), Vec2::new(10.0, 10.0));
+            painter.rect_filled(front, 2, theme::muted());
         }
     }
 }

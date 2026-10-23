@@ -4,17 +4,23 @@
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
 mod app;
+mod backup;
 mod config;
 mod db;
 mod edit;
 mod geo;
 mod i18n;
 mod image_io;
+mod liberty;
+mod mvt;
 mod photo_info;
 mod picasa_ini;
 mod raw_tiff;
+mod secret;
+mod shell;
 mod thumbs;
 mod types;
+mod update;
 mod video;
 mod worker;
 

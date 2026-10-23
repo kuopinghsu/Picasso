@@ -1,0 +1,40 @@
+#!/bin/sh
+# Starts Picasso inside its AppImage.
+#
+# The AppImage carries every library Picasso links to or loads at runtime,
+# apart from glibc and the OpenGL driver, each in a folder of its own under
+# usr/lib/picasso. Only the folders of libraries the system lacks go on the
+# library path, so the system's own copies, which match its sound, font, and
+# display setup, come first, and programs Picasso starts, such as FFmpeg,
+# are not handed libraries that differ from the system's.
+
+here=$(dirname "$(readlink -f "$0")")
+
+tab=$(printf '\t')
+installed=$({ /sbin/ldconfig -p || ldconfig -p; } 2>/dev/null)
+bundled=
+for dir in "$here"/usr/lib/picasso/*/; do
+    dir=${dir%/}
+    name=${dir##*/}
+    case $installed in
+        *"$tab$name (libc6,x86-64"*) ;;
+        *) bundled=$bundled${bundled:+:}$dir ;;
+    esac
+done
+if [ -n "$bundled" ]; then
+    export LD_LIBRARY_PATH="${LD_LIBRARY_PATH:+$LD_LIBRARY_PATH:}$bundled"
+fi
+
+# FFmpeg is not bundled. Besides PATH, Picasso finds ffmpeg and ffprobe put
+# in the AppImage's folder or in an ffmpeg folder beside it.
+if [ -z "${PICASSO_FFMPEG-}" ] && [ -n "${APPIMAGE-}" ]; then
+    beside=$(dirname "$APPIMAGE")
+    for dir in "$beside/ffmpeg" "$beside"; do
+        if [ -x "$dir/ffmpeg" ] && [ -x "$dir/ffprobe" ]; then
+            export PICASSO_FFMPEG="$dir"
+            break
+        fi
+    done
+fi
+
+exec "$here/usr/bin/picasso" "$@"

@@ -5,7 +5,11 @@ use std::path::{Path, PathBuf};
 use crossbeam_channel::Receiver;
 use eframe::egui::{self, Margin, RichText, Sense, Vec2};
 
+use crate::backup;
+use crate::config::Config;
+use crate::geo::MapSource;
 use crate::i18n::{self, tr, trf, Lang};
+use crate::secret;
 use crate::thumbs::ThumbStore;
 use crate::types::{format_bytes, FileType};
 use crate::worker::Command;
@@ -23,19 +27,53 @@ enum Page {
     General,
     Folders,
     FileTypes,
+    Map,
     Storage,
 }
 
 impl Page {
-    const ALL: [Page; 4] = [Page::General, Page::Folders, Page::FileTypes, Page::Storage];
+    const ALL: [Page; 5] = [Page::General, Page::Folders, Page::FileTypes, Page::Map, Page::Storage];
 
     fn label(self) -> &'static str {
         match self {
             Page::General => "General",
             Page::Folders => "Folders",
             Page::FileTypes => "File types",
+            Page::Map => "Map",
             Page::Storage => "Storage",
         }
+    }
+}
+
+const CARTO_KEY_URL: &str = "https://carto.com/basemaps/apikey/";
+/// Shown in the key field in place of a saved key.
+const KEY_MASK: &str = "********";
+
+/// The CARTO key saved in `config`, or an empty one when there is none or it
+/// was sealed on another machine. A key an older build saved in the clear is
+/// sealed now.
+pub(super) fn load_carto_key(config: &mut Config) -> String {
+    let stored = config.text("carto_key").unwrap_or_default().to_string();
+    if secret::is_sealed(&stored) {
+        return secret::open(&stored).unwrap_or_default();
+    }
+    if let Some(sealed) = secret::seal(&stored).filter(|_| !stored.is_empty()) {
+        config.set("carto_key", sealed);
+    }
+    stored
+}
+
+/// What the key field starts with: the mask when a key is saved.
+fn masked(key: &str) -> String {
+    if key.is_empty() { String::new() } else { KEY_MASK.to_string() }
+}
+
+fn source_note(source: MapSource) -> &'static str {
+    match source {
+        MapSource::OpenFreeMap => "Free, with no key. Picasso draws it from OpenStreetMap data.",
+        MapSource::OpenStreetMap => "The standard OpenStreetMap map.",
+        MapSource::CartoPositron => "A light, quiet map. Needs a free CARTO API key.",
+        MapSource::EsriImagery => "Satellite and aerial photos.",
     }
 }
 
@@ -59,18 +97,37 @@ pub(super) struct SettingsState {
     /// File types ticked while the dialog is open, applied when it closes so
     /// a box unticked by mistake removes nothing from the library.
     file_types: Option<Vec<FileType>>,
+    /// CARTO key being typed, saved when the field or the dialog closes.
+    /// It holds [`KEY_MASK`] rather than a saved key, and is `None` while
+    /// the dialog is closed, so the saved key is left alone.
+    carto_key: Option<String>,
+    /// A backup being made on a thread.
+    backing_up: Option<Receiver<Result<PathBuf, String>>>,
+    /// The outcome of the latest Back up now or Restore.
+    backup_note: String,
+    /// A backup picked for Restore, waiting for the user to confirm.
+    restore: Option<RestoreAsk>,
+}
+
+struct RestoreAsk {
+    path: PathBuf,
+    photos: i64,
 }
 
 impl PicassoApp {
     pub(super) fn open_settings(&mut self, ctx: &egui::Context) {
         self.settings.error.clear();
-        self.settings.file_types = Some(self.config.file_types());        self.measure_storage(ctx, false);
+        self.settings.file_types = Some(self.config.file_types());
+        self.settings.carto_key = Some(masked(&self.carto_key));
+        self.measure_storage(ctx, false);
         self.modal = Modal::Settings;
     }
 
     /// Saves the file types picked in a dialog that just closed and rescans
     /// every folder, which adds files of new types and drops the others.
     pub(super) fn settings_closed(&mut self) {
+        self.save_carto_key();
+        self.settings.carto_key = None;
         let Some(picked) = self.settings.file_types.take() else { return };
         let picked: Vec<FileType> = FileType::ALL.into_iter().filter(|kind| picked.contains(kind)).collect();
         if picked.is_empty() || picked == self.config.file_types() {
@@ -91,6 +148,9 @@ impl PicassoApp {
         let spawned = std::thread::Builder::new().name("picasso-storage".into()).spawn(move || {
             if clear {
                 ThumbStore::open(&cache).clear();
+                for suffix in ["", "-wal", "-shm"] {
+                    let _ = std::fs::remove_file(cache.join(format!("{}{suffix}", super::dupes::HASHES_FILE)));
+                }
                 let tiles = cache.join("tiles");
                 let _ = std::fs::remove_dir_all(&tiles);
                 let _ = std::fs::create_dir_all(&tiles);
@@ -114,10 +174,42 @@ impl PicassoApp {
     }
 
     fn clear_cache(&mut self, ctx: &egui::Context) {
-        self.tiles.clear();
-        self.tile_wait.clear();
-        self.tile_fail.clear();
+        self.reset_tiles();
         self.measure_storage(ctx, true);
+    }
+
+    fn set_map_source(&mut self, source: MapSource) {
+        if source != self.map_source {
+            self.map_source = source;
+            self.config.set("map_source", source.code());
+            self.reset_tiles();
+        }
+    }
+
+    /// Saves a newly typed key. An empty field keeps the saved key, which
+    /// only the Remove button clears.
+    fn save_carto_key(&mut self) {
+        let Some(typed) = &self.settings.carto_key else { return };
+        let key = typed.trim().to_string();
+        if key.is_empty() || key == KEY_MASK {
+            return;
+        }
+        self.settings.carto_key = Some(KEY_MASK.to_string());
+        self.store_carto_key(key);
+    }
+
+    fn store_carto_key(&mut self, key: String) {
+        if key == self.carto_key {
+            return;
+        }
+        let sealed = if key.is_empty() { Some(String::new()) } else { secret::seal(&key) };
+        if let Some(sealed) = sealed {
+            self.config.set("carto_key", sealed);
+        }
+        self.carto_key = key;
+        if self.map_source == MapSource::CartoPositron {
+            self.reset_tiles();
+        }
     }
 
     pub(super) fn settings_modal(&mut self, ctx: &egui::Context) {
@@ -154,6 +246,7 @@ impl PicassoApp {
                             Page::General => self.general_page(ui),
                             Page::Folders => self.folders_page(ui),
                             Page::FileTypes => self.file_types_page(ui),
+                            Page::Map => self.map_page(ui),
                             Page::Storage => self.storage_page(ui),
                         }
                     });
@@ -221,6 +314,9 @@ impl PicassoApp {
             self.confirm_trash = confirm;
             self.config.set("confirm_trash", confirm);
         }
+
+        heading(ui, tr("Updates"));
+        self.update_settings(ui);
     }
 
     fn file_types_page(&mut self, ui: &mut egui::Ui) {
@@ -262,6 +358,63 @@ impl PicassoApp {
         }
     }
 
+    fn map_page(&mut self, ui: &mut egui::Ui) {
+        heading(ui, tr("Map source"));
+        note(ui, tr("Places and the Map panel show this map."));
+        ui.add_space(2.0);
+        for source in MapSource::ALL {
+            let chosen = self.map_source == source;
+            ui.scope(|ui| {
+                ui.spacing_mut().item_spacing.y = 2.0;
+                if ui.radio(chosen, RichText::new(source.name()).strong()).clicked() {
+                    self.set_map_source(source);
+                }
+                ui.horizontal(|ui| {
+                    ui.add_space(24.0);
+                    note(ui, tr(source_note(source)));
+                });
+            });
+            if source.needs_key() && chosen {
+                ui.horizontal(|ui| {
+                    ui.add_space(24.0);
+                    ui.label(tr("CARTO API key"));
+                    let typed = self.settings.carto_key.get_or_insert_with(|| masked(&self.carto_key));
+                    let field = ui.add(
+                        egui::TextEdit::singleline(typed)
+                            .hint_text(tr("Paste your key here"))
+                            .desired_width(200.0),
+                    );
+                    if field.gained_focus() && typed == KEY_MASK {
+                        typed.clear();
+                    }
+                    if field.lost_focus() {
+                        self.save_carto_key();
+                        if self.settings.carto_key.as_deref().is_some_and(|typed| typed.trim().is_empty()) {
+                            self.settings.carto_key = Some(masked(&self.carto_key));
+                        }
+                    }
+                    if !self.carto_key.is_empty() && ui.button(tr("Remove")).clicked() {
+                        self.store_carto_key(String::new());
+                        self.settings.carto_key = Some(String::new());
+                    }
+                    ui.hyperlink_to(tr("Get a free key"), CARTO_KEY_URL);
+                });
+                ui.horizontal(|ui| {
+                    ui.add_space(24.0);
+                    note(ui, tr("The key is saved encrypted and works only on this computer."));
+                });
+                if self.carto_key.is_empty() {
+                    ui.horizontal(|ui| {
+                        ui.add_space(24.0);
+                        ui.label(RichText::new(tr("The map stays blank until you add a key.")).size(12.5).color(theme::DANGER));
+                    });
+                }
+            }
+            ui.add_space(4.0);
+        }
+        note(ui, self.map_source.attribution());
+    }
+
     fn folders_page(&mut self, ui: &mut egui::Ui) {
         heading(ui, tr("Photo folders"));
         note(ui, tr("Picasso watches this folder and adds new photos as they appear."));
@@ -299,6 +452,48 @@ impl PicassoApp {
                 }
             }
         });
+
+        heading(ui, tr("Excluded folders"));
+        note(ui, tr("Picasso skips these folders and everything inside them. Their photos leave the library; the files stay on disk."));
+        let excluded = self.excluded.clone();
+        if !excluded.is_empty() {
+            egui::Frame::new()
+                .fill(theme::tray())
+                .stroke(egui::Stroke::new(1.0, theme::hairline()))
+                .corner_radius(8)
+                .inner_margin(Margin::symmetric(10, 8))
+                .show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    egui::ScrollArea::vertical().id_salt("settings-excluded").max_height(110.0).auto_shrink([false, true]).show(ui, |ui| {
+                        ui.spacing_mut().item_spacing.y = 6.0;
+                        for (dir, _) in excluded {
+                            ui.horizontal(|ui| {
+                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                    if ui.button(tr("Include again")).clicked() {
+                                        self.include_dir(&dir);
+                                    }
+                                    ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                                        ui.add(egui::Label::new(display_path(Path::new(&dir))).truncate());
+                                    });
+                                });
+                            });
+                        }
+                    });
+                });
+        }
+        let start = self.folders.first().map(|folder| PathBuf::from(display_path(Path::new(&folder.path))));
+        if ui.add_enabled(start.is_some(), egui::Button::new(tr("Exclude a folder…"))).clicked() {
+            let mut dialog = rfd::FileDialog::new().set_title(tr("Pick a folder for Picasso to skip"));
+            if let Some(start) = start {
+                dialog = dialog.set_directory(start);
+            }
+            if let Some(picked) = dialog.pick_folder() {
+                match self.exclude_dir(&picked) {
+                    Ok(()) => self.settings.error.clear(),
+                    Err(err) => self.settings.error = err,
+                }
+            }
+        }
         if !self.settings.error.is_empty() {
             ui.label(RichText::new(&self.settings.error).color(theme::DANGER));
         }
@@ -333,6 +528,8 @@ impl PicassoApp {
         note(ui, tr("Albums, stars, captions, and edits. Your photo files stay where they are."));
         location(ui, &self.data_dir, &size(|usage| usage.library));
 
+        self.backups_section(ui);
+
         heading(ui, tr("Cache"));
         note(ui, tr("Thumbnails and map tiles. Safe to clear; Picasso makes them again when needed."));
         location(ui, &self.cache_dir, &size(|usage| usage.thumbs + usage.tiles));
@@ -354,6 +551,118 @@ impl PicassoApp {
                 ui.label(RichText::new(tr("Clearing…")).color(theme::muted()));
             }
         });
+
+        heading(ui, tr("Settings"));
+        note(ui, tr("The choices in this dialog, kept apart from the library so they apply to whichever library you open."));
+        settings_file(ui, self.config.path());
+    }
+
+    fn backups_section(&mut self, ui: &mut egui::Ui) {
+        if let Some(result) = self.settings.backing_up.as_ref().and_then(|done| done.try_recv().ok()) {
+            self.settings.backing_up = None;
+            self.settings.backup_note = match result {
+                Ok(_) => tr("Backup saved").to_string(),
+                Err(err) => trf("Couldn't back up the library: {}", &[&err]),
+            };
+        }
+        heading(ui, tr("Backups"));
+        note(
+            ui,
+            &trf(
+                "Picasso copies the library once a week and keeps the last {}. Restoring one brings back the albums, stars, captions, and edits it holds.",
+                &[&backup::KEEP],
+            ),
+        );
+        let backups = backup::list(&self.data_dir);
+        if let Some(ask) = &self.settings.restore {
+            let name = ask.path.file_name().unwrap_or_default().to_string_lossy().into_owned();
+            let question = trf(
+                "Restore the library from {}? It holds {} photos. Picasso restarts, and backs up the current library first.",
+                &[&name, &ask.photos],
+            );
+            ui.add(egui::Label::new(RichText::new(question).color(theme::text())).wrap());
+            let mut confirmed = false;
+            let mut cancel = false;
+            ui.horizontal(|ui| {
+                confirmed = ui.add(theme::danger_button(tr("Restore and restart"))).clicked();
+                cancel = ui.button(tr("Cancel")).clicked();
+            });
+            if cancel {
+                self.settings.restore = None;
+            } else if confirmed {
+                let path = ask.path.clone();
+                self.settings.restore = None;
+                self.restore_backup(ui.ctx(), &path);
+            }
+            return;
+        }
+        let busy = self.settings.backing_up.is_some();
+        ui.horizontal(|ui| {
+            let last = backups.first().map_or_else(
+                || tr("No backup yet").to_string(),
+                |newest| trf("Last backup: {} · {}", &[&local_time(newest.made_at), &format_bytes(newest.bytes)]),
+            );
+            ui.label(RichText::new(last).color(theme::muted()));
+            if busy {
+                ui.add(egui::Spinner::new().size(14.0));
+            } else if !self.settings.backup_note.is_empty() {
+                ui.label(RichText::new(&self.settings.backup_note).color(theme::muted()));
+            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.button(tr("Open folder")).clicked() {
+                    let folder = backup::dir(&self.data_dir);
+                    let _ = std::fs::create_dir_all(&folder);
+                    let _ = open::that(folder);
+                }
+                if ui.button(tr("Restore…")).on_hover_text(tr("Choose a backup to bring back")).clicked() {
+                    self.pick_backup();
+                }
+                if ui.add_enabled(!busy, egui::Button::new(tr("Back up now"))).clicked() {
+                    self.back_up_now(ui.ctx());
+                }
+            });
+        });
+    }
+
+    fn back_up_now(&mut self, ctx: &egui::Context) {
+        let (sender, receiver) = crossbeam_channel::bounded(1);
+        let (data_dir, ctx) = (self.data_dir.clone(), ctx.clone());
+        let spawned = std::thread::Builder::new().name("picasso-backup".into()).spawn(move || {
+            let _ = sender.send(backup::create(&data_dir));
+            ctx.request_repaint();
+        });
+        if spawned.is_ok() {
+            self.settings.backup_note.clear();
+            self.settings.backing_up = Some(receiver);
+        }
+    }
+
+    fn pick_backup(&mut self) {
+        let folder = backup::dir(&self.data_dir);
+        let Some(path) = rfd::FileDialog::new()
+            .set_title(tr("Choose a backup to bring back"))
+            .set_directory(&folder)
+            .add_filter(tr("Picasso library"), &["db"])
+            .pick_file()
+        else {
+            return;
+        };
+        match backup::check(&path) {
+            Ok(photos) => self.settings.restore = Some(RestoreAsk { path, photos }),
+            Err(err) => self.settings.backup_note = trf("Couldn't use this backup: {}", &[&err]),
+        }
+    }
+
+    /// Stages `path` and restarts Picasso, which swaps it in at startup.
+    fn restore_backup(&mut self, ctx: &egui::Context, path: &Path) {
+        if let Err(err) = backup::stage_restore(&self.data_dir, path) {
+            self.settings.backup_note = trf("Couldn't use this backup: {}", &[&err]);
+            return;
+        }
+        match backup::relaunch() {
+            Ok(()) => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+            Err(_) => self.settings.backup_note = tr("Restart Picasso to finish restoring the backup").to_string(),
+        }
     }
 
     pub(super) fn set_thumb_size(&mut self, size: f32, response: &egui::Response) {
@@ -429,6 +738,24 @@ fn location(ui: &mut egui::Ui, path: &Path, size: &str) {
     });
 }
 
+/// The settings file's path with its size and a button that shows it in
+/// the file manager.
+fn settings_file(ui: &mut egui::Ui, path: &Path) {
+    ui.horizontal(|ui| {
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if ui.button(tr("Show in folder")).clicked() {
+                crate::shell::reveal(&path.display().to_string());
+            }
+            ui.label(RichText::new(format_bytes(file_size(path))).strong().color(theme::text()));
+            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                let text = display_path(path);
+                ui.add(egui::Label::new(RichText::new(&text).monospace().size(11.5).color(theme::muted())).truncate())
+                    .on_hover_text(text);
+            });
+        });
+    });
+}
+
 /// `.jpg  .jpeg`, shortened for the long RAW and video lists.
 fn extension_list(kind: FileType) -> String {
     const SHOWN: usize = 6;
@@ -440,7 +767,14 @@ fn extension_list(kind: FileType) -> String {
     text
 }
 
-fn display_path(path: &Path) -> String {
+/// Unix seconds as local date and time, e.g. `2026-10-23 09:58`.
+fn local_time(secs: i64) -> String {
+    chrono::DateTime::from_timestamp(secs, 0)
+        .map(|time| time.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M").to_string())
+        .unwrap_or_default()
+}
+
+pub(super) fn display_path(path: &Path) -> String {
     path.display().to_string().trim_start_matches(r"\\?\").to_string()
 }
 

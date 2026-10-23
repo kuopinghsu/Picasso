@@ -88,7 +88,7 @@ const MOUSE: &[Section] = &[
     (
         "Viewer",
         &[
-            (&["Wheel"], "Zoom at the pointer"),
+            (&["Wheel", "Pinch"], "Zoom at the pointer"),
             (&["Drag"], "Pan a zoomed photo"),
             (&["Double-click"], "Switch between fit and actual size"),
             (&["Click"], "Play or pause a video"),

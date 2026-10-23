@@ -416,6 +416,9 @@ impl PicassoApp {
         } else {
             self.edits.insert(id, settings);
         }
+        if self.sort.edited_only() {
+            self.library_dirty = true;
+        }
         self.forget_thumb(id);
     }
 
@@ -618,5 +621,8 @@ impl PicassoApp {
         self.displays.retain(|item| item.id != id);
         self.display_inflight.remove(&id);
         self.display_failed.remove(&id);
+        if self.sharp == Some(id) {
+            self.sharp = None;
+        }
     }
 }

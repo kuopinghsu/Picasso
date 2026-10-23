@@ -84,11 +84,36 @@ impl Photo {
     }
 }
 
+/// A file or folder a scan could not read, and why.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Unreadable {
+    pub path: String,
+    pub reason: String,
+    /// A folder that could not be listed, rather than one file.
+    pub folder: bool,
+    /// Size and modification time of a file, so an unchanged one isn't read
+    /// again on every scan.
+    pub bytes: u64,
+    pub modified_at: i64,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Sort {
     DateNewest,
     DateOldest,
     Name,
+    /// By name, only photos with an edit applied.
+    NameEdited,
+}
+
+impl Sort {
+    pub fn by_name(self) -> bool {
+        matches!(self, Sort::Name | Sort::NameEdited)
+    }
+
+    pub fn edited_only(self) -> bool {
+        self == Sort::NameEdited
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -292,6 +317,13 @@ pub fn format_day(ts: i64) -> String {
         .unwrap_or_else(|| crate::i18n::tr("Unknown date").to_string())
 }
 
+/// Local calendar day of `ts`, for grouping photos by the day `format_day`
+/// names. `None` where `format_day` says "Unknown date".
+pub fn day_key(ts: i64) -> Option<i32> {
+    use chrono::Datelike;
+    chrono::DateTime::from_timestamp(ts, 0).map(|dt| dt.with_timezone(&chrono::Local).num_days_from_ce())
+}
+
 pub fn format_timestamp(ts: i64) -> String {
     chrono::DateTime::from_timestamp(ts, 0)
         .map(|dt| {
@@ -394,6 +426,14 @@ mod tests {
         assert!(is_video_path(Path::new("clip.MOV")));
         assert!(is_media_path(Path::new("clip.mp4")));
         assert_eq!(FileType::of(Path::new("clip.mp4")), Some(FileType::Video));
+    }
+
+    #[test]
+    fn edited_sort_orders_by_name() {
+        assert!(Sort::NameEdited.by_name() && Sort::Name.by_name());
+        assert!(!Sort::DateNewest.by_name());
+        assert!(Sort::NameEdited.edited_only());
+        assert!(!Sort::Name.edited_only());
     }
 
     #[test]

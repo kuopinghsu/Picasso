@@ -57,7 +57,7 @@ pub(super) fn dialog_frame() -> egui::Frame {
 
 /// Window-style strip across the top of a dialog with the logo, `title`,
 /// and a close button that sets `close`.
-fn title_bar(ui: &mut egui::Ui, logo: &egui::TextureHandle, title: &str, close: &mut bool) {
+pub(super) fn title_bar(ui: &mut egui::Ui, logo: &egui::TextureHandle, title: &str, close: &mut bool) {
     let corners = CornerRadius {
         nw: RADIUS,
         ne: RADIUS,
@@ -121,6 +121,7 @@ fn body(ui: &mut egui::Ui) {
     heading(ui, tr("Credits"));
     text(ui, tr("Built with Rust, egui, image, rawler, heic-rs, rusqlite, rodio, and FFmpeg"));
     text(ui, tr("Map data © OpenStreetMap contributors"));
+    text(ui, tr("Maps from OpenFreeMap and OpenMapTiles, OpenStreetMap, CARTO, and Esri"));
     text(ui, tr("And everyone who contributes to these open source projects"));
 
     heading(ui, tr("License"));

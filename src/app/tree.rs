@@ -151,6 +151,14 @@ impl PicassoApp {
                     let _ = open::that(&path);
                     ui.close();
                 }
+                if let Nav::Dir(_) = row.nav {
+                    if ui.button(crate::i18n::tr("Exclude from scanning")).clicked() {
+                        if let Err(err) = self.exclude_dir(std::path::Path::new(&path)) {
+                            self.activity = err;
+                        }
+                        ui.close();
+                    }
+                }
                 if let Nav::Folder(id) = row.nav {
                     if ui.button(crate::i18n::tr("Refresh Thumbnails")).clicked() {
                         let _ = self.cmd_tx.send(crate::worker::Command::Scan(id));

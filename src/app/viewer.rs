@@ -144,7 +144,7 @@ impl PicassoApp {
                     self.close_viewer();
                 }
                 ui.add_space(6.0);
-                ui.label(egui::RichText::new(self.viewer_heading()).color(theme::text()).strong());
+                let heading = self.viewer_heading();
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let dark = theme::is_dark();
                     let tip = if dark { "Switch to the light theme" } else { "Switch to the dark theme" };
@@ -231,6 +231,11 @@ impl PicassoApp {
                         let response = ui.add(egui::Slider::new(&mut interval, 1.0..=15.0).suffix(" s").fixed_decimals(0));
                         self.set_slideshow_interval(interval, &response);
                     }
+                    // The title takes what the buttons leave, shortened with "…".
+                    ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                        let title = egui::RichText::new(&heading).color(theme::text()).strong();
+                        ui.add(egui::Label::new(title).truncate()).on_hover_text(&heading);
+                    });
                 });
             });
         });
@@ -250,14 +255,22 @@ impl PicassoApp {
         let video = self.video.as_ref().filter(|view| view.id == photo.id);
         let video_frame = video.and_then(|view| view.texture.clone());
         let editing = self.edit.as_ref().is_some_and(|session| session.id == photo.id);
+        self.drop_sharp(Some(photo.id));
+        if !editing && !slideshow {
+            let (ppp, max_side) = ui.input(|input| (input.pixels_per_point, input.max_texture_side));
+            self.request_sharp(self.viewer_index, size * ppp, max_side);
+        }
+        // A zoomed photo is larger than the stage; keep it off the toolbar,
+        // filmstrip, and side panel.
+        let clipped = ui.painter_at(stage);
         if let Some(texture) = video_frame {
-            theme::paint_image(ui.painter(), &texture, image_rect, full_uv(), photo.rotation);
+            theme::paint_image(&clipped, &texture, image_rect, full_uv(), photo.rotation);
         } else if editing && self.paint_edit_stage(ui, stage, image_rect, &photo) {
             self.edit_overlay(ui, stage, image_rect, &photo);
         } else if let Some((texture, _, _)) = self.display_texture(photo.id) {
-            theme::paint_image(ui.painter(), &texture, image_rect, full_uv(), photo.rotation);
+            theme::paint_image(&clipped, &texture, image_rect, full_uv(), photo.rotation);
         } else if let Some((texture, _w, _h)) = self.thumb_texture(photo.id) {
-            theme::paint_image(ui.painter(), &texture, image_rect, full_uv(), photo.rotation);
+            theme::paint_image(&clipped, &texture, image_rect, full_uv(), photo.rotation);
         } else {
             self.ensure_thumb(photo.id, &photo.path);
             ui.painter().text(
@@ -270,9 +283,13 @@ impl PicassoApp {
         }
 
         if response.hovered() {
-            let scroll = ui.input(|input| input.smooth_scroll_delta.y);
+            // Ctrl+wheel and trackpad pinches arrive as a zoom factor.
+            let (scroll, pinch) = ui.input(|input| (input.smooth_scroll_delta.y, input.zoom_delta()));
+            let mut factor = pinch;
             if scroll.abs() > 0.1 {
-                let factor = (scroll * 0.002).exp();
+                factor *= (scroll * 0.002).exp();
+            }
+            if (factor - 1.0).abs() > 1e-4 {
                 let pointer = response.hover_pos().unwrap_or(stage.center());
                 self.zoom_at(factor, pointer, stage, img_w, img_h);
             }
@@ -448,9 +465,7 @@ impl PicassoApp {
             }
             ui.add_space(8.0);
             if ui.button(tr("Show in folder")).clicked() {
-                if let Some(parent) = std::path::Path::new(&photo.path).parent() {
-                    let _ = open::that(parent);
-                }
+                crate::shell::reveal(&photo.path);
             }
             if ui.button(tr("Show on map")).clicked() {
                 self.show_on_map(photo.id);

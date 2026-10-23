@@ -64,6 +64,8 @@ pub const BAND_HUES: [f32; 8] = [29.0, 60.0, 105.0, 142.0, 195.0, 262.0, 300.0, 
 pub const ZONES: [&str; 4] = ["Shadows", "Midtones", "Highlights", "Global"];
 const ZONE_KEYS: [&str; 4] = ["shadows", "midtones", "highlights", "global"];
 pub const PROFILES: [&str; 6] = ["Color", "Neutral", "Vivid", "Landscape", "Portrait", "Monochrome"];
+/// HDR tone mapping methods, in the order of the `hdr.method` values.
+pub const HDR_METHODS: [&str; 5] = ["Local tone mapping", "Exposure fusion", "Reinhard", "Drago", "Filmic"];
 pub const CURVE_CHANNELS: [&str; 4] = ["RGB", "Red", "Green", "Blue"];
 const CURVE_KEYS: [&str; 4] = ["curve.points.rgb", "curve.points.red", "curve.points.green", "curve.points.blue"];
 pub const MIX_PARTS: [&str; 3] = ["Hue", "Saturation", "Luminance"];
@@ -101,7 +103,7 @@ pub const LOCAL_SATURATION: usize = 6;
 pub const LOCAL_CLARITY: usize = 7;
 pub const LOCAL_DEHAZE: usize = 8;
 
-const COUNT: usize = 89;
+const COUNT: usize = 92;
 const MIX: u8 = 20;
 const GRADE: u8 = 44;
 const BW: u8 = 59;
@@ -156,6 +158,9 @@ impl Control {
     pub const CROP_RIGHT: Control = Control(86);
     pub const CROP_BOTTOM: Control = Control(87);
     pub const PROFILE: Control = Control(88);
+    pub const HDR_METHOD: Control = Control(89);
+    pub const HDR_STRENGTH: Control = Control(90);
+    pub const HDR_DETAIL: Control = Control(91);
 
     /// Color mixer slider: `part` 0 hue, 1 saturation, 2 luminance.
     pub const fn mix(part: usize, band: usize) -> Control {
@@ -216,11 +221,23 @@ impl Control {
             Unit::Hue => format!("{value:.0}°"),
             Unit::Radius => format!("{value:.1}"),
             Unit::Toggle => tr(if value >= 0.5 { "On" } else { "Off" }).to_string(),
-            Unit::Choice => tr(PROFILES[(value.round() as usize).min(PROFILES.len() - 1)]).to_string(),
+            Unit::Choice => {
+                let choices = self.choices();
+                tr(choices[(value.round().max(0.0) as usize).min(choices.len() - 1)]).to_string()
+            }
             Unit::Fraction => format!("{:.0}%", value * 100.0),
             Unit::Plain => format!("{value:.0}"),
             Unit::Signed if value.round() == 0.0 => "0".into(),
             Unit::Signed => format!("{value:+.0}"),
+        }
+    }
+
+    /// Names of the values of a [`Unit::Choice`] control.
+    pub fn choices(self) -> &'static [&'static str] {
+        if self == Control::HDR_METHOD {
+            &HDR_METHODS
+        } else {
+            &PROFILES
         }
     }
 
@@ -313,6 +330,9 @@ fn defs() -> &'static [Def] {
             def("crop.right", "Crop right", 0.0, 1.0, 1.0, Unit::Fraction),
             def("crop.bottom", "Crop bottom", 0.0, 1.0, 1.0, Unit::Fraction),
             def("profile", "Profile", 0.0, (PROFILES.len() - 1) as f32, 0.0, Unit::Choice),
+            def("hdr.method", "Method", 0.0, (HDR_METHODS.len() - 1) as f32, 0.0, Unit::Choice).prefixed("HDR"),
+            plain("hdr.strength".into(), "Strength", 0.0).prefixed("HDR"),
+            plain("hdr.detail".into(), "Detail", 50.0).prefixed("HDR"),
         ]);
         debug_assert_eq!(list.len(), COUNT);
         list
@@ -646,6 +666,9 @@ impl Step {
 pub struct History {
     steps: Vec<Step>,
     applied: usize,
+    /// Settings after the applied steps, kept up to date by every change so
+    /// the editor doesn't replay the steps each frame.
+    current: Settings,
 }
 
 impl History {
@@ -658,7 +681,12 @@ impl History {
     }
 
     pub fn settings(&self) -> Settings {
-        self.settings_at(self.applied)
+        self.current.clone()
+    }
+
+    fn set_applied(&mut self, applied: usize) {
+        self.applied = applied.min(self.steps.len());
+        self.current = self.settings_at(self.applied);
     }
 
     /// Settings after the first `count` steps.
@@ -684,7 +712,7 @@ impl History {
         let patch = after.changed_from(&base);
         self.steps.truncate(self.applied);
         self.steps.push(Step { kind, patch });
-        self.applied = self.steps.len();
+        self.set_applied(self.steps.len());
         true
     }
 
@@ -697,14 +725,13 @@ impl History {
         };
         let base = self.settings_at(last);
         self.steps.truncate(last);
-        self.applied = last;
         if *after != base {
             self.steps.push(Step {
                 patch: after.changed_from(&base),
                 kind,
             });
-            self.applied = self.steps.len();
         }
+        self.set_applied(self.steps.len());
         true
     }
 
@@ -746,24 +773,24 @@ impl History {
     }
 
     pub fn undo(&mut self) {
-        self.applied = self.applied.saturating_sub(1);
+        self.set_applied(self.applied.saturating_sub(1));
     }
 
     pub fn redo(&mut self) {
-        self.applied = (self.applied + 1).min(self.steps.len());
+        self.set_applied(self.applied + 1);
     }
 
     pub fn undo_all(&mut self) {
-        self.applied = 0;
+        self.set_applied(0);
     }
 
     pub fn redo_all(&mut self) {
-        self.applied = self.steps.len();
+        self.set_applied(self.steps.len());
     }
 
     /// Applies exactly the first `count` steps.
     pub fn jump(&mut self, count: usize) {
-        self.applied = count.min(self.steps.len());
+        self.set_applied(count);
     }
 
     /// The steps as JSON: `[{"kind":"adjust","patch":{"light.exposure":0.5}}]`.
@@ -807,8 +834,9 @@ impl History {
                 })
             })
             .collect();
-        let applied = applied.min(steps.len());
-        History { steps, applied }
+        let mut history = History { steps, ..History::default() };
+        history.set_applied(applied);
+        history
     }
 }
 
@@ -905,6 +933,29 @@ mod tests {
         assert_eq!(auto(&history), expected);
         history.commit(Kind::Reset, &Settings::default());
         assert!(history.auto_values().is_empty());
+    }
+
+    #[test]
+    fn cached_settings_match_a_replay() {
+        let replayed = |history: &History| history.settings_at(history.applied());
+        let mut history = History::default();
+        let one = with(Control::EXPOSURE, 1.0, &Settings::default());
+        history.commit(Kind::Adjust, &one);
+        let two = with(Control::CONTRAST, 30.0, &one);
+        history.commit(Kind::Adjust, &two);
+        history.amend(Kind::Adjust, &with(Control::CONTRAST, 40.0, &one));
+        assert_eq!(history.settings(), replayed(&history));
+        history.commit(Kind::Reset, &Settings::default());
+        assert_eq!(history.settings(), replayed(&history));
+        for change in [History::undo, History::undo_all, History::redo, History::redo_all] {
+            change(&mut history);
+            assert_eq!(history.settings(), replayed(&history));
+        }
+        history.jump(1);
+        assert_eq!(history.settings(), one);
+        let back = History::from_json(&history.steps_json(), 2);
+        assert_eq!(back.settings(), replayed(&back));
+        assert_eq!(back.settings().get(Control::CONTRAST), 40.0);
     }
 
     #[test]

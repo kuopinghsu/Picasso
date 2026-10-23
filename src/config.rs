@@ -19,15 +19,13 @@ impl Config {
     /// build kept in the library `db` are copied over.
     pub fn load(dir: &Path, db: &Database) -> Config {
         let path = dir.join("settings.json");
-        let stored = std::fs::read_to_string(&path)
-            .ok()
-            .and_then(|text| serde_json::from_str::<Value>(&text).ok());
+        let stored = read(&path);
         let mut config = Config {
             path,
             values: Map::new(),
         };
         match stored {
-            Some(Value::Object(values)) => config.values = values,
+            Some(values) => config.values = values,
             _ => {
                 config.copy_from_library(db);
                 config.save();
@@ -50,6 +48,11 @@ impl Config {
         if let Some(value) = db.setting("confirm_trash") {
             self.values.insert("confirm_trash".into(), Value::from(value != "0"));
         }
+    }
+
+    /// Where `settings.json` is kept.
+    pub fn path(&self) -> &Path {
+        &self.path
     }
 
     pub fn text(&self, key: &str) -> Option<&str> {
@@ -77,10 +80,15 @@ impl Config {
         self.set("file_types", Value::Array(codes));
     }
 
-    /// Stores `value` and writes the file.
+    /// Stores `value` and writes the file. Other settings are taken from the
+    /// file first, so another Picasso window's changes since this one loaded
+    /// are kept.
     pub fn set(&mut self, key: &str, value: impl Into<Value>) {
         let value = value.into();
         if self.values.get(key) != Some(&value) {
+            if let Some(stored) = read(&self.path) {
+                self.values = stored;
+            }
             self.values.insert(key.into(), value);
             self.save();
         }
@@ -99,6 +107,14 @@ impl Config {
         if let Err(err) = written {
             eprintln!("picasso settings: {err}");
         }
+    }
+}
+
+fn read(path: &Path) -> Option<Map<String, Value>> {
+    let text = std::fs::read_to_string(path).ok()?;
+    match serde_json::from_str::<Value>(&text).ok()? {
+        Value::Object(values) => Some(values),
+        _ => None,
     }
 }
 
@@ -129,6 +145,24 @@ mod tests {
         assert_eq!(config.text("language"), Some("zh-Hant"));
         assert_eq!(config.number("thumb_size"), Some(120.0));
         assert_eq!(config.file_types(), vec![FileType::Jpeg, FileType::Raw]);
+        drop(db);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn two_windows_keep_each_others_settings() {
+        let dir = std::env::temp_dir().join(format!("picasso-config-two-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let db = Database::open(&dir.join("library.db")).unwrap();
+        let mut first = Config::load(&dir, &db);
+        let mut second = Config::load(&dir, &db);
+
+        first.set("carto_key", "abc123");
+        second.set("thumb_size", 150.0);
+        let config = Config::load(&dir, &db);
+        assert_eq!(config.text("carto_key"), Some("abc123"));
+        assert_eq!(config.number("thumb_size"), Some(150.0));
         drop(db);
         let _ = std::fs::remove_dir_all(&dir);
     }

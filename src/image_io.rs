@@ -310,10 +310,30 @@ fn probe_heic(path: &Path, modified_at: i64) -> Result<Probe, String> {
     if let Some(probe) = heic_probe_bytes(&head, modified_at) {
         return Ok(probe);
     }
+    if !heif_brand(&head) {
+        return Err("Not a HEIF image".into());
+    }
     let bytes = if head.len() as u64 >= len { head } else { std::fs::read(path).map_err(|err| err.to_string())? };
     let info = heic_rs::probe(&bytes).map_err(|err| err.to_string())?;
     let bits = heic_exif(&bytes).unwrap_or_else(ExifBits::empty);
     Ok(heic_probe(&info, bits, modified_at))
+}
+
+/// False when the file's type box lists no HEIF brand, as in a QuickTime
+/// movie saved with a .heic name, so the rest of the file need not be read.
+/// A file without a readable type box is left to the decoder.
+fn heif_brand(head: &[u8]) -> bool {
+    const BRANDS: [&[u8]; 12] = [
+        b"heic", b"heix", b"heim", b"heis", b"hevc", b"hevx", b"hevm", b"hevs", b"mif1", b"msf1", b"miaf", b"avif",
+    ];
+    if head.len() < 16 || &head[4..8] != b"ftyp" {
+        return true;
+    }
+    let size = (u32::from_be_bytes([head[0], head[1], head[2], head[3]]) as usize).clamp(16, head.len());
+    // The major brand, then compatible brands after the minor version.
+    std::iter::once(&head[8..12])
+        .chain(head[16..size].as_chunks::<4>().0.iter().map(|brand| brand.as_slice()))
+        .any(|brand| BRANDS.contains(&brand))
 }
 
 fn heic_probe_bytes(bytes: &[u8], modified_at: i64) -> Option<Probe> {
@@ -731,6 +751,26 @@ fn dms_to_deg(values: &[exif::Rational]) -> Option<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn heic_names_on_other_files_are_caught_from_the_type_box() {
+        let ftyp = |major: &[u8], compatible: &[&[u8]]| {
+            let mut box_ = ((16 + 4 * compatible.len()) as u32).to_be_bytes().to_vec();
+            box_.extend_from_slice(b"ftyp");
+            box_.extend_from_slice(major);
+            box_.extend_from_slice(&[0; 4]);
+            for brand in compatible {
+                box_.extend_from_slice(brand);
+            }
+            box_.extend_from_slice(&[0; 8]);
+            box_
+        };
+        assert!(heif_brand(&ftyp(b"heic", &[b"mif1", b"heic"])));
+        assert!(heif_brand(&ftyp(b"isom", &[b"mif1"])), "a compatible HEIF brand counts");
+        assert!(!heif_brand(&ftyp(b"qt  ", &[b"qt  "])), "a QuickTime movie");
+        assert!(!heif_brand(&ftyp(b"isom", &[b"iso2", b"mp41"])), "an MP4 video");
+        assert!(heif_brand(b"no type box here at all"), "unknown files go to the decoder");
+    }
 
     #[test]
     fn dms_to_decimal_degrees() {

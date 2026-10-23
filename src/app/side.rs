@@ -2,7 +2,7 @@
 //! the photo tray as in Picasa 3: properties and EXIF of the selected photo,
 //! or a map of where it was taken.
 
-use eframe::egui::{self, Align2, Color32, FontId, Pos2, Rect, Sense, Stroke, Vec2};
+use eframe::egui::{self, Color32, Pos2, Rect, Sense, Stroke, Vec2};
 
 use crate::geo;
 use crate::i18n::{tr, trf};
@@ -184,9 +184,7 @@ impl PicassoApp {
         ui.add_space(12.0);
         ui.horizontal_wrapped(|ui| {
             if ui.button(tr("Show in folder")).clicked() {
-                if let Some(parent) = std::path::Path::new(&photo.path).parent() {
-                    let _ = open::that(parent);
-                }
+                crate::shell::reveal(&photo.path);
             }
             if photo.place().is_some() && ui.button(tr("Show map")).clicked() {
                 self.toggle_side(SidePanel::Map);
@@ -251,7 +249,7 @@ impl PicassoApp {
         }
 
         let painter = ui.painter_at(rect);
-        painter.rect_filled(rect, 0, Color32::from_rgb(0xD6, 0xE4, 0xF0));
+        painter.rect_filled(rect, 0, super::places::MAP_BACKDROP);
         let view = MapView {
             lat,
             lon,
@@ -265,13 +263,14 @@ impl PicassoApp {
             let (x, y) = geo::latlon_to_world(other_lat, other_lon, self.side_zoom);
             rect.center() + Vec2::new((x - px) as f32, (y - py) as f32) + self.side_pan
         };
+        let mut covered = super::places::PinCells::default();
         for other in &self.photos {
             if other.id == photo.id {
                 continue;
             }
             if let Some((other_lat, other_lon)) = other.place() {
                 let pos = to_screen(other_lat, other_lon);
-                if rect.contains(pos) {
+                if rect.contains(pos) && covered.first(pos) {
                     painter.circle_filled(pos, 4.0, ACCENT);
                     painter.circle_stroke(pos, 5.0, Stroke::new(1.5, WHITE));
                 }
@@ -279,13 +278,7 @@ impl PicassoApp {
         }
         paint_pin(&painter, rect.center() + self.side_pan);
         painter.rect_stroke(rect, theme::THUMB_RADIUS, Stroke::new(1.0, theme::hairline()), egui::StrokeKind::Inside);
-        painter.text(
-            rect.right_bottom() + Vec2::new(-6.0, -4.0),
-            Align2::RIGHT_BOTTOM,
-            "© OpenStreetMap contributors",
-            FontId::proportional(10.0),
-            Color32::from_gray(70),
-        );
+        self.paint_map_notes(&painter, rect);
 
         let buttons = Rect::from_min_size(rect.right_top() + Vec2::new(-36.0, 8.0), Vec2::new(28.0, 60.0));
         let mut overlay = ui.new_child(egui::UiBuilder::new().max_rect(buttons));

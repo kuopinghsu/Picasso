@@ -1,6 +1,6 @@
 [package]
 name = "picasso"
-version = "0.9.1"
+version = "0.9.2"
 edition = "2021"
 rust-version = "1.95"
 description = "Fast local photo library and viewer in the style of Picasa"
@@ -27,6 +27,7 @@ rodio = { version = "0.23.0", default-features = false, features = ["playback"] 
 serde_json = "1.0.154"
 sys-locale = "0.3.2"
 rayon = "1.12.0"
+roxmltree = "0.21"
 jpeg-decoder = { version = "0.3", default-features = false }
 tiny-skia = { version = "0.11", default-features = false, features = ["std", "simd"] }
 flate2 = "1"

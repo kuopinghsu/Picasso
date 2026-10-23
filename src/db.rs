@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
 
+use crate::track::Track;
 use crate::types::{unix_now, Album, Folder, Nav, NewPhoto, Photo, Sort, Unreadable, EARLIEST_PHOTO};
 
 /// Bumped whenever the scanner starts reading new metadata from files, so
@@ -200,6 +201,19 @@ impl Database {
                     folder_id INTEGER NOT NULL REFERENCES folders(id) ON DELETE CASCADE
                 );
                 CREATE INDEX IF NOT EXISTS idx_photos_folder ON photos(folder_id);
+                -- GPS tracks from GPX and KML files; `points` is Track::encode.
+                CREATE TABLE IF NOT EXISTS tracks (
+                    id INTEGER PRIMARY KEY,
+                    folder_id INTEGER NOT NULL REFERENCES folders(id) ON DELETE CASCADE,
+                    path TEXT NOT NULL UNIQUE,
+                    name TEXT NOT NULL,
+                    bytes INTEGER NOT NULL,
+                    modified_at INTEGER NOT NULL,
+                    started_at INTEGER,
+                    ended_at INTEGER,
+                    points BLOB NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_tracks_folder ON tracks(folder_id);
                 DROP TABLE IF EXISTS faces;
                 DROP TABLE IF EXISTS people;
                 ",
@@ -419,6 +433,11 @@ impl Database {
         tx.execute(
             "DELETE FROM unreadable WHERE folder_id = ?4 AND (path = ?1 OR (path >= ?2 AND path < ?3))",
             params![dir, start, end, folder_id],
+        )
+        .map_err(|err| err.to_string())?;
+        tx.execute(
+            "DELETE FROM tracks WHERE path >= ?1 AND path < ?2 AND folder_id = ?3",
+            params![start, end, folder_id],
         )
         .map_err(|err| err.to_string())?;
         tx.commit().map_err(|err| err.to_string())?;
@@ -798,6 +817,71 @@ impl Database {
         let _ = tx.execute("DELETE FROM seen_paths", []);
         let _ = tx.commit();
         removed
+    }
+
+    /// Size and modification time of every stored track under
+    /// `folder_path`, by path, to skip unchanged files.
+    pub fn track_snapshot(&self, folder_id: i64, folder_path: &str) -> HashMap<String, (u64, i64)> {
+        let (start, end) = under_dir(folder_path);
+        let rows = self.map_rows(
+            "SELECT path, bytes, modified_at FROM tracks WHERE folder_id=?1 OR (path >= ?2 AND path < ?3)",
+            params![folder_id, start, end],
+            |row| Ok((row.get::<_, String>(0)?, (row.get::<_, i64>(1)? as u64, row.get::<_, i64>(2)?))),
+        );
+        rows.into_iter().collect()
+    }
+
+    pub fn store_track(&self, folder_id: i64, path: &str, bytes: u64, modified_at: i64, track: &Track) -> Result<(), String> {
+        let span = track.time_span();
+        self.conn
+            .execute(
+                "INSERT INTO tracks(folder_id, path, name, bytes, modified_at, started_at, ended_at, points)
+                 VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                 ON CONFLICT(path) DO UPDATE SET folder_id=excluded.folder_id, name=excluded.name,
+                    bytes=excluded.bytes, modified_at=excluded.modified_at, started_at=excluded.started_at,
+                    ended_at=excluded.ended_at, points=excluded.points",
+                params![
+                    folder_id,
+                    path,
+                    track.name,
+                    bytes as i64,
+                    modified_at,
+                    span.map(|(start, _)| start),
+                    span.map(|(_, end)| end),
+                    track.encode()
+                ],
+            )
+            .map(|_| ())
+            .map_err(|err| err.to_string())
+    }
+
+    /// Drops a stored track whose file can no longer be read. True if there was one.
+    pub fn forget_track(&self, path: &str) -> bool {
+        self.conn.execute("DELETE FROM tracks WHERE path=?1", [path]).unwrap_or(0) > 0
+    }
+
+    /// Deletes tracks of `folder_id` whose file a complete scan did not see.
+    pub fn remove_missing_tracks(&self, folder_id: i64, seen: &[String]) -> usize {
+        let seen: HashSet<&str> = seen.iter().map(String::as_str).collect();
+        let stored: Vec<(i64, String)> =
+            self.map_rows("SELECT id, path FROM tracks WHERE folder_id=?1", [folder_id], |row| Ok((row.get(0)?, row.get(1)?)));
+        stored
+            .into_iter()
+            .filter(|(_, path)| !seen.contains(path.as_str()))
+            .filter(|(id, _)| self.conn.execute("DELETE FROM tracks WHERE id=?1", [id]).unwrap_or(0) > 0)
+            .count()
+    }
+
+    /// Every stored track as (id, folder id, path, track), oldest first.
+    pub fn tracks(&self) -> Vec<(i64, i64, String, Track)> {
+        self.map_rows(
+            "SELECT id, folder_id, path, name, points FROM tracks ORDER BY started_at, path",
+            [],
+            |row| {
+                let points: Vec<u8> = row.get(4)?;
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?, Track::decode(row.get(3)?, &points)))
+            },
+        )
     }
 
     pub fn photos(&self, nav: &Nav, search: &str, sort: Sort) -> Vec<Photo> {
@@ -1459,6 +1543,43 @@ mod tests {
         db.exclude_dir(&skip).unwrap();
         db.remove_folder(folder_id);
         assert!(db.excluded_dirs().is_empty());
+    }
+
+    #[test]
+    fn tracks_are_stored_replaced_and_removed_with_their_folder() {
+        use crate::track::Point;
+        let (db, folder_id, folder) = library("tracks");
+        let track = |name: &str, lat: f64| Track {
+            name: name.into(),
+            segments: vec![vec![
+                Point { lat, lon: 121.0, time: Some(100) },
+                Point { lat: lat + 0.01, lon: 121.0, time: Some(160) },
+            ]],
+        };
+        let ride = folder_path(&folder, "ride.gpx");
+        let walk = folder_path(&folder.join("skip"), "walk.kml");
+        db.store_track(folder_id, &ride, 10, 1, &track("Ride", 25.0)).unwrap();
+        db.store_track(folder_id, &walk, 20, 2, &track("Walk", 24.0)).unwrap();
+        db.store_track(folder_id, &ride, 11, 3, &track("Ride again", 25.5)).unwrap();
+        let stored = db.tracks();
+        assert_eq!(stored.len(), 2);
+        let (_, owner, path, again) = stored.iter().find(|(_, _, path, _)| *path == ride).unwrap();
+        assert_eq!((*owner, path.as_str()), (folder_id, ride.as_str()));
+        assert_eq!(again.name, "Ride again");
+        assert_eq!(again.segments[0][0], Point { lat: 25.5, lon: 121.0, time: Some(100) });
+        assert_eq!(db.track_snapshot(folder_id, &folder.to_string_lossy()).get(&ride), Some(&(11, 3)));
+
+        assert_eq!(db.remove_missing_tracks(folder_id, std::slice::from_ref(&ride)), 1);
+        assert_eq!(db.tracks().len(), 1);
+        db.store_track(folder_id, &walk, 20, 2, &track("Walk", 24.0)).unwrap();
+        std::fs::create_dir_all(folder.join("skip")).unwrap();
+        db.exclude_dir(&folder.join("skip")).unwrap();
+        assert_eq!(db.tracks().len(), 1);
+        assert!(db.forget_track(&ride));
+        assert!(!db.forget_track(&ride));
+        db.store_track(folder_id, &ride, 10, 1, &track("Ride", 25.0)).unwrap();
+        db.remove_folder(folder_id);
+        assert!(db.tracks().is_empty());
     }
 
     #[test]

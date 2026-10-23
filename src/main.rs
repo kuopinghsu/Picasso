@@ -19,6 +19,7 @@ mod raw_tiff;
 mod secret;
 mod shell;
 mod thumbs;
+mod track;
 mod types;
 mod update;
 mod video;

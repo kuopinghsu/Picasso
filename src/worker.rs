@@ -34,6 +34,7 @@ use crate::image_io::{self, Probe};
 use crate::photo_info::{self, Histogram};
 use crate::picasa_ini::PicasaIni;
 use crate::thumbs::ThumbStore;
+use crate::track::{is_track_path, MapTrack, Track};
 use crate::types::{folder_label, is_media_path, is_video_path, unix_now, NewPhoto, Photo, Unreadable};
 use crate::video;
 
@@ -114,6 +115,9 @@ pub enum UiEvent {
         id: i64,
         rows: Vec<(&'static str, String)>,
     },
+    /// Every GPS track in the catalog, sent at start and after a scan
+    /// changes any.
+    Tracks(Vec<MapTrack>),
     /// The photo decoded at editor preview size.
     EditBase {
         id: i64,
@@ -185,6 +189,15 @@ struct WalkSummary {
     seen: Vec<String>,
     unreadable: Vec<Unreadable>,
     complete: bool,
+    /// Track files that are new or changed.
+    tracks: Vec<TrackFile>,
+    tracks_seen: Vec<String>,
+}
+
+struct TrackFile {
+    path: String,
+    bytes: u64,
+    modified_at: i64,
 }
 
 enum Outcome {
@@ -240,6 +253,7 @@ pub fn index_loop(
         deferred: Vec::new(),
         backfilled: false,
     };
+    indexer.send_tracks();
     indexer.run();
 }
 
@@ -301,6 +315,41 @@ impl Indexer {
         self.ctx.request_repaint();
     }
 
+    fn send_tracks(&self) {
+        let tracks = self
+            .db
+            .tracks()
+            .into_iter()
+            .map(|(id, folder_id, path, track)| MapTrack::new(id, folder_id, path, &track))
+            .collect();
+        self.notify(UiEvent::Tracks(tracks));
+    }
+
+    /// Reads the new and changed track files a walk found. Returns true if
+    /// the stored tracks changed.
+    fn read_tracks(&self, folder_id: i64, files: &[TrackFile], unreadable: &mut Vec<Unreadable>) -> bool {
+        let mut changed = false;
+        for file in files {
+            match Track::read(Path::new(&file.path)) {
+                Ok(track) => match self.db.store_track(folder_id, &file.path, file.bytes, file.modified_at, &track) {
+                    Ok(()) => changed = true,
+                    Err(err) => eprintln!("picasso track: {err}"),
+                },
+                Err(reason) => {
+                    changed |= self.db.forget_track(&file.path);
+                    unreadable.push(Unreadable {
+                        path: file.path.clone(),
+                        reason,
+                        folder: false,
+                        bytes: file.bytes,
+                        modified_at: file.modified_at,
+                    });
+                }
+            }
+        }
+        changed
+    }
+
     fn scan_folder(&mut self, folder_id: i64) -> Outcome {
         let Some(path) = self.db.folder_path(folder_id) else {
             return Outcome::Finished;
@@ -315,6 +364,7 @@ impl Indexer {
         self.notify(UiEvent::ScanStarted(label.clone()));
 
         let snapshot = self.db.folder_snapshot(folder_id, &path);
+        let known_tracks = self.db.track_snapshot(folder_id, &path);
         let remembered = self.db.unreadable_snapshot(folder_id);
         let remembered_paths: HashSet<String> = remembered.keys().cloned().collect();
         let excluded: HashSet<PathBuf> = self.db.excluded_dirs().into_iter().map(|(dir, _)| PathBuf::from(dir)).collect();
@@ -328,7 +378,7 @@ impl Indexer {
             let checked = checked.clone();
             std::thread::Builder::new()
                 .name("picasso-walk".into())
-                .spawn(move || walk_folder(&root, snapshot, remembered, excluded, job_tx, &cancel, &checked))
+                .spawn(move || walk_folder(&root, snapshot, known_tracks, remembered, excluded, job_tx, &cancel, &checked))
         };
         let walker = match walker {
             Ok(handle) => handle,
@@ -416,13 +466,20 @@ impl Indexer {
                 modified_at: 0,
             }],
             complete: false,
+            tracks: Vec::new(),
+            tracks_seen: Vec::new(),
         });
+        let mut tracks_changed = self.read_tracks(folder_id, &summary.tracks, &mut unreadable);
         unreadable.extend(summary.unreadable);
         unreadable.sort_by(|a, b| a.path.cmp(&b.path));
         self.db.store_unreadable(folder_id, &unreadable, summary.complete, &remembered_paths);
         if summary.complete {
             self.db.remove_missing(folder_id, &summary.seen);
+            tracks_changed |= self.db.remove_missing_tracks(folder_id, &summary.tracks_seen) > 0;
             self.db.set_scan_pending(folder_id, false);
+        }
+        if tracks_changed {
+            self.send_tracks();
         }
         let restored = self.db.adopt_archived();
         if !restored.is_empty() {
@@ -522,6 +579,10 @@ impl Indexer {
 /// Shared state of one folder walk.
 struct Walk<'a> {
     snapshot: HashMap<String, Known>,
+    /// Size and modification time of the stored tracks, by path.
+    known_tracks: HashMap<String, (u64, i64)>,
+    tracks: Mutex<Vec<TrackFile>>,
+    tracks_seen: Mutex<Vec<String>>,
     /// Files that failed before, skipped while they are unchanged.
     remembered: HashMap<String, Unreadable>,
     /// Folders the user left out, skipped with everything below them.
@@ -581,9 +642,11 @@ fn known_under<'a>(known: impl Iterator<Item = &'a String>, unreadable: &[PathBu
 /// directories on slow or network drives are read in parallel. Size and
 /// modification time come from the directory listing itself, which on
 /// Windows saves opening every file.
+#[allow(clippy::too_many_arguments)]
 fn walk_folder(
     root: &Path,
     snapshot: HashMap<String, Known>,
+    known_tracks: HashMap<String, (u64, i64)>,
     remembered: HashMap<String, Unreadable>,
     excluded: HashSet<PathBuf>,
     jobs: Sender<ProbeJob>,
@@ -593,6 +656,9 @@ fn walk_folder(
     let walk = Walk {
         seen: Mutex::new(Vec::with_capacity(snapshot.len())),
         snapshot,
+        known_tracks,
+        tracks: Mutex::new(Vec::new()),
+        tracks_seen: Mutex::new(Vec::new()),
         remembered,
         excluded,
         jobs,
@@ -614,10 +680,14 @@ fn walk_folder(
     let mut seen = walk.seen.into_inner().unwrap_or_default();
     let paths: Vec<PathBuf> = unreadable.iter().map(|item| PathBuf::from(&item.path)).collect();
     seen.extend(known_under(walk.snapshot.keys(), &paths));
+    let mut tracks_seen = walk.tracks_seen.into_inner().unwrap_or_default();
+    tracks_seen.extend(known_under(walk.known_tracks.keys(), &paths));
     WalkSummary {
         seen,
         unreadable,
         complete,
+        tracks: walk.tracks.into_inner().unwrap_or_default(),
+        tracks_seen,
     }
 }
 
@@ -641,6 +711,8 @@ fn walk_dir<'s>(scope: &rayon::Scope<'s>, dir: PathBuf, root: bool, walk: &'s Wa
     };
     let mut seen = Vec::new();
     let mut jobs = Vec::new();
+    let mut tracks_seen = Vec::new();
+    let mut tracks = Vec::new();
     let mut listed = true;
     for entry in entries {
         let Ok(entry) = entry else {
@@ -665,7 +737,8 @@ fn walk_dir<'s>(scope: &rayon::Scope<'s>, dir: PathBuf, root: bool, walk: &'s Wa
             }
             continue;
         }
-        if !is_media_path(&path) {
+        let track = is_track_path(&path);
+        if !track && !is_media_path(&path) {
             continue;
         }
         // A link's own entry describes the link, so follow it to the file.
@@ -682,14 +755,24 @@ fn walk_dir<'s>(scope: &rayon::Scope<'s>, dir: PathBuf, root: bool, walk: &'s Wa
         let path_text = path.to_string_lossy().into_owned();
         let modified_at = image_io::file_mtime(&meta);
         let bytes = meta.len();
-        let known = walk.snapshot.get(&path_text).copied();
-        seen.push(path_text.clone());
-        if known.is_some_and(|known| known.current(modified_at, bytes)) {
+        let known = if track { None } else { walk.snapshot.get(&path_text).copied() };
+        let current = if track {
+            tracks_seen.push(path_text.clone());
+            walk.known_tracks.get(&path_text) == Some(&(bytes, modified_at))
+        } else {
+            seen.push(path_text.clone());
+            known.is_some_and(|known| known.current(modified_at, bytes))
+        };
+        if current {
             continue;
         }
         let failed = walk.remembered.get(&path_text);
         if let Some(item) = failed.filter(|item| item.bytes == bytes && item.modified_at == modified_at) {
             walk.push(item.clone());
+            continue;
+        }
+        if track {
+            tracks.push(TrackFile { path: path_text, bytes, modified_at });
             continue;
         }
         jobs.push(ProbeJob {
@@ -709,6 +792,12 @@ fn walk_dir<'s>(scope: &rayon::Scope<'s>, dir: PathBuf, root: bool, walk: &'s Wa
     }
     if let Ok(mut all) = walk.seen.lock() {
         all.extend(seen);
+    }
+    if let Ok(mut all) = walk.tracks_seen.lock() {
+        all.extend(tracks_seen);
+    }
+    if let Ok(mut all) = walk.tracks.lock() {
+        all.extend(tracks);
     }
     for job in jobs {
         if walk.cancel.load(Ordering::Relaxed) || walk.jobs.send(job).is_err() {
@@ -962,7 +1051,17 @@ mod tests {
         for dir in ["a/b", ".hidden", "skip"] {
             std::fs::create_dir_all(root.join(dir)).unwrap();
         }
-        for file in ["top.jpg", "a/one.png", "a/b/two.heic", "a/notes.txt", ".hidden/three.jpg", "skip/four.jpg"] {
+        for file in [
+            "top.jpg",
+            "a/one.png",
+            "a/b/two.heic",
+            "a/notes.txt",
+            ".hidden/three.jpg",
+            "skip/four.jpg",
+            "a/ride.gpx",
+            "a/b/old.KML",
+            "skip/walk.kml",
+        ] {
             std::fs::write(root.join(file), b"x").unwrap();
         }
         let top = root.join("top.jpg");
@@ -974,20 +1073,27 @@ mod tests {
             version: crate::db::INDEX_VERSION,
         };
         let snapshot = HashMap::from([(top.to_string_lossy().into_owned(), known)]);
+        let old = root.join("a").join("b").join("old.KML");
+        let old_meta = std::fs::metadata(&old).unwrap();
+        let known_tracks =
+            HashMap::from([(old.to_string_lossy().into_owned(), (old_meta.len(), image_io::file_mtime(&old_meta)))]);
 
         let (tx, rx) = bounded::<ProbeJob>(4);
         let drain = std::thread::spawn(move || rx.iter().map(|job| job.filename).collect::<Vec<_>>());
         let (cancel, checked) = (AtomicBool::new(false), AtomicUsize::new(0));
         let excluded = HashSet::from([root.join("skip")]);
-        let summary = walk_folder(&root, snapshot, HashMap::new(), excluded, tx, &cancel, &checked);
+        let summary = walk_folder(&root, snapshot, known_tracks, HashMap::new(), excluded, tx, &cancel, &checked);
         let mut probed = drain.join().unwrap();
         probed.sort();
         let _ = std::fs::remove_dir_all(&root);
 
         assert!(summary.complete);
         assert_eq!(summary.seen.len(), 3);
-        assert_eq!(checked.load(Ordering::Relaxed), 3);
+        assert_eq!(checked.load(Ordering::Relaxed), 5);
         assert_eq!(probed, ["one.png", "two.heic"]);
+        assert_eq!(summary.tracks_seen.len(), 2);
+        let tracks: Vec<String> = summary.tracks.iter().map(|file| file.path.clone()).collect();
+        assert_eq!(tracks, [root.join("a").join("ride.gpx").to_string_lossy().into_owned()]);
     }
 
     #[test]

@@ -67,11 +67,11 @@ The macOS app is a universal binary for Apple silicon and Intel Macs, and runs o
 To publish a release, set `version` in `Cargo.toml`, commit, then push a matching tag:
 
 ```bash
-git tag v0.9.1
-git push origin v0.9.1
+git tag v0.9.2
+git push origin v0.9.2
 ```
 
-The workflow then attaches all six packages (named `picasso-0.9.1-windows-x64.exe` and so on) and `SHA256SUMS.txt` to a new GitHub release. The run fails if the tag doesn't match the version in `Cargo.toml`. A tag with a hyphen, such as `v1.0.0-beta.1`, is marked as a pre-release. Release builds open no console window.
+The workflow then attaches all six packages (named `picasso-0.9.2-windows-x64.exe` and so on) and `SHA256SUMS.txt` to a new GitHub release. The run fails if the tag doesn't match the version in `Cargo.toml`. A tag with a hyphen, such as `v1.0.0-beta.1`, is marked as a pre-release. Release builds open no console window.
 
 ## Data
 
@@ -120,6 +120,7 @@ The first time a new version starts, it copies the settings an older version kep
 - Folder library with a date-grouped thumbnail grid, search, star filter, and sorting by date (newest or oldest first) or by name. **Sort by Name, edited** shows only the photos you have edited. Dragging the scroll bar shows the date in view, or the first file name when sorted by name. When sorted by date, a strip beside the grid lists the years, with the months of the year in view; click one to jump there. The library is read on a background thread, so the window stays responsive while a large library loads or a scan adds photos.
 - Search finds photos that match every word you type, in the file name, the folder path below the library folder, the caption, the camera, or an album name. A date such as `2019`, `2019-05`, or `2019-05-17` (also with `/` or `.`) finds photos taken in that year, month, or day, so `2019-05 beach` finds the May 2019 beach photos.
 - Folder tree with photo counts, albums, starred photos, and Places, a map of every photo with GPS. The map comes from OpenFreeMap, OpenStreetMap, CARTO, or Esri; pick one in **Settings → Map**.
+- GPS tracks: `.gpx` and `.kml` files in your folders are read by the scan and drawn as colored paths under the photo pins, in Places and on the Map panel. GPX tracks and routes are read, as are KML lines and `gx:Track` recordings; KMZ files and the outlines of areas are not. Hover over a track for its name, start time, distance, and duration, and double-click it to zoom to it. **Tracks** in the Places toolbar turns them off. Like photos, a track file is read again only when it changes, and one that can't be read is listed with the other unreadable files.
 - Info and Map panel beside the grid with the photo's EXIF and location, and a details panel in the viewer with a histogram
 - Viewer with zoom, pan, filmstrip, rotate, slideshow, and video playback. Zoom with the wheel, Ctrl+wheel, a trackpad pinch, or + and −. The viewer first shows a 2560 px version of the photo; zoom past it, or press 1 for actual size, and it decodes the photo at full resolution so 100% shows every pixel. **Show in folder** opens the file manager with the file selected.
 - Photo Tray for working on a selection: add to album, rotate, star, delete, or export. After **Move to trash**, the status bar offers **Undo** for two minutes, which puts the files back where they were (Windows and Linux).

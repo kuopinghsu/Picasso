@@ -217,6 +217,8 @@ pub struct PicassoApp {
     exif_waiting: HashSet<i64>,
     side_zoom: u8,
     side_pan: Vec2,
+    /// Wheel scroll toward the next zoom step of the Map panel.
+    side_wheel: f32,
     side_map_photo: Option<i64>,
     caption_buf: String,
     caption_photo: Option<i64>,
@@ -271,7 +273,14 @@ pub struct PicassoApp {
     map_lon: f64,
     map_zoom: u8,
     map_pan: Vec2,
+    /// Wheel scroll toward the next zoom step of the Places map.
+    map_wheel: f32,
     map_place: bool,
+    /// Size of the Places map in the latest frame.
+    map_size: Vec2,
+    /// GPS tracks from the GPX and KML files in the folders.
+    tracks: Vec<crate::track::MapTrack>,
+    show_tracks: bool,
     map_source: MapSource,
     carto_key: String,
     tiles: HashMap<(u8, u32, u32), places::MapTile>,
@@ -429,6 +438,7 @@ impl PicassoApp {
             exif_waiting: HashSet::new(),
             side_zoom: 13,
             side_pan: Vec2::ZERO,
+            side_wheel: 0.0,
             side_map_photo: None,
             caption_buf: String::new(),
             caption_photo: None,
@@ -468,7 +478,11 @@ impl PicassoApp {
             map_lon: 0.0,
             map_zoom: 2,
             map_pan: Vec2::ZERO,
+            map_wheel: 0.0,
             map_place: false,
+            map_size: Vec2::new(800.0, 600.0),
+            tracks: Vec::new(),
+            show_tracks: true,
             map_source,
             carto_key,
             tiles: HashMap::new(),
@@ -520,6 +534,7 @@ impl PicassoApp {
         app.thumb_size = config.number("thumb_size").map_or(app.thumb_size, |size| size.clamp(96.0, 220.0));
         app.slideshow_interval = config.number("slideshow_interval").map_or(app.slideshow_interval, |secs| secs.clamp(1.0, 15.0));
         app.confirm_trash = config.flag("confirm_trash").unwrap_or(true);
+        app.show_tracks = config.flag("map_tracks").unwrap_or(true);
         for (folder, item) in app.db.unreadable() {
             app.unreadable.entry(folder).or_default().push(item);
         }
@@ -720,6 +735,7 @@ impl PicassoApp {
                 self.library_dirty = true;
             }
             UiEvent::Library => self.library_dirty = true,
+            UiEvent::Tracks(tracks) => self.tracks = tracks,
             UiEvent::Restored(ids) => {
                 for id in ids {
                     let settings = self
@@ -917,7 +933,7 @@ impl PicassoApp {
         for path in dropped {
             let folder = if path.is_dir() {
                 path
-            } else if crate::types::is_media_path(&path) {
+            } else if crate::types::is_media_path(&path) || crate::track::is_track_path(&path) {
                 path.parent().map(Path::to_path_buf).unwrap_or(path)
             } else {
                 continue;
@@ -1624,6 +1640,7 @@ impl PicassoApp {
     fn remove_folder(&mut self, id: i64) {
         self.db.remove_folder(id);
         self.unreadable.remove(&id);
+        self.tracks.retain(|track| track.folder_id != id);
         self.excluded = self.db.excluded_dirs();
         if matches!(self.nav, Nav::Folder(_) | Nav::Dir(_)) {
             self.nav = Nav::Library;
@@ -1640,6 +1657,7 @@ impl PicassoApp {
         if let Some(list) = self.unreadable.get_mut(&folder) {
             list.retain(|item| !Path::new(&item.path).starts_with(&dir));
         }
+        self.tracks.retain(|track| track.folder_id != folder || !Path::new(&track.path).starts_with(&dir));
         if let Nav::Dir(ref path) = self.nav {
             if Path::new(path).starts_with(&dir) {
                 self.nav = Nav::Folder(folder);

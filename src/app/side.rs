@@ -242,10 +242,7 @@ impl PicassoApp {
         }
         let mut zoom_by = 0i32;
         if response.hovered() {
-            let scroll = ui.input(|input| input.smooth_scroll_delta.y);
-            if scroll.abs() > 0.5 {
-                zoom_by = if scroll > 0.0 { 1 } else { -1 };
-            }
+            zoom_by = super::places::wheel_steps(&mut self.side_wheel, ui.input(|input| input.smooth_scroll_delta.y));
         }
 
         let painter = ui.painter_at(rect);
@@ -257,6 +254,9 @@ impl PicassoApp {
             pan: self.side_pan,
         };
         self.paint_tiles(&painter, rect, view);
+        if self.show_tracks {
+            self.paint_tracks(&painter, rect, view, None);
+        }
 
         let (px, py) = geo::latlon_to_world(lat, lon, self.side_zoom);
         let to_screen = |other_lat: f64, other_lon: f64| {
@@ -292,8 +292,7 @@ impl PicassoApp {
         if zoom_by != 0 {
             let next = (self.side_zoom as i32 + zoom_by).clamp(MIN_ZOOM as i32, MAX_ZOOM as i32) as u8;
             if next != self.side_zoom {
-                let factor = if next > self.side_zoom { 2.0 } else { 0.5 };
-                self.side_pan *= factor;
+                self.side_pan *= 2f32.powi(i32::from(next) - i32::from(self.side_zoom));
                 self.side_zoom = next;
             }
         }

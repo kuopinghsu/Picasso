@@ -183,7 +183,7 @@ impl PicassoApp {
                     if ui.button(tr("Rotate Left")).on_hover_text(tr("Rotate counterclockwise (Ctrl+[)")).clicked() {
                         self.rotate_current(-90);
                     }
-                    if ui.button(tr("Open map")).on_hover_text(tr("Open this photo in OpenStreetMap")).clicked() {
+                    if ui.button(tr("Open in OpenStreetMap")).on_hover_text(tr("Open this photo in OpenStreetMap")).clicked() {
                         if let Some(photo) = self.photos.get(self.viewer_index) {
                             let (lat, lon, zoom) = match photo.place() {
                                 Some((lat, lon)) => (lat, lon, 14),
@@ -470,7 +470,7 @@ impl PicassoApp {
             if ui.button(tr("Show on map")).clicked() {
                 self.show_on_map(photo.id);
             }
-            if ui.button(tr("Open map")).clicked() {
+            if ui.button(tr("Open in OpenStreetMap")).clicked() {
                 let (lat, lon, zoom) = photo
                     .place()
                     .map(|(lat, lon)| (lat, lon, 14))

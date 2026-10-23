@@ -1,12 +1,14 @@
 //! Places: a map of geotagged photos. Click a pin to open it.
 //! With Geotag on, a click stores a pin for the current selection.
+//! GPS tracks from GPX and KML files are drawn under the pins.
 
 use eframe::egui::{self, epaint::TextShape, Align2, Color32, FontId, Pos2, Rect, Sense, TextureHandle, Vec2};
 
 use crate::geo::{self, TileJob, TILE_PX};
 use crate::i18n::{tr, trf};
 use crate::liberty::{LabelKind, MapLabel};
-use crate::types::Photo;
+use crate::track::{format_distance, Bounds, MapTrack};
+use crate::types::{format_duration, format_timestamp, Photo};
 
 use super::theme::{self, ACCENT, STAR};
 use super::PicassoApp;
@@ -48,14 +50,25 @@ impl PicassoApp {
                     self.reload_view();
                 }
             }
-            if ui.button(tr("Open map")).on_hover_text(tr("Open this view in OpenStreetMap")).clicked() {
+            if ui.button(tr("Open in OpenStreetMap")).on_hover_text(tr("Open this view in OpenStreetMap")).clicked() {
                 open_osm(self.map_lat, self.map_lon, self.map_zoom);
+            }
+            ui.separator();
+            let hint = tr("Show the GPS tracks of the GPX and KML files in your folders. Double-click a track to zoom to it.");
+            if ui.checkbox(&mut self.show_tracks, tr("Tracks")).on_hover_text(hint).changed() {
+                self.config.set("map_tracks", self.show_tracks);
+            }
+            if self.show_tracks && !self.tracks.is_empty() {
+                let count = self.tracks.len();
+                let text = if count == 1 { "{} track" } else { "{} tracks" };
+                ui.label(egui::RichText::new(trf(text, &[&count])).color(theme::muted()));
             }
         });
         ui.add_space(4.0);
 
         let size = ui.available_size();
         let (rect, response) = ui.allocate_exact_size(size.max(Vec2::new(80.0, 80.0)), Sense::click_and_drag());
+        self.map_size = rect.size();
         if response.dragged() {
             self.map_pan += response.drag_delta();
         }
@@ -63,14 +76,9 @@ impl PicassoApp {
             self.bake_map_pan();
         }
         if response.hovered() {
-            let scroll = ui.input(|input| input.smooth_scroll_delta.y);
-            if scroll.abs() > 0.5 {
-                let next = (self.map_zoom as i32 + if scroll > 0.0 { 1 } else { -1 }).clamp(2, 16) as u8;
-                if next != self.map_zoom {
-                    self.map_zoom = next;
-                    self.map_pan = Vec2::ZERO;
-                    self.tiles.clear();
-                }
+            let steps = wheel_steps(&mut self.map_wheel, ui.input(|input| input.smooth_scroll_delta.y));
+            if let Some(pointer) = response.hover_pos().filter(|_| steps != 0) {
+                self.zoom_map_at(steps, pointer, rect);
             }
         }
 
@@ -83,13 +91,20 @@ impl PicassoApp {
         };
         let painter = ui.painter_at(rect);
         self.paint_tiles(&painter, rect, view);
+        let on_track = if self.show_tracks { self.paint_tracks(&painter, rect, view, response.hover_pos()) } else { None };
         let hit = self.paint_pins(ui, rect);
+        let on_track = on_track.filter(|_| hit.is_none() && !response.dragged());
         self.paint_map_notes(&painter, rect);
+        if let Some(track) = on_track.and_then(|index| self.tracks.get(index)) {
+            response.clone().on_hover_ui_at_pointer(|ui| track_tooltip(ui, track));
+        }
         if response.double_clicked() {
             if let Some(id) = hit {
                 if let Some(index) = self.index_of(id) {
                     self.open_at(index);
                 }
+            } else if let Some(bounds) = on_track.and_then(|index| self.tracks.get(index)).map(|track| track.bounds) {
+                self.frame_bounds(bounds);
             }
         } else if response.clicked() && !response.dragged() {
             if let Some(id) = hit {
@@ -111,7 +126,8 @@ impl PicassoApp {
             }
         }
 
-        if self.photos.is_empty() && self.selection.is_empty() && !self.loading {
+        let tracks_shown = self.show_tracks && !self.tracks.is_empty();
+        if self.photos.is_empty() && self.selection.is_empty() && !self.loading && !tracks_shown {
             ui.painter().text(
                 rect.center(),
                 Align2::CENTER_CENTER,
@@ -132,8 +148,84 @@ impl PicassoApp {
             self.map_lat = lat;
             self.map_lon = lon;
             self.map_zoom = if places.len() <= 1 { 12 } else { 4 };
+        } else if self.show_tracks && !self.tracks.is_empty() {
+            let all = self.tracks.iter().fold(Bounds::EMPTY, |all, track| all.union(track.bounds));
+            self.frame_bounds(all);
         }
         self.map_pan = Vec2::ZERO;
+    }
+
+    /// Centers the Places map on `bounds`, in world pixels at zoom 0, at
+    /// the closest zoom that shows all of it.
+    fn frame_bounds(&mut self, bounds: Bounds) {
+        if bounds.is_empty() {
+            return;
+        }
+        let [x, y] = bounds.center();
+        let (lat, lon) = geo::world_to_latlon(x, y, 0);
+        let [w, h] = bounds.size();
+        let room = self.map_size * 0.85;
+        let mut zoom = 16u8;
+        while zoom > 2 && (w * f64::from(1u32 << zoom) > f64::from(room.x) || h * f64::from(1u32 << zoom) > f64::from(room.y)) {
+            zoom -= 1;
+        }
+        self.map_lat = lat;
+        self.map_lon = lon;
+        self.map_zoom = zoom;
+        self.map_pan = Vec2::ZERO;
+    }
+
+    /// Draws the GPS tracks over the tiles of `view`. Returns the index of
+    /// the track within a few points of `pointer`, drawn on top.
+    pub(super) fn paint_tracks(&self, painter: &egui::Painter, rect: Rect, view: MapView, pointer: Option<Pos2>) -> Option<usize> {
+        const REACH: f32 = 6.0;
+        let scale = f64::from(1u32 << view.zoom);
+        let (cx, cy) = geo::latlon_to_world(view.lat, view.lon, view.zoom);
+        let middle = rect.center() + view.pan;
+        let to_screen = |[x, y]: [f64; 2]| middle + Vec2::new((x * scale - cx) as f32, (y * scale - cy) as f32);
+        let area = rect.expand(8.0);
+        let pointer = pointer.filter(|pointer| rect.contains(*pointer));
+        let mut drawn: Vec<(usize, Vec<Vec<Pos2>>)> = Vec::new();
+        let mut hovered = None;
+        let mut best = REACH;
+        for (index, track) in self.tracks.iter().enumerate() {
+            let mut runs = Vec::new();
+            for segment in &track.segments {
+                let seen = Rect::from_two_pos(to_screen(segment.bounds.min), to_screen(segment.bounds.max));
+                if seen.intersects(area) {
+                    visible_runs(segment.points.iter().map(|point| to_screen(*point)), area, &mut runs);
+                }
+            }
+            if runs.is_empty() {
+                continue;
+            }
+            if let Some(pointer) = pointer {
+                let distance = runs.iter().map(|run| distance_to_run(pointer, run)).fold(f32::INFINITY, f32::min);
+                if distance < best {
+                    best = distance;
+                    hovered = Some(index);
+                }
+            }
+            drawn.push((index, runs));
+        }
+        drawn.sort_by_key(|(index, _)| Some(*index) == hovered);
+        for (index, runs) in &drawn {
+            let color = track_color(self.tracks[*index].id);
+            let wide = Some(*index) == hovered;
+            let (casing, line) = if wide { (8.0, 5.0) } else { (5.0, 3.0) };
+            for run in runs {
+                if run.len() == 1 {
+                    painter.circle_filled(run[0], casing / 2.0, Color32::WHITE);
+                    painter.circle_filled(run[0], line / 2.0, color);
+                } else {
+                    painter.add(egui::Shape::line(run.clone(), egui::Stroke::new(casing, Color32::from_white_alpha(220))));
+                }
+            }
+            for run in runs.iter().filter(|run| run.len() > 1) {
+                painter.add(egui::Shape::line(run.clone(), egui::Stroke::new(line, color)));
+            }
+        }
+        hovered
     }
 
     pub(super) fn show_on_map(&mut self, id: i64) {
@@ -156,6 +248,24 @@ impl PicassoApp {
         self.map_lat = lat;
         self.map_lon = lon;
         self.map_pan = Vec2::ZERO;
+    }
+
+    /// Zooms the Places map by `steps` levels, keeping the place under
+    /// `pointer` where it is.
+    fn zoom_map_at(&mut self, steps: i32, pointer: Pos2, rect: Rect) {
+        let next = (self.map_zoom as i32 + steps).clamp(2, 16) as u8;
+        if next == self.map_zoom {
+            return;
+        }
+        let (lat, lon) = self.screen_to_latlon(pointer, rect);
+        let (x, y) = geo::latlon_to_world(lat, lon, next);
+        let offset = pointer - rect.center();
+        let (lat, lon) = geo::world_to_latlon(x - f64::from(offset.x), y - f64::from(offset.y), next);
+        self.map_lat = lat;
+        self.map_lon = lon;
+        self.map_zoom = next;
+        self.map_pan = Vec2::ZERO;
+        self.tiles.clear();
     }
 
     fn screen_to_latlon(&self, pointer: Pos2, rect: Rect) -> (f64, f64) {
@@ -351,6 +461,99 @@ impl PinCells {
     }
 }
 
+/// Scroll that makes one zoom step. A mouse wheel notch scrolls 40 points.
+const WHEEL_STEP: f32 = 30.0;
+
+/// Zoom levels to move for this frame's scroll `delta`, one per wheel
+/// notch. egui spreads a notch over several frames, so the deltas add up in
+/// `wheel` until they make a step; what is left of a notch after its step
+/// is dropped when the scrolling stops.
+pub(super) fn wheel_steps(wheel: &mut f32, delta: f32) -> i32 {
+    if delta.abs() < 0.01 {
+        *wheel = 0.0;
+        return 0;
+    }
+    if wheel.signum() != delta.signum() {
+        *wheel = 0.0;
+    }
+    *wheel += delta;
+    if wheel.abs() < WHEEL_STEP {
+        return 0;
+    }
+    let steps = (*wheel / WHEEL_STEP).trunc();
+    *wheel = 0.0;
+    steps as i32
+}
+
+/// Track colors, picked by track id so each keeps its color.
+const TRACK_COLORS: [Color32; 6] = [
+    Color32::from_rgb(0xE5, 0x39, 0x35),
+    Color32::from_rgb(0x1E, 0x6F, 0xD9),
+    Color32::from_rgb(0x2E, 0x9D, 0x44),
+    Color32::from_rgb(0x8E, 0x24, 0xAA),
+    Color32::from_rgb(0xF0, 0x7C, 0x00),
+    Color32::from_rgb(0x00, 0x89, 0x7B),
+];
+
+fn track_color(id: i64) -> Color32 {
+    TRACK_COLORS[id.rem_euclid(TRACK_COLORS.len() as i64) as usize]
+}
+
+/// Adds the stretches of a line that cross `area` to `runs`. Points closer
+/// than a pixel and a half to the one kept before are dropped, so a long
+/// track costs little to draw at any zoom. A track smaller than that is
+/// left as a run of one point.
+fn visible_runs(points: impl Iterator<Item = Pos2>, area: Rect, runs: &mut Vec<Vec<Pos2>>) {
+    let mut run: Vec<Pos2> = Vec::new();
+    let mut prev: Option<Pos2> = None;
+    for pos in points {
+        if let Some(last) = prev {
+            if Rect::from_two_pos(last, pos).intersects(area) {
+                if run.is_empty() {
+                    run.push(last);
+                }
+                if run.last().is_some_and(|kept| kept.distance(pos) >= 1.5) {
+                    run.push(pos);
+                }
+            } else if !run.is_empty() {
+                runs.push(std::mem::take(&mut run));
+            }
+        }
+        prev = Some(pos);
+    }
+    if !run.is_empty() {
+        runs.push(run);
+    }
+}
+
+fn distance_to_run(pointer: Pos2, run: &[Pos2]) -> f32 {
+    if let [only] = run {
+        return pointer.distance(*only);
+    }
+    run.windows(2)
+        .map(|pair| {
+            let along = pair[1] - pair[0];
+            let t = ((pointer - pair[0]).dot(along) / along.length_sq().max(1e-6)).clamp(0.0, 1.0);
+            pointer.distance(pair[0] + along * t)
+        })
+        .fold(f32::INFINITY, f32::min)
+}
+
+fn track_tooltip(ui: &mut egui::Ui, track: &MapTrack) {
+    ui.label(egui::RichText::new(&track.name).strong());
+    match track.time_span {
+        Some((start, end)) => {
+            ui.label(format_timestamp(start));
+            ui.label(format!("{} · {}", format_distance(track.meters), format_duration((end - start) as f64)));
+        }
+        None => {
+            ui.label(format_distance(track.meters));
+        }
+    }
+    let file = std::path::Path::new(&track.path).file_name().map(|name| name.to_string_lossy().into_owned());
+    ui.label(egui::RichText::new(file.unwrap_or_default()).small().color(theme::muted()));
+}
+
 /// Writes map names over the tiles, most important first, skipping any that
 /// would overlap one already written.
 fn paint_labels(painter: &egui::Painter, rect: Rect, mut labels: Vec<(Pos2, &MapLabel)>) {
@@ -427,4 +630,21 @@ fn label_style(kind: LabelKind) -> (f32, Color32) {
 pub(super) fn open_osm(lat: f64, lon: f64, zoom: u8) {
     let url = format!("https://www.openstreetmap.org/?mlat={lat:.6}&mlon={lon:.6}#map={zoom}/{lat:.6}/{lon:.6}");
     let _ = open::that(url);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_wheel_notch_spread_over_frames_zooms_one_level() {
+        let mut wheel = 0.0;
+        // One 40-point notch, as egui smooths it.
+        let steps: i32 = [12.0, 10.0, 8.0, 5.0, 3.0, 1.5, 0.5, 0.0].iter().map(|delta| wheel_steps(&mut wheel, *delta)).sum();
+        assert_eq!(steps, 1);
+        let steps: i32 = [-20.0, -20.0, -20.0, -20.0, 0.0].iter().map(|delta| wheel_steps(&mut wheel, *delta)).sum();
+        assert_eq!(steps, -2);
+        assert_eq!(wheel_steps(&mut wheel, 10.0), 0);
+        assert_eq!(wheel_steps(&mut wheel, -10.0), 0, "turning back starts over");
+    }
 }

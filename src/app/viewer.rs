@@ -491,6 +491,7 @@ impl PicassoApp {
             let count = self.photos.len();
             let current = self.viewer_index;
             egui::ScrollArea::horizontal()
+                .id_salt("filmstrip")
                 .auto_shrink([false, false])
                 .show_viewport(ui, |ui, viewport| {
                     ui.set_width((cell + gap) * count as f32 + 8.0);

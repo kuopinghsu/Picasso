@@ -132,7 +132,9 @@ impl PicassoApp {
             .or(self.jump_to);
         self.scroll_to = None;
         self.jump_to = None;
-        let mut area = egui::ScrollArea::vertical().auto_shrink([false, false]);
+        // Named, so the viewer's filmstrip in the same panel keeps its own
+        // scroll position and the grid is where it was after the viewer.
+        let mut area = egui::ScrollArea::vertical().id_salt("library-grid").auto_shrink([false, false]);
         if let Some(y) = pending {
             area = area.vertical_scroll_offset(y.max(0.0));
         }

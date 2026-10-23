@@ -181,6 +181,9 @@ pub struct PicassoApp {
     grid_cols: usize,
     thumb_size: f32,
     scroll_to: Option<i64>,
+    /// Photo at the top of the Library grid, kept in the settings at exit
+    /// and scrolled to on the next start.
+    library_top: Option<i64>,
     /// Grid scroll offset picked in the date strip.
     jump_to: Option<f32>,
     /// Last frame the library scroll bar was dragged, for its date bubble.
@@ -411,6 +414,7 @@ impl PicassoApp {
             grid_cols: 1,
             thumb_size: 144.0,
             scroll_to: None,
+            library_top: None,
             jump_to: None,
             scroll_hint_at: None,
             view_epoch: 0,
@@ -535,6 +539,8 @@ impl PicassoApp {
         app.slideshow_interval = config.number("slideshow_interval").map_or(app.slideshow_interval, |secs| secs.clamp(1.0, 15.0));
         app.confirm_trash = config.flag("confirm_trash").unwrap_or(true);
         app.show_tracks = config.flag("map_tracks").unwrap_or(true);
+        app.library_top = config.text("library_top").and_then(|id| id.parse().ok());
+        app.scroll_to = app.library_top;
         for (folder, item) in app.db.unreadable() {
             app.unreadable.entry(folder).or_default().push(item);
         }
@@ -2128,6 +2134,9 @@ impl PicassoApp {
 impl eframe::App for PicassoApp {
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         let _ = self.cmd_tx.send(Command::Stop);
+        if let Some(id) = self.library_top {
+            self.config.set("library_top", id.to_string());
+        }
     }
 
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {

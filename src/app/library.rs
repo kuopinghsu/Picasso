@@ -87,6 +87,17 @@ impl GridLayout {
         }
     }
 
+    /// Index of the first photo in the first row of photos that is mostly
+    /// in view when the view's top edge is at `top`. Scrolling to that photo
+    /// finds the same row again.
+    fn first_visible(&self, top: f32) -> Option<usize> {
+        let first = self.rows.partition_point(|row| Self::row_y(row) + Self::row_height(row) / 2.0 <= top);
+        self.rows.get(first..)?.iter().find_map(|row| match row {
+            GridRow::Photos { indices, .. } => Some(indices.start),
+            GridRow::Header { .. } => None,
+        })
+    }
+
     fn photo_y(&self, index: usize) -> Option<f32> {
         let at = self.rows.partition_point(|row| match row {
             GridRow::Header { first, .. } => *first <= index,
@@ -193,6 +204,12 @@ impl PicassoApp {
             }
         });
         ui.advance_cursor_after_rect(full);
+        // The Library as a new window opens it, so the next start can come
+        // back to the same photos.
+        if self.nav == Nav::Library && self.search.is_empty() && self.sort == Sort::DateNewest && !self.loading {
+            let top = layout.first_visible(output.state.clamped_offset().y);
+            self.library_top = top.and_then(|index| self.photos.get(index)).map(|photo| photo.id);
+        }
         self.scroll_hint(ui, &layout, &output);
         if strip_w > 0.0 {
             let strip = Rect::from_min_max(Pos2::new(grid_rect.max.x, full.min.y), full.max);

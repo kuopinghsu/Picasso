@@ -79,11 +79,62 @@ fn run(args: &[std::path::PathBuf], renderer: eframe::Renderer) -> eframe::Resul
             })
             .with_drag_and_drop(true),
         renderer,
+        system_font_fallback: false,
         ..Default::default()
     };
     eframe::run_native(
         "Picasso",
         options,
-        Box::new(move |cc| Ok(Box::new(app::PicassoApp::new(&cc.egui_ctx, args)))),
+        Box::new(move |cc| {
+            cc.egui_ctx.add_font_provider(std::sync::Arc::new(SystemFonts::default()));
+            Ok(Box::new(app::PicassoApp::new(&cc.egui_ctx, args)))
+        }),
     )
+}
+
+/// egui's fallback to the system's fonts, which draws Chinese, Japanese,
+/// and other scripts the built-in fonts lack. Where fontconfig has no setup
+/// or no fonts, such as a bare container or a minimal server, it panics
+/// while listing them; text then sticks to the built-in fonts instead.
+#[derive(Default)]
+struct SystemFonts {
+    inner: egui_system_font_provider::SystemFontProvider,
+    failed: std::sync::atomic::AtomicBool,
+}
+
+impl SystemFonts {
+    fn guarded<T>(&self, empty: T, find: impl FnOnce() -> T) -> T {
+        use std::sync::atomic::Ordering;
+        if self.failed.load(Ordering::Relaxed) {
+            return empty;
+        }
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(find)).unwrap_or_else(|_| {
+            self.failed.store(true, Ordering::Relaxed);
+            eprintln!("Picasso: the system's fonts could not be listed, so only the built-in fonts are used.");
+            empty
+        })
+    }
+}
+
+impl eframe::egui::epaint::text::FontProvider for SystemFonts {
+    fn fonts_for_family(&self, family: &eframe::egui::FontFamily) -> Vec<eframe::egui::epaint::text::FontInsert> {
+        self.guarded(Vec::new(), || self.inner.fonts_for_family(family))
+    }
+
+    fn font_for(&self, request: &eframe::egui::epaint::text::FallbackRequest<'_>) -> Option<eframe::egui::epaint::text::FontInsert> {
+        self.guarded(None, || self.inner.font_for(request))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fonts_that_cannot_be_listed_leave_the_built_in_ones() {
+        let fonts = SystemFonts::default();
+        assert_eq!(fonts.guarded(1, || 2), 2);
+        assert_eq!(fonts.guarded(0, || -> i32 { panic!("no fontconfig") }), 0);
+        assert_eq!(fonts.guarded(0, || 2), 0, "a failed listing is not tried again");
+    }
 }

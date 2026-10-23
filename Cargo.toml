@@ -12,6 +12,7 @@ chrono = "0.4"
 crossbeam-channel = "0.5"
 directories = "6"
 eframe = { version = "0.37", features = ["glow"] }
+egui_system_font_provider = { version = "0.37", default-features = false }
 heic-rs = "0.1"
 kamadak-exif = "0.6"
 rawler = "0.8"

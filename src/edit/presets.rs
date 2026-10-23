@@ -319,6 +319,22 @@ pub const BUILTIN: &[Preset] = &[
             ("presence.clarity", -5.0),
         ],
     ),
+    preset(
+        "HDR Natural",
+        "Style",
+        &[("hdr.method", 1.0), ("hdr.strength", 70.0), ("hdr.detail", 60.0), ("presence.vibrance", 10.0)],
+    ),
+    preset(
+        "HDR Dramatic",
+        "Style",
+        &[
+            ("hdr.method", 0.0),
+            ("hdr.strength", 90.0),
+            ("hdr.detail", 85.0),
+            ("presence.clarity", 10.0),
+            ("presence.vibrance", 20.0),
+        ],
+    ),
 ];
 
 pub fn builtin(name: &str) -> Option<&'static Preset> {

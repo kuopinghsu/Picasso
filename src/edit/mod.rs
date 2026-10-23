@@ -8,6 +8,7 @@ mod color;
 mod curve;
 mod filters;
 mod geometry;
+mod hdr;
 pub mod pipeline;
 pub mod presets;
 mod settings;
@@ -22,10 +23,11 @@ use image::RgbaImage;
 pub use auto::{auto_tone, auto_white_balance, sample, white_balance_for};
 pub use color::hue_rgb;
 pub use curve::{parametric_points, sample as sample_curve};
-pub use geometry::{constrain, inside, with_aspect, Geometry, FULL};
+pub use geometry::{canvas_size, constrain, inside, is_convex, with_aspect, Geometry, FULL, SQUARE};
 pub use pipeline::{Cache, Options};
 pub use settings::{
-    Control, Curve, History, Kind, Mask, Shape, Settings, Step, Unit, BANDS, CURVE_CHANNELS, LOCALS, MIX_PARTS, PROFILES, ZONES,
+    Control, Curve, History, Kind, Mask, Shape, Settings, Step, Unit, BANDS, CURVE_CHANNELS, HDR_METHODS, LOCALS, MIX_PARTS, PROFILES,
+    ZONES,
 };
 
 use crate::i18n::tr;

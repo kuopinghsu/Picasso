@@ -3,7 +3,7 @@
 
 use eframe::egui::{self, Align2, Color32, CursorIcon, FontId, Pos2, Rect, Sense, Stroke, Vec2};
 
-use crate::edit::{self, Kind, Settings, Shape};
+use crate::edit::{self, Control, Geometry, Kind, Settings, Shape};
 use crate::i18n::tr;
 use crate::types::Photo;
 
@@ -17,6 +17,18 @@ pub(super) enum StageDrag {
     Edge { x: Option<usize>, y: Option<usize> },
     MoveCrop { start: [f32; 4], from: [f32; 2] },
     Mask { handle: MaskHandle, start: Shape, from: [f32; 2] },
+    /// The Transform tool's corners, as they were when the drag started,
+    /// in canvas fractions.
+    Quad { handle: QuadHandle, start: [[f32; 2]; 4], from: [f32; 2] },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum QuadHandle {
+    Corner(usize),
+    /// The side from this corner to the next one clockwise.
+    Side(usize),
+    Move,
+    Turn,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -138,8 +150,13 @@ impl PicassoApp {
         }
         let canvas = session.canvas(photo);
         let settings = session.current();
+        if session.tool == Tool::Adjust && (session.grid || session.straightening) && session.compare() != Compare::SideBySide {
+            paint_grid(&ui.painter_at(stage), image_rect);
+        }
         if session.tool == Tool::Crop {
             crop_overlay(ui, session, stage, image_rect, turns, canvas, &settings);
+        } else if session.tool == Tool::Transform {
+            transform_overlay(ui, session, stage, image_rect, turns, canvas, &settings);
         } else if session.tool == Tool::Mask {
             mask_overlay(ui, session, stage, image_rect, turns, &settings);
         } else if session.picker {
@@ -190,16 +207,16 @@ fn set_live(session: &mut EditSession, kind: Kind, settings: Settings) {
 }
 
 /// The furthest step from `from` toward `to` that keeps the crop on the
-/// straightened photo.
-fn furthest_inside(from: [f32; 4], to: [f32; 4], angle: f32, canvas: [f32; 2]) -> [f32; 4] {
-    if edit::inside(to, angle, canvas[0], canvas[1]) {
+/// turned, tilted, and distorted photo.
+fn furthest_inside(from: [f32; 4], to: [f32; 4], turn: &Geometry, canvas: [f32; 2]) -> [f32; 4] {
+    if edit::inside(to, turn, canvas[0], canvas[1]) {
         return to;
     }
     let lerp = |t: f32| std::array::from_fn(|i| from[i] + (to[i] - from[i]) * t);
     let (mut low, mut high) = (0.0f32, 1.0f32);
     for _ in 0..14 {
         let middle = (low + high) * 0.5;
-        if edit::inside(lerp(middle), angle, canvas[0], canvas[1]) {
+        if edit::inside(lerp(middle), turn, canvas[0], canvas[1]) {
             low = middle;
         } else {
             high = middle;
@@ -256,7 +273,6 @@ fn crop_overlay(ui: &mut egui::Ui, session: &mut EditSession, stage: Rect, image
         view: edit::FULL,
     };
     let crop = settings.crop();
-    let angle = settings.get(edit::Control::STRAIGHTEN);
     let frame = Rect::from_two_pos(map.to_screen([crop[0], crop[1]]), map.to_screen([crop[2], crop[3]]));
     let painter = ui.painter_at(stage);
     let shade = Color32::from_black_alpha(150);
@@ -271,7 +287,11 @@ fn crop_overlay(ui: &mut egui::Ui, session: &mut EditSession, stage: Rect, image
             painter.rect_filled(rect, 0, shade);
         }
     }
-    paint_guides(&painter, frame, session.guide);
+    if session.straightening {
+        paint_grid(&painter, frame);
+    } else {
+        paint_guides(&painter, frame, session.guide);
+    }
     painter.rect_stroke(frame, 0, Stroke::new(1.5, WHITE), egui::StrokeKind::Middle);
     let handle_at = |(x, y): (Option<usize>, Option<usize>)| {
         let fx = x.map_or((crop[0] + crop[2]) * 0.5, |i| crop[i]);
@@ -338,7 +358,152 @@ fn crop_overlay(ui: &mut egui::Ui, session: &mut EditSession, stage: Rect, image
             };
             if let Some(wanted) = wanted {
                 let mut next = settings.clone();
-                next.set_crop(furthest_inside(crop, wanted, angle, canvas));
+                next.set_crop(if session.constrain {
+                    furthest_inside(crop, wanted, &Geometry::turn_of(settings), canvas)
+                } else {
+                    wanted
+                });
+                set_live(session, Kind::Crop, next);
+            }
+        }
+    }
+    if response.drag_stopped() {
+        session.drag = None;
+    }
+    if response.double_clicked() {
+        session.tool = Tool::Adjust;
+    }
+}
+
+/// Whether `at` lies in `quad`, both in canvas fractions with the corners
+/// clockwise from the top left.
+fn in_quad(quad: [[f32; 2]; 4], at: [f32; 2]) -> bool {
+    (0..4).all(|i| {
+        let [a, b] = [quad[i], quad[(i + 1) % 4]];
+        (b[0] - a[0]) * (at[1] - a[1]) - (b[1] - a[1]) * (at[0] - a[0]) >= 0.0
+    })
+}
+
+/// `quad` after a drag of `handle` from `from` to `at`, all in fractions of
+/// a canvas of `canvas` pixels. Turning works in pixels so the shape holds.
+fn drag_quad(quad: [[f32; 2]; 4], handle: QuadHandle, from: [f32; 2], at: [f32; 2], canvas: [f32; 2]) -> [[f32; 2]; 4] {
+    let shift = |point: [f32; 2]| [point[0] + at[0] - from[0], point[1] + at[1] - from[1]];
+    let mut next = quad;
+    match handle {
+        QuadHandle::Corner(i) => next[i] = shift(quad[i]),
+        QuadHandle::Side(i) => {
+            next[i] = shift(quad[i]);
+            next[(i + 1) % 4] = shift(quad[(i + 1) % 4]);
+        }
+        QuadHandle::Move => next = quad.map(shift),
+        QuadHandle::Turn => {
+            let pixels = |point: [f32; 2]| [point[0] * canvas[0], point[1] * canvas[1]];
+            let center = quad.iter().fold([0.0, 0.0], |sum, point| {
+                let point = pixels(*point);
+                [sum[0] + point[0] * 0.25, sum[1] + point[1] * 0.25]
+            });
+            let bearing = |point: [f32; 2]| {
+                let point = pixels(point);
+                (point[1] - center[1]).atan2(point[0] - center[0])
+            };
+            let (sin, cos) = (bearing(at) - bearing(from)).sin_cos();
+            next = quad.map(|point| {
+                let point = pixels(point);
+                let (dx, dy) = (point[0] - center[0], point[1] - center[1]);
+                [
+                    (center[0] + dx * cos - dy * sin) / canvas[0],
+                    (center[1] + dx * sin + dy * cos) / canvas[1],
+                ]
+            });
+        }
+    }
+    next
+}
+
+/// The Transform tool: the photo's corners and the middles of its sides as
+/// handles, the outline they make, and the crop that is kept. Dragging a
+/// corner or a side moves it, inside moves the whole photo, and outside
+/// turns it about its middle.
+fn transform_overlay(ui: &mut egui::Ui, session: &mut EditSession, stage: Rect, image_rect: Rect, turns: usize, canvas: [f32; 2], settings: &Settings) {
+    let map = Mapping {
+        rect: image_rect,
+        turns,
+        view: edit::FULL,
+    };
+    let quad = Geometry::from_settings(settings).quad();
+    let painter = ui.painter_at(stage);
+    paint_grid(&painter, image_rect);
+    let crop = settings.crop();
+    let frame = Rect::from_two_pos(map.to_screen([crop[0], crop[1]]), map.to_screen([crop[2], crop[3]]));
+    painter.rect_stroke(frame, 0, Stroke::new(1.0, Color32::from_white_alpha(170)), egui::StrokeKind::Middle);
+    let corners = quad.map(|corner| map.to_screen(corner));
+    let sides: [Pos2; 4] = std::array::from_fn(|i| corners[i].lerp(corners[(i + 1) % 4], 0.5));
+    for i in 0..4 {
+        let edge = [corners[i], corners[(i + 1) % 4]];
+        painter.line_segment(edge, Stroke::new(3.0, Color32::from_black_alpha(90)));
+        painter.line_segment(edge, Stroke::new(1.5, ACCENT));
+    }
+    for pos in sides {
+        let rect = Rect::from_center_size(pos, Vec2::splat(9.0));
+        painter.rect_filled(rect, 1, WHITE);
+        painter.rect_stroke(rect, 1, Stroke::new(1.5, ACCENT), egui::StrokeKind::Outside);
+    }
+    for pos in corners {
+        painter.circle_filled(pos, 7.0, WHITE);
+        painter.circle_stroke(pos, 7.0, Stroke::new(2.0, ACCENT));
+    }
+
+    let response = ui.interact(stage, egui::Id::unique("edit-transform"), Sense::click_and_drag());
+    let handle_at = |pos: Pos2| {
+        let nearest = |points: &[Pos2; 4]| {
+            points
+                .iter()
+                .enumerate()
+                .map(|(i, point)| (i, point.distance(pos)))
+                .filter(|(_, distance)| *distance < 14.0)
+                .min_by(|a, b| a.1.total_cmp(&b.1))
+                .map(|(i, _)| i)
+        };
+        match (nearest(&corners), nearest(&sides)) {
+            (Some(i), _) => QuadHandle::Corner(i),
+            (None, Some(i)) => QuadHandle::Side(i),
+            _ if in_quad(quad, map.to_canvas(pos)) => QuadHandle::Move,
+            _ => QuadHandle::Turn,
+        }
+    };
+    if let Some(pos) = response.hover_pos() {
+        let held = match session.drag {
+            Some(StageDrag::Quad { handle, .. }) => handle,
+            _ => handle_at(pos),
+        };
+        ui.ctx().set_cursor_icon(match held {
+            QuadHandle::Corner(_) => CursorIcon::Crosshair,
+            QuadHandle::Side(_) => CursorIcon::AllScroll,
+            QuadHandle::Move => CursorIcon::Move,
+            QuadHandle::Turn if response.dragged() => CursorIcon::Grabbing,
+            QuadHandle::Turn => CursorIcon::Grab,
+        });
+    }
+    if response.drag_started() {
+        if let Some(pos) = response.interact_pointer_pos() {
+            session.drag = Some(StageDrag::Quad {
+                handle: handle_at(pos),
+                start: quad,
+                from: map.to_canvas(pos),
+            });
+        }
+    }
+    if response.dragged() {
+        if let (Some(pos), Some(StageDrag::Quad { handle, start, from })) = (response.interact_pointer_pos(), session.drag) {
+            let next_quad = drag_quad(start, handle, from, map.to_canvas(pos), canvas);
+            if edit::is_convex(next_quad) {
+                let mut next = settings.clone();
+                for (i, corner) in next_quad.iter().enumerate() {
+                    for axis in 0..2 {
+                        next.set(Control::corner(i, axis), corner[axis] - edit::SQUARE[i][axis]);
+                    }
+                }
+                session.refit_crop(&mut next, turns);
                 set_live(session, Kind::Crop, next);
             }
         }
@@ -390,6 +555,30 @@ fn paint_guides(painter: &egui::Painter, frame: Rect, guide: usize) {
             line(frame.right_top(), frame.left_bottom());
         }
         _ => {}
+    }
+}
+
+/// Square cells over `rect`, with lines through its center, for lining up
+/// horizons and verticals.
+fn paint_grid(painter: &egui::Painter, rect: Rect) {
+    let painter = painter.with_clip_rect(rect.intersect(painter.clip_rect()));
+    let cell = (rect.width().max(rect.height()) / 12.0).clamp(24.0, 72.0);
+    let shadow = Stroke::new(2.0, Color32::from_black_alpha(60));
+    let stroke = Stroke::new(1.0, Color32::from_white_alpha(120));
+    let line = |a: Pos2, b: Pos2| {
+        painter.line_segment([a, b], shadow);
+        painter.line_segment([a, b], stroke);
+    };
+    let center = rect.center();
+    let across = (rect.width() * 0.5 / cell).floor() as i32;
+    for step in -across..=across {
+        let x = center.x + step as f32 * cell;
+        line(Pos2::new(x, rect.top()), Pos2::new(x, rect.bottom()));
+    }
+    let down = (rect.height() * 0.5 / cell).floor() as i32;
+    for step in -down..=down {
+        let y = center.y + step as f32 * cell;
+        line(Pos2::new(rect.left(), y), Pos2::new(rect.right(), y));
     }
 }
 

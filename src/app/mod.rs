@@ -1022,9 +1022,12 @@ impl PicassoApp {
             if plain(Key::C) {
                 self.set_tool(editor::Tool::Crop);
             }
-            let cropping = self.edit.as_ref().is_some_and(|session| session.tool == editor::Tool::Crop);
-            if cropping && plain(Key::Enter) {
-                self.set_tool(editor::Tool::Crop);
+            if plain(Key::T) {
+                self.set_tool(editor::Tool::Transform);
+            }
+            let framing = self.edit.as_ref().filter(|session| session.uncropped()).map(|session| session.tool);
+            if let Some(tool) = framing.filter(|_| plain(Key::Enter)) {
+                self.set_tool(tool);
             }
         }
         if plain(Key::E) {

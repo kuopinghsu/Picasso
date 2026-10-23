@@ -22,6 +22,8 @@ use super::PicassoApp;
 pub(super) enum Tool {
     Adjust,
     Crop,
+    /// Four corner handles that turn, tilt, and skew the photo.
+    Transform,
     Mask,
 }
 
@@ -84,6 +86,13 @@ pub(super) struct EditSession {
     pub aspect: usize,
     pub portrait: bool,
     pub guide: usize,
+    /// A square grid over the photo in the Adjust tool.
+    pub grid: bool,
+    /// The straighten slider is being dragged, so the stage shows the grid.
+    pub straightening: bool,
+    /// Turning, tilting, or moving corners shrinks the crop to keep the
+    /// empty edges out.
+    pub constrain: bool,
     pub mask: Option<usize>,
     pub mask_overlay: bool,
     pub point_curve: bool,
@@ -121,6 +130,9 @@ impl EditSession {
             aspect: 0,
             portrait: false,
             guide: 0,
+            grid: false,
+            straightening: false,
+            constrain: true,
             mask: None,
             mask_overlay: true,
             point_curve: false,
@@ -146,11 +158,16 @@ impl EditSession {
 
     fn options(&self) -> Options {
         Options {
-            crop: self.tool != Tool::Crop,
+            crop: !self.uncropped(),
             adjust: true,
             clipping: self.clipping,
             overlay: self.mask.filter(|_| self.tool == Tool::Mask && self.mask_overlay),
         }
+    }
+
+    /// Whether the tool shows the whole canvas, crop and all.
+    pub fn uncropped(&self) -> bool {
+        matches!(self.tool, Tool::Crop | Tool::Transform)
     }
 
     /// How the stage compares, after tools that need the edit alone.
@@ -170,12 +187,14 @@ impl EditSession {
         self.before.as_ref().or(self.preview.as_ref())
     }
 
-    /// Size of the canvas crops are measured on, in pixels.
+    /// Size of the canvas crops are measured on, in pixels, at the current
+    /// straighten angle.
     pub fn canvas(&self, photo: &Photo) -> [f32; 2] {
-        match &self.base {
+        let [w, h] = match &self.base {
             Some(base) => [base.width() as f32, base.height() as f32],
             None => [photo.width.max(1) as f32, photo.height.max(1) as f32],
-        }
+        };
+        edit::canvas_size(self.current().get(Control::STRAIGHTEN), w, h)
     }
 
     /// Width over height of the chosen crop shape in canvas pixels, or
@@ -201,6 +220,25 @@ impl EditSession {
         }
         Some(if odd { 1.0 / screen } else { screen })
     }
+
+    /// Fits the crop of `settings` again after its turn, tilt, or corners
+    /// changed: the crop's shape, or the chosen aspect, as large as the
+    /// canvas allows, then shrunk to keep the empty edges out while
+    /// constraining. `turns` is the catalog rotation in quarter turns.
+    pub fn refit_crop(&self, settings: &mut Settings, turns: usize) {
+        let Some(base) = &self.base else { return };
+        let canvas = edit::canvas_size(settings.get(Control::STRAIGHTEN), base.width() as f32, base.height() as f32);
+        let [left, top, right, bottom] = settings.crop();
+        let ratio = self
+            .aspect_ratio(canvas, turns)
+            .unwrap_or(((right - left) * canvas[0]) / ((bottom - top) * canvas[1]).max(1e-3));
+        let widest = edit::with_aspect(edit::FULL, ratio, canvas[0], canvas[1]);
+        settings.set_crop(if self.constrain {
+            edit::constrain(widest, &Geometry::turn_of(settings), canvas[0], canvas[1])
+        } else {
+            widest
+        });
+    }
 }
 
 impl PicassoApp {
@@ -217,7 +255,7 @@ impl PicassoApp {
             Some(session) => session.current(),
             None => self.edit_settings(photo.id),
         };
-        if session.is_some_and(|session| session.tool == Tool::Crop) || photo.is_video() {
+        if session.is_some_and(EditSession::uncropped) || photo.is_video() {
             settings.set_crop(edit::FULL);
         }
         let (w, h) = edit::edited_size(&settings, photo.width.max(1), photo.height.max(1));
@@ -541,7 +579,8 @@ impl PicassoApp {
         let Some(base) = session.base.clone() else { return };
         let mut settings = session.current();
         let (w, h) = (base.width() as f32, base.height() as f32);
-        let (x, y) = Geometry::from_settings(&settings).canvas_to_source(at[0] * w, at[1] * h, w, h);
+        let [cw, ch] = edit::canvas_size(settings.get(Control::STRAIGHTEN), w, h);
+        let (x, y) = Geometry::from_settings(&settings).canvas_to_source(at[0] * cw, at[1] * ch, cw, ch);
         let (temperature, tint) = edit::white_balance_for(edit::sample(&base, x / w, y / h, 3));
         settings.set(Control::TEMPERATURE, temperature);
         settings.set(Control::TINT, tint);

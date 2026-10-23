@@ -333,7 +333,7 @@ impl PicassoApp {
         // The arrows take the hover from the stage once the pointer is on
         // them, so they key off the pointer position rather than `hovered`.
         let handles = self.edit.as_ref().is_some_and(|session| {
-            session.id == photo.id && matches!(session.tool, super::editor::Tool::Crop | super::editor::Tool::Mask)
+            session.id == photo.id && matches!(session.tool, super::editor::Tool::Crop | super::editor::Tool::Transform | super::editor::Tool::Mask)
         });
         if (ui.rect_contains_pointer(stage) && !handles) || slideshow {
             let mid_y = stage.center().y;

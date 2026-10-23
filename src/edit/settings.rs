@@ -103,7 +103,12 @@ pub const LOCAL_SATURATION: usize = 6;
 pub const LOCAL_CLARITY: usize = 7;
 pub const LOCAL_DEHAZE: usize = 8;
 
-const COUNT: usize = 92;
+const COUNT: usize = 102;
+const CORNER: u8 = 94;
+
+/// The photo's corners in the distort, clockwise from the top left.
+pub const CORNERS: [&str; 4] = ["Top left", "Top right", "Bottom right", "Bottom left"];
+const CORNER_KEYS: [&str; 4] = ["top_left", "top_right", "bottom_right", "bottom_left"];
 const MIX: u8 = 20;
 const GRADE: u8 = 44;
 const BW: u8 = 59;
@@ -161,6 +166,14 @@ impl Control {
     pub const HDR_METHOD: Control = Control(89);
     pub const HDR_STRENGTH: Control = Control(90);
     pub const HDR_DETAIL: Control = Control(91);
+    pub const PERSPECTIVE_V: Control = Control(92);
+    pub const PERSPECTIVE_H: Control = Control(93);
+
+    /// How far corner `corner` (clockwise from the top left) is moved along
+    /// `axis` (0 across, 1 down), in canvas fractions.
+    pub const fn corner(corner: usize, axis: usize) -> Control {
+        Control(CORNER + (corner * 2 + axis) as u8)
+    }
 
     /// Color mixer slider: `part` 0 hue, 1 saturation, 2 luminance.
     pub const fn mix(part: usize, band: usize) -> Control {
@@ -259,7 +272,7 @@ impl Control {
     }
 
     fn is_geometry(self) -> bool {
-        (Control::STRAIGHTEN.0..=Control::CROP_BOTTOM.0).contains(&self.0)
+        (Control::STRAIGHTEN.0..=Control::CROP_BOTTOM.0).contains(&self.0) || self.0 >= Control::PERSPECTIVE_V.0
     }
 }
 
@@ -322,7 +335,7 @@ fn defs() -> &'static [Def] {
             plain("sharpen.masking".into(), "Masking", 0.0).prefixed("Sharpening"),
             plain("noise.luminance".into(), "Luminance", 0.0).prefixed("Noise reduction"),
             plain("noise.color".into(), "Color", 0.0).prefixed("Noise reduction"),
-            def("geometry.angle", "Straighten", -45.0, 45.0, 0.0, Unit::Degrees),
+            def("geometry.angle", "Straighten", -180.0, 180.0, 0.0, Unit::Degrees),
             def("geometry.flip_h", "Flip horizontal", 0.0, 1.0, 0.0, Unit::Toggle),
             def("geometry.flip_v", "Flip vertical", 0.0, 1.0, 0.0, Unit::Toggle),
             def("crop.left", "Crop left", 0.0, 1.0, 0.0, Unit::Fraction),
@@ -333,7 +346,14 @@ fn defs() -> &'static [Def] {
             def("hdr.method", "Method", 0.0, (HDR_METHODS.len() - 1) as f32, 0.0, Unit::Choice).prefixed("HDR"),
             plain("hdr.strength".into(), "Strength", 0.0).prefixed("HDR"),
             plain("hdr.detail".into(), "Detail", 50.0).prefixed("HDR"),
+            def("geometry.vertical", "Vertical", -45.0, 45.0, 0.0, Unit::Degrees).prefixed("Perspective"),
+            def("geometry.horizontal", "Horizontal", -45.0, 45.0, 0.0, Unit::Degrees).prefixed("Perspective"),
         ]);
+        for (corner, key) in CORNER_KEYS.iter().enumerate() {
+            for axis in ["x", "y"] {
+                list.push(def(format!("geometry.corner.{key}.{axis}"), CORNERS[corner], -1.0, 1.0, 0.0, Unit::Fraction).prefixed("Corner"));
+            }
+        }
         debug_assert_eq!(list.len(), COUNT);
         list
     })
@@ -505,8 +525,8 @@ impl Settings {
         self.set(Control::CROP_BOTTOM, bottom);
     }
 
-    /// The settings with straighten, flips, and crop back to none, as copied
-    /// to other photos.
+    /// The settings with straighten, perspective, corners, flips, and crop
+    /// back to none, as copied to other photos.
     pub fn without_geometry(&self) -> Settings {
         let mut copy = self.clone();
         for control in Control::all().filter(|control| control.is_geometry()) {
@@ -515,7 +535,7 @@ impl Settings {
         copy
     }
 
-    /// `self` with the straighten, flips, and crop of `other`, as pasted.
+    /// `self` with the geometry of `other`, as pasted.
     pub fn with_geometry_of(&self, other: &Settings) -> Settings {
         let mut copy = self.clone();
         for control in Control::all().filter(|control| control.is_geometry()) {

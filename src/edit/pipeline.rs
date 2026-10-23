@@ -3,8 +3,8 @@
 //! slider change only reruns the per-pixel pass.
 //!
 //! Order: noise reduction, dehaze, white balance and exposure, local
-//! highlights and shadows, clarity, texture, and sharpening, the global
-//! tone curve, mask contrast, the OkLab color stage (mixer, vibrance,
+//! highlights and shadows, clarity, texture, and sharpening, HDR tone
+//! mapping, the global tone curve, mask contrast, the OkLab color stage (mixer, vibrance,
 //! saturation, black & white, grading), vignette, encoding, point curves,
 //! grain, and the clipping and mask overlays.
 
@@ -18,6 +18,7 @@ use super::color::{self, decode_table, encode, from_oklab, hue_direction, lumina
 use super::curve;
 use super::filters::{box_blur, guided, min_filter, shrink, Low};
 use super::geometry::{warp, Geometry, FULL};
+use super::hdr::{self, Hdr};
 use super::presets;
 use super::settings::*;
 
@@ -45,7 +46,7 @@ impl Default for Options {
     }
 }
 
-type Key = (usize, u32, u32, [u32; 7]);
+type Key = (usize, u32, u32, [u32; 17]);
 
 /// The frame of the last render, reused while the photo and its geometry
 /// stay the same. Clear it when the photo changes.
@@ -63,12 +64,23 @@ impl Cache {
 
     fn frame(&mut self, source: &RgbaImage, geometry: &Geometry) -> Arc<Frame> {
         let g = geometry;
+        let corner = |i: usize| g.corners[i / 2][i % 2].to_bits();
         let key = (
             source.as_raw().as_ptr() as usize,
             source.width(),
             source.height(),
             [
                 g.angle.to_bits(),
+                g.vertical.to_bits(),
+                g.horizontal.to_bits(),
+                corner(0),
+                corner(1),
+                corner(2),
+                corner(3),
+                corner(4),
+                corner(5),
+                corner(6),
+                corner(7),
                 u32::from(g.flip_h),
                 u32::from(g.flip_v),
                 g.crop[0].to_bits(),
@@ -102,6 +114,7 @@ pub struct Frame {
     base: OnceLock<Low>,
     fine: OnceLock<Vec<f32>>,
     haze: OnceLock<Haze>,
+    stats: OnceLock<hdr::Stats>,
 }
 
 struct Haze {
@@ -128,14 +141,20 @@ impl Frame {
         Frame {
             w: warped.width() as usize,
             h: warped.height() as usize,
-            canvas: [source.width() as f32, source.height() as f32],
+            canvas: super::geometry::canvas_size(geometry.angle, source.width() as f32, source.height() as f32),
             view: geometry.crop,
             rgb,
             log,
             base: OnceLock::new(),
             fine: OnceLock::new(),
             haze: OnceLock::new(),
+            stats: OnceLock::new(),
         }
+    }
+
+    /// Average and extremes of the brightness, which HDR tone maps from.
+    fn stats(&self) -> hdr::Stats {
+        *self.stats.get_or_init(|| hdr::Stats::of(&shrink(&self.log, self.w, self.h, 512).0))
     }
 
     /// Edge-aware large-scale luminance, the base local tone works on.
@@ -431,7 +450,14 @@ fn process(frame: &Frame, s: &Settings) -> RgbaImage {
             .collect()
     });
 
-    let needs_base = highlights != 0.0
+    let hdr_strength = n(Control::HDR_STRENGTH);
+    let hdr = (hdr_strength > 0.0).then(|| {
+        let method = hdr::Method::from_index(s.get(Control::HDR_METHOD).round() as usize);
+        Hdr::new(method, hdr_strength, s.get(Control::HDR_DETAIL), frame.stats(), exposure)
+    });
+
+    let needs_base = hdr.is_some()
+        || highlights != 0.0
         || shadows != 0.0
         || clarity != 0.0
         || local_any(LOCAL_HIGHLIGHTS)
@@ -552,6 +578,14 @@ fn process(frame: &Frame, s: &Settings) -> RgbaImage {
             }
             if delta != 0.0 {
                 let scale = delta.clamp(-6.0, 6.0).exp2();
+                rgb = rgb.map(|c| c * scale);
+            }
+
+            if let (Some(hdr), Some(base)) = (&hdr, base) {
+                let current = (luminance(rgb) + LOG_FLOOR).log2();
+                let detail = l0 - base.sample(fx, fy);
+                let target = current + (hdr.map(current - detail, detail) - current) * hdr.strength;
+                let scale = (target - current).clamp(-8.0, 8.0).exp2();
                 rgb = rgb.map(|c| c * scale);
             }
 
@@ -689,6 +723,38 @@ mod tests {
 
     fn gradient() -> RgbaImage {
         RgbaImage::from_fn(64, 48, |x, y| image::Rgba([(x * 4) as u8, (y * 5) as u8, 128, 255]))
+    }
+
+    /// Bright sky with a white sun over a dark, textured foreground.
+    fn backlit() -> RgbaImage {
+        RgbaImage::from_fn(240, 160, |x, y| {
+            let (fx, fy) = (x as f32 / 240.0, y as f32 / 160.0);
+            let texture = ((x as f32 * 0.9).sin() * (y as f32 * 0.7).cos()) * 0.5 + 0.5;
+            let v = if ((fx - 0.7).powi(2) + (fy - 0.18).powi(2)).sqrt() < 0.06 {
+                255
+            } else if fy < 0.45 {
+                220
+            } else {
+                (20.0 + 20.0 * texture) as u8
+            };
+            image::Rgba([v, v, v, 255])
+        })
+    }
+
+    #[test]
+    fn hdr_lifts_shadows_and_tames_highlights() {
+        let source = backlit();
+        let mut cache = Cache::default();
+        for method in 0..HDR_METHODS.len() {
+            let mut settings = Settings::default();
+            settings.set(Control::HDR_METHOD, method as f32);
+            settings.set(Control::HDR_STRENGTH, 100.0);
+            let out = render(&source, &settings, &Options::default(), Some(&mut cache));
+            assert!(out.get_pixel(168, 29)[0] < 255, "{method}: the sun comes down from white");
+            if HDR_METHODS[method] != "Filmic" {
+                assert!(out.get_pixel(40, 140)[0] > source.get_pixel(40, 140)[0], "{method}: shadows open up");
+            }
+        }
     }
 
     #[test]

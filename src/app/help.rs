@@ -66,6 +66,7 @@ const KEYBOARD: &[Section] = &[
             (&["Shift+Y"], "Before and after split view"),
             (&["J"], "Show clipped highlights and shadows"),
             (&["C"], "Crop & straighten"),
+            (&["T"], "Transform with four corners"),
             (&["Enter"], "Finish cropping"),
             (&["Esc"], "Leave the tool or close the editor"),
         ],

@@ -8,7 +8,7 @@ use eframe::egui::{self, Color32, Pos2, RichText, Sense, Stroke, Vec2};
 use serde_json::{Map, Value};
 
 use crate::edit::{
-    self, presets, Control, Kind, Mask, Settings, Shape, Unit, BANDS, CURVE_CHANNELS, LOCALS, MIX_PARTS, PROFILES, ZONES,
+    self, presets, Control, Geometry, Kind, Mask, Settings, Shape, Unit, BANDS, CURVE_CHANNELS, HDR_METHODS, LOCALS, MIX_PARTS, PROFILES, ZONES,
 };
 use crate::i18n::{tr, trf};
 use crate::photo_info::Histogram;
@@ -156,6 +156,7 @@ fn panel_contents(ui: &mut egui::Ui, session: Option<&mut EditSession>, height: 
     let tools = [
         (Tool::Adjust, "Adjust", "Light, color, effects, and detail"),
         (Tool::Crop, "Crop", "Crop & straighten (C)"),
+        (Tool::Transform, "Transform", "Drag four corners to turn, tilt, and skew (T)"),
         (Tool::Mask, "Masks", "Linear and radial local adjustments"),
     ];
     let picked = button_row(
@@ -257,6 +258,7 @@ fn panel_contents(ui: &mut egui::Ui, session: Option<&mut EditSession>, height: 
         amend: false,
         auto: session.history.auto_values(),
     };
+    session.straightening = false;
     let used = ui.cursor().top() - top;
     egui::ScrollArea::vertical()
         .id_salt("edit-panel")
@@ -267,6 +269,7 @@ fn panel_contents(ui: &mut egui::Ui, session: Option<&mut EditSession>, height: 
             match session.tool {
                 Tool::Adjust => adjust_sections(ui, session, &mut draft, context, actions),
                 Tool::Crop => crop_section(ui, session, &mut draft, context, actions),
+                Tool::Transform => corners_section(ui, session, &mut draft, context, actions),
                 Tool::Mask => mask_section(ui, session, &mut draft),
             }
         });
@@ -325,11 +328,18 @@ fn subheading(ui: &mut egui::Ui, title: &'static str) {
 
 /// Slider with its name and value above it. Double-clicking the name or
 /// the slider puts it back to neutral.
-fn slider(ui: &mut egui::Ui, draft: &mut Draft, control: Control, kind: Kind) {
-    slider_labeled(ui, draft, control, kind, control.def().label, None);
+fn slider(ui: &mut egui::Ui, draft: &mut Draft, control: Control, kind: Kind) -> egui::Response {
+    slider_labeled(ui, draft, control, kind, control.def().label, None)
 }
 
-fn slider_labeled(ui: &mut egui::Ui, draft: &mut Draft, control: Control, kind: Kind, label: &'static str, swatch: Option<Color32>) {
+fn slider_labeled(
+    ui: &mut egui::Ui,
+    draft: &mut Draft,
+    control: Control,
+    kind: Kind,
+    label: &'static str,
+    swatch: Option<Color32>,
+) -> egui::Response {
     let def = control.def();
     let mut value = draft.settings.get(control);
     let neutral = control.neutral();
@@ -348,6 +358,7 @@ fn slider_labeled(ui: &mut egui::Ui, draft: &mut Draft, control: Control, kind: 
         draft.settings.set(control, value);
         draft.changed(kind);
     }
+    response
 }
 
 /// Bold name, an "auto" badge when Auto tone or Auto white balance set the
@@ -476,6 +487,8 @@ fn adjust_sections(ui: &mut egui::Ui, session: &mut EditSession, draft: &mut Dra
 
     section(ui, "Presets", false, |ui| presets_section(ui, session, draft, context, actions));
 
+    section(ui, "Transform", false, |ui| transform_section(ui, session, draft, context, actions));
+
     section(ui, "Light", true, |ui| {
         for control in Control::LIGHT {
             slider(ui, draft, control, Kind::Adjust);
@@ -483,6 +496,8 @@ fn adjust_sections(ui: &mut egui::Ui, session: &mut EditSession, draft: &mut Dra
     });
 
     section(ui, "Tone curve", false, |ui| tone_curve_section(ui, session, draft));
+
+    section(ui, "HDR", false, |ui| hdr_section(ui, draft));
 
     section(ui, "Color", true, |ui| {
         ui.horizontal(|ui| {
@@ -593,6 +608,37 @@ fn adjust_sections(ui: &mut egui::Ui, session: &mut EditSession, draft: &mut Dra
                 .color(theme::muted()),
         );
     });
+}
+
+/// What each HDR method does to a photo, under its picker.
+const HDR_NOTES: [&str; 5] = [
+    "Evens out light and shadow by area and brings out detail, the classic HDR look.",
+    "Blends darker and brighter copies of the photo, keeping each area from the best exposed one. Natural, with open shadows.",
+    "A gentle curve that rolls off bright highlights and lifts shadows.",
+    "A logarithmic curve that opens up deep shadows the most.",
+    "The film-like curve from cinema, with rich contrast and soft highlights.",
+];
+
+fn hdr_section(ui: &mut egui::Ui, draft: &mut Draft) {
+    ui.horizontal(|ui| {
+        ui.label(RichText::new(tr("Method")).size(12.0).color(theme::text()));
+        let mut method = (draft.settings.get(Control::HDR_METHOD).round().max(0.0) as usize).min(HDR_METHODS.len() - 1);
+        egui::ComboBox::from_id_salt("edit-hdr-method")
+            .width(170.0)
+            .selected_text(tr(HDR_METHODS[method]))
+            .show_ui(ui, |ui| {
+                for (index, name) in HDR_METHODS.iter().enumerate() {
+                    if ui.selectable_value(&mut method, index, tr(name)).clicked() {
+                        draft.settings.set(Control::HDR_METHOD, index as f32);
+                        draft.changed(Kind::Adjust);
+                    }
+                }
+            });
+    });
+    let method = (draft.settings.get(Control::HDR_METHOD).round().max(0.0) as usize).min(HDR_NOTES.len() - 1);
+    ui.label(RichText::new(tr(HDR_NOTES[method])).size(11.0).color(theme::muted()));
+    slider(ui, draft, Control::HDR_STRENGTH, Kind::Adjust);
+    slider(ui, draft, Control::HDR_DETAIL, Kind::Adjust);
 }
 
 fn swatch(hue: f32) -> Color32 {
@@ -937,6 +983,55 @@ fn crop_section(ui: &mut egui::Ui, session: &mut EditSession, draft: &mut Draft,
     let Some(photo) = context.photo else { return };
     let canvas = session.canvas(photo);
     let turns = photo.rotation.div_euclid(90).rem_euclid(4) as usize;
+    let before = Geometry::turn_of(&draft.settings);
+    aspect_row(ui, session, draft, canvas, turns);
+    ui.horizontal(|ui| {
+        ui.label(RichText::new(tr("Overlay")).size(12.0).color(theme::text()));
+        egui::ComboBox::from_id_salt("edit-guide")
+            .width(130.0)
+            .selected_text(tr(GUIDES[session.guide]))
+            .show_ui(ui, |ui| {
+                for (index, name) in GUIDES.iter().enumerate() {
+                    ui.selectable_value(&mut session.guide, index, tr(name));
+                }
+            });
+    });
+    ui.add_space(4.0);
+    straighten_slider(ui, session, draft);
+    ui.add_space(4.0);
+    flip_and_rotate(ui, draft, actions);
+    let mut refit = constrain_checkbox(ui, session);
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        let mut reset = draft.settings.clone();
+        for control in [Control::STRAIGHTEN, Control::FLIP_H, Control::FLIP_V] {
+            reset.set(control, control.neutral());
+        }
+        reset.set_crop(edit::FULL);
+        if ui.add_enabled(reset != draft.settings, egui::Button::new(tr("Reset crop"))).clicked() {
+            draft.settings = reset;
+            draft.changed(Kind::Crop);
+            refit = true;
+        }
+        if ui.add(theme::primary_button(tr("Done"))).clicked() {
+            actions.push(Action::Tool(Tool::Adjust));
+        }
+    });
+    if refit || Geometry::turn_of(&draft.settings) != before {
+        session.refit_crop(&mut draft.settings, turns);
+        draft.changed(Kind::Crop);
+    }
+    ui.add_space(6.0);
+    ui.label(
+        RichText::new(tr("Drag the corners or edges to crop, and inside the frame to move it. Double-click or press Enter to finish."))
+            .size(11.0)
+            .color(theme::muted()),
+    );
+}
+
+/// The crop shape, with a button that swaps portrait and landscape. A new
+/// shape takes the largest crop of it inside the current one.
+fn aspect_row(ui: &mut egui::Ui, session: &mut EditSession, draft: &mut Draft, canvas: [f32; 2], turns: usize) {
     let mut reshape = false;
     ui.horizontal(|ui| {
         ui.label(RichText::new(tr("Aspect")).size(12.0).color(theme::text()));
@@ -958,35 +1053,167 @@ fn crop_section(ui: &mut egui::Ui, session: &mut EditSession, draft: &mut Draft,
             reshape = true;
         }
     });
-    let angle = draft.settings.get(Control::STRAIGHTEN);
     if reshape {
         if let Some(ratio) = session.aspect_ratio(canvas, turns) {
-            let crop = edit::with_aspect(draft.settings.crop(), ratio, canvas[0], canvas[1]);
-            draft.settings.set_crop(edit::constrain(crop, angle, canvas[0], canvas[1]));
+            let mut crop = edit::with_aspect(draft.settings.crop(), ratio, canvas[0], canvas[1]);
+            if session.constrain {
+                crop = edit::constrain(crop, &Geometry::turn_of(&draft.settings), canvas[0], canvas[1]);
+            }
+            draft.settings.set_crop(crop);
             draft.changed(Kind::Crop);
         }
     }
+}
+
+/// Returns true when constraining was just turned on, so the crop needs
+/// fitting again.
+fn constrain_checkbox(ui: &mut egui::Ui, session: &mut EditSession) -> bool {
+    ui.checkbox(&mut session.constrain, tr("Constrain crop"))
+        .on_hover_text(tr("Crop away the empty edges that turning, perspective, or moved corners leave"))
+        .changed()
+        && session.constrain
+}
+
+/// Straighten, perspective, flips, 90° turns, and the grid, without leaving
+/// Adjust, and the way to the corner handles and the crop frame.
+fn transform_section(ui: &mut egui::Ui, session: &mut EditSession, draft: &mut Draft, context: &Context, actions: &mut Vec<Action>) {
+    let Some(photo) = context.photo else { return };
+    let canvas = session.canvas(photo);
+    let turns = photo.rotation.div_euclid(90).rem_euclid(4) as usize;
+    transform_controls(ui, session, draft, turns, actions);
+    ui.checkbox(&mut session.grid, tr("Show grid"))
+        .on_hover_text(tr("Lines over the photo to line up horizons and verticals"));
+    aspect_row(ui, session, draft, canvas, turns);
+    ui.add_space(2.0);
     ui.horizontal(|ui| {
-        ui.label(RichText::new(tr("Overlay")).size(12.0).color(theme::text()));
-        egui::ComboBox::from_id_salt("edit-guide")
-            .width(130.0)
-            .selected_text(tr(GUIDES[session.guide]))
-            .show_ui(ui, |ui| {
-                for (index, name) in GUIDES.iter().enumerate() {
-                    ui.selectable_value(&mut session.guide, index, tr(name));
-                }
-            });
+        if ui.button(tr("Corners…")).on_hover_text(tr("Drag four corners to turn, tilt, and skew (T)")).clicked() {
+            actions.push(Action::Tool(Tool::Transform));
+        }
+        if ui.button(tr("Crop…")).on_hover_text(tr("Crop & straighten (C)")).clicked() {
+            actions.push(Action::Tool(Tool::Crop));
+        }
+        reset_transform_button(ui, session, draft, turns);
     });
+}
+
+/// The Transform tool: the stage shows four corner handles.
+fn corners_section(ui: &mut egui::Ui, session: &mut EditSession, draft: &mut Draft, context: &Context, actions: &mut Vec<Action>) {
+    let Some(photo) = context.photo else { return };
+    let turns = photo.rotation.div_euclid(90).rem_euclid(4) as usize;
+    ui.label(
+        RichText::new(tr(
+            "Drag a corner to move it, the middle of a side to slide or skew that side, inside to shift the photo, and outside to turn it.",
+        ))
+        .size(11.0)
+        .color(theme::muted()),
+    );
     ui.add_space(4.0);
-    slider(ui, draft, Control::STRAIGHTEN, Kind::Crop);
-    let new_angle = draft.settings.get(Control::STRAIGHTEN);
-    if new_angle != angle {
-        let [left, top, right, bottom] = draft.settings.crop();
-        let ratio = ((right - left) * canvas[0]) / ((bottom - top) * canvas[1]).max(1e-3);
-        let widest = edit::with_aspect(edit::FULL, ratio, canvas[0], canvas[1]);
-        draft.settings.set_crop(edit::constrain(widest, new_angle, canvas[0], canvas[1]));
+    transform_controls(ui, session, draft, turns, actions);
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        let moved = (0..4).any(|corner| (0..2).any(|axis| draft.settings.get(Control::corner(corner, axis)) != 0.0));
+        if ui.add_enabled(moved, egui::Button::new(tr("Reset corners"))).clicked() {
+            for corner in 0..4 {
+                for axis in 0..2 {
+                    draft.settings.set(Control::corner(corner, axis), 0.0);
+                }
+            }
+            session.refit_crop(&mut draft.settings, turns);
+            draft.changed(Kind::Crop);
+        }
+        reset_transform_button(ui, session, draft, turns);
+    });
+    if ui.add(theme::primary_button(tr("Done"))).clicked() {
+        actions.push(Action::Tool(Tool::Adjust));
+    }
+}
+
+/// Straighten, perspective, flips, 90° turns, and constraining the crop.
+/// A new turn or tilt fits the crop again.
+fn transform_controls(ui: &mut egui::Ui, session: &mut EditSession, draft: &mut Draft, turns: usize, actions: &mut Vec<Action>) {
+    let before = Geometry::turn_of(&draft.settings);
+    straighten_slider(ui, session, draft);
+    subheading(ui, "Perspective");
+    for (axis, hint) in [
+        (0, "Positive widens the top, for buildings that lean back"),
+        (1, "Positive widens the right side"),
+    ] {
+        if perspective_slider(ui, draft, axis, turns).on_hover_text(tr(hint)).dragged() {
+            session.straightening = true;
+        }
     }
     ui.add_space(4.0);
+    flip_and_rotate(ui, draft, actions);
+    let refit = constrain_checkbox(ui, session);
+    if refit || Geometry::turn_of(&draft.settings) != before {
+        session.refit_crop(&mut draft.settings, turns);
+        draft.changed(Kind::Crop);
+    }
+}
+
+/// Puts straighten, perspective, corners, flips, and crop back to none.
+fn reset_transform_button(ui: &mut egui::Ui, session: &EditSession, draft: &mut Draft, turns: usize) {
+    let reset = draft.settings.with_geometry_of(&Settings::default());
+    if ui.add_enabled(reset != draft.settings, egui::Button::new(tr("Reset transform"))).clicked() {
+        draft.settings = reset;
+        session.refit_crop(&mut draft.settings, turns);
+        draft.changed(Kind::Crop);
+    }
+}
+
+/// Which tilt a perspective slider moves, and which way, so that the
+/// vertical one works up and down on screen after the catalog rotation.
+/// `axis` is 0 for vertical and 1 for horizontal.
+fn perspective_control(axis: usize, turns: usize) -> (Control, f32) {
+    let (vertical, horizontal) = (Control::PERSPECTIVE_V, Control::PERSPECTIVE_H);
+    match (turns % 4, axis) {
+        (0, 0) => (vertical, 1.0),
+        (0, _) => (horizontal, 1.0),
+        (1, 0) => (horizontal, -1.0),
+        (1, _) => (vertical, 1.0),
+        (2, 0) => (vertical, -1.0),
+        (2, _) => (horizontal, -1.0),
+        (3, 0) => (horizontal, 1.0),
+        _ => (vertical, -1.0),
+    }
+}
+
+fn perspective_slider(ui: &mut egui::Ui, draft: &mut Draft, axis: usize, turns: usize) -> egui::Response {
+    let (control, sign) = perspective_control(axis, turns);
+    let mut value = draft.settings.get(control) * sign;
+    let label = tr(["Vertical", "Horizontal"][axis]);
+    let reset = slider_header(ui, label, None, false, &control.format(value), value != 0.0);
+    let response = develop_slider(ui, &mut value, -45.0..=45.0, 0.1, 0.0);
+    if reset || response.double_clicked() {
+        value = 0.0;
+    }
+    if reset || response.changed() || response.double_clicked() {
+        draft.settings.set(control, value * sign);
+        draft.changed(Kind::Crop);
+    }
+    response
+}
+
+/// The straighten slider, from −180° to 180°, and a box for an exact angle.
+fn straighten_slider(ui: &mut egui::Ui, session: &mut EditSession, draft: &mut Draft) {
+    let response = slider(ui, draft, Control::STRAIGHTEN, Kind::Crop);
+    let mut dragging = response.dragged();
+    ui.horizontal(|ui| {
+        ui.label(RichText::new(tr("Angle")).size(12.0).color(theme::text()));
+        let mut value = draft.settings.get(Control::STRAIGHTEN);
+        let exact = ui
+            .add(egui::DragValue::new(&mut value).range(-180.0..=180.0).speed(0.1).fixed_decimals(1).suffix("°"))
+            .on_hover_text(tr("Type an angle, or drag for fine steps"));
+        if exact.changed() {
+            draft.settings.set(Control::STRAIGHTEN, value);
+            draft.changed(Kind::Crop);
+        }
+        dragging |= exact.dragged();
+    });
+    session.straightening |= dragging;
+}
+
+fn flip_and_rotate(ui: &mut egui::Ui, draft: &mut Draft, actions: &mut Vec<Action>) {
     ui.horizontal(|ui| {
         for (control, label) in [(Control::FLIP_H, "Flip horizontal"), (Control::FLIP_V, "Flip vertical")] {
             let on = draft.settings.get(control) >= 0.5;
@@ -1004,29 +1231,14 @@ fn crop_section(ui: &mut egui::Ui, session: &mut EditSession, draft: &mut Draft,
             actions.push(Action::Rotate(90));
         }
     });
-    ui.add_space(4.0);
-    ui.horizontal(|ui| {
-        let geometry = Settings::default().with_geometry_of(&draft.settings);
-        if ui.add_enabled(!geometry.is_identity(), egui::Button::new(tr("Reset crop"))).clicked() {
-            draft.settings = draft.settings.with_geometry_of(&Settings::default());
-            draft.changed(Kind::Crop);
-        }
-        if ui.add(theme::primary_button(tr("Done"))).clicked() {
-            actions.push(Action::Tool(Tool::Adjust));
-        }
-    });
-    ui.add_space(6.0);
-    ui.label(
-        RichText::new(tr("Drag the corners or edges to crop, and inside the frame to move it. Double-click or press Enter to finish."))
-            .size(11.0)
-            .color(theme::muted()),
-    );
 }
 
 fn mask_section(ui: &mut egui::Ui, session: &mut EditSession, draft: &mut Draft) {
     let [left, top, right, bottom] = draft.settings.crop();
     let (cx, cy) = ((left + right) * 0.5, (top + bottom) * 0.5);
-    let canvas = session.base.as_ref().map_or([1.0, 1.0], |base| [base.width() as f32, base.height() as f32]);
+    let canvas = session.base.as_ref().map_or([1.0, 1.0], |base| {
+        edit::canvas_size(draft.settings.get(Control::STRAIGHTEN), base.width() as f32, base.height() as f32)
+    });
     ui.horizontal(|ui| {
         let count = draft.settings.masks.len() + 1;
         if ui.button(tr("+ Linear gradient")).clicked() {

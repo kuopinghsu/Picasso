@@ -1,6 +1,6 @@
 [package]
 name = "picasso"
-version = "0.9.0"
+version = "0.9.1"
 edition = "2021"
 rust-version = "1.95"
 description = "Fast local photo library and viewer in the style of Picasa"
@@ -27,6 +27,11 @@ serde_json = "1.0.154"
 sys-locale = "0.3.2"
 rayon = "1.12.0"
 jpeg-decoder = { version = "0.3", default-features = false }
+tiny-skia = { version = "0.11", default-features = false, features = ["std", "simd"] }
+flate2 = "1"
+ring = "0.17"
+base64 = "0.22"
+machine-uid = "0.6.0"
 
 [profile.dev.package."*"]
 opt-level = 1

@@ -76,7 +76,8 @@ impl PicassoApp {
             self.bake_map_pan();
         }
         if response.hovered() {
-            let steps = wheel_steps(&mut self.map_wheel, ui.input(|input| input.smooth_scroll_delta.y));
+            let (scroll, pinch) = ui.input(|input| (input.smooth_scroll_delta.y, input.zoom_delta()));
+            let steps = wheel_steps(&mut self.map_wheel, scroll) + pinch_steps(&mut self.map_pinch, pinch);
             if let Some(pointer) = response.hover_pos().filter(|_| steps != 0) {
                 self.zoom_map_at(steps, pointer, rect);
             }
@@ -485,6 +486,25 @@ pub(super) fn wheel_steps(wheel: &mut f32, delta: f32) -> i32 {
     steps as i32
 }
 
+/// Spread of the fingers, as log2 of the scale, that makes one zoom step.
+const PINCH_STEP: f32 = 0.5;
+
+/// Zoom levels to move for this frame's trackpad pinch `factor`. The pinch
+/// adds up in `pinch` until it makes a step; turning back starts over.
+pub(super) fn pinch_steps(pinch: &mut f32, factor: f32) -> i32 {
+    if !factor.is_finite() || factor <= 0.0 || (factor - 1.0).abs() < 1e-4 {
+        return 0;
+    }
+    let delta = factor.log2();
+    if pinch.signum() != delta.signum() {
+        *pinch = 0.0;
+    }
+    *pinch += delta;
+    let steps = (*pinch / PINCH_STEP).trunc();
+    *pinch -= steps * PINCH_STEP;
+    steps as i32
+}
+
 /// Track colors, picked by track id so each keeps its color.
 const TRACK_COLORS: [Color32; 6] = [
     Color32::from_rgb(0xE5, 0x39, 0x35),
@@ -646,5 +666,15 @@ mod tests {
         assert_eq!(steps, -2);
         assert_eq!(wheel_steps(&mut wheel, 10.0), 0);
         assert_eq!(wheel_steps(&mut wheel, -10.0), 0, "turning back starts over");
+    }
+
+    #[test]
+    fn a_pinch_zooms_one_level_per_step_of_spread() {
+        let mut pinch = 0.0;
+        let steps: i32 = [1.1_f32; 8].iter().map(|factor| pinch_steps(&mut pinch, *factor)).sum();
+        assert_eq!(steps, 2, "spreading 2.1 times");
+        let steps: i32 = [0.9_f32; 4].iter().map(|factor| pinch_steps(&mut pinch, *factor)).sum();
+        assert_eq!(steps, -1, "pinching back to 0.66 times");
+        assert_eq!(pinch_steps(&mut pinch, 1.0), 0);
     }
 }

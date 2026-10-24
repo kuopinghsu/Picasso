@@ -666,4 +666,8 @@ pub(super) const TABLE: &[(&str, &str)] = &[
     ),
     ("Reset corners", "Ecken zurücksetzen"),
     ("Reset transform", "Transformation zurücksetzen"),
+    ("Select", "Auswählen"),
+    ("More", "Mehr"),
+    ("Zoom in", "Vergrößern"),
+    ("Zoom out", "Verkleinern"),
 ];

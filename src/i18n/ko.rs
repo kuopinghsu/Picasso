@@ -666,4 +666,8 @@ pub(super) const TABLE: &[(&str, &str)] = &[
     ),
     ("Reset corners", "모서리 재설정"),
     ("Reset transform", "변형 재설정"),
+    ("Select", "선택"),
+    ("More", "더 보기"),
+    ("Zoom in", "확대"),
+    ("Zoom out", "축소"),
 ];

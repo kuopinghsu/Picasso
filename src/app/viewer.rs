@@ -1,6 +1,6 @@
 //! Single-photo stage, filmstrip, and slideshow.
 
-use eframe::egui::{self, Align2, Color32, FontId, Pos2, Rect, Sense, Vec2};
+use eframe::egui::{self, Align2, Color32, FontId, Pos2, Rect, Sense, Stroke, Vec2};
 
 use crate::i18n::{tr, trf};
 use crate::photo_info::Histogram;
@@ -158,6 +158,7 @@ impl PicassoApp {
                     if help.on_hover_text(tr("Help & Shortcuts (F1)")).clicked() {
                         self.modal = super::Modal::Help;
                     }
+                    self.viewer_more_menu(ui);
                     if ui.button(tr(if slideshow { "Exit Slideshow" } else { "Slideshow" })).clicked() {
                         if slideshow {
                             self.slideshow = None;
@@ -171,53 +172,41 @@ impl PicassoApp {
                     let video = self.photos.get(self.viewer_index).is_some_and(Photo::is_video);
                     if !slideshow && !video {
                         let edit = ui
-                            .selectable_label(self.editing, tr("Edit"))
+                            .add(egui::Button::new(tr("Edit")).selected(self.editing))
                             .on_hover_text(tr("Adjust light and color without changing the original (E)"));
                         if edit.clicked() {
                             self.toggle_editing();
                         }
                     }
-                    if ui.button(tr("Rotate Right")).on_hover_text(tr("Rotate clockwise (Ctrl+])")).clicked() {
+                    let rotate = theme::icon_button(ui, theme::Icon::RotateRight, true, false);
+                    if rotate.on_hover_text(tr("Rotate clockwise (Ctrl+])")).clicked() {
                         self.rotate_current(90);
                     }
-                    if ui.button(tr("Rotate Left")).on_hover_text(tr("Rotate counterclockwise (Ctrl+[)")).clicked() {
+                    let rotate = theme::icon_button(ui, theme::Icon::RotateLeft, true, false);
+                    if rotate.on_hover_text(tr("Rotate counterclockwise (Ctrl+[)")).clicked() {
                         self.rotate_current(-90);
-                    }
-                    if ui.button(tr("Open in OpenStreetMap")).on_hover_text(tr("Open this photo in OpenStreetMap")).clicked() {
-                        if let Some(photo) = self.photos.get(self.viewer_index) {
-                            let (lat, lon, zoom) = match photo.place() {
-                                Some((lat, lon)) => (lat, lon, 14),
-                                None => (self.map_lat, self.map_lon, self.map_zoom.max(2)),
-                            };
-                            super::places::open_osm(lat, lon, zoom);
-                        }
-                    }
-                    if ui.button(tr("Fit")).clicked() {
-                        self.zoom = Zoom::Fit;
-                        self.pan = Vec2::ZERO;
-                    }
-                    if ui.button("100%").clicked() {
-                        self.zoom = Zoom::Scale(1.0 / ui.ctx().pixels_per_point());
-                        self.pan = Vec2::ZERO;
-                    }
-                    if ui.button("−").clicked() {
-                        self.zoom_keys(1.0 / 1.25);
-                    }
-                    if ui.button("+").clicked() {
-                        self.zoom_keys(1.25);
-                    }
-                    let starred = self.photos.get(self.viewer_index).map(|p| p.starred).unwrap_or(false);
-                    let star = if starred { "★" } else { "☆" };
-                    if ui.button(star).on_hover_text(tr("Add/Remove Star")).clicked() {
-                        if let Some(id) = self.photos.get(self.viewer_index).map(|p| p.id) {
-                            self.toggle_star(id);
-                        }
                     }
                     if let Some(photo) = self.photos.get(self.viewer_index) {
                         let (w, h) = self.shown_size(photo);
                         let scale = self.scale_for(w, h, self.stage_rect.size());
                         let pct = scale * ui.ctx().pixels_per_point() * 100.0;
-                        ui.label(egui::RichText::new(format!("{pct:.0}%")).color(theme::muted()));
+                        let fit = matches!(self.zoom, Zoom::Fit);
+                        match zoom_control(ui, pct, fit) {
+                            Some(ZoomPick::Out) => self.zoom_keys(1.0 / 1.25),
+                            Some(ZoomPick::In) => self.zoom_keys(1.25),
+                            Some(ZoomPick::Switch) => {
+                                self.zoom = if fit { Zoom::Scale(1.0 / ui.ctx().pixels_per_point()) } else { Zoom::Fit };
+                                self.pan = Vec2::ZERO;
+                            }
+                            None => {}
+                        }
+                    }
+                    let starred = self.photos.get(self.viewer_index).map(|p| p.starred).unwrap_or(false);
+                    let star = egui::RichText::new(if starred { "★" } else { "☆" }).color(if starred { theme::STAR } else { theme::text() });
+                    if ui.button(star).on_hover_text(tr("Add/Remove Star")).clicked() {
+                        if let Some(id) = self.photos.get(self.viewer_index).map(|p| p.id) {
+                            self.toggle_star(id);
+                        }
                     }
                     if slideshow {
                         let playing = self.slideshow.as_ref().map(|s| s.playing).unwrap_or(false);
@@ -241,6 +230,91 @@ impl PicassoApp {
         });
     }
 
+    /// The ··· button: what is done to the photo now and then.
+    fn viewer_more_menu(&mut self, ui: &mut egui::Ui) {
+        let button = theme::icon_button(ui, theme::Icon::More, true, false);
+        let Some(photo) = self.photos.get(self.viewer_index).cloned() else {
+            return;
+        };
+        let popup = egui::Popup::menu(&button).show(|ui| {
+            if ui.button(tr("Show in folder")).clicked() {
+                crate::shell::reveal(&photo.path);
+            }
+            if ui.button(tr("Show on map")).clicked() {
+                self.show_on_map(photo.id);
+            }
+            if ui.button(tr("Open in OpenStreetMap")).on_hover_text(tr("Open this photo in OpenStreetMap")).clicked() {
+                let (lat, lon, zoom) = photo
+                    .place()
+                    .map(|(lat, lon)| (lat, lon, 14))
+                    .unwrap_or((self.map_lat, self.map_lon, self.map_zoom.max(2)));
+                super::places::open_osm(lat, lon, zoom);
+            }
+            ui.separator();
+            if ui.button(tr("Export…")).clicked() {
+                self.open_export(&[photo.id]);
+            }
+            if ui.button(tr("Adjust date…")).clicked() {
+                self.open_adjust_date(vec![photo.id]);
+            }
+            ui.separator();
+            if ui.button(tr("Move to trash")).clicked() {
+                self.modal = super::Modal::Trash { ids: vec![photo.id] };
+            }
+        });
+        if popup.is_none() {
+            button.on_hover_text(tr("More"));
+        }
+    }
+}
+
+enum ZoomPick {
+    Out,
+    In,
+    /// Between fitting the window and 100%.
+    Switch,
+}
+
+/// Zoom out, the zoom level, and zoom in, joined in one rounded control.
+/// The level is a button too: it switches between fit and 100%.
+fn zoom_control(ui: &mut egui::Ui, pct: f32, fit: bool) -> Option<ZoomPick> {
+    const SIDE: f32 = 26.0;
+    const LEVEL: f32 = 50.0;
+    let height = ui.spacing().interact_size.y.max(22.0);
+    let (rect, _) = ui.allocate_exact_size(Vec2::new(SIDE * 2.0 + LEVEL, height), Sense::hover());
+    let painter = ui.painter().clone();
+    let widgets = ui.visuals().widgets.clone();
+    painter.rect(rect, theme::RADIUS, widgets.inactive.weak_bg_fill, widgets.inactive.bg_stroke, egui::StrokeKind::Inside);
+    let parts = [
+        (Rect::from_min_size(rect.min, Vec2::new(SIDE, height)), ZoomPick::Out, "−".to_string(), "Zoom out"),
+        (
+            Rect::from_min_size(rect.min + Vec2::new(SIDE, 0.0), Vec2::new(LEVEL, height)),
+            ZoomPick::Switch,
+            format!("{pct:.0}%"),
+            if fit { "Actual size" } else { "Fit" },
+        ),
+        (Rect::from_min_size(rect.min + Vec2::new(SIDE + LEVEL, 0.0), Vec2::new(SIDE, height)), ZoomPick::In, "+".to_string(), "Zoom in"),
+    ];
+    let mut picked = None;
+    for (index, (part, pick, label, hint)) in parts.into_iter().enumerate() {
+        let response = ui.interact(part, egui::Id::unique(("zoom-control", index)), Sense::click());
+        if response.hovered() {
+            painter.rect_filled(part.shrink(2.0), theme::RADIUS - 2, widgets.hovered.weak_bg_fill);
+        }
+        if index > 0 {
+            let x = part.left();
+            painter.line_segment([Pos2::new(x, part.top() + 5.0), Pos2::new(x, part.bottom() - 5.0)], Stroke::new(1.0, theme::hairline()));
+        }
+        let size = if index == 1 { 12.5 } else { 15.0 };
+        painter.text(part.center(), Align2::CENTER_CENTER, label, FontId::proportional(size), theme::text());
+        if response.on_hover_text(tr(hint)).clicked() {
+            picked = Some(pick);
+        }
+    }
+    picked
+}
+
+impl PicassoApp {
     fn paint_stage(&mut self, ui: &mut egui::Ui, stage: Rect, slideshow: bool) {
         self.stage_rect = stage;
         ui.painter().rect_filled(stage, 0, theme::stage());
@@ -379,23 +453,13 @@ impl PicassoApp {
         let Some(photo) = self.photos.get(self.viewer_index).cloned() else {
             return;
         };
-        let info = self.display_info(photo.id);
+        let info = self.panel_info(photo.id, ui.ctx());
         {
             ui.label(egui::RichText::new(tr("Histogram")).strong());
             ui.add_space(4.0);
             match &info {
                 Some((histogram, _)) => paint_histogram(ui, histogram),
-                None => {
-                    let (rect, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), HISTOGRAM_H), Sense::hover());
-                    ui.painter().rect_filled(rect, 2, theme::well());
-                    ui.painter().text(
-                        rect.center(),
-                        Align2::CENTER_CENTER,
-                        tr("Loading…"),
-                        FontId::proportional(12.0),
-                        theme::muted(),
-                    );
-                }
+                None => paint_histogram_placeholder(ui, true),
             }
             ui.add_space(10.0);
             ui.label(egui::RichText::new(tr("Details")).strong());
@@ -490,52 +554,56 @@ impl PicassoApp {
             let gap = 6.0;
             let count = self.photos.len();
             let current = self.viewer_index;
-            egui::ScrollArea::horizontal()
-                .id_salt("filmstrip")
-                .auto_shrink([false, false])
-                .show_viewport(ui, |ui, viewport| {
-                    ui.set_width((cell + gap) * count as f32 + 8.0);
-                    ui.set_min_height(height - 16.0);
-                    let step = cell + gap;
-                    let first = (viewport.min.x / step).floor().max(0.0) as usize;
-                    let last = ((viewport.max.x / step).ceil() as usize + 1).min(count);
-                    let origin = ui.min_rect().min;
-                    for index in first..last {
-                        let rect = Rect::from_min_size(
-                            origin + Vec2::new(index as f32 * step, 0.0),
-                            Vec2::new(cell, cell * 0.75),
-                        );
-                        let id = self.photos[index].id;
-                        let path = self.photos[index].path.clone();
-                        let rotation = self.photos[index].rotation;
-                        let is_video = self.photos[index].is_video();
-                        self.ensure_thumb(id, &path);
-                        let response = ui.interact(rect, egui::Id::unique(("film", id)), Sense::click());
-                        if let Some((texture, w, h)) = self.thumb_texture(id) {
-                            theme::paint_image_rounded(ui.painter(), &texture, rect, theme::cover_uv(w, h), rotation, 5.0);
-                        } else {
-                            ui.painter().rect_filled(rect, 5, theme::placeholder());
-                        }
-                        if is_video {
-                            paint_play_button(ui.painter(), rect.center(), 11.0);
-                        }
-                        if index != current && !response.hovered() {
-                            ui.painter().rect_filled(rect, 5, Color32::from_black_alpha(110));
-                        }
-                        if self.edits.contains_key(&id) {
-                            theme::paint_edit_mark(ui.painter(), rect.right_top() + Vec2::new(-10.0, 10.0), 7.5);
-                        }
-                        if index == current {
-                            ui.painter().rect_stroke(rect, 6, egui::Stroke::new(2.0, ACCENT), egui::StrokeKind::Outside);
-                            if response.rect.width() > 0.0 {
-                                response.scroll_to_me(Some(egui::Align::Center));
-                            }
-                        }
-                        if response.clicked() {
-                            self.set_index(index, true);
-                        }
+            let step = cell + gap;
+            let mut area = egui::ScrollArea::horizontal().id_salt("filmstrip").auto_shrink([false, false]);
+            // Scrolled only when another photo becomes current and is not
+            // already in full view, so a click on a thumbnail leaves the
+            // strip where it is.
+            let current_id = self.photos.get(current).map(|photo| photo.id);
+            if current_id != self.film_shown {
+                self.film_shown = current_id;
+                let (left, width) = (current as f32 * step, ui.available_width());
+                if left < self.film_offset || left + cell > self.film_offset + width {
+                    area = area.horizontal_scroll_offset((left + cell / 2.0 - width / 2.0).max(0.0));
+                }
+            }
+            let output = area.show_viewport(ui, |ui, viewport| {
+                ui.set_width((cell + gap) * count as f32 + 8.0);
+                ui.set_min_height(height - 16.0);
+                let first = (viewport.min.x / step).floor().max(0.0) as usize;
+                let last = ((viewport.max.x / step).ceil() as usize + 1).min(count);
+                let origin = ui.min_rect().min;
+                for index in first..last {
+                    let rect = Rect::from_min_size(origin + Vec2::new(index as f32 * step, 0.0), Vec2::new(cell, cell * 0.75));
+                    let id = self.photos[index].id;
+                    let path = self.photos[index].path.clone();
+                    let rotation = self.photos[index].rotation;
+                    let is_video = self.photos[index].is_video();
+                    self.ensure_thumb(id, &path);
+                    let response = ui.interact(rect, egui::Id::unique(("film", id)), Sense::click());
+                    if let Some((texture, w, h)) = self.thumb_texture(id) {
+                        theme::paint_image_rounded(ui.painter(), &texture, rect, theme::cover_uv(w, h), rotation, 5.0);
+                    } else {
+                        ui.painter().rect_filled(rect, 5, theme::placeholder());
                     }
-                });
+                    if is_video {
+                        paint_play_button(ui.painter(), rect.center(), 11.0);
+                    }
+                    if index != current && !response.hovered() {
+                        ui.painter().rect_filled(rect, 5, Color32::from_black_alpha(110));
+                    }
+                    if self.edits.contains_key(&id) {
+                        theme::paint_edit_mark(ui.painter(), rect.right_top() + Vec2::new(-10.0, 10.0), 7.5);
+                    }
+                    if index == current {
+                        ui.painter().rect_stroke(rect, 6, egui::Stroke::new(2.0, ACCENT), egui::StrokeKind::Outside);
+                    }
+                    if response.clicked() {
+                        self.set_index(index, true);
+                    }
+                }
+            });
+            self.film_offset = output.state.clamped_offset().x;
         });
     }
 
@@ -790,6 +858,18 @@ pub(super) fn paint_histogram(ui: &mut egui::Ui, histogram: &Histogram) {
             ],
         ));
     }
+}
+
+/// The space [`paint_histogram`] takes, empty, with "Loading…" in it when
+/// `loading`.
+pub(super) fn paint_histogram_placeholder(ui: &mut egui::Ui, loading: bool) {
+    let (rect, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), HISTOGRAM_H), Sense::hover());
+    ui.painter().rect_filled(rect, 2, theme::well());
+    if loading {
+        ui.painter().text(rect.center(), Align2::CENTER_CENTER, tr("Loading…"), FontId::proportional(12.0), theme::muted());
+    }
+    // Where the clipping summary goes, so what follows stays put.
+    ui.label(egui::RichText::new(" ").size(11.0));
 }
 
 fn full_uv() -> Rect {

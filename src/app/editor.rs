@@ -5,6 +5,7 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Instant;
 
 use eframe::egui;
 use image::RgbaImage;
@@ -74,6 +75,9 @@ pub(super) struct EditSession {
     preview: Option<egui::TextureHandle>,
     before: Option<egui::TextureHandle>,
     pub histogram: Option<Box<Histogram>>,
+    /// The previous photo's histogram, shown until this one's is rendered
+    /// or the instant passes, so the panel doesn't blank on a change.
+    pub held_histogram: Option<(Box<Histogram>, Instant)>,
     requested: Option<(Settings, Options, bool)>,
     before_requested: Option<(Settings, Options)>,
     seq: u64,
@@ -119,6 +123,7 @@ impl EditSession {
             preview: None,
             before: None,
             histogram: None,
+            held_histogram: None,
             requested: None,
             before_requested: None,
             seq: 0,
@@ -281,6 +286,10 @@ impl PicassoApp {
             return;
         };
         if self.edit.as_ref().map(|session| session.id) != Some(photo.id) {
+            let held = self.edit.as_mut().and_then(|session| {
+                let until = Instant::now() + super::PANEL_HOLD;
+                session.histogram.take().map(|histogram| (histogram, until)).or(session.held_histogram.take())
+            });
             self.end_edit_session();
             let history = self
                 .db
@@ -291,7 +300,9 @@ impl PicassoApp {
                 id: photo.id,
                 path: photo.path.clone(),
             });
-            self.edit = Some(EditSession::new(photo.id, history));
+            let mut session = EditSession::new(photo.id, history);
+            session.held_histogram = held;
+            self.edit = Some(session);
         }
         let pointer_down = ctx.input(|input| input.pointer.any_down());
         let Some(session) = self.edit.as_mut() else { return };

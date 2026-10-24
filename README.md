@@ -67,11 +67,11 @@ The macOS app is a universal binary for Apple silicon and Intel Macs, and runs o
 To publish a release, set `version` in `Cargo.toml`, commit, then push a matching tag:
 
 ```bash
-git tag v0.9.2
-git push origin v0.9.2
+git tag v0.9.3
+git push origin v0.9.3
 ```
 
-The workflow then attaches all six packages (named `picasso-0.9.2-windows-x64.exe` and so on) and `SHA256SUMS.txt` to a new GitHub release. The run fails if the tag doesn't match the version in `Cargo.toml`. A tag with a hyphen, such as `v1.0.0-beta.1`, is marked as a pre-release. Release builds open no console window.
+The workflow then attaches all six packages (named `picasso-0.9.3-windows-x64.exe` and so on) and `SHA256SUMS.txt` to a new GitHub release. The run fails if the tag doesn't match the version in `Cargo.toml`. A tag with a hyphen, such as `v1.0.0-beta.1`, is marked as a pre-release. Release builds open no console window.
 
 ## Data
 

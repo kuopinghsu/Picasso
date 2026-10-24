@@ -1,6 +1,6 @@
 CARGO ?= cargo
 
-# `cargo pkgid` prints ".../picasso#0.9.2" (or "...#picasso@0.9.2").
+# `cargo pkgid` prints ".../picasso#0.9.3" (or "...#picasso@0.9.3").
 # Make before 4.3 (macOS ships 3.81) treats a bare `#` inside a function call as a comment.
 HASH    := \#
 VERSION := $(lastword $(subst @, ,$(subst $(HASH), ,$(shell $(CARGO) pkgid))))

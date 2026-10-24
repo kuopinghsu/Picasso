@@ -15,12 +15,13 @@ use crate::photo_info::Histogram;
 use crate::types::Photo;
 
 use super::editor::{Compare, EditSession, Live, Tool, ASPECTS, EXPORT_EDGES, EXPORT_FORMATS, GUIDES};
-use super::theme::{self, ACCENT, WHITE};
+use super::theme::{self, Icon, ACCENT, WHITE};
 use super::PicassoApp;
 
 const PANEL_W: f32 = 276.0;
-/// Height kept for the export controls under the sections.
-const EXPORT_H: f32 = 116.0;
+/// Height kept for the export controls under the sections until they have
+/// been drawn once and measured.
+const EXPORT_H: f32 = 136.0;
 
 /// HSL hue of each color band's swatch.
 const BAND_SWATCH: [f32; 8] = [0.0, 30.0, 55.0, 120.0, 180.0, 220.0, 275.0, 315.0];
@@ -126,11 +127,21 @@ impl PicassoApp {
 
 fn panel_contents(ui: &mut egui::Ui, session: Option<&mut EditSession>, height: f32, context: &Context, actions: &mut Vec<Action>) {
     let top = ui.cursor().top();
+    let history = session.as_ref().filter(|session| session.error.is_none()).map(|session| &session.history);
     ui.horizontal(|ui| {
         ui.label(RichText::new(tr("Edit")).size(16.0).strong().color(theme::text()));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if ui.button(tr("Done")).clicked() {
                 actions.push(Action::Done);
+            }
+            let Some(history) = history else { return };
+            history_menu(ui, history, context, actions);
+            let (can_undo, can_redo) = (history.can_undo(), history.can_redo());
+            if theme::icon_button(ui, Icon::Redo, can_redo, false).on_hover_text(tr("Redo (Ctrl+Y)")).clicked() {
+                actions.push(Action::Redo);
+            }
+            if theme::icon_button(ui, Icon::Undo, can_undo, false).on_hover_text(tr("Undo (Ctrl+Z)")).clicked() {
+                actions.push(Action::Undo);
             }
         });
     });
@@ -146,10 +157,10 @@ fn panel_contents(ui: &mut egui::Ui, session: Option<&mut EditSession>, height: 
     if let Some(error) = &session.error {
         ui.label(RichText::new(error).color(theme::DANGER));
     }
-    if session.base.is_none() {
-        if session.error.is_none() {
-            ui.label(RichText::new(tr("Loading…")).color(theme::muted()));
-        }
+    // Until the photo is decoded the controls already show its saved edit,
+    // so the panel looks the same while the next photo loads; only Auto,
+    // the eyedropper, and the histogram wait for the pixels.
+    if session.error.is_some() && session.base.is_none() {
         return;
     }
 
@@ -172,84 +183,43 @@ fn panel_contents(ui: &mut egui::Ui, session: Option<&mut EditSession>, height: 
         actions.push(Action::Tool(tools[index].0));
     }
     ui.add_space(4.0);
-    match &session.histogram {
+    let now = std::time::Instant::now();
+    let held = session.held_histogram.as_ref().filter(|(_, until)| now < *until);
+    if let (None, Some((_, until))) = (&session.histogram, held) {
+        ui.ctx().request_repaint_after(*until - now);
+    }
+    match session.histogram.as_ref().or(held.map(|(histogram, _)| histogram)) {
         Some(histogram) => super::viewer::paint_histogram(ui, histogram),
-        None => {
-            ui.allocate_exact_size(Vec2::new(ui.available_width(), 112.0), Sense::hover());
-        }
+        None => super::viewer::paint_histogram_placeholder(ui, false),
     }
 
-    let history = &session.history;
-    let row = [
-        (history.can_undo(), "Undo all", "Back to the original"),
-        (history.can_undo(), "Undo", "Undo (Ctrl+Z)"),
-        (history.can_redo(), "Redo", "Redo (Ctrl+Y)"),
-        (history.can_redo(), "Redo all", "Apply every step again"),
-    ];
-    let picked = button_row(
-        ui,
-        &row.map(|(enabled, label, hint)| Item {
-            label,
-            hint,
-            enabled,
-            selected: false,
-        }),
-    );
-    match picked {
-        Some(0) => actions.push(Action::UndoAll),
-        Some(1) => actions.push(Action::Undo),
-        Some(2) => actions.push(Action::Redo),
-        Some(3) => actions.push(Action::RedoAll),
-        _ => {}
-    }
-
+    ui.add_space(2.0);
     let compare = session.compare;
     let row = [
         ("Before", "Show the original (\\)", compare == Compare::Before),
         ("Side by side", "Before and after side by side (Y)", compare == Compare::SideBySide),
         ("Split", "Before and after split view (Shift+Y)", matches!(compare, Compare::Split(_))),
-        ("Clipping", "Show clipped highlights and shadows (J)", session.clipping),
     ];
-    let picked = button_row(
-        ui,
-        &row.map(|(label, hint, selected)| Item {
+    let row_w = ui.available_width();
+    ui.allocate_ui_with_layout(Vec2::new(row_w, 26.0), egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        ui.spacing_mut().item_spacing.x = 6.0;
+        let clipping = theme::icon_button(ui, Icon::Clipping, true, session.clipping);
+        if clipping.on_hover_text(tr("Show clipped highlights and shadows (J)")).clicked() {
+            actions.push(Action::Clipping);
+        }
+        let items = row.map(|(label, hint, selected)| Item {
             label,
             hint,
             enabled: true,
             selected,
-        }),
-    );
-    match picked {
-        Some(0) => actions.push(Action::Compare(Compare::Before)),
-        Some(1) => actions.push(Action::Compare(Compare::SideBySide)),
-        Some(2) => actions.push(Action::Compare(Compare::Split(0.5))),
-        Some(3) => actions.push(Action::Clipping),
-        _ => {}
-    }
-
-    let edited = !history.settings().is_identity();
-    let row = [
-        ("Auto", "Auto tone: balance exposure and contrast", true),
-        ("Reset all", "Back to the untouched photo, as a step", edited),
-        ("Copy", "Copy these settings (Ctrl+Shift+C)", true),
-        ("Paste", "Paste copied settings (Ctrl+Shift+V)", context.has_clipboard),
-    ];
-    let picked = button_row(
-        ui,
-        &row.map(|(label, hint, enabled)| Item {
-            label,
-            hint,
-            enabled,
-            selected: false,
-        }),
-    );
-    match picked {
-        Some(0) => actions.push(Action::AutoTone),
-        Some(1) => actions.push(Action::Commit(Kind::Reset, Settings::default())),
-        Some(2) => actions.push(Action::Copy),
-        Some(3) => actions.push(Action::Paste),
-        _ => {}
-    }
+        });
+        match segmented(ui, &items, ui.available_width()) {
+            Some(0) => actions.push(Action::Compare(Compare::Before)),
+            Some(1) => actions.push(Action::Compare(Compare::SideBySide)),
+            Some(2) => actions.push(Action::Compare(Compare::Split(0.5))),
+            _ => {}
+        }
+    });
     ui.add_space(4.0);
 
     let mut draft = Draft {
@@ -260,10 +230,15 @@ fn panel_contents(ui: &mut egui::Ui, session: Option<&mut EditSession>, height: 
     };
     session.straightening = false;
     let used = ui.cursor().top() - top;
+    // The export controls' height as last drawn, so the sections take what
+    // is left and the panel keeps to the stage's height. Taller, it would
+    // push the filmstrip down, and back up while the next photo loads.
+    let tail_id = egui::Id::unique("edit-panel-tail");
+    let tail_h = ui.ctx().data(|data| data.get_temp::<f32>(tail_id)).unwrap_or(EXPORT_H);
     egui::ScrollArea::vertical()
         .id_salt("edit-panel")
         .auto_shrink([false, false])
-        .max_height((height - used - EXPORT_H).max(100.0))
+        .max_height((height - used - tail_h).max(100.0))
         .show(ui, |ui| {
             ui.spacing_mut().item_spacing.y = 3.0;
             match session.tool {
@@ -273,8 +248,14 @@ fn panel_contents(ui: &mut egui::Ui, session: Option<&mut EditSession>, height: 
                 Tool::Mask => mask_section(ui, session, &mut draft),
             }
         });
+    let tail_top = ui.cursor().top();
     ui.add_space(6.0);
     export_section(ui, session, actions);
+    let measured = ui.cursor().top() - tail_top;
+    if (measured - tail_h).abs() > 0.5 {
+        ui.ctx().data_mut(|data| data.insert_temp(tail_id, measured));
+        ui.ctx().request_repaint();
+    }
 
     if let Some(kind) = draft.kind.take() {
         if draft.settings != session.current() {
@@ -292,6 +273,66 @@ struct Item {
     hint: &'static str,
     enabled: bool,
     selected: bool,
+}
+
+/// The ··· button beside undo and redo: the steps furthest back and
+/// forward, and the settings as a whole.
+fn history_menu(ui: &mut egui::Ui, history: &edit::History, context: &Context, actions: &mut Vec<Action>) {
+    let button = theme::icon_button(ui, Icon::More, true, false);
+    let edited = !history.settings().is_identity();
+    let popup = egui::Popup::menu(&button).show(|ui| {
+        let mut item = |enabled: bool, label: &'static str, hint: &'static str| ui.add_enabled(enabled, egui::Button::new(tr(label))).on_hover_text(tr(hint)).clicked();
+        if item(history.can_undo(), "Undo all", "Back to the original") {
+            actions.push(Action::UndoAll);
+        }
+        if item(history.can_redo(), "Redo all", "Apply every step again") {
+            actions.push(Action::RedoAll);
+        }
+        if item(edited, "Reset all", "Back to the untouched photo, as a step") {
+            actions.push(Action::Commit(Kind::Reset, Settings::default()));
+        }
+        if item(true, "Copy", "Copy these settings (Ctrl+Shift+C)") {
+            actions.push(Action::Copy);
+        }
+        if item(context.has_clipboard, "Paste", "Paste copied settings (Ctrl+Shift+V)") {
+            actions.push(Action::Paste);
+        }
+    });
+    if popup.is_none() {
+        button.on_hover_text(tr("More"));
+    }
+}
+
+/// Options side by side in one rounded track, the picked one raised on it.
+/// Returns the clicked one; clicking the picked one again is how a compare
+/// mode is turned off.
+fn segmented(ui: &mut egui::Ui, items: &[Item], width: f32) -> Option<usize> {
+    let height = 26.0;
+    let (rect, _) = ui.allocate_exact_size(Vec2::new(width, height), Sense::hover());
+    let painter = ui.painter().clone();
+    painter.rect_filled(rect, theme::RADIUS + 1, theme::well());
+    let part_w = (width - 4.0) / items.len() as f32;
+    let raised = if theme::is_dark() { Color32::from_rgb(0x38, 0x3B, 0x41) } else { theme::bg() };
+    let mut clicked = None;
+    for (index, item) in items.iter().enumerate() {
+        let part = egui::Rect::from_min_size(rect.min + Vec2::new(2.0 + part_w * index as f32, 2.0), Vec2::new(part_w, height - 4.0));
+        let response = ui.interact(part, egui::Id::unique(("segmented", item.label)), Sense::click());
+        if item.selected {
+            painter.rect_filled(part.translate(Vec2::new(0.0, 0.5)), theme::RADIUS - 1, Color32::from_black_alpha(24));
+            painter.rect_filled(part, theme::RADIUS - 1, raised);
+        } else if response.hovered() {
+            painter.rect_filled(part, theme::RADIUS - 1, theme::overlay(14));
+        }
+        let color = if item.selected { theme::text() } else { theme::muted() };
+        let mut job = egui::text::LayoutJob::simple_singleline(tr(item.label).to_string(), egui::FontId::proportional(12.0), color);
+        job.wrap = egui::text::TextWrapping::truncate_at_width(part_w - 6.0);
+        let galley = painter.layout_job(job);
+        painter.galley(part.center() - galley.size() / 2.0, galley, color);
+        if response.on_hover_text(tr(item.hint)).clicked() {
+            clicked = Some(index);
+        }
+    }
+    clicked
 }
 
 /// Equal-width buttons across the panel. Returns the clicked one.
@@ -490,6 +531,13 @@ fn adjust_sections(ui: &mut egui::Ui, session: &mut EditSession, draft: &mut Dra
     section(ui, "Transform", false, |ui| transform_section(ui, session, draft, context, actions));
 
     section(ui, "Light", true, |ui| {
+        ui.horizontal(|ui| {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.small_button(tr("Auto tone")).on_hover_text(tr("Auto tone: balance exposure and contrast")).clicked() {
+                    actions.push(Action::AutoTone);
+                }
+            });
+        });
         for control in Control::LIGHT {
             slider(ui, draft, control, Kind::Adjust);
         }

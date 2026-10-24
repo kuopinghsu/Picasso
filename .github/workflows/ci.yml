@@ -2,7 +2,7 @@
 # pull request, then packages it: picasso.exe plus a .zip for Windows, a
 # .tar.gz, a .deb, and an AppImage for Linux, and Picasso.app in a .dmg and a
 # .zip for macOS. The AppImage is started on Ubuntu and RHEL-compatible
-# systems before it is published. Pushing a tag like `v0.9.2` also publishes
+# systems before it is published. Pushing a tag like `v0.9.3` also publishes
 # every package on a GitHub release. The tag must match the version in
 # Cargo.toml.
 name: CI

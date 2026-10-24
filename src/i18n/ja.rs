@@ -666,4 +666,8 @@ pub(super) const TABLE: &[(&str, &str)] = &[
     ),
     ("Reset corners", "コーナーをリセット"),
     ("Reset transform", "変形をリセット"),
+    ("Select", "選択"),
+    ("More", "その他"),
+    ("Zoom in", "拡大"),
+    ("Zoom out", "縮小"),
 ];

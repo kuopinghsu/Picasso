@@ -26,9 +26,9 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use crossbeam_channel::{bounded, Receiver, RecvTimeoutError, Select, Sender, TryRecvError};
-use image::RgbaImage;
+use image::{DynamicImage, RgbaImage};
 use crate::db::{Database, Known, ScanRecord};
-use crate::edit::{self, Settings};
+use crate::edit::{self, Geometry, Settings};
 use crate::i18n::tr;
 use crate::image_io::{self, Probe};
 use crate::photo_info::{self, Histogram};
@@ -166,8 +166,16 @@ pub fn thumb_threads() -> usize {
     (std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4) * 3 / 4).clamp(2, 8)
 }
 
-/// Long edge of a cached thumbnail.
-const THUMB_EDGE: u32 = 256;
+/// Short edge of a cached thumbnail. Tiles are squares cut from the middle
+/// and up to 220 points wide, so this keeps them sharp on high-density
+/// screens without making the cache much larger.
+const THUMB_EDGE: u32 = 320;
+/// Most the short edge of the photo is decoded to for a thumbnail whose
+/// edit crops, turns, or tilts it.
+const REFRAMED_SOURCE_EDGE: u32 = 1280;
+/// JPEG quality of stored edited thumbnails. They are not made again from
+/// the original, so they keep more detail than the plain ones.
+const EDITED_THUMB_QUALITY: u8 = 90;
 /// Long edge of the full-size view until the viewer zooms past it.
 pub const DISPLAY_EDGE: u32 = 2560;
 
@@ -965,17 +973,28 @@ fn run_thumb(store: &ThumbStore, gate: &DisplayGate, job: ThumbJob) -> Option<Ui
             None
         }
         ThumbJob::Thumb { id, path, edit } => {
-            let mut rgba = match store.get(id).and_then(|jpeg| decode_jpeg(&jpeg)) {
-                Some(rgba) => rgba,
-                None => {
-                    let Ok(rgba) = make_thumb(Path::new(&path)) else {
-                        return Some(UiEvent::ThumbFailed { id });
-                    };
-                    save_thumb(store, id, &rgba);
-                    rgba
+            let file = Path::new(&path);
+            let rgba = if edit.is_identity() {
+                store.remove_edited(id);
+                match plain_thumb(store, id, file) {
+                    Some(rgba) => rgba,
+                    None => return Some(UiEvent::ThumbFailed { id }),
+                }
+            } else {
+                let key = edit_key(&edit);
+                match store.get_edited(id, &key).and_then(|jpeg| decode_jpeg(&jpeg)) {
+                    Some(rgba) => rgba,
+                    None => {
+                        let Some(rgba) = edited_thumb(store, id, file, &edit) else {
+                            return Some(UiEvent::ThumbFailed { id });
+                        };
+                        if let Ok(jpeg) = image_io::encode_jpeg(&rgba, EDITED_THUMB_QUALITY) {
+                            store.put_edited(id, &key, &jpeg);
+                        }
+                        rgba
+                    }
                 }
             };
-            edit::apply(&mut rgba, &edit);
             let (w, h, rgba) = raw_rgba(&rgba);
             Some(UiEvent::Thumb { id, w, h, rgba, edit })
         }
@@ -1019,11 +1038,54 @@ fn run_thumb(store: &ThumbStore, gate: &DisplayGate, job: ThumbJob) -> Option<Ui
 /// Decodes a photo or video poster at thumbnail size.
 fn make_thumb(path: &Path) -> Result<RgbaImage, String> {
     if is_video_path(path) {
-        return video::poster(path, THUMB_EDGE).map(|(rgba, _)| rgba);
+        return video::poster(path, 2 * THUMB_EDGE).map(|(rgba, _)| image_io::thumbnail_rgba(&DynamicImage::ImageRgba8(rgba), THUMB_EDGE));
     }
-    std::panic::catch_unwind(|| image_io::load_at_least(path, THUMB_EDGE))
+    std::panic::catch_unwind(|| image_io::load_for_tile(path, THUMB_EDGE))
         .unwrap_or_else(|_| Err("decoder fault".into()))
         .map(|image| image_io::thumbnail_rgba(&image, THUMB_EDGE))
+}
+
+/// The unedited thumbnail, made and stored first if it is missing.
+fn plain_thumb(store: &ThumbStore, id: i64, file: &Path) -> Option<RgbaImage> {
+    if let Some(rgba) = store.get(id).and_then(|jpeg| decode_jpeg(&jpeg)) {
+        return Some(rgba);
+    }
+    let rgba = make_thumb(file).ok()?;
+    save_thumb(store, id, &rgba);
+    Some(rgba)
+}
+
+/// The thumbnail with `edit` applied.
+fn edited_thumb(store: &ThumbStore, id: i64, file: &Path, edit: &Settings) -> Option<RgbaImage> {
+    let reframed = !is_video_path(file) && !Geometry::from_settings(edit).is_identity();
+    if let Some(rgba) = reframed.then(|| reframed_thumb(file, edit)).flatten() {
+        return Some(rgba);
+    }
+    let mut rgba = plain_thumb(store, id, file)?;
+    edit::apply(&mut rgba, edit);
+    Some(rgba)
+}
+
+/// What a stored edited thumbnail was made from. The app version is part of
+/// it, so a release that renders edits differently makes them again.
+fn edit_key(edit: &Settings) -> String {
+    let changes = serde_json::Value::Object(edit.changed_from(&Settings::default()));
+    format!("{}:{changes}", env!("CARGO_PKG_VERSION"))
+}
+
+/// The edited photo at thumbnail size for an edit that crops, turns, or
+/// tilts it. The cached thumbnail is too small for that: the crop would
+/// enlarge it and the warp would soften it a second time, so the photo is
+/// decoded larger, edited, and only then shrunk.
+fn reframed_thumb(path: &Path, edit: &Settings) -> Option<RgbaImage> {
+    let [left, top, right, bottom] = edit.crop();
+    let kept = (right - left).min(bottom - top).clamp(0.05, 1.0);
+    let edge = ((2 * THUMB_EDGE) as f32 / kept).ceil() as u32;
+    let edge = edge.min(REFRAMED_SOURCE_EDGE);
+    let image = std::panic::catch_unwind(|| image_io::load_for_tile(path, edge)).ok()?.ok()?;
+    let mut rgba = image_io::thumbnail_rgba(&image, edge);
+    edit::apply(&mut rgba, edit);
+    Some(image_io::thumbnail_rgba(&DynamicImage::ImageRgba8(rgba), THUMB_EDGE))
 }
 
 fn decode_jpeg(jpeg: &[u8]) -> Option<RgbaImage> {

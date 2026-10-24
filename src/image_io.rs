@@ -83,10 +83,38 @@ pub fn load_oriented(path: &Path) -> Result<DynamicImage, String> {
 /// the decoder, and HEIC uses its embedded thumbnail when it is big enough.
 /// The result can still be larger than `edge`.
 pub fn load_at_least(path: &Path, edge: u32) -> Result<DynamicImage, String> {
+    load_reduced(path, edge, Side::Long)
+}
+
+/// [`load_at_least`] with the short edge at least `edge`, for a tile cut
+/// square from the middle of the image.
+pub fn load_for_tile(path: &Path, edge: u32) -> Result<DynamicImage, String> {
+    load_reduced(path, edge, Side::Short)
+}
+
+/// The side of a reduced decode that has to reach the edge asked for.
+#[derive(Clone, Copy)]
+enum Side {
+    Long,
+    Short,
+}
+
+impl Side {
+    fn of(self, width: u32, height: u32) -> u32 {
+        match self {
+            Side::Long => width.max(height),
+            Side::Short => width.min(height),
+        }
+    }
+}
+
+fn load_reduced(path: &Path, edge: u32, side: Side) -> Result<DynamicImage, String> {
     if is_raw_path(path) {
         return load_raw(path);
     }
     if is_heic_path(path) {
+        // An iPhone's embedded thumbnail is 320 by 240, a little soft for a
+        // tile, but decoding the whole photo instead takes many times longer.
         if let Some(image) = heic_thumbnail_from_file(path, edge) {
             return Ok(image);
         }
@@ -94,7 +122,7 @@ pub fn load_at_least(path: &Path, edge: u32) -> Result<DynamicImage, String> {
         return heic_image(&bytes);
     }
     let bytes = std::fs::read(path).map_err(|err| err.to_string())?;
-    if let Some(image) = jpeg_scaled(&bytes, edge) {
+    if let Some(image) = jpeg_scaled(&bytes, edge, side) {
         return Ok(image);
     }
     decode_oriented(path, &bytes)
@@ -120,9 +148,9 @@ fn decode_oriented(path: &Path, bytes: &[u8]) -> Result<DynamicImage, String> {
 }
 
 /// A baseline or progressive JPEG decoded straight to the smallest of 1/8,
-/// 1/4, or 1/2 size that still covers `edge`. `None` for other files, CMYK,
-/// 16-bit, and images too small to gain from it.
-fn jpeg_scaled(bytes: &[u8], edge: u32) -> Option<DynamicImage> {
+/// 1/4, or 1/2 size whose `side` still covers `edge`. `None` for other files,
+/// CMYK, 16-bit, and images too small to gain from it.
+fn jpeg_scaled(bytes: &[u8], edge: u32, side: Side) -> Option<DynamicImage> {
     if !bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
         return None;
     }
@@ -131,15 +159,22 @@ fn jpeg_scaled(bytes: &[u8], edge: u32) -> Option<DynamicImage> {
         let mut decoder = jpeg_decoder::Decoder::new(bytes);
         decoder.read_info().ok()?;
         let info = decoder.info()?;
-        if info.width.max(info.height) / 2 < edge {
+        if side.of(u32::from(info.width), u32::from(info.height)) / 2 < u32::from(edge) {
             return None;
         }
+        // The decoder stops at the first scale where either side reaches
+        // what is asked, so the short side alone is asked for it.
+        let (want_w, want_h) = match side {
+            Side::Short if info.width > info.height => (u16::MAX, edge),
+            Side::Short => (edge, u16::MAX),
+            Side::Long => (edge, edge),
+        };
         let gray = match info.pixel_format {
             jpeg_decoder::PixelFormat::L8 => true,
             jpeg_decoder::PixelFormat::RGB24 => false,
             _ => return None,
         };
-        let (w, h) = decoder.scale(edge, edge).ok()?;
+        let (w, h) = decoder.scale(want_w, want_h).ok()?;
         let pixels = decoder.decode().ok()?;
         let (w, h) = (u32::from(w), u32::from(h));
         let image = if gray {
@@ -170,8 +205,18 @@ fn apply_orientation(image: DynamicImage, orientation: u16) -> DynamicImage {
     }
 }
 
+/// `image` shrunk until its short edge is `edge`, since a square tile is cut
+/// from its middle, with the long edge held to three times that so a
+/// panorama stays small. A smaller image is kept as it is.
 pub fn thumbnail_rgba(image: &DynamicImage, edge: u32) -> ImageBuffer<Rgba<u8>, Vec<u8>> {
-    image.thumbnail(edge, edge).to_rgba8()
+    let (width, height) = image.dimensions();
+    let (short, long) = (width.min(height).max(1) as f32, width.max(height).max(1) as f32);
+    let scale = (edge as f32 / short).min(3.0 * edge as f32 / long);
+    if scale >= 1.0 {
+        return image.to_rgba8();
+    }
+    let size = |n: u32| ((n as f32 * scale).round() as u32).max(1);
+    image.thumbnail(size(width), size(height)).to_rgba8()
 }
 
 pub fn limit_rgba(image: DynamicImage, max_edge: u32) -> ImageBuffer<Rgba<u8>, Vec<u8>> {
@@ -449,7 +494,7 @@ fn heic_thumbnail(bytes: &[u8], edge: u32) -> Option<DynamicImage> {
         let props = context.props(thumb).ok()?;
         let data = context.item_data(thumb).ok()?;
         let image = if &context.meta.item(thumb)?.item_type == b"jpeg" {
-            let decoded = jpeg_scaled(&data, edge)
+            let decoded = jpeg_scaled(&data, edge, Side::Long)
                 .or_else(|| image::load_from_memory_with_format(&data, image::ImageFormat::Jpeg).ok())?
                 .into_rgba8();
             heic_rs::Image {
@@ -806,13 +851,18 @@ mod tests {
     #[test]
     fn jpeg_decodes_at_the_smallest_scale_that_covers_the_edge() {
         let bytes = jpeg(2048, 1024);
-        let image = jpeg_scaled(&bytes, 256).unwrap();
+        let image = jpeg_scaled(&bytes, 256, Side::Long).unwrap();
         assert_eq!(image.dimensions(), (256, 128));
-        let image = jpeg_scaled(&bytes, 300).unwrap();
+        let image = jpeg_scaled(&bytes, 300, Side::Long).unwrap();
         assert_eq!(image.dimensions(), (512, 256));
+        let image = jpeg_scaled(&bytes, 200, Side::Short).unwrap();
+        assert_eq!(image.dimensions(), (512, 256));
+        let tall = jpeg(1024, 2048);
+        assert_eq!(jpeg_scaled(&tall, 200, Side::Short).unwrap().dimensions(), (256, 512));
         // Less than half the size: a full decode is as fast.
-        assert!(jpeg_scaled(&bytes, 1500).is_none());
-        assert!(jpeg_scaled(b"not a jpeg", 256).is_none());
+        assert!(jpeg_scaled(&bytes, 1500, Side::Long).is_none());
+        assert!(jpeg_scaled(&bytes, 600, Side::Short).is_none());
+        assert!(jpeg_scaled(b"not a jpeg", 256, Side::Long).is_none());
     }
 
     #[test]
@@ -825,12 +875,21 @@ mod tests {
         let probe = probe(&source, 42).unwrap();
         assert_eq!((probe.width, probe.height, probe.taken_at), (640, 480, 42));
 
-        let thumb = thumbnail_rgba(&load_at_least(&source, 256).unwrap(), 256);
+        let thumb = thumbnail_rgba(&load_for_tile(&source, 256).unwrap(), 256);
         let target = dir.join("thumbs").join("1.jpg");
         save_jpeg(&target, &thumb, 80).unwrap();
         let names: Vec<_> = std::fs::read_dir(target.parent().unwrap()).unwrap().flatten().map(|e| e.file_name()).collect();
         assert_eq!(names, ["1.jpg"]);
-        assert_eq!(image::image_dimensions(&target).unwrap(), (256, 192));
+        assert_eq!(image::image_dimensions(&target).unwrap(), (341, 256));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn thumbnails_keep_the_short_edge_a_tile_needs() {
+        let size = |w, h, edge| thumbnail_rgba(&DynamicImage::new_rgb8(w, h), edge).dimensions();
+        assert_eq!(size(6000, 4000, 320), (480, 320));
+        assert_eq!(size(4000, 6000, 320), (320, 480));
+        assert_eq!(size(12000, 1000, 320), (960, 80), "a panorama's long edge stops at three times the edge");
+        assert_eq!(size(200, 150, 320), (200, 150), "never enlarged");
     }
 }

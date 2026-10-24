@@ -358,48 +358,77 @@ where
         }
         Lang::German => {
             const DAYS: [&str; 7] = ["Sonntag", "Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag"];
-            const MONTHS: [&str; 12] = [
-                "Januar", "Februar", "März", "April", "Mai", "Juni", "Juli", "August", "September", "Oktober", "November",
-                "Dezember",
-            ];
-            format!("{}, {day}. {} {year}", DAYS[weekday], MONTHS[month as usize - 1])
+            format!("{}, {day}. {} {year}", DAYS[weekday], month_name(lang, month))
         }
         Lang::Spanish => {
             const DAYS: [&str; 7] = ["domingo", "lunes", "martes", "miércoles", "jueves", "viernes", "sábado"];
-            const MONTHS: [&str; 12] = [
-                "enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre",
-                "noviembre", "diciembre",
-            ];
-            format!("{}, {day} de {} de {year}", DAYS[weekday], MONTHS[month as usize - 1])
+            format!("{}, {day} de {} de {year}", DAYS[weekday], month_name(lang, month))
         }
         Lang::French => {
             const DAYS: [&str; 7] = ["dimanche", "lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi"];
-            const MONTHS: [&str; 12] = [
-                "janvier", "février", "mars", "avril", "mai", "juin", "juillet", "août", "septembre", "octobre",
-                "novembre", "décembre",
-            ];
             let day = if day == 1 { "1er".to_string() } else { day.to_string() };
-            format!("{} {day} {} {year}", DAYS[weekday], MONTHS[month as usize - 1])
+            format!("{} {day} {} {year}", DAYS[weekday], month_name(lang, month))
         }
         Lang::Italian => {
             const DAYS: [&str; 7] = ["domenica", "lunedì", "martedì", "mercoledì", "giovedì", "venerdì", "sabato"];
-            const MONTHS: [&str; 12] = [
-                "gennaio", "febbraio", "marzo", "aprile", "maggio", "giugno", "luglio", "agosto", "settembre", "ottobre",
-                "novembre", "dicembre",
-            ];
-            format!("{} {day} {} {year}", DAYS[weekday], MONTHS[month as usize - 1])
+            format!("{} {day} {} {year}", DAYS[weekday], month_name(lang, month))
         }
         Lang::Portuguese => {
             const DAYS: [&str; 7] = [
                 "domingo", "segunda-feira", "terça-feira", "quarta-feira", "quinta-feira", "sexta-feira", "sábado",
             ];
-            const MONTHS: [&str; 12] = [
-                "janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro",
-                "novembro", "dezembro",
-            ];
-            format!("{}, {day} de {} de {year}", DAYS[weekday], MONTHS[month as usize - 1])
+            format!("{}, {day} de {} de {year}", DAYS[weekday], month_name(lang, month))
         }
     }
+}
+
+/// Month and year, written the way the language writes them, as the date
+/// strip names the part of the library under the pointer.
+pub fn format_month(year: i32, month: u32) -> String {
+    month_year(year, month, crate::i18n::current())
+}
+
+fn month_year(year: i32, month: u32, lang: crate::i18n::Lang) -> String {
+    use crate::i18n::Lang;
+    match lang {
+        Lang::TraditionalChinese | Lang::SimplifiedChinese | Lang::Japanese => format!("{year}年{month}月"),
+        Lang::Korean => format!("{year}년 {month}월"),
+        Lang::Spanish | Lang::Portuguese => format!("{} de {year}", month_name(lang, month)),
+        Lang::English | Lang::German | Lang::French | Lang::Italian => format!("{} {year}", month_name(lang, month)),
+    }
+}
+
+/// Full name of `month` (1 to 12) in a language that spells months out.
+/// The others number them.
+fn month_name(lang: crate::i18n::Lang, month: u32) -> &'static str {
+    use crate::i18n::Lang;
+    const ENGLISH: [&str; 12] = [
+        "January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December",
+    ];
+    const GERMAN: [&str; 12] = [
+        "Januar", "Februar", "März", "April", "Mai", "Juni", "Juli", "August", "September", "Oktober", "November", "Dezember",
+    ];
+    const SPANISH: [&str; 12] = [
+        "enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre",
+    ];
+    const FRENCH: [&str; 12] = [
+        "janvier", "février", "mars", "avril", "mai", "juin", "juillet", "août", "septembre", "octobre", "novembre", "décembre",
+    ];
+    const ITALIAN: [&str; 12] = [
+        "gennaio", "febbraio", "marzo", "aprile", "maggio", "giugno", "luglio", "agosto", "settembre", "ottobre", "novembre", "dicembre",
+    ];
+    const PORTUGUESE: [&str; 12] = [
+        "janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro",
+    ];
+    let names = match lang {
+        Lang::German => &GERMAN,
+        Lang::Spanish => &SPANISH,
+        Lang::French => &FRENCH,
+        Lang::Italian => &ITALIAN,
+        Lang::Portuguese => &PORTUGUESE,
+        _ => &ENGLISH,
+    };
+    names[(month.clamp(1, 12) - 1) as usize]
 }
 
 pub fn unix_now() -> i64 {
@@ -471,6 +500,13 @@ mod tests {
         assert_eq!(long_date(&dt, Lang::French), "mercredi 5 août 2026");
         assert_eq!(long_date(&dt, Lang::Italian), "mercoledì 5 agosto 2026");
         assert_eq!(long_date(&dt, Lang::Portuguese), "quarta-feira, 5 de agosto de 2026");
+
+        assert_eq!(month_year(2026, 8, Lang::English), "August 2026");
+        assert_eq!(month_year(2026, 8, Lang::TraditionalChinese), "2026年8月");
+        assert_eq!(month_year(2026, 8, Lang::Korean), "2026년 8월");
+        assert_eq!(month_year(2026, 3, Lang::German), "März 2026");
+        assert_eq!(month_year(2026, 8, Lang::Spanish), "agosto de 2026");
+        assert_eq!(month_year(2026, 8, Lang::French), "août 2026");
     }
 
     #[test]

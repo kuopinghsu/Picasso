@@ -353,6 +353,113 @@ pub fn paint_theme_icon(painter: &egui::Painter, center: Pos2, moon: bool, color
     painter.add(egui::Shape::mesh(mesh));
 }
 
+/// Darkens the bottom `depth` of `rect`, whose corners are rounded by
+/// `radius`, from clear to black at `alpha`, so white text there reads on
+/// any photo.
+pub fn paint_bottom_fade(painter: &egui::Painter, rect: Rect, radius: f32, depth: f32, alpha: u8) {
+    let depth = depth.min(rect.height());
+    let top = rect.bottom() - depth;
+    let radius = radius.min(rect.width() * 0.5).min(depth);
+    let rows = 32;
+    let mut mesh = egui::Mesh::default();
+    for row in 0..=rows {
+        let t = row as f32 / rows as f32;
+        let y = top + depth * t;
+        let below = y - (rect.bottom() - radius);
+        let inset = if below > 0.0 { radius - (radius * radius - below * below).max(0.0).sqrt() } else { 0.0 };
+        let color = Color32::from_black_alpha((f32::from(alpha) * t.powf(1.5)).round() as u8);
+        mesh.colored_vertex(Pos2::new(rect.left() + inset, y), color);
+        mesh.colored_vertex(Pos2::new(rect.right() - inset, y), color);
+        if row > 0 {
+            let i = mesh.vertices.len() as u32;
+            mesh.add_triangle(i - 4, i - 3, i - 2);
+            mesh.add_triangle(i - 3, i - 2, i - 1);
+        }
+    }
+    painter.add(egui::Shape::mesh(mesh));
+}
+
+/// Glyphs for [`icon_button`], each about 14 points wide.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Icon {
+    RotateLeft,
+    RotateRight,
+    Undo,
+    Redo,
+    AddToAlbum,
+    RemoveFromAlbum,
+    Clipping,
+    More,
+}
+
+/// A button the size of a short text button with `icon` drawn in it.
+pub fn icon_button(ui: &mut egui::Ui, icon: Icon, enabled: bool, selected: bool) -> egui::Response {
+    let response = ui.add_enabled(enabled, egui::Button::new("     ").selected(selected));
+    let color = if enabled { text() } else { muted().gamma_multiply(0.6) };
+    paint_icon(ui.painter(), icon, response.rect.center(), color);
+    response
+}
+
+pub fn paint_icon(painter: &egui::Painter, icon: Icon, center: Pos2, color: Color32) {
+    let stroke = Stroke::new(1.4, color);
+    let arrowhead = |tip: Pos2, dir: Vec2| {
+        let side = Vec2::new(-dir.y, dir.x) * 2.8;
+        let back = tip - dir * 3.4;
+        painter.add(egui::Shape::convex_polygon(vec![tip, back + side, back - side], color, Stroke::NONE));
+    };
+    match icon {
+        Icon::RotateLeft | Icon::RotateRight => {
+            // An open ring swept clockwise from upper right round to the
+            // top, ending in an arrowhead; mirrored for the other way.
+            let flip = if icon == Icon::RotateRight { 1.0 } else { -1.0 };
+            let radius = 5.2;
+            let (start, end) = (-40_f32.to_radians(), 255_f32.to_radians());
+            let at = |angle: f32| center + Vec2::new(flip * angle.cos(), angle.sin()) * radius;
+            let points: Vec<Pos2> = (0..=20).map(|step| at(start + (end - start) * step as f32 / 20.0)).collect();
+            painter.add(egui::Shape::line(points, stroke));
+            let dir = Vec2::new(-flip * end.sin(), end.cos());
+            arrowhead(at(end) + dir * 2.4, dir);
+        }
+        Icon::Undo | Icon::Redo => {
+            // A straight stroke out to the arrowhead, coming back round a
+            // half turn underneath.
+            let flip = if icon == Icon::Undo { 1.0 } else { -1.0 };
+            let point = |x: f32, y: f32| center + Vec2::new(flip * x, y);
+            let mut points = vec![point(-3.0, -2.5), point(2.0, -2.5)];
+            for step in 1..=12 {
+                let angle = -std::f32::consts::FRAC_PI_2 + std::f32::consts::PI * step as f32 / 12.0;
+                points.push(point(2.0 + 3.25 * angle.cos(), 0.75 + 3.25 * angle.sin()));
+            }
+            points.push(point(-1.5, 4.0));
+            painter.add(egui::Shape::line(points, stroke));
+            arrowhead(point(-6.0, -2.5), Vec2::new(-flip, 0.0));
+        }
+        Icon::AddToAlbum | Icon::RemoveFromAlbum => {
+            let front = Rect::from_center_size(center + Vec2::new(-1.0, 1.0), Vec2::new(11.0, 9.0));
+            painter.rect_stroke(front, 2.0, stroke, egui::StrokeKind::Middle);
+            painter.line_segment([front.left_top() + Vec2::new(2.5, -2.5), front.right_top() + Vec2::new(2.5, -2.5)], stroke);
+            painter.line_segment([front.right_top() + Vec2::new(2.5, -2.5), front.right_bottom() + Vec2::new(2.5, -2.5)], stroke);
+            let mid = front.center();
+            painter.line_segment([mid - Vec2::new(2.5, 0.0), mid + Vec2::new(2.5, 0.0)], stroke);
+            if icon == Icon::AddToAlbum {
+                painter.line_segment([mid - Vec2::new(0.0, 2.5), mid + Vec2::new(0.0, 2.5)], stroke);
+            }
+        }
+        Icon::Clipping => {
+            let top = center + Vec2::new(0.0, -6.0);
+            let corners = vec![top, center + Vec2::new(6.5, 5.0), center + Vec2::new(-6.5, 5.0)];
+            painter.add(egui::Shape::closed_line(corners, stroke));
+            painter.line_segment([center + Vec2::new(0.0, -2.0), center + Vec2::new(0.0, 1.5)], stroke);
+            painter.circle_filled(center + Vec2::new(0.0, 3.4), 0.9, color);
+        }
+        Icon::More => {
+            for x in [-5.0, 0.0, 5.0] {
+                painter.circle_filled(center + Vec2::new(x, 0.0), 1.6, color);
+            }
+        }
+    }
+}
+
 /// Help glyph about 15 points wide: a question mark in a ring.
 pub fn paint_help_icon(painter: &egui::Painter, center: Pos2, color: Color32) {
     painter.circle_stroke(center, 7.2, Stroke::new(1.4, color));

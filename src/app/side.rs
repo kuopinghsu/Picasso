@@ -242,7 +242,8 @@ impl PicassoApp {
         }
         let mut zoom_by = 0i32;
         if response.hovered() {
-            zoom_by = super::places::wheel_steps(&mut self.side_wheel, ui.input(|input| input.smooth_scroll_delta.y));
+            let (scroll, pinch) = ui.input(|input| (input.smooth_scroll_delta.y, input.zoom_delta()));
+            zoom_by = super::places::wheel_steps(&mut self.side_wheel, scroll) + super::places::pinch_steps(&mut self.side_pinch, pinch);
         }
 
         let painter = ui.painter_at(rect);

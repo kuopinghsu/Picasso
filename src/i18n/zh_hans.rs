@@ -666,4 +666,8 @@ pub(super) const TABLE: &[(&str, &str)] = &[
     ),
     ("Reset corners", "重置四角"),
     ("Reset transform", "重置变换"),
+    ("Select", "选择"),
+    ("More", "更多"),
+    ("Zoom in", "放大"),
+    ("Zoom out", "缩小"),
 ];

@@ -44,6 +44,11 @@ use theme::ThemeMode;
 const UNDO_TRASH_FOR: Duration = Duration::from_secs(120);
 /// Pause after the last keystroke before the search runs.
 const SEARCH_DELAY: Duration = Duration::from_millis(250);
+/// A photo's histogram and its EXIF as label and value.
+type PhotoInfo = (crate::photo_info::Histogram, Vec<(&'static str, String)>);
+/// How long the info and edit panels keep the last photo's histogram and
+/// EXIF while the next photo's load, so a quick change doesn't blank them.
+const PANEL_HOLD: Duration = Duration::from_millis(600);
 const SEARCH_HINT: &str =
     "Finds every word in file and folder names, captions, cameras, and albums. Add a date such as 2019, 2019-05, or 2019-05-17.";
 
@@ -102,7 +107,9 @@ struct ThumbCache {
 }
 
 impl ThumbCache {
-    const CAPACITY: usize = 600;
+    /// Each thumbnail texture is about 600 KB, so this keeps them to about
+    /// 250 MB unless the window shows more at once.
+    const CAPACITY: usize = 400;
 
     fn new() -> Self {
         Self {
@@ -176,6 +183,13 @@ pub struct PicassoApp {
     search_due: Option<Instant>,
     mode: Mode,
     viewer_index: usize,
+    /// Photo the viewer's filmstrip last brought into view, and how far the
+    /// strip is scrolled.
+    film_shown: Option<i64>,
+    film_offset: f32,
+    /// Histogram and EXIF the info panel last showed, whose photo, and
+    /// when the viewer moved on from it.
+    info_held: Option<(i64, PhotoInfo, Option<Instant>)>,
     selection: HashSet<i64>,
     anchor: Option<i64>,
     grid_cols: usize,
@@ -188,6 +202,14 @@ pub struct PicassoApp {
     jump_to: Option<f32>,
     /// Last frame the library scroll bar was dragged, for its date bubble.
     scroll_hint_at: Option<Instant>,
+    /// Grid scroll offset the date strip last saw, and when it last changed,
+    /// so the strip names the month in view for a moment after scrolling.
+    strip_offset: f32,
+    strip_moved_at: Option<Instant>,
+    /// Scroll from one offset to another the date strip is animating.
+    strip_glide: Option<(f32, f32, Instant)>,
+    /// Where on the date strip's handle the pointer took hold of it.
+    strip_grab: Option<f32>,
     view_epoch: u64,
     layout: Option<CachedLayout>,
 
@@ -222,6 +244,8 @@ pub struct PicassoApp {
     side_pan: Vec2,
     /// Wheel scroll toward the next zoom step of the Map panel.
     side_wheel: f32,
+    /// Trackpad pinch toward the next zoom step of the Map panel.
+    side_pinch: f32,
     side_map_photo: Option<i64>,
     caption_buf: String,
     caption_photo: Option<i64>,
@@ -278,6 +302,8 @@ pub struct PicassoApp {
     map_pan: Vec2,
     /// Wheel scroll toward the next zoom step of the Places map.
     map_wheel: f32,
+    /// Trackpad pinch toward the next zoom step of the Places map.
+    map_pinch: f32,
     map_place: bool,
     /// Size of the Places map in the latest frame.
     map_size: Vec2,
@@ -409,6 +435,9 @@ impl PicassoApp {
             search_due: None,
             mode: Mode::Browse,
             viewer_index: 0,
+            film_shown: None,
+            film_offset: 0.0,
+            info_held: None,
             selection: HashSet::new(),
             anchor: None,
             grid_cols: 1,
@@ -417,6 +446,10 @@ impl PicassoApp {
             library_top: None,
             jump_to: None,
             scroll_hint_at: None,
+            strip_offset: 0.0,
+            strip_moved_at: None,
+            strip_glide: None,
+            strip_grab: None,
             view_epoch: 0,
             layout: None,
             thumbs: ThumbCache::new(),
@@ -443,6 +476,7 @@ impl PicassoApp {
             side_zoom: 13,
             side_pan: Vec2::ZERO,
             side_wheel: 0.0,
+            side_pinch: 0.0,
             side_map_photo: None,
             caption_buf: String::new(),
             caption_photo: None,
@@ -483,6 +517,7 @@ impl PicassoApp {
             map_zoom: 2,
             map_pan: Vec2::ZERO,
             map_wheel: 0.0,
+            map_pinch: 0.0,
             map_place: false,
             map_size: Vec2::new(800.0, 600.0),
             tracks: Vec::new(),
@@ -951,7 +986,9 @@ impl PicassoApp {
     }
 
     fn handle_keys(&mut self, ctx: &egui::Context) {
-        let escape = ctx.input_mut(|input| input.consume_key(Modifiers::NONE, Key::Escape));
+        // An open menu or drop-down closes on Escape itself; the press is
+        // left for it rather than also leaving the viewer.
+        let escape = !egui::Popup::is_any_open(ctx) && ctx.input_mut(|input| input.consume_key(Modifiers::NONE, Key::Escape));
         if escape {
             if !matches!(self.modal, Modal::None) {
                 self.modal = Modal::None;
@@ -1741,6 +1778,7 @@ impl PicassoApp {
 
     fn close_viewer(&mut self) {
         self.mode = Mode::Browse;
+        self.film_shown = None;
         self.slideshow = None;
         self.editing = false;
         self.end_edit_session();
@@ -2114,12 +2152,29 @@ impl PicassoApp {
     }
 
     /// Histogram and EXIF rows decoded with the full-size view of `id`.
-    fn display_info(&self, id: i64) -> Option<(crate::photo_info::Histogram, Vec<(&'static str, String)>)> {
+    fn display_info(&self, id: i64) -> Option<PhotoInfo> {
         self.displays
             .iter()
             .rev()
             .find(|item| item.id == id)
             .map(|item| ((*item.histogram).clone(), item.exif.clone()))
+    }
+
+    /// The info panel's histogram and EXIF for photo `id`, or for
+    /// [`PANEL_HOLD`] after a change the previous photo's while `id`'s load.
+    fn panel_info(&mut self, id: i64, ctx: &egui::Context) -> Option<PhotoInfo> {
+        if let Some(info) = self.display_info(id) {
+            self.info_held = Some((id, info.clone(), None));
+            return Some(info);
+        }
+        let (held_id, info, left) = self.info_held.as_mut()?;
+        if *held_id == id {
+            return None;
+        }
+        let left = *left.get_or_insert_with(Instant::now);
+        let remaining = PANEL_HOLD.checked_sub(left.elapsed())?;
+        ctx.request_repaint_after(remaining);
+        Some(info.clone())
     }
 
     fn display_texture(&self, id: i64) -> Option<(TextureHandle, usize, usize)> {

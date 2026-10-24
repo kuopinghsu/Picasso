@@ -1,5 +1,7 @@
 # Picasso
 
+English | [繁體中文](README_zh-TW.md)
+
 ![Picasso](images/banner.jpg)
 
 A fast local photo library, viewer, and editor in the spirit of Picasa. It watches your folders, builds a date-grouped thumbnail grid, and edits photos without touching the originals. Everything runs on this computer, and nothing is uploaded.

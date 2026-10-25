@@ -10,7 +10,7 @@ use crate::types::{unix_now, Album, Folder, Nav, NewPhoto, Photo, Sort, Unreadab
 
 /// Bumped whenever the scanner starts reading new metadata from files, so
 /// rows written by an older build are probed once more on the next scan.
-pub const INDEX_VERSION: i64 = 2;
+pub const INDEX_VERSION: i64 = 3;
 
 const PHOTO_COLS: &str = "\
 p.id, p.folder_id, p.path, p.filename, p.width, p.height, p.bytes, \
@@ -273,6 +273,17 @@ impl Database {
         // are probed again on the next scan, which reads the real date.
         self.conn
             .execute("UPDATE photos SET indexed_version=0 WHERE file_taken_at < ?1", [EARLIEST_PHOTO])
+            .map_err(|err| err.to_string())?;
+        // Version 2 missed the EXIF of HEIF files that attach it to an item
+        // other than the primary picture; only those are read again.
+        self.conn
+            .execute(
+                "UPDATE photos SET indexed_version = CASE WHEN camera = ''
+                     AND (lower(filename) LIKE '%.heic' OR lower(filename) LIKE '%.heif' OR lower(filename) LIKE '%.hif')
+                     THEN 0 ELSE ?1 END
+                 WHERE indexed_version = 2",
+                [INDEX_VERSION],
+            )
             .map_err(|err| err.to_string())?;
         Ok(())
     }
@@ -1765,6 +1776,26 @@ mod tests {
         assert_eq!(db.photo(7).unwrap().rotation, 90, "rotation from an older build is kept");
         let known = db.folder_snapshot(1, "/pics")["/pics/a.jpg"];
         assert!(!known.current(0, 0), "rows from an older build are probed again");
+    }
+
+    #[test]
+    fn heif_files_without_a_camera_are_read_again_once() {
+        let (db, folder_id, folder) = library("heif-exif");
+        for (name, camera) in [("a.heic", ""), ("b.HIF", ""), ("c.heic", "Apple iPhone 15"), ("d.jpg", "")] {
+            db.conn
+                .execute(
+                    "INSERT INTO photos(folder_id, path, filename, camera, indexed_version) VALUES (?1, ?2, ?3, ?4, 2)",
+                    params![folder_id, folder_path(&folder, name), name, camera],
+                )
+                .unwrap();
+        }
+        db.migrate().unwrap();
+        let versions: Vec<(String, i64)> =
+            db.map_rows("SELECT filename, indexed_version FROM photos ORDER BY filename", [], |row| Ok((row.get(0)?, row.get(1)?)));
+        assert_eq!(
+            versions,
+            vec![("a.heic".into(), 0), ("b.HIF".into(), 0), ("c.heic".into(), INDEX_VERSION), ("d.jpg".into(), INDEX_VERSION)]
+        );
     }
 
     #[test]

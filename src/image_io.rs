@@ -560,20 +560,37 @@ fn heic_thumbnail(bytes: &[u8], edge: u32) -> Option<DynamicImage> {
     std::panic::catch_unwind(decode).ok().flatten()
 }
 
-/// EXIF of the primary item. `None` when the item lies past the end of
+/// EXIF of the primary item, or else of any item: HDR files from a Hasselblad
+/// X2D II attach it to the gain map's tone-mapped (`tmap`) item rather than
+/// to the primary picture. `None` when an EXIF item lies past the end of
 /// `bytes`, so a truncated read can ask for more.
 fn heic_exif(bytes: &[u8]) -> Option<ExifBits> {
     let context = heic_rs::context::Context::open(bytes).ok()?;
-    match context.exif(context.meta.primary) {
-        Ok(Some(tiff)) => Some(
-            exif::Reader::new()
-                .read_raw(tiff.to_vec())
-                .map(|exif| bits_from_exif(&exif))
-                .unwrap_or_else(|_| ExifBits::empty()),
-        ),
-        Ok(None) => Some(ExifBits::empty()),
-        Err(_) => None,
+    let meta = &context.meta;
+    let others = meta.items.iter().filter(|item| &item.item_type == b"Exif").map(|item| item.id);
+    let mut truncated = false;
+    for id in context.exif_item(meta.primary).into_iter().chain(others) {
+        let Ok(data) = context.item_data(id) else {
+            truncated = true;
+            continue;
+        };
+        if let Some(exif) = exif_tiff(&data).and_then(|tiff| exif::Reader::new().read_raw(tiff.to_vec()).ok()) {
+            return Some(bits_from_exif(&exif));
+        }
     }
+    (!truncated).then(ExifBits::empty)
+}
+
+/// The TIFF block of a HEIF `Exif` item, which starts with a count of the
+/// bytes before the TIFF header, usually the six of `Exif\0\0`. Writers that
+/// get the count wrong still put the header near the start.
+fn exif_tiff(item: &[u8]) -> Option<&[u8]> {
+    let is_tiff = |at: &[u8]| at.starts_with(b"II*\0") || at.starts_with(b"MM\0*");
+    let skip = u32::from_be_bytes(item.get(..4)?.try_into().ok()?) as usize;
+    if let Some(tiff) = skip.checked_add(4).and_then(|start| item.get(start..)).filter(|tiff| is_tiff(tiff)) {
+        return Some(tiff);
+    }
+    (0..item.len().min(64)).map(|at| &item[at..]).find(|tiff| is_tiff(tiff))
 }
 
 /// Reads RAW dimensions and metadata from the file headers. The decoder runs
@@ -831,6 +848,72 @@ fn dms_to_deg(values: &[exif::Rational]) -> Option<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn heif_box(kind: &[u8; 4], body: &[u8]) -> Vec<u8> {
+        let mut out = ((body.len() + 8) as u32).to_be_bytes().to_vec();
+        out.extend_from_slice(kind);
+        out.extend_from_slice(body);
+        out
+    }
+
+    fn full_box(kind: &[u8; 4], version: u8, body: &[u8]) -> Vec<u8> {
+        heif_box(kind, &[&[version, 0, 0, 0], body].concat())
+    }
+
+    /// A little-endian TIFF block with only a make and a model.
+    fn camera_tiff(make: &str, model: &str) -> Vec<u8> {
+        let (make, model) = ([make.as_bytes(), b"\0"].concat(), [model.as_bytes(), b"\0"].concat());
+        let data = 8 + 2 + 2 * 12 + 4;
+        let mut tiff = b"II*\0".to_vec();
+        tiff.extend(8u32.to_le_bytes());
+        tiff.extend(2u16.to_le_bytes());
+        for (tag, text, at) in [(0x010F_u16, &make, data), (0x0110, &model, data + make.len())] {
+            tiff.extend(tag.to_le_bytes());
+            tiff.extend(2u16.to_le_bytes());
+            tiff.extend((text.len() as u32).to_le_bytes());
+            tiff.extend((at as u32).to_le_bytes());
+        }
+        tiff.extend(0u32.to_le_bytes());
+        tiff.extend(make);
+        tiff.extend(model);
+        tiff
+    }
+
+    /// A HEIF file laid out like an X2D II HDR photo: picture 1 is primary,
+    /// the tone-mapped item 2 derives from it, and the EXIF item 3 describes
+    /// item 2 only.
+    fn heif_with_exif_on_tmap(exif: &[u8]) -> Vec<u8> {
+        let ftyp = heif_box(b"ftyp", b"heic\0\0\0\0mif1heic");
+        let infe = |id: u16, kind: &[u8; 4]| full_box(b"infe", 2, &[&id.to_be_bytes()[..], &[0, 0], kind, b"\0"].concat());
+        let meta = |offset: u32| {
+            let body = [
+                full_box(b"hdlr", 0, &[&[0; 4][..], b"pict", &[0; 12], b"\0"].concat()),
+                full_box(b"pitm", 0, &1u16.to_be_bytes()),
+                full_box(b"iinf", 0, &[&3u16.to_be_bytes()[..], &infe(1, b"hvc1"), &infe(2, b"tmap"), &infe(3, b"Exif")].concat()),
+                full_box(b"iref", 0, &[heif_box(b"dimg", &[0, 2, 0, 1, 0, 1]), heif_box(b"cdsc", &[0, 3, 0, 1, 0, 2])].concat()),
+                full_box(
+                    b"iloc",
+                    0,
+                    &[&[0x44, 0x00, 0, 1, 0, 3, 0, 0, 0, 1][..], &offset.to_be_bytes(), &(exif.len() as u32).to_be_bytes()].concat(),
+                ),
+            ]
+            .concat();
+            full_box(b"meta", 0, &body)
+        };
+        let offset = (ftyp.len() + meta(0).len() + 8) as u32;
+        [ftyp, meta(offset), heif_box(b"mdat", exif)].concat()
+    }
+
+    #[test]
+    fn heic_exif_on_another_item_still_names_the_camera() {
+        let tiff = camera_tiff("Hasselblad", "X2D II 100C");
+        let file = heif_with_exif_on_tmap(&[&6u32.to_be_bytes()[..], b"Exif\0\0", &tiff].concat());
+        assert_eq!(heic_exif(&file).map(|bits| bits.camera).as_deref(), Some("Hasselblad X2D II 100C"));
+        assert!(heic_exif(&file[..file.len() - 8]).is_none(), "a cut-off EXIF item asks for the whole file");
+
+        let miscounted = heif_with_exif_on_tmap(&[&0u32.to_be_bytes()[..], b"Exif\0\0", &tiff].concat());
+        assert_eq!(heic_exif(&miscounted).map(|bits| bits.camera).as_deref(), Some("Hasselblad X2D II 100C"));
+    }
 
     #[test]
     fn heic_names_on_other_files_are_caught_from_the_type_box() {

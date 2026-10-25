@@ -36,6 +36,13 @@ section of this file as the release notes.
 - Release packages include `CHANGELOG.md` and the Traditional Chinese README, and the GitHub release
   notes come from this file.
 
+### Fixed
+
+- HDR HEIF photos from the Hasselblad X2D II showed no camera, lens or focal length, so Statistics
+  left them out of Cameras and Lenses. These files attach their EXIF to the gain map rather than
+  to the picture; the scan now finds it there. HEIC files already in the library that have no
+  camera are read again once on the next scan.
+
 ## [0.9.3] - 2026-10-24
 
 ### Added

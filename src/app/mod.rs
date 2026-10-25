@@ -336,7 +336,7 @@ pub struct PicassoApp {
     /// Clusters on the Places map in the latest frame, for the side panel.
     map_view_clusters: Vec<places::Cluster>,
     /// Statistics of the photos in view, worked out when first shown.
-    stats: Option<std::rc::Rc<stats::Stats>>,
+    stats: Option<stats::StatsPage>,
     /// Travel Map marks and view.
     travel: travel::Travel,
     /// Cluster under the pointer on the map, lit in the side panel.
@@ -1552,6 +1552,9 @@ impl PicassoApp {
             self.selection.clear();
         }
         self.frame_after_load = places;
+        if self.nav == Nav::TravelMap {
+            self.travel.opened();
+        }
         self.reload_view();
     }
 

@@ -49,6 +49,24 @@ section of this file as the release notes.
 - Thumbnails grow to 320 points, up from 220. A tile larger than the cached thumbnail gets a
   sharper copy decoded for it, which the window keeps in memory, so the thumbnail cache stays
   the same size.
+- The Travel Map fills the whole view, with its controls and side panel floating over the map. The
+  panel slides away from its header, and a pill brings it back.
+- The map moves smoothly. Clicking a country flies to it, a flick keeps the map gliding, the zoom
+  buttons ease in and out, and Reset view flies home. The globe glows, has soft shading and turns
+  slowly for about 20 seconds after the map opens, until you touch it.
+- Clicking a place selects it and shows a card with its photo count, dates, the years you went,
+  how many of its states and provinces you've seen, and a Show photos button.
+- Year chips above the map show one year of travel at a time. The panel has a progress ring toward
+  the next goal, continent chips that filter the country list, and a search box. Each country
+  shows the years you went and a bar for its share of your photos.
+- Statistics has a new look. A header sums up the library with a sparkline of photos per year, and
+  year chips show the whole page for one year at a time. Tiles with icons compare each number with
+  the year before. Cover photos mark the busiest day, the longest streak, the busiest month and the
+  first photo. An activity calendar shows each day of the year; clicking a day shows its photos.
+  Charts have gridlines, grow in when the page opens and show a card on hover, and a grid shows the
+  weekdays and hours you take photos. Cameras, lenses, photos and videos, and photos with a
+  location are shown as rings. Places are a mosaic of large covers, and the Travel card follows the
+  chosen year.
 - Release packages include `CHANGELOG.md` and the Traditional Chinese README, and the GitHub release
   notes come from this file.
 

@@ -14,6 +14,7 @@ mod places;
 mod settings;
 mod side;
 mod stats;
+mod travel;
 mod theme;
 mod tree;
 mod unreadable;
@@ -312,6 +313,8 @@ pub struct PicassoApp {
     map_view_clusters: Vec<places::Cluster>,
     /// Statistics of the photos in view, worked out when first shown.
     stats: Option<std::rc::Rc<stats::Stats>>,
+    /// Travel Map marks and view.
+    travel: travel::Travel,
     /// Cluster under the pointer on the map, lit in the side panel.
     map_hover: Option<places::ClusterKey>,
     /// Cluster and track under the pointer in the side panel, lit on the map.
@@ -420,6 +423,7 @@ impl PicassoApp {
             let _ = watch_tx.send(result);
         })
         .ok();
+        let travel = travel::Travel::load(&config);
 
         let mut app = Self {
             db: database,
@@ -534,6 +538,7 @@ impl PicassoApp {
             map_card: None,
             map_view_clusters: Vec::new(),
             stats: None,
+            travel,
             map_hover: None,
             map_hot: None,
             track_hot: None,
@@ -1038,8 +1043,10 @@ impl PicassoApp {
         let command = |key| ctx.input_mut(|input| input.consume_key(Modifiers::COMMAND, key));
         let plain = |key| ctx.input_mut(|input| input.consume_key(Modifiers::NONE, key));
         let shift = |key| ctx.input_mut(|input| input.consume_key(Modifiers::SHIFT, key));
+        // Statistics and the Travel Map show no photos to select, open, or trash.
+        let photo_keys = self.mode == Mode::View || !matches!(self.nav, Nav::Statistics | Nav::TravelMap);
 
-        if command(Key::A) && self.mode == Mode::Browse {
+        if command(Key::A) && self.mode == Mode::Browse && photo_keys {
             self.selection.clear();
             for photo in &self.photos {
                 self.selection.insert(photo.id);
@@ -1058,6 +1065,9 @@ impl PicassoApp {
         }
         if command(Key::Comma) {
             self.open_settings(ctx);
+        }
+        if !photo_keys {
+            return;
         }
         let command_shift = |key| ctx.input_mut(|input| input.consume_key(Modifiers::COMMAND | Modifiers::SHIFT, key));
         if command_shift(Key::C) {
@@ -1418,6 +1428,9 @@ impl PicassoApp {
             if self.tree_row(ui, tr("Statistics"), Glyph::Chart, self.nav == Nav::Statistics, None).clicked() {
                 self.set_nav(Nav::Statistics);
             }
+            if self.tree_row(ui, tr("Travel Map"), Glyph::Globe, self.nav == Nav::TravelMap, None).clicked() {
+                self.set_nav(Nav::TravelMap);
+            }
             let showing = matches!(self.modal, Modal::Duplicates { .. });
             let found = self.duplicate_groups().map(|groups| groups as i64);
             if self
@@ -1760,6 +1773,7 @@ impl PicassoApp {
             Nav::Starred => tr("Starred Photos").into(),
             Nav::Places => tr("Places").into(),
             Nav::Statistics => tr("Statistics").into(),
+            Nav::TravelMap => tr("Travel Map").into(),
             Nav::Folder(id) => self
                 .folders
                 .iter()
@@ -2262,7 +2276,7 @@ impl eframe::App for PicassoApp {
                 .max_size(340.0)
                 .frame(theme::toolbar_frame(theme::sidebar()).inner_margin(egui::Margin::symmetric(10, 6)))
                 .show(ui, |ui| self.sidebar(ui));
-            if self.side != SidePanel::None && self.nav != Nav::Statistics {
+            if self.side != SidePanel::None && !matches!(self.nav, Nav::Statistics | Nav::TravelMap) {
                 egui::Panel::right("side")
                     .resizable(true)
                     .default_size(300.0)
@@ -2315,6 +2329,7 @@ enum Glyph {
     Pin,
     Copies,
     Chart,
+    Globe,
 }
 
 fn paint_glyph(painter: &egui::Painter, center_left: egui::Pos2, glyph: Glyph) {
@@ -2356,6 +2371,13 @@ fn paint_glyph(painter: &egui::Painter, center_left: egui::Pos2, glyph: Glyph) {
                 let bar = Rect::from_min_max(egui::pos2(left, origin.y + 14.0 - h), egui::pos2(left + 3.5, origin.y + 14.0));
                 painter.rect_filled(bar, 1, Color32::from_rgb(0x1F, 0xA8, 0x6B));
             }
+        }
+        Glyph::Globe => {
+            let center = origin + Vec2::new(7.0, 7.0);
+            let line = egui::Stroke::new(1.2, Color32::WHITE);
+            painter.circle_filled(center, 6.5, Color32::from_rgb(0xC3, 0x76, 0xA6));
+            painter.line_segment([center - Vec2::new(6.0, 0.0), center + Vec2::new(6.0, 0.0)], line);
+            painter.add(egui::Shape::ellipse_stroke(center, Vec2::new(2.6, 6.0), line));
         }
     }
 }

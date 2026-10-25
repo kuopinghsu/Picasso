@@ -24,6 +24,7 @@ mod types;
 mod update;
 mod video;
 mod worker;
+mod world;
 
 /// Edge of the application icon unpacked by `build.rs`.
 pub const ICON_SIZE: usize = 256;

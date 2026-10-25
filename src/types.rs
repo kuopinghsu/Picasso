@@ -130,6 +130,8 @@ pub enum Nav {
     Places,
     /// When, where, and with what the library's photos were taken.
     Statistics,
+    /// The countries and states where geotagged photos were taken.
+    TravelMap,
 }
 
 #[derive(Clone, Debug)]

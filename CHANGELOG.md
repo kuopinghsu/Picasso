@@ -20,6 +20,13 @@ section of this file as the release notes.
 - **In this area:** on the Places page the right panel lists the places and GPS tracks the map is
   showing, largest first, with their dates, folders and thumbnails. Hovering a row highlights it on
   the map and the other way round, and clicking a row zooms to it.
+- **Travel Map** in the sidebar: a globe or flat world map that colors every country, and the
+  states and provinces of the largest countries, where geotagged photos were taken. Places with
+  more photos are a deeper color. The side panel counts countries, continents and the next goal,
+  shows coverage by continent and lists your countries; clicking a country or a colored place
+  shows its photos on the Places map. Statistics has a Travel card with the same totals. The map
+  follows only the photos' GPS tags; nothing is marked by hand. Borders come from the public-domain
+  [Natural Earth](https://www.naturalearthdata.com) data, built by `scripts/world-map.py`.
 - The scan reads each photo's **lens** and **focal length** (35 mm equivalent when the file records
   it). Search also finds photos by lens name. Existing libraries read this once on the next scan.
 - Traditional Chinese README (`README_zh-TW.md`).

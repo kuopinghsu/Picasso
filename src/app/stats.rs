@@ -15,6 +15,7 @@ use crate::types::{format_bytes, format_day, short_month, short_weekday, Nav, Ph
 
 use super::places::{cluster_points, date_span, folder_summary, grouped, truncated};
 use super::theme::{self, ACCENT};
+use super::travel::Visits;
 use super::{Mode, PicassoApp};
 
 /// Rows a ranked list shows; the rest are summed up below it.
@@ -59,6 +60,8 @@ pub(super) struct Stats {
     focal: [usize; FOCAL_BANDS.len()],
     /// Most used focal length in whole millimeters, and how often.
     focal_top: Option<(u32, usize)>,
+    /// The countries and states the photos were taken in.
+    travel: Rc<Visits>,
 }
 
 struct Place {
@@ -111,6 +114,7 @@ fn compute(photos: &[Photo], epoch: u64) -> Stats {
         lenses: Ranked::default(),
         focal: [0; FOCAL_BANDS.len()],
         focal_top: None,
+        travel: Rc::new(Visits::compute(photos, epoch)),
     };
     let mut years: HashMap<i32, usize> = HashMap::new();
     let mut days: HashMap<i32, (i64, usize)> = HashMap::new();
@@ -219,6 +223,12 @@ impl PicassoApp {
             });
             go = go.take().or(camera);
             ui.add_space(CARD_GAP);
+            card(ui, width, tr("Travel"), |ui| {
+                if self.travel_card(ui, &stats.travel) {
+                    go = Some(Go::TravelMap);
+                }
+            });
+            ui.add_space(CARD_GAP);
             pair(ui, two, |ui| card(ui, half, tr("Lenses"), |ui| ranked_section(ui, &stats.lenses, "{} without lens info", &mut go)), |ui| {
                 card(ui, half, tr("Focal length"), |ui| focal_section(ui, &stats))
             });
@@ -227,6 +237,7 @@ impl PicassoApp {
         match go {
             Some(Go::Search(query)) => self.search_library(query),
             Some(Go::Map(bounds)) => self.show_area_on_map(bounds),
+            Some(Go::TravelMap) => self.set_nav(Nav::TravelMap),
             None => {}
         }
     }
@@ -351,7 +362,7 @@ impl PicassoApp {
     }
 
     /// The Places map framed on `bounds`, in world pixels at zoom 0.
-    fn show_area_on_map(&mut self, bounds: Bounds) {
+    pub(super) fn show_area_on_map(&mut self, bounds: Bounds) {
         self.set_nav(Nav::Places);
         self.frame_after_load = false;
         self.frame_bounds(bounds);
@@ -364,6 +375,7 @@ impl PicassoApp {
 enum Go {
     Search(String),
     Map(Bounds),
+    TravelMap,
 }
 
 /// A titled card `width` wide.
@@ -568,7 +580,7 @@ fn bar_row(ui: &mut egui::Ui, name: &str, count: usize, most: usize, total: usiz
 }
 
 /// A rounded bar filled `share` of the way.
-fn meter(painter: &egui::Painter, rect: Rect, share: f32, color: Color32) {
+pub(super) fn meter(painter: &egui::Painter, rect: Rect, share: f32, color: Color32) {
     let radius = (rect.height() / 2.0) as u8;
     painter.rect_filled(rect, radius, theme::well());
     if share > 0.0 {
@@ -588,7 +600,7 @@ fn more_line(ui: &mut egui::Ui, more: usize, photos: usize) {
 }
 
 /// `part` of `total` as a whole percentage, at least 1 when `part` isn't 0.
-fn percent(part: usize, total: usize) -> usize {
+pub(super) fn percent(part: usize, total: usize) -> usize {
     if part == 0 || total == 0 {
         return 0;
     }

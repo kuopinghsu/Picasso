@@ -924,7 +924,7 @@ impl Database {
                 );
                 self.map_rows(&sql, [*id], read_photo)
             }
-            Nav::Places => {
+            Nav::Places | Nav::TravelMap => {
                 let sql = format!(
                     "SELECT {PHOTO_COLS} FROM photos p
                      WHERE (p.pin_lat IS NOT NULL AND p.pin_lon IS NOT NULL)

@@ -178,6 +178,10 @@ impl PicassoApp {
             self.places_ui(ui);
             return;
         }
+        if self.nav == Nav::TravelMap {
+            self.travel_ui(ui);
+            return;
+        }
         if self.photos.is_empty() {
             if self.loading {
                 ui.vertical_centered(|ui| {
@@ -538,7 +542,7 @@ impl PicassoApp {
             if self.loading {
                 ui.add(egui::Spinner::new().size(13.0));
             }
-            if self.nav == Nav::Statistics {
+            if matches!(self.nav, Nav::Statistics | Nav::TravelMap) {
                 return;
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {

@@ -8,9 +8,13 @@ Picasso 是一套承襲 Picasa 精神的本機相片圖庫，集管理、瀏覽�
 
 ![Picasso 圖庫：左側是資料夾樹狀圖，中間是縮圖，右側是相片詳細資料](images/picasso.png)
 
-![Picasso 圖庫：相片編輯器](images/editor.png)
+| 相片編輯器 | 地點 |
+| --- | --- |
+| ![相片編輯器](images/editor.png) | ![地點](images/places.png) |
 
-![Picasso 圖庫：地點](images/places.png)
+| 統計資料 | 旅行地圖 |
+| --- | --- |
+| ![統計資料](images/statistics.png) | ![旅行地圖](images/travelmap.png) |
 
 ## 系統需求
 

@@ -8,9 +8,13 @@ A fast local photo library, viewer, and editor in the spirit of Picasa. It watch
 
 ![The Picasso library: folder tree on the left, thumbnail grid in the middle, and photo details on the right](images/picasso.png)
 
-![The Picasso library: image editor](images/editor.png)
+| image editor | places |
+| --- | --- |
+| ![image editor](images/editor.png) | ![places](images/places.png) |
 
-![The Picasso library: places](images/places.png)
+| statistics | travel map |
+| --- | --- |
+| ![statistics](images/statistics.png) | ![travel map](images/travelmap.png) |
 
 ## Prerequisites
 

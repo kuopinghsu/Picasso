@@ -3,7 +3,7 @@
 All notable changes to Picasso are listed here, newest first. Each release on GitHub uses its
 section of this file as the release notes.
 
-## [0.9.4] - Unreleased
+## [0.9.4] - 2026-10-25
 
 ### Added
 
@@ -158,7 +158,7 @@ First release.
 - Light, dark or system theme, ten interface languages, and Help & Shortcuts.
 - Packages for Windows (`.exe` and `.zip`) and Linux (`.deb` and `.tar.gz`).
 
-[0.9.4]: https://github.com/kuopinghsu/picasso/compare/v0.9.3...HEAD
+[0.9.4]: https://github.com/kuopinghsu/picasso/compare/v0.9.3...v0.9.4
 [0.9.3]: https://github.com/kuopinghsu/picasso/compare/v0.9.2...v0.9.3
 [0.9.2]: https://github.com/kuopinghsu/picasso/compare/v0.9.1...v0.9.2
 [0.9.1]: https://github.com/kuopinghsu/picasso/compare/v0.9.0...v0.9.1

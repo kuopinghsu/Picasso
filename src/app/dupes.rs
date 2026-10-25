@@ -521,6 +521,8 @@ mod tests {
             starred: false,
             caption: String::new(),
             camera: String::new(),
+            lens: String::new(),
+            focal_mm: 0.0,
             gps_lat: None,
             gps_lon: None,
             pin_lat: None,

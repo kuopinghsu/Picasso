@@ -13,6 +13,7 @@ mod loader;
 mod places;
 mod settings;
 mod side;
+mod stats;
 mod theme;
 mod tree;
 mod unreadable;
@@ -305,6 +306,17 @@ pub struct PicassoApp {
     /// Trackpad pinch toward the next zoom step of the Places map.
     map_pinch: f32,
     map_place: bool,
+    /// Thumbnails of the cluster under the pointer on the Places map.
+    map_card: Option<places::MapCard>,
+    /// Clusters on the Places map in the latest frame, for the side panel.
+    map_view_clusters: Vec<places::Cluster>,
+    /// Statistics of the photos in view, worked out when first shown.
+    stats: Option<std::rc::Rc<stats::Stats>>,
+    /// Cluster under the pointer on the map, lit in the side panel.
+    map_hover: Option<places::ClusterKey>,
+    /// Cluster and track under the pointer in the side panel, lit on the map.
+    map_hot: Option<places::ClusterKey>,
+    track_hot: Option<usize>,
     /// Size of the Places map in the latest frame.
     map_size: Vec2,
     /// GPS tracks from the GPX and KML files in the folders.
@@ -519,6 +531,12 @@ impl PicassoApp {
             map_wheel: 0.0,
             map_pinch: 0.0,
             map_place: false,
+            map_card: None,
+            map_view_clusters: Vec::new(),
+            stats: None,
+            map_hover: None,
+            map_hot: None,
+            track_hot: None,
             map_size: Vec2::new(800.0, 600.0),
             tracks: Vec::new(),
             show_tracks: true,
@@ -1397,6 +1415,9 @@ impl PicassoApp {
             if self.tree_row(ui, tr("Places"), Glyph::Pin, self.nav == Nav::Places, None).clicked() {
                 self.set_nav(Nav::Places);
             }
+            if self.tree_row(ui, tr("Statistics"), Glyph::Chart, self.nav == Nav::Statistics, None).clicked() {
+                self.set_nav(Nav::Statistics);
+            }
             let showing = matches!(self.modal, Modal::Duplicates { .. });
             let found = self.duplicate_groups().map(|groups| groups as i64);
             if self
@@ -1738,6 +1759,7 @@ impl PicassoApp {
             Nav::Library => tr("Library").into(),
             Nav::Starred => tr("Starred Photos").into(),
             Nav::Places => tr("Places").into(),
+            Nav::Statistics => tr("Statistics").into(),
             Nav::Folder(id) => self
                 .folders
                 .iter()
@@ -2240,7 +2262,7 @@ impl eframe::App for PicassoApp {
                 .max_size(340.0)
                 .frame(theme::toolbar_frame(theme::sidebar()).inner_margin(egui::Margin::symmetric(10, 6)))
                 .show(ui, |ui| self.sidebar(ui));
-            if self.side != SidePanel::None {
+            if self.side != SidePanel::None && self.nav != Nav::Statistics {
                 egui::Panel::right("side")
                     .resizable(true)
                     .default_size(300.0)
@@ -2292,6 +2314,7 @@ enum Glyph {
     Star,
     Pin,
     Copies,
+    Chart,
 }
 
 fn paint_glyph(painter: &egui::Painter, center_left: egui::Pos2, glyph: Glyph) {
@@ -2326,6 +2349,13 @@ fn paint_glyph(painter: &egui::Painter, center_left: egui::Pos2, glyph: Glyph) {
             painter.rect_stroke(back, 2, stroke, egui::StrokeKind::Inside);
             let front = Rect::from_min_size(origin + Vec2::new(0.0, 4.0), Vec2::new(10.0, 10.0));
             painter.rect_filled(front, 2, theme::muted());
+        }
+        Glyph::Chart => {
+            for (n, h) in [6.0, 13.0, 9.0].into_iter().enumerate() {
+                let left = origin.x + 1.0 + n as f32 * 4.5;
+                let bar = Rect::from_min_max(egui::pos2(left, origin.y + 14.0 - h), egui::pos2(left + 3.5, origin.y + 14.0));
+                painter.rect_filled(bar, 1, Color32::from_rgb(0x1F, 0xA8, 0x6B));
+            }
         }
     }
 }

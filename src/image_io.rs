@@ -29,6 +29,10 @@ pub struct Probe {
     pub height: u32,
     pub taken_at: i64,
     pub camera: String,
+    pub lens: String,
+    /// Focal length in millimeters, as on a 35 mm camera when the file says;
+    /// 0 when unknown.
+    pub focal_mm: f32,
     pub gps_lat: Option<f64>,
     pub gps_lon: Option<f64>,
     pub duration: f64,
@@ -273,6 +277,8 @@ struct ExifBits {
     orientation: u16,
     taken_at: Option<i64>,
     camera: String,
+    lens: String,
+    focal_mm: f32,
     gps_lat: Option<f64>,
     gps_lon: Option<f64>,
 }
@@ -297,8 +303,22 @@ fn bits_from_exif(exif: &exif::Exif) -> ExifBits {
             .into_iter()
             .find_map(|tag| parse_exif_time(&ascii_field(exif, tag)?)),
         camera: camera_name(make.as_deref().unwrap_or(""), model.as_deref().unwrap_or("")),
+        lens: ascii_field(exif, exif::Tag::LensModel).map(|lens| lens.trim().to_string()).unwrap_or_default(),
+        focal_mm: short_field(exif, exif::Tag::FocalLengthIn35mmFilm)
+            .filter(|mm| *mm > 0)
+            .map(f32::from)
+            .or_else(|| rational_field(exif, exif::Tag::FocalLength))
+            .unwrap_or(0.0),
         gps_lat: gps_degrees(exif, exif::Tag::GPSLatitude, exif::Tag::GPSLatitudeRef),
         gps_lon: gps_degrees(exif, exif::Tag::GPSLongitude, exif::Tag::GPSLongitudeRef),
+    }
+}
+
+/// A positive rational EXIF field, such as the focal length.
+fn rational_field(exif: &exif::Exif, tag: exif::Tag) -> Option<f32> {
+    match &exif.get_field(tag, exif::In::PRIMARY)?.value {
+        exif::Value::Rational(values) => values.first().map(|r| r.to_f64() as f32).filter(|value| value.is_finite() && *value > 0.0),
+        _ => None,
     }
 }
 
@@ -308,6 +328,8 @@ impl ExifBits {
             orientation: 1,
             taken_at: None,
             camera: String::new(),
+            lens: String::new(),
+            focal_mm: 0.0,
             gps_lat: None,
             gps_lon: None,
         }
@@ -320,6 +342,8 @@ impl ExifBits {
             height,
             taken_at: self.taken_at.unwrap_or(modified_at),
             camera: self.camera,
+            lens: self.lens,
+            focal_mm: self.focal_mm,
             gps_lat: self.gps_lat,
             gps_lon: self.gps_lon,
             duration: 0.0,
@@ -393,6 +417,8 @@ fn heic_probe(info: &heic_rs::ImageInfo, bits: ExifBits, modified_at: i64) -> Pr
         height: info.height,
         taken_at: bits.taken_at.unwrap_or(modified_at),
         camera: bits.camera,
+        lens: bits.lens,
+        focal_mm: bits.focal_mm,
         gps_lat: bits.gps_lat,
         gps_lon: bits.gps_lon,
         duration: 0.0,
@@ -698,6 +724,15 @@ fn bits_from_raw(metadata: &rawler::decoders::RawMetadata) -> ExifBits {
             .into_iter()
             .find_map(|date| parse_exif_time(date.as_deref()?)),
         camera: camera_name(&metadata.make, &metadata.model),
+        lens: metadata.exif.lens_model.as_deref().map(str::trim).unwrap_or_default().to_string(),
+        focal_mm: metadata
+            .exif
+            .focal_length
+            .as_ref()
+            .filter(|r| r.d != 0)
+            .map(|r| r.n as f32 / r.d as f32)
+            .filter(|mm| mm.is_finite() && *mm > 0.0)
+            .unwrap_or(0.0),
         gps_lat: gps.and_then(raw_latitude),
         gps_lon: gps.and_then(raw_longitude),
     }

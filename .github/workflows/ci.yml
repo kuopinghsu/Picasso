@@ -3,8 +3,9 @@
 # .tar.gz, a .deb, and an AppImage for Linux, and Picasso.app in a .dmg and a
 # .zip for macOS. The AppImage is started on Ubuntu and RHEL-compatible
 # systems before it is published. Pushing a tag like `v0.9.3` also publishes
-# every package on a GitHub release. The tag must match the version in
-# Cargo.toml.
+# every package on a GitHub release, with the version's section of
+# CHANGELOG.md as the release notes. The tag must match the version in
+# Cargo.toml, and CHANGELOG.md must have a dated section for it.
 name: CI
 
 on:
@@ -26,6 +27,40 @@ env:
   CARGO_INCREMENTAL: 0
 
 jobs:
+  # Fails in seconds, not after the builds, when a tag doesn't match
+  # Cargo.toml or CHANGELOG.md has no dated section for it.
+  changelog:
+    name: Changelog
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          sparse-checkout: |
+            Cargo.toml
+            CHANGELOG.md
+            scripts/release-notes.sh
+          sparse-checkout-cone-mode: false
+
+      - name: Check
+        run: |
+          set -euo pipefail
+          version=$(sed -n 's/^version *= *"\(.*\)"/\1/p' Cargo.toml | head -n 1)
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            if [ "$GITHUB_REF_NAME" != "v$version" ]; then
+              echo "::error::Tag $GITHUB_REF_NAME does not match version $version in Cargo.toml"
+              exit 1
+            fi
+            bash scripts/release-notes.sh --release "$version" || {
+              echo "::error::CHANGELOG.md needs a dated section for $version"
+              exit 1
+            }
+          else
+            bash scripts/release-notes.sh "$version" >/dev/null || {
+              echo "::error::CHANGELOG.md has no section for $version"
+              exit 1
+            }
+          fi
+
   windows:
     name: Windows x64
     runs-on: windows-latest
@@ -60,7 +95,7 @@ jobs:
 
           New-Item -ItemType Directory -Force -Path dist, "staging/$name" | Out-Null
           Copy-Item target/release/picasso.exe "dist/$name.exe"
-          Copy-Item target/release/picasso.exe, README.md, LICENSE "staging/$name/"
+          Copy-Item target/release/picasso.exe, README.md, README_zh-TW.md, CHANGELOG.md, LICENSE "staging/$name/"
           Compress-Archive -Path "staging/$name" -DestinationPath "dist/$name.zip"
 
           Get-ChildItem dist | Format-Table Name, Length
@@ -114,7 +149,7 @@ jobs:
           mkdir -p dist "staging/$name"
 
           install -m 755 target/release/picasso "staging/$name/"
-          install -m 644 README.md LICENSE build/picasso.desktop build/picasso.png "staging/$name/"
+          install -m 644 README.md README_zh-TW.md CHANGELOG.md LICENSE build/picasso.desktop build/picasso.png "staging/$name/"
           tar -C staging -czf "dist/$name.tar.gz" "$name"
 
           # Debian versions can't contain "-" without a revision; "~" also
@@ -126,6 +161,8 @@ jobs:
           install -Dm 644 build/picasso.png "$root/usr/share/icons/hicolor/256x256/apps/picasso.png"
           install -Dm 644 LICENSE "$root/usr/share/doc/picasso/copyright"
           install -Dm 644 README.md "$root/usr/share/doc/picasso/README.md"
+          install -Dm 644 README_zh-TW.md "$root/usr/share/doc/picasso/README_zh-TW.md"
+          install -Dm 644 CHANGELOG.md "$root/usr/share/doc/picasso/CHANGELOG.md"
           mkdir -p "$root/DEBIAN"
           cat > "$root/DEBIAN/control" <<EOF
           Package: picasso
@@ -369,7 +406,7 @@ jobs:
           </plist>
           EOF
           plutil -lint "$app/Contents/Info.plist"
-          cp README.md LICENSE staging/dmg/
+          cp README.md README_zh-TW.md CHANGELOG.md LICENSE staging/dmg/
 
           # Ad-hoc signature: Apple silicon refuses to run unsigned code. The
           # app is not notarized, so the first launch needs Open from the
@@ -397,12 +434,19 @@ jobs:
 
   release:
     name: GitHub release
-    needs: [windows, linux, appimage, appimage-test, macos]
+    needs: [changelog, windows, linux, appimage, appimage-test, macos]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v6
+        with:
+          sparse-checkout: |
+            CHANGELOG.md
+            scripts/release-notes.sh
+          sparse-checkout-cone-mode: false
+
       - uses: actions/download-artifact@v8
         with:
           pattern: picasso-*
@@ -415,16 +459,30 @@ jobs:
           sha256sum * > SHA256SUMS.txt
           cat SHA256SUMS.txt
 
+      # The release notes are this version's section of CHANGELOG.md, followed
+      # by the download instructions.
+      - name: Release notes
+        run: |
+          set -euo pipefail
+          {
+            bash scripts/release-notes.sh --release "$GITHUB_REF_NAME"
+            echo
+            echo "## Downloads"
+            echo
+            cat <<'EOF'
+          **Windows x64:** download `picasso-*-windows-x64.exe` and run it, or unzip `picasso-*-windows-x64.zip`.
+
+          **Linux x64:** `picasso-*-linux-x64.AppImage` runs without installing anything on Ubuntu 20.04, RHEL 8, Debian 10, and newer: `chmod +x picasso-*-linux-x64.AppImage`, then run it. It carries the libraries Picasso needs besides glibc and the graphics driver. Without FUSE, start it with `--appimage-extract-and-run`. On Ubuntu 22.04 or newer, `sudo apt install ./picasso-*-linux-x64.deb` installs Picasso instead, and `picasso-*-linux-x64.tar.gz` holds the bare program.
+
+          **macOS 11 or later (Apple silicon and Intel):** open `picasso-*-macos-universal.dmg` and drag Picasso to Applications. The app is not notarized, so the first time, Control-click it and choose **Open**, or allow it in **System Settings → Privacy & Security**. `picasso-*-macos-universal.zip` holds the same app.
+
+          Check downloads against `SHA256SUMS.txt`. Videos need [FFmpeg](https://ffmpeg.org) (`winget install Gyan.FFmpeg` on Windows, `sudo apt install ffmpeg` on Debian or Ubuntu, `brew install ffmpeg` on macOS). Without permission to install it, put `ffmpeg` and `ffprobe` beside the AppImage. Photos work without it.
+          EOF
+          } > release-notes.md
+          cat release-notes.md
+
       - uses: softprops/action-gh-release@v3
         with:
           files: dist/*
-          generate_release_notes: true
+          body_path: release-notes.md
           prerelease: ${{ contains(github.ref_name, '-') }}
-          body: |
-            **Windows x64:** download `picasso-*-windows-x64.exe` and run it, or unzip `picasso-*-windows-x64.zip`.
-
-            **Linux x64:** `picasso-*-linux-x64.AppImage` runs without installing anything on Ubuntu 20.04, RHEL 8, Debian 10, and newer: `chmod +x picasso-*-linux-x64.AppImage`, then run it. It carries the libraries Picasso needs besides glibc and the graphics driver. Without FUSE, start it with `--appimage-extract-and-run`. On Ubuntu 22.04 or newer, `sudo apt install ./picasso-*-linux-x64.deb` installs Picasso instead, and `picasso-*-linux-x64.tar.gz` holds the bare program.
-
-            **macOS 11 or later (Apple silicon and Intel):** open `picasso-*-macos-universal.dmg` and drag Picasso to Applications. The app is not notarized, so the first time, Control-click it and choose **Open**, or allow it in **System Settings → Privacy & Security**. `picasso-*-macos-universal.zip` holds the same app.
-
-            Check downloads against `SHA256SUMS.txt`. Videos need [FFmpeg](https://ffmpeg.org) (`winget install Gyan.FFmpeg` on Windows, `sudo apt install ffmpeg` on Debian or Ubuntu, `brew install ffmpeg` on macOS). Without permission to install it, put `ffmpeg` and `ffprobe` beside the AppImage. Photos work without it.

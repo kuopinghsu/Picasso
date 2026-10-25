@@ -10,6 +10,8 @@ A fast local photo library, viewer, and editor in the spirit of Picasa. It watch
 
 ![The Picasso library: image editor](images/editor.png)
 
+![The Picasso library: places](images/places.png)
+
 ## Prerequisites
 
 - [Rust](https://rustup.rs) 1.95 or newer (`rustup update stable`)
@@ -46,11 +48,11 @@ GitHub Actions (`.github/workflows/ci.yml`) builds and tests Picasso on Windows,
 | Package | Contents |
 | --- | --- |
 | `picasso-<version>-<commit>-windows-x64.exe` | The app, ready to run |
-| `picasso-<version>-<commit>-windows-x64.zip` | The exe, this README, and the license |
-| `picasso-<version>-<commit>-linux-x64.tar.gz` | The `picasso` binary, `picasso.desktop`, `picasso.png`, this README, and the license |
-| `picasso-<version>-<commit>-linux-x64.deb` | A Debian / Ubuntu package that installs the app, its menu entry, and its icon |
+| `picasso-<version>-<commit>-windows-x64.zip` | The exe, the READMEs, the changelog, and the license |
+| `picasso-<version>-<commit>-linux-x64.tar.gz` | The `picasso` binary, `picasso.desktop`, `picasso.png`, the READMEs, the changelog, and the license |
+| `picasso-<version>-<commit>-linux-x64.deb` | A Debian / Ubuntu package that installs the app, its menu entry, and its icon, with the READMEs and the changelog in `/usr/share/doc/picasso` |
 | `picasso-<version>-<commit>-linux-x64.AppImage` | The app with the libraries it needs, for Ubuntu, RHEL, and other distributions, run without installing |
-| `picasso-<version>-<commit>-macos-universal.dmg` | A disk image with `Picasso.app`, a shortcut to Applications, this README, and the license |
+| `picasso-<version>-<commit>-macos-universal.dmg` | A disk image with `Picasso.app`, a shortcut to Applications, the READMEs, the changelog, and the license |
 | `picasso-<version>-<commit>-macos-universal.zip` | `Picasso.app` on its own |
 
 The AppImage needs no installing and no administrator rights, so it suits computers where you can't add system packages. It is built on AlmaLinux 8, so it runs on RHEL 8, Ubuntu 20.04, Debian 10, and newer. It carries every library Picasso uses (ALSA, fontconfig, X11, Wayland, and xkbcommon, with their dependencies) except glibc and the OpenGL driver, which come from the system. On start, it uses the system's copy of each library when there is one and its own copy otherwise. Run it with:
@@ -66,14 +68,26 @@ The `.deb` and `.tar.gz` are built on Ubuntu 22.04, so they run on that release 
 
 The macOS app is a universal binary for Apple silicon and Intel Macs, and runs on macOS 11 and newer. Open the `.dmg` and drag Picasso to Applications. The app has an ad-hoc signature but is not notarized by Apple, so the first launch is blocked: Control-click Picasso and choose **Open**, or click **Open Anyway** in **System Settings → Privacy & Security**. From a terminal, `xattr -dr com.apple.quarantine /Applications/Picasso.app` does the same.
 
-To publish a release, set `version` in `Cargo.toml`, commit, then push a matching tag:
+Pushing a tag such as `v0.9.4` publishes all seven packages (named `picasso-0.9.4-windows-x64.exe` and so on) and `SHA256SUMS.txt` on a new GitHub release. The tag must match the version in `Cargo.toml`, and a tag with a hyphen, such as `v1.0.0-beta.1`, is marked as a pre-release. Release builds open no console window.
 
-```bash
-git tag v0.9.3
-git push origin v0.9.3
-```
+The release notes are the version's section of [`CHANGELOG.md`](CHANGELOG.md), followed by download instructions. The section must be there and carry the release date before tagging: a first **Changelog** job checks this, and the tag's run fails within seconds if the tag doesn't match `Cargo.toml` or the section is missing or still says `Unreleased`. `scripts/release-notes.sh 0.9.4` (or `make release-notes`) prints the notes for a version. CI only reads `CHANGELOG.md`; it never edits it.
 
-The workflow then attaches all six packages (named `picasso-0.9.3-windows-x64.exe` and so on) and `SHA256SUMS.txt` to a new GitHub release. The run fails if the tag doesn't match the version in `Cargo.toml`. A tag with a hyphen, such as `v1.0.0-beta.1`, is marked as a pre-release. Release builds open no console window.
+To make a release:
+
+1. Set `version` in `Cargo.toml` and run `cargo build` so `Cargo.lock` picks it up.
+2. In `CHANGELOG.md`, change the version's heading from `## [0.9.4] - Unreleased` to the release date, for example `## [0.9.4] - 2026-10-26`, and check its entries. At the bottom, point the version's link at the tag, for example `[0.9.4]: https://github.com/kuopinghsu/picasso/compare/v0.9.3...v0.9.4`.
+3. Run `make test`, and preview the notes with `make release-notes`.
+4. Commit and push to `main`, then wait for CI to pass on every platform. Tagging builds the commit the tag points at, so a commit that fails CI fails the release too.
+5. Tag that commit and push the tag:
+
+   ```bash
+   git tag -a v0.9.4 -m "Picasso 0.9.4"
+   git push origin v0.9.4
+   ```
+
+6. Start the next version: add a `## [0.9.5] - Unreleased` section at the top of `CHANGELOG.md`, with a `[0.9.5]: https://github.com/kuopinghsu/picasso/compare/v0.9.4...HEAD` link at the bottom, and record changes there as they land.
+
+If a release build fails, fix it on `main`, then move the tag to the new commit and push it again (`git tag -f -a v0.9.4 -m "Picasso 0.9.4"` and `git push -f origin v0.9.4`).
 
 ## Data
 

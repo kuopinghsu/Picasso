@@ -10,12 +10,13 @@ use crate::types::{unix_now, Album, Folder, Nav, NewPhoto, Photo, Sort, Unreadab
 
 /// Bumped whenever the scanner starts reading new metadata from files, so
 /// rows written by an older build are probed once more on the next scan.
-pub const INDEX_VERSION: i64 = 1;
+pub const INDEX_VERSION: i64 = 2;
 
 const PHOTO_COLS: &str = "\
 p.id, p.folder_id, p.path, p.filename, p.width, p.height, p.bytes, \
 p.taken_at, p.modified_at, p.starred, p.caption, p.camera, \
-p.gps_lat, p.gps_lon, p.pin_lat, p.pin_lon, p.rotation, p.duration";
+p.gps_lat, p.gps_lon, p.pin_lat, p.pin_lon, p.rotation, p.duration, \
+p.lens, p.focal_mm";
 
 /// Days a removed photo's stars, captions, albums and edits are kept, so
 /// they come back if the file returns or turns up under another name.
@@ -230,6 +231,8 @@ impl Database {
             ("added_at", "INTEGER NOT NULL DEFAULT 0"),
             // Set when the user changed the date taken; scans keep it then.
             ("date_set", "INTEGER NOT NULL DEFAULT 0"),
+            ("lens", "TEXT NOT NULL DEFAULT ''"),
+            ("focal_mm", "REAL NOT NULL DEFAULT 0"),
         ] {
             self.ensure_column("photos", column, decl)?;
         }
@@ -680,7 +683,7 @@ impl Database {
                     "UPDATE photos SET folder_id=?1, filename=?2, width=?3, height=?4, bytes=?5,
                      taken_at=CASE WHEN date_set != 0 THEN taken_at ELSE ?6 END, file_taken_at=?6,
                      modified_at=?7, camera=?8, gps_lat=?9, gps_lon=?10,
-                     indexed_version=?11, duration=?13
+                     indexed_version=?11, duration=?13, lens=?14, focal_mm=?15
                      WHERE id=?12",
                 )
                 .map_err(|err| err.to_string())?;
@@ -689,17 +692,18 @@ impl Database {
                     "INSERT INTO photos(
                         id, folder_id, path, filename, width, height, bytes, taken_at, modified_at,
                         camera, gps_lat, gps_lon, indexed_version, starred, caption, rotation, duration,
-                        added_at, file_taken_at
+                        added_at, file_taken_at, lens, focal_mm
                      ) VALUES (
                         max(coalesce((SELECT max(id) FROM photos), 0),
                             coalesce((SELECT value FROM id_floor WHERE name = 'photos'), 0)) + 1,
-                        ?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?7)
+                        ?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?7,?18,?19)
                      ON CONFLICT(path) DO UPDATE SET
                         width=excluded.width, height=excluded.height, bytes=excluded.bytes,
                         taken_at=CASE WHEN date_set != 0 THEN taken_at ELSE excluded.taken_at END,
                         file_taken_at=excluded.file_taken_at, modified_at=excluded.modified_at,
                         camera=excluded.camera, gps_lat=excluded.gps_lat, gps_lon=excluded.gps_lon,
-                        indexed_version=excluded.indexed_version, duration=excluded.duration
+                        indexed_version=excluded.indexed_version, duration=excluded.duration,
+                        lens=excluded.lens, focal_mm=excluded.focal_mm
                      RETURNING id",
                 )
                 .map_err(|err| err.to_string())?;
@@ -724,6 +728,8 @@ impl Database {
                                 version,
                                 id,
                                 photo.duration,
+                                photo.lens,
+                                f64::from(photo.focal_mm),
                             ])
                             .map_err(|err| err.to_string())?;
                         result.updated += 1;
@@ -749,6 +755,8 @@ impl Database {
                                 crate::types::turn(record.rotation.unwrap_or(0), 0),
                                 photo.duration,
                                 now,
+                                photo.lens,
+                                f64::from(photo.focal_mm),
                             ], |row| row.get(0))
                             .map_err(|err| err.to_string())?;
                         result.inserted += 1;
@@ -891,7 +899,7 @@ impl Database {
         }
         let order = order_sql(sort);
         match nav {
-            Nav::Library => {
+            Nav::Library | Nav::Statistics => {
                 let sql = format!("SELECT {PHOTO_COLS} FROM photos p ORDER BY {order}");
                 self.map_rows(&sql, [], read_photo)
             }
@@ -949,6 +957,7 @@ impl Database {
                         "(substr(p.path, length(f.path) + 1) LIKE ?{at} ESCAPE '\\'
                           OR p.caption LIKE ?{at} ESCAPE '\\'
                           OR p.camera LIKE ?{at} ESCAPE '\\'
+                          OR p.lens LIKE ?{at} ESCAPE '\\'
                           OR EXISTS (SELECT 1 FROM album_photos ap JOIN albums a ON a.id = ap.album_id
                                      WHERE ap.photo_id = p.id AND a.name LIKE ?{at} ESCAPE '\\'))"
                     ));
@@ -1208,6 +1217,8 @@ fn read_photo(row: &rusqlite::Row<'_>) -> rusqlite::Result<Photo> {
         pin_lon: row.get(15)?,
         rotation: row.get::<_, i64>(16)? as i32,
         duration: row.get(17)?,
+        lens: row.get(18)?,
+        focal_mm: row.get::<_, f64>(19)? as f32,
     })
 }
 
@@ -1229,7 +1240,7 @@ enum Term {
 /// The words of a search. A year, month, or day such as `2019`, `2019-05`,
 /// or `2019/5/17` stands for the photos taken then, in local time; any
 /// other word is looked for in the file and subfolder names, the caption,
-/// the camera, and the names of the photo's albums.
+/// the camera, the lens, and the names of the photo's albums.
 fn search_terms(query: &str) -> Vec<Term> {
     query
         .split_whitespace()
@@ -1335,6 +1346,8 @@ mod tests {
                 taken_at: 1_700_000_000,
                 modified_at,
                 camera: "TestCam".into(),
+                lens: String::new(),
+                focal_mm: 0.0,
                 gps_lat: Some(37.5),
                 gps_lon: Some(-122.4),
                 duration: 0.0,

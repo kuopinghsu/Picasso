@@ -47,6 +47,9 @@ pub struct Photo {
     pub starred: bool,
     pub caption: String,
     pub camera: String,
+    pub lens: String,
+    /// Focal length in millimeters, 35 mm equivalent when known; 0 when unknown.
+    pub focal_mm: f32,
     pub gps_lat: Option<f64>,
     pub gps_lon: Option<f64>,
     pub pin_lat: Option<f64>,
@@ -125,6 +128,8 @@ pub enum Nav {
     Dir(String),
     Album(i64),
     Places,
+    /// When, where, and with what the library's photos were taken.
+    Statistics,
 }
 
 #[derive(Clone, Debug)]
@@ -138,6 +143,8 @@ pub struct NewPhoto {
     pub taken_at: i64,
     pub modified_at: i64,
     pub camera: String,
+    pub lens: String,
+    pub focal_mm: f32,
     pub gps_lat: Option<f64>,
     pub gps_lon: Option<f64>,
     pub duration: f64,
@@ -396,6 +403,39 @@ fn month_year(year: i32, month: u32, lang: crate::i18n::Lang) -> String {
         Lang::Spanish | Lang::Portuguese => format!("{} de {year}", month_name(lang, month)),
         Lang::English | Lang::German | Lang::French | Lang::Italian => format!("{} {year}", month_name(lang, month)),
     }
+}
+
+/// Short name of `month` (1 to 12) for a chart axis.
+pub fn short_month(month: u32) -> String {
+    use crate::i18n::Lang;
+    let lang = crate::i18n::current();
+    match lang {
+        Lang::TraditionalChinese | Lang::SimplifiedChinese | Lang::Japanese => format!("{month}月"),
+        Lang::Korean => format!("{month}월"),
+        Lang::French => {
+            const FRENCH: [&str; 12] = ["janv.", "févr.", "mars", "avr.", "mai", "juin", "juil.", "août", "sept.", "oct.", "nov.", "déc."];
+            FRENCH[(month.clamp(1, 12) - 1) as usize].to_string()
+        }
+        _ => month_name(lang, month).chars().take(3).collect(),
+    }
+}
+
+/// Short name of a weekday for a chart axis, counting from Monday at 0.
+pub fn short_weekday(day: usize) -> &'static str {
+    use crate::i18n::Lang;
+    let names: [&str; 7] = match crate::i18n::current() {
+        Lang::English => ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"],
+        Lang::TraditionalChinese => ["週一", "週二", "週三", "週四", "週五", "週六", "週日"],
+        Lang::SimplifiedChinese => ["周一", "周二", "周三", "周四", "周五", "周六", "周日"],
+        Lang::Japanese => ["月", "火", "水", "木", "金", "土", "日"],
+        Lang::Korean => ["월", "화", "수", "목", "금", "토", "일"],
+        Lang::German => ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"],
+        Lang::Spanish => ["lun", "mar", "mié", "jue", "vie", "sáb", "dom"],
+        Lang::French => ["lun", "mar", "mer", "jeu", "ven", "sam", "dim"],
+        Lang::Italian => ["lun", "mar", "mer", "gio", "ven", "sab", "dom"],
+        Lang::Portuguese => ["seg", "ter", "qua", "qui", "sex", "sáb", "dom"],
+    };
+    names[day.min(6)]
 }
 
 /// Full name of `month` (1 to 12) in a language that spells months out.

@@ -6,7 +6,7 @@ use eframe::egui::{self, Color32, Pos2, Rect, Sense, Stroke, Vec2};
 
 use crate::geo;
 use crate::i18n::{tr, trf};
-use crate::types::{displayed_size, folder_label, format_bytes, format_timestamp, Photo};
+use crate::types::{displayed_size, folder_label, format_bytes, format_timestamp, Nav, Photo};
 
 use super::places::MapView;
 use super::theme::{self, ACCENT, WHITE};
@@ -54,7 +54,7 @@ impl PicassoApp {
     }
 
     /// The photo the panel describes: the focused one of the selection.
-    fn side_photo(&self) -> Option<Photo> {
+    pub(super) fn side_photo(&self) -> Option<Photo> {
         self.primary_index()
             .and_then(|index| self.photos.get(index).cloned())
             .or_else(|| {
@@ -64,6 +64,10 @@ impl PicassoApp {
     }
 
     pub(super) fn side_ui(&mut self, ui: &mut egui::Ui) {
+        if self.nav == Nav::Places {
+            self.places_side_ui(ui);
+            return;
+        }
         ui.horizontal(|ui| {
             for (panel, label) in [(SidePanel::Info, "Info"), (SidePanel::Map, "Map")] {
                 let on = self.side == panel;
@@ -119,7 +123,7 @@ impl PicassoApp {
         }
     }
 
-    fn side_info(&mut self, ui: &mut egui::Ui, photo: &Photo) {
+    pub(super) fn side_info(&mut self, ui: &mut egui::Ui, photo: &Photo) {
         self.side_preview(ui, photo);
         ui.add_space(10.0);
         ui.add(egui::Label::new(egui::RichText::new(&photo.filename).size(15.0).strong().color(theme::text())).wrap());
@@ -186,7 +190,7 @@ impl PicassoApp {
             if ui.button(tr("Show in folder")).clicked() {
                 crate::shell::reveal(&photo.path);
             }
-            if photo.place().is_some() && ui.button(tr("Show map")).clicked() {
+            if photo.place().is_some() && self.nav != Nav::Places && ui.button(tr("Show map")).clicked() {
                 self.toggle_side(SidePanel::Map);
             }
         });

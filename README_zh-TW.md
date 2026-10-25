@@ -10,6 +10,8 @@ Picasso 是一套承襲 Picasa 精神的本機相片圖庫，集管理、瀏覽�
 
 ![Picasso 圖庫：相片編輯器](images/editor.png)
 
+![Picasso 圖庫：地點](images/places.png)
+
 ## 系統需求
 
 - [Rust](https://rustup.rs) 1.95 以上版本（`rustup update stable`）
@@ -46,11 +48,11 @@ Picasso 使用 OpenGL 繪製畫面，在 WSL 上會使用 Windows 的顯示卡�
 | 套件 | 內容 |
 | --- | --- |
 | `picasso-<version>-<commit>-windows-x64.exe` | 應用程式本身，可直接執行 |
-| `picasso-<version>-<commit>-windows-x64.zip` | 執行檔、本說明文件與授權條款 |
-| `picasso-<version>-<commit>-linux-x64.tar.gz` | `picasso` 執行檔、`picasso.desktop`、`picasso.png`、本說明文件與授權條款 |
-| `picasso-<version>-<commit>-linux-x64.deb` | Debian／Ubuntu 安裝套件，會安裝應用程式、選單項目與圖示 |
+| `picasso-<version>-<commit>-windows-x64.zip` | 執行檔、說明文件、變更紀錄與授權條款 |
+| `picasso-<version>-<commit>-linux-x64.tar.gz` | `picasso` 執行檔、`picasso.desktop`、`picasso.png`、說明文件、變更紀錄與授權條款 |
+| `picasso-<version>-<commit>-linux-x64.deb` | Debian／Ubuntu 安裝套件，會安裝應用程式、選單項目與圖示，說明文件與變更紀錄放在 `/usr/share/doc/picasso` |
 | `picasso-<version>-<commit>-linux-x64.AppImage` | 內含所需程式庫的應用程式，適用於 Ubuntu、RHEL 等發行版，免安裝即可執行 |
-| `picasso-<version>-<commit>-macos-universal.dmg` | 磁碟映像檔，內含 `Picasso.app`、「應用程式」資料夾的替身、本說明文件與授權條款 |
+| `picasso-<version>-<commit>-macos-universal.dmg` | 磁碟映像檔，內含 `Picasso.app`、「應用程式」資料夾的替身、說明文件、變更紀錄與授權條款 |
 | `picasso-<version>-<commit>-macos-universal.zip` | 只有 `Picasso.app` |
 
 AppImage 不必安裝，也不需要系統管理員權限，適合無法自行安裝系統套件的電腦。它在 AlmaLinux 8 上建置，因此可在 RHEL 8、Ubuntu 20.04、Debian 10 及更新的版本上執行。除了 glibc 和 OpenGL 驅動程式由系統提供之外，Picasso 用到的所有程式庫（ALSA、fontconfig、X11、Wayland、xkbcommon 及其相依套件）都已包含在內。啟動時，系統有的程式庫會優先使用系統版本，沒有的才使用內附的版本。執行方式如下：
@@ -66,14 +68,26 @@ AppImage 會透過 FUSE 自行掛載。在沒有 FUSE 的環境（例如容器�
 
 macOS 版是同時支援 Apple 晶片與 Intel 處理器的通用執行檔，可在 macOS 11 及更新的版本上執行。打開 `.dmg`，把 Picasso 拖到「應用程式」資料夾即可。這個應用程式只有臨時簽章，沒有經過 Apple 公證，所以第一次啟動會被系統阻擋：請按住 Control 鍵並按一下 Picasso，再選擇「打開」；或到「系統設定 → 隱私權與安全性」按一下「強制打開」。也可以在終端機執行 `xattr -dr com.apple.quarantine /Applications/Picasso.app`，效果相同。
 
-要發布新版本時，請先修改 `Cargo.toml` 中的 `version` 並提交，再推送對應的標籤：
+推送 `v0.9.4` 這類標籤時，工作流程會建立新的 GitHub 發行版本，並附上全部七種套件（檔名如 `picasso-0.9.4-windows-x64.exe`）與 `SHA256SUMS.txt`。標籤必須與 `Cargo.toml` 中的版本一致；標籤含有連字號時（例如 `v1.0.0-beta.1`），會標示為預先發行版本。正式版本啟動時不會開啟主控台視窗。
 
-```bash
-git tag v0.9.3
-git push origin v0.9.3
-```
+發行說明取自 [`CHANGELOG.md`](CHANGELOG.md) 中該版本的段落，後面再附上下載說明。推送標籤前，這個段落必須已經寫好，並標上發行日期：工作流程一開始的「Changelog」工作會檢查這點，如果標籤與 `Cargo.toml` 不一致，或段落不存在、仍標示為 `Unreleased`，流程會在幾秒內失敗。執行 `scripts/release-notes.sh 0.9.4`（或 `make release-notes`）可預覽某個版本的發行說明。CI 只會讀取 `CHANGELOG.md`，不會修改它。
 
-接著，工作流程會建立新的 GitHub 發行版本，並附上全部六種套件（檔名如 `picasso-0.9.3-windows-x64.exe`）與 `SHA256SUMS.txt`。如果標籤和 `Cargo.toml` 中的版本不一致，流程就會失敗。標籤含有連字號時（例如 `v1.0.0-beta.1`），會標示為預先發行版本。正式版本啟動時不會開啟主控台視窗。
+發布新版本的步驟：
+
+1. 修改 `Cargo.toml` 中的 `version`，再執行 `cargo build`，讓 `Cargo.lock` 一併更新。
+2. 在 `CHANGELOG.md` 中，把該版本的標題從 `## [0.9.4] - Unreleased` 改成發行日期，例如 `## [0.9.4] - 2026-10-26`，並檢查內容。檔案最下方該版本的連結也要改成指向標籤，例如 `[0.9.4]: https://github.com/kuopinghsu/picasso/compare/v0.9.3...v0.9.4`。
+3. 執行 `make test`，再用 `make release-notes` 預覽發行說明。
+4. 提交並推送到 `main`，等所有平台的 CI 都通過。推送標籤時建置的是標籤指向的那次提交，所以 CI 失敗的提交，發行也會失敗。
+5. 為這次提交加上標籤並推送：
+
+   ```bash
+   git tag -a v0.9.4 -m "Picasso 0.9.4"
+   git push origin v0.9.4
+   ```
+
+6. 開始下一個版本：在 `CHANGELOG.md` 最上方加入 `## [0.9.5] - Unreleased` 段落，在最下方加上 `[0.9.5]: https://github.com/kuopinghsu/picasso/compare/v0.9.4...HEAD` 連結，之後的變更都記錄在這裡。
+
+如果發行版本建置失敗，請先在 `main` 上修正，再把標籤移到新的提交並重新推送（`git tag -f -a v0.9.4 -m "Picasso 0.9.4"` 與 `git push -f origin v0.9.4`）。
 
 ## 資料存放位置
 

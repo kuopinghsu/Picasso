@@ -189,6 +189,10 @@ impl PicassoApp {
             }
             return;
         }
+        if self.nav == Nav::Statistics {
+            self.stats_ui(ui);
+            return;
+        }
         let full = ui.available_rect_before_wrap();
         let strip_w = if self.sort.by_name() { 0.0 } else { STRIP_W };
         let grid_rect = Rect::from_min_max(full.min, Pos2::new(full.max.x - strip_w, full.max.y));
@@ -533,6 +537,9 @@ impl PicassoApp {
             ui.label(egui::RichText::new(super::photo_count(self.photos.len())).size(13.0).color(theme::muted()));
             if self.loading {
                 ui.add(egui::Spinner::new().size(13.0));
+            }
+            if self.nav == Nav::Statistics {
+                return;
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let mut sort = self.sort;
@@ -1000,6 +1007,8 @@ mod tests {
             starred: false,
             caption: String::new(),
             camera: String::new(),
+            lens: String::new(),
+            focal_mm: 0.0,
             gps_lat: None,
             gps_lon: None,
             pin_lat: None,

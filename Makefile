@@ -11,7 +11,7 @@ else
   PLATFORM := $(shell uname -s | tr A-Z a-z)
 endif
 
-.PHONY: release run appimage clean
+.PHONY: release run test release-notes appimage clean
 
 # Release build. `make` and `make release` both produce target/release/picasso.
 release:
@@ -21,6 +21,14 @@ release:
 #   make run ARGS="~/Pictures ~/Photos"
 run:
 	$(CARGO) run --release -- $(ARGS)
+
+# Unit tests, as CI runs them.
+test:
+	$(CARGO) test --release --locked
+
+# The release notes CI publishes for the version in Cargo.toml, from CHANGELOG.md.
+release-notes:
+	bash scripts/release-notes.sh $(VERSION)
 
 # Linux x86_64 AppImage in dist/, the same AppDir as the CI AppImage job.
 appimage: release

@@ -535,6 +535,8 @@ impl Indexer {
                 taken_at: if probe.taken_at == 0 { unix_now() } else { probe.taken_at },
                 modified_at: job.modified_at,
                 camera: probe.camera,
+                lens: probe.lens,
+                focal_mm: probe.focal_mm,
                 gps_lat: probe.gps_lat,
                 gps_lon: probe.gps_lon,
                 duration: probe.duration,

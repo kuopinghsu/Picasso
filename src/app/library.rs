@@ -660,6 +660,8 @@ impl PicassoApp {
                 photo.rotation,
                 THUMB_RADIUS as f32,
             );
+            let held = ui.input(|input| input.pointer.any_down());
+            self.sharpen_thumb(photo.id, &photo.path, thumb * ui.ctx().pixels_per_point(), held);
         }
         let painter = ui.painter();
         if !labeled && response.hovered() {

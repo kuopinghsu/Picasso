@@ -9,6 +9,7 @@ mod config;
 mod db;
 mod edit;
 mod geo;
+mod geotag;
 mod i18n;
 mod image_io;
 mod liberty;
@@ -33,6 +34,9 @@ pub static ICON_RGBA: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/icon-256
 
 fn main() -> eframe::Result {
     let args: Vec<std::path::PathBuf> = std::env::args_os().skip(1).map(std::path::PathBuf::from).collect();
+    if args.first().is_some_and(|arg| arg.as_os_str() == "geotag") {
+        std::process::exit(geotag::cli(&args[1..]));
+    }
     prefer_wsl_gl();
     let renderer = match std::env::var("PICASSO_RENDERER").ok().as_deref() {
         Some("wgpu") => eframe::Renderer::Wgpu,

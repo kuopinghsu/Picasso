@@ -7,6 +7,7 @@ mod editor;
 mod editor_panel;
 mod editor_stage;
 mod export;
+mod geotagging;
 mod help;
 mod library;
 mod loader;
@@ -44,6 +45,9 @@ use theme::ThemeMode;
 
 /// How long the status bar offers to undo a Move to trash.
 const UNDO_TRASH_FOR: Duration = Duration::from_secs(120);
+/// Range of the thumbnail size slider, in points.
+const MIN_THUMB: f32 = 96.0;
+const MAX_THUMB: f32 = 320.0;
 /// Pause after the last keystroke before the search runs.
 const SEARCH_DELAY: Duration = Duration::from_millis(250);
 /// A photo's histogram and its EXIF as label and value.
@@ -82,6 +86,7 @@ enum Modal {
     Unreadable { confirm_all: bool },
     Export(export::ExportDialog),
     AdjustDate(dates::DateDialog),
+    Geotag(geotagging::GeotagDialog),
     /// The duplicate search; `confirm_all` while asking before moving every
     /// extra copy to the trash.
     Duplicates { confirm_all: bool },
@@ -96,6 +101,15 @@ struct ThumbTex {
     h: usize,
     /// Value of [`ThumbCache::clock`] when last drawn.
     used: u64,
+    /// Short edge of the sharper copy last asked for; 0 when none was.
+    asked: u32,
+}
+
+impl ThumbTex {
+    /// Larger than the cached thumbnail, made for a big tile.
+    fn sharp(&self) -> bool {
+        self.w.min(self.h) > worker::THUMB_EDGE as usize
+    }
 }
 
 /// Thumbnail textures, least recently drawn first out.
@@ -112,6 +126,8 @@ impl ThumbCache {
     /// Each thumbnail texture is about 600 KB, so this keeps them to about
     /// 250 MB unless the window shows more at once.
     const CAPACITY: usize = 400;
+    /// Sharper copies for big tiles run to a few MB each, so fewer are kept.
+    const SHARP_CAPACITY: usize = 48;
 
     fn new() -> Self {
         Self {
@@ -132,6 +148,14 @@ impl ThumbCache {
         self.clock += 1;
         tex.used = self.clock;
         self.map.insert(id, tex);
+        let sharp = Self::SHARP_CAPACITY.max(2 * self.keep);
+        if self.map.values().filter(|tex| tex.sharp()).count() > sharp {
+            let mut ages: Vec<(u64, i64)> = self.map.iter().filter(|(_, tex)| tex.sharp()).map(|(id, tex)| (tex.used, *id)).collect();
+            ages.sort_unstable();
+            for (_, old) in ages.into_iter().take(sharp / 4) {
+                self.map.remove(&old);
+            }
+        }
         let capacity = Self::CAPACITY.max(2 * self.keep);
         if self.map.len() > capacity {
             // Evict in chunks so the scan for the oldest runs rarely.
@@ -593,7 +617,7 @@ impl PicassoApp {
         app.show_info = app.db.setting("viewer_info").as_deref() != Some("0");
         app.side = SidePanel::from_setting(app.db.setting("side_panel").as_deref());
         let config = &app.config;
-        app.thumb_size = config.number("thumb_size").map_or(app.thumb_size, |size| size.clamp(96.0, 220.0));
+        app.thumb_size = config.number("thumb_size").map_or(app.thumb_size, |size| size.clamp(MIN_THUMB, MAX_THUMB));
         app.slideshow_interval = config.number("slideshow_interval").map_or(app.slideshow_interval, |secs| secs.clamp(1.0, 15.0));
         app.confirm_trash = config.flag("confirm_trash").unwrap_or(true);
         app.show_tracks = config.flag("map_tracks").unwrap_or(true);
@@ -821,8 +845,13 @@ impl PicassoApp {
                     // Rendered with older steps; asked for again when drawn.
                     return;
                 }
+                let old = self.thumbs.map.get(&id);
+                if old.is_some_and(|old| old.w.min(old.h) > w.min(h)) {
+                    return;
+                }
+                let asked = old.map_or(0, |old| old.asked);
                 if let Some(texture) = upload(ctx, &format!("thumb-{id}"), w, h, &rgba) {
-                    self.thumbs.insert(id, ThumbTex { texture, w, h, used: 0 });
+                    self.thumbs.insert(id, ThumbTex { texture, w, h, used: 0, asked });
                 } else {
                     self.thumb_failed.insert(id);
                 }
@@ -865,6 +894,9 @@ impl PicassoApp {
             }
             UiEvent::ThumbSkipped { id } => {
                 self.thumb_waiting.remove(&id);
+                if let Some(tex) = self.thumbs.map.get_mut(&id) {
+                    tex.asked = 0;
+                }
             }
             UiEvent::DisplayFailed { id, nonce } => {
                 if self.display_nonce.get(&id) == Some(&nonce) {
@@ -1405,7 +1437,7 @@ impl PicassoApp {
                 ui.add_space(12.0);
                 ui.label(egui::RichText::new("▮").size(16.0).color(theme::muted()));
                 let mut size = self.thumb_size;
-                let response = ui.add(egui::Slider::new(&mut size, 96.0..=220.0).show_value(false));
+                let response = ui.add(egui::Slider::new(&mut size, MIN_THUMB..=MAX_THUMB).show_value(false));
                 ui.label(egui::RichText::new("▮").size(10.0).color(theme::muted()));
                 self.set_thumb_size(size, &response);
             });
@@ -1542,6 +1574,7 @@ impl PicassoApp {
             Modal::Unreadable { .. } => self.unreadable_modal(ctx),
             Modal::Export(_) => self.export_modal(ctx),
             Modal::AdjustDate(_) => self.adjust_date_modal(ctx),
+            Modal::Geotag(_) => self.geotag_modal(ctx),
             Modal::Duplicates { .. } => self.duplicates_modal(ctx),
             Modal::Settings => self.settings_modal(ctx),
             Modal::About => {
@@ -2091,7 +2124,30 @@ impl PicassoApp {
             id,
             path: path.to_string(),
             edit: self.edit_settings(id),
+            edge: worker::THUMB_EDGE,
         });
+    }
+
+    /// Asks for a sharper copy of a thumbnail drawn `pixels` wide when the
+    /// one shown would be stretched. Nothing is asked while the pointer is
+    /// held, so dragging the size slider doesn't queue a decode per step.
+    fn sharpen_thumb(&mut self, id: i64, path: &str, pixels: f32, held: bool) {
+        const STEP: u32 = 128;
+        const MAX_EDGE: u32 = 1024;
+        let edit = self.edit_settings(id);
+        let Some(tex) = self.thumbs.map.get_mut(&id) else { return };
+        if held || pixels <= tex.w.min(tex.h) as f32 * 1.15 {
+            return;
+        }
+        let edge = ((pixels / STEP as f32).ceil() as u32 * STEP).min(MAX_EDGE);
+        if tex.asked >= edge {
+            return;
+        }
+        tex.asked = edge;
+        if let Ok(mut wanted) = self.thumb_wanted.lock() {
+            wanted.insert(id);
+        }
+        let _ = self.urgent_tx.send(ThumbJob::Thumb { id, path: path.to_string(), edit, edge });
     }
 
     fn thumb_texture(&mut self, id: i64) -> Option<(TextureHandle, usize, usize)> {

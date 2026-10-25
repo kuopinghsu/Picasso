@@ -32,6 +32,7 @@ use crate::edit::{self, Geometry, Settings};
 use crate::i18n::tr;
 use crate::image_io::{self, Probe};
 use crate::photo_info::{self, Histogram};
+use crate::geotag::Sidecar;
 use crate::picasa_ini::PicasaIni;
 use crate::thumbs::ThumbStore;
 use crate::track::{is_track_path, MapTrack, Track};
@@ -58,7 +59,9 @@ pub enum Command {
 
 pub enum ThumbJob {
     /// `edit` is applied over the decoded pixels; the disk cache keeps the original.
-    Thumb { id: i64, path: String, edit: Settings },
+    /// `edge` is the short edge wanted: [`THUMB_EDGE`] is the cached size, and a
+    /// larger one is decoded for a big tile and kept by the window alone.
+    Thumb { id: i64, path: String, edit: Settings, edge: u32 },
     /// `edge` caps the long side of the decoded photo; videos use their poster.
     Display { id: i64, path: String, nonce: u64, edit: Settings, edge: u32 },
     /// Writes the disk thumbnail during a scan without sending pixels to the
@@ -166,10 +169,10 @@ pub fn thumb_threads() -> usize {
     (std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4) * 3 / 4).clamp(2, 8)
 }
 
-/// Short edge of a cached thumbnail. Tiles are squares cut from the middle
-/// and up to 220 points wide, so this keeps them sharp on high-density
-/// screens without making the cache much larger.
-const THUMB_EDGE: u32 = 320;
+/// Short edge of a cached thumbnail. Tiles are squares cut from the middle;
+/// one that is larger on screen gets a sharper copy decoded for it, which
+/// stays out of the cache so the cache doesn't grow.
+pub const THUMB_EDGE: u32 = 320;
 /// Most the short edge of the photo is decoded to for a thumbnail whose
 /// edit crops, turns, or tilts it.
 const REFRAMED_SOURCE_EDGE: u32 = 1280;
@@ -406,7 +409,7 @@ impl Indexer {
         drop(job_rx);
         drop(done_tx);
 
-        let mut ini_cache: HashMap<PathBuf, PicasaIni> = HashMap::new();
+        let mut ini_cache: HashMap<PathBuf, (PicasaIni, Sidecar)> = HashMap::new();
         let mut batch: Vec<ScanRecord> = Vec::with_capacity(BATCH_SIZE);
         let mut unreadable = Vec::new();
         let mut indexed = 0usize;
@@ -505,7 +508,7 @@ impl Indexer {
         &self,
         folder_id: i64,
         result: ProbeResult,
-        ini_cache: &mut HashMap<PathBuf, PicasaIni>,
+        ini_cache: &mut HashMap<PathBuf, (PicasaIni, Sidecar)>,
     ) -> Result<ScanRecord, Unreadable> {
         let ProbeResult { job, probe } = result;
         let probe = probe.map_err(|reason| Unreadable {
@@ -515,14 +518,17 @@ impl Indexer {
             bytes: job.bytes,
             modified_at: job.modified_at,
         })?;
-        let (star, caption, rotation) = if job.existing.is_none() {
+        let (star, caption, rotation, pin) = if job.existing.is_none() {
             let parent = job.path.parent().unwrap_or(&job.path).to_path_buf();
-            let ini = ini_cache.entry(parent.clone()).or_insert_with(|| PicasaIni::load(&parent));
-            ini.get(&job.filename)
+            let (ini, geotags) = ini_cache.entry(parent.clone()).or_insert_with(|| (PicasaIni::load(&parent), Sidecar::load(&parent)));
+            let (star, caption, rotation) = ini
+                .get(&job.filename)
                 .map(|meta| (meta.star, meta.caption.clone(), meta.rotation))
-                .unwrap_or((None, None, None))
+                .unwrap_or((None, None, None));
+            let pin = if probe.gps_lat.is_none() { geotags.place(&job.filename) } else { None };
+            (star, caption, rotation, pin)
         } else {
-            (None, None, None)
+            (None, None, None, None)
         };
         Ok(ScanRecord {
             photo: NewPhoto {
@@ -545,6 +551,7 @@ impl Indexer {
             star,
             caption,
             rotation,
+            pin,
             complete: probe.complete,
         })
     }
@@ -569,7 +576,7 @@ impl Indexer {
             // again; new photos only need their disk thumbnail.
             let job = if record.existing.is_some() {
                 self.thumb_store.remove(id);
-                ThumbJob::Thumb { id, path, edit: Settings::default() }
+                ThumbJob::Thumb { id, path, edit: Settings::default(), edge: THUMB_EDGE }
             } else {
                 ThumbJob::Cache { id, path }
             };
@@ -974,8 +981,14 @@ fn run_thumb(store: &ThumbStore, gate: &DisplayGate, job: ThumbJob) -> Option<Ui
             }
             None
         }
-        ThumbJob::Thumb { id, path, edit } => {
+        ThumbJob::Thumb { id, path, edit, edge } => {
             let file = Path::new(&path);
+            if edge > THUMB_EDGE {
+                // The cached thumbnail is already shown; a failure leaves it.
+                let rgba = sharp_thumb(file, &edit, edge)?;
+                let (w, h, rgba) = raw_rgba(&rgba);
+                return Some(UiEvent::Thumb { id, w, h, rgba, edit });
+            }
             let rgba = if edit.is_identity() {
                 store.remove_edited(id);
                 match plain_thumb(store, id, file) {
@@ -1060,10 +1073,26 @@ fn plain_thumb(store: &ThumbStore, id: i64, file: &Path) -> Option<RgbaImage> {
 /// The thumbnail with `edit` applied.
 fn edited_thumb(store: &ThumbStore, id: i64, file: &Path, edit: &Settings) -> Option<RgbaImage> {
     let reframed = !is_video_path(file) && !Geometry::from_settings(edit).is_identity();
-    if let Some(rgba) = reframed.then(|| reframed_thumb(file, edit)).flatten() {
+    if let Some(rgba) = reframed.then(|| reframed_thumb(file, edit, THUMB_EDGE)).flatten() {
         return Some(rgba);
     }
     let mut rgba = plain_thumb(store, id, file)?;
+    edit::apply(&mut rgba, edit);
+    Some(rgba)
+}
+
+/// The photo, with `edit` applied, at a short edge of `edge`, for a tile
+/// larger than the cached thumbnail.
+fn sharp_thumb(file: &Path, edit: &Settings, edge: u32) -> Option<RgbaImage> {
+    if is_video_path(file) {
+        let (rgba, _) = video::poster(file, 2 * edge).ok()?;
+        return Some(image_io::thumbnail_rgba(&DynamicImage::ImageRgba8(rgba), edge));
+    }
+    if !Geometry::from_settings(edit).is_identity() {
+        return reframed_thumb(file, edit, edge);
+    }
+    let image = std::panic::catch_unwind(|| image_io::load_for_tile(file, edge)).ok()?.ok()?;
+    let mut rgba = image_io::thumbnail_rgba(&image, edge);
     edit::apply(&mut rgba, edit);
     Some(rgba)
 }
@@ -1078,16 +1107,16 @@ fn edit_key(edit: &Settings) -> String {
 /// The edited photo at thumbnail size for an edit that crops, turns, or
 /// tilts it. The cached thumbnail is too small for that: the crop would
 /// enlarge it and the warp would soften it a second time, so the photo is
-/// decoded larger, edited, and only then shrunk.
-fn reframed_thumb(path: &Path, edit: &Settings) -> Option<RgbaImage> {
+/// decoded larger, edited, and only then shrunk to a short edge of `edge`.
+fn reframed_thumb(path: &Path, edit: &Settings, edge: u32) -> Option<RgbaImage> {
     let [left, top, right, bottom] = edit.crop();
     let kept = (right - left).min(bottom - top).clamp(0.05, 1.0);
-    let edge = ((2 * THUMB_EDGE) as f32 / kept).ceil() as u32;
-    let edge = edge.min(REFRAMED_SOURCE_EDGE);
-    let image = std::panic::catch_unwind(|| image_io::load_for_tile(path, edge)).ok()?.ok()?;
-    let mut rgba = image_io::thumbnail_rgba(&image, edge);
+    let source = ((2 * edge) as f32 / kept).ceil() as u32;
+    let source = source.min(REFRAMED_SOURCE_EDGE.max(2 * edge));
+    let image = std::panic::catch_unwind(|| image_io::load_for_tile(path, source)).ok()?.ok()?;
+    let mut rgba = image_io::thumbnail_rgba(&image, source);
     edit::apply(&mut rgba, edit);
-    Some(image_io::thumbnail_rgba(&DynamicImage::ImageRgba8(rgba), THUMB_EDGE))
+    Some(image_io::thumbnail_rgba(&DynamicImage::ImageRgba8(rgba), edge))
 }
 
 fn decode_jpeg(jpeg: &[u8]) -> Option<RgbaImage> {

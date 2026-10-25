@@ -180,9 +180,32 @@ fn report_lines(ui: &mut egui::Ui, report: &Report) {
     if report.had_gps > 0 {
         ui.label(RichText::new(trf("{} already had GPS from the camera", &[&report.had_gps])).color(theme::muted()));
     }
+    if report.hand_pinned > 0 {
+        ui.label(RichText::new(trf("{} were pinned by hand and keep their place", &[&report.hand_pinned])).color(theme::muted()));
+    }
     if report.unmatched > 0 {
         let minutes = NEAR / 60;
         ui.label(RichText::new(trf("{} had no track point within {} minutes", &[&report.unmatched, &minutes])).color(theme::muted()));
+    }
+    match &report.library_error {
+        Some(err) => {
+            ui.label(RichText::new(trf("The library wasn't updated: {}", &[err])).color(theme::DANGER));
+        }
+        None if report.library > 0 => {
+            ui.label(RichText::new(trf("Pinned {} photos in the library", &[&report.library])).color(theme::muted()));
+        }
+        None => {}
+    }
+    for (path, err) in &report.failed {
+        let folder = path.parent().map(display_path).unwrap_or_default();
+        ui.label(RichText::new(trf("Couldn't write the geotag file in {}: {}", &[&folder, err])).color(theme::DANGER));
+    }
+    if report.zone_guessed > 0 {
+        let text = trf(
+            "{} photos record no time zone, so this computer's ({}) was used. If they were taken elsewhere, geotag their folder again with the camera time zone.",
+            &[&report.zone_guessed, &geotag::local_offset()],
+        );
+        ui.label(RichText::new(text).color(theme::muted()));
     }
     if report.tagged == 0 && report.unmatched > 0 {
         ui.label(
@@ -197,13 +220,17 @@ fn spawn(options: geotag::Options, db_path: PathBuf, ctx: egui::Context) -> Run 
     let (sender, finished) = mpsc::channel();
     let (done_in, total_in) = (done.clone(), total.clone());
     let _ = std::thread::Builder::new().name("picasso-geotag".into()).spawn(move || {
-        let db = Database::open(&db_path).ok();
+        let db = Database::open(&db_path);
         let progress = |count: usize, all: usize| {
             done_in.store(count, Ordering::Relaxed);
             total_in.store(all, Ordering::Relaxed);
             ctx.request_repaint();
         };
-        let _ = sender.send(geotag::run(&options, db.as_ref(), &progress));
+        let mut result = geotag::run(&options, db.as_ref().ok(), &progress);
+        if let (Ok(report), Err(err)) = (&mut result, &db) {
+            report.library_error = Some(err.clone());
+        }
+        let _ = sender.send(result);
         ctx.request_repaint();
     });
     Run { done, total, finished }

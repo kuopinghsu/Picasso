@@ -61,6 +61,52 @@ pub struct Photo {
     pub duration: f64,
 }
 
+/// Seconds a clock is ahead of UTC, from text such as `+01:00` (as EXIF
+/// writes it), `UTC-5`, `+8`, `+0530`, or `+01:02:30`. `Z` and `UTC` alone
+/// are 0; blank text is no offset.
+pub fn parse_utc_offset(text: &str) -> Option<i32> {
+    let mut text = text.trim();
+    if text.is_empty() {
+        return None;
+    }
+    for prefix in ["UTC", "GMT", "utc", "gmt"] {
+        text = text.strip_prefix(prefix).unwrap_or(text).trim_start();
+    }
+    if text.is_empty() || text == "Z" {
+        return Some(0);
+    }
+    let (sign, rest) = match text.as_bytes()[0] {
+        b'+' => (1, &text[1..]),
+        b'-' => (-1, &text[1..]),
+        _ => (1, text),
+    };
+    let parts: Vec<&str> = if rest.contains(':') {
+        rest.split(':').collect()
+    } else if rest.len() == 4 {
+        vec![&rest[..2], &rest[2..]]
+    } else {
+        vec![rest]
+    };
+    if parts.is_empty() || parts.len() > 3 || parts.iter().any(|part| part.is_empty() || !part.bytes().all(|b| b.is_ascii_digit())) {
+        return None;
+    }
+    let number = |index: usize| parts.get(index).map_or(Some(0), |part| part.parse::<i32>().ok());
+    let (hours, minutes, seconds) = (number(0)?, number(1)?, number(2)?);
+    (hours <= 23 && minutes < 60 && seconds < 60).then_some(sign * (hours * 3600 + minutes * 60 + seconds))
+}
+
+/// `+01:00`, or `+01:02:30` when there are seconds.
+pub fn format_utc_offset(seconds: i32) -> String {
+    let sign = if seconds < 0 { '-' } else { '+' };
+    let all = seconds.unsigned_abs();
+    let (hours, minutes, rest) = (all / 3600, all / 60 % 60, all % 60);
+    if rest == 0 {
+        format!("{sign}{hours:02}:{minutes:02}")
+    } else {
+        format!("{sign}{hours:02}:{minutes:02}:{rest:02}")
+    }
+}
+
 /// Adds `delta` degrees to a rotation and normalizes it to 0, 90, 180, or 270.
 pub fn turn(rotation: i32, delta: i32) -> i32 {
     (rotation + delta).div_euclid(90).rem_euclid(4) * 90
@@ -483,6 +529,25 @@ pub fn unix_now() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reads_utc_offsets() {
+        assert_eq!(parse_utc_offset("+01:00"), Some(3600));
+        assert_eq!(parse_utc_offset(" -05:30 "), Some(-19_800));
+        assert_eq!(parse_utc_offset("UTC+8"), Some(28_800));
+        assert_eq!(parse_utc_offset("GMT -3"), Some(-10_800));
+        assert_eq!(parse_utc_offset("+0545"), Some(20_700));
+        assert_eq!(parse_utc_offset("+01:02:30"), Some(3750));
+        assert_eq!(parse_utc_offset("Z"), Some(0));
+        assert_eq!(parse_utc_offset("UTC"), Some(0));
+        for bad in ["", "   ", "+1:60", "+24:00", "1h", "+01:00:00:00", "--1", "+:30", "東京"] {
+            assert_eq!(parse_utc_offset(bad), None, "{bad}");
+        }
+        assert_eq!(format_utc_offset(3600), "+01:00");
+        assert_eq!(format_utc_offset(-19_800), "-05:30");
+        assert_eq!(format_utc_offset(3750), "+01:02:30");
+        assert_eq!(format_utc_offset(0), "+00:00");
+    }
 
     #[test]
     fn recognizes_heic_and_camera_raw() {

@@ -151,6 +151,10 @@ impl PicassoApp {
                     let _ = open::that(&path);
                     ui.close();
                 }
+                if ui.button(crate::i18n::tr("Geotag from GPS track…")).clicked() {
+                    self.open_geotag(&path);
+                    ui.close();
+                }
                 if let Nav::Dir(_) = row.nav {
                     if ui.button(crate::i18n::tr("Exclude from scanning")).clicked() {
                         if let Err(err) = self.exclude_dir(std::path::Path::new(&path)) {

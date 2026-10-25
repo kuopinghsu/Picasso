@@ -298,7 +298,7 @@ impl PicassoApp {
         egui::Grid::new("settings-browsing").num_columns(2).spacing([24.0, 10.0]).show(ui, |ui| {
             ui.label(tr("Thumbnail size"));
             let mut size = self.thumb_size;
-            let response = ui.add(egui::Slider::new(&mut size, 96.0..=220.0).suffix(" px").fixed_decimals(0));
+            let response = ui.add(egui::Slider::new(&mut size, super::MIN_THUMB..=super::MAX_THUMB).suffix(" px").fixed_decimals(0));
             self.set_thumb_size(size, &response);
             ui.end_row();
 

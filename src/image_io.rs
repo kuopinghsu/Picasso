@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use image::codecs::jpeg::JpegEncoder;
 use image::{DynamicImage, ExtendedColorType, GenericImageView, ImageBuffer, ImageReader, Rgba};
 
-use crate::types::{is_heic_path, is_raw_path, is_video_path, unix_now, EARLIEST_PHOTO};
+use crate::types::{is_heic_path, is_raw_path, is_video_path, parse_utc_offset, unix_now, EARLIEST_PHOTO};
 
 /// Bytes read from the start of a file to probe it. JPEG EXIF fits in one
 /// 64 KB segment and the frame header follows it; HEIC and TIFF-based RAW
@@ -35,6 +35,8 @@ pub struct Probe {
     pub focal_mm: f32,
     pub gps_lat: Option<f64>,
     pub gps_lon: Option<f64>,
+    /// Seconds the camera's clock was ahead of UTC, when the file says.
+    pub zone: Option<i32>,
     pub duration: f64,
     /// False when some metadata could not be read yet.
     pub complete: bool,
@@ -281,6 +283,7 @@ struct ExifBits {
     focal_mm: f32,
     gps_lat: Option<f64>,
     gps_lon: Option<f64>,
+    zone: Option<i32>,
 }
 
 fn read_exif(path: &Path) -> ExifBits {
@@ -311,6 +314,9 @@ fn bits_from_exif(exif: &exif::Exif) -> ExifBits {
             .unwrap_or(0.0),
         gps_lat: gps_degrees(exif, exif::Tag::GPSLatitude, exif::Tag::GPSLatitudeRef),
         gps_lon: gps_degrees(exif, exif::Tag::GPSLongitude, exif::Tag::GPSLongitudeRef),
+        zone: [exif::Tag::OffsetTimeOriginal, exif::Tag::OffsetTime]
+            .into_iter()
+            .find_map(|tag| parse_utc_offset(&ascii_field(exif, tag)?)),
     }
 }
 
@@ -332,6 +338,7 @@ impl ExifBits {
             focal_mm: 0.0,
             gps_lat: None,
             gps_lon: None,
+            zone: None,
         }
     }
 
@@ -346,6 +353,7 @@ impl ExifBits {
             focal_mm: self.focal_mm,
             gps_lat: self.gps_lat,
             gps_lon: self.gps_lon,
+            zone: self.zone,
             duration: 0.0,
             complete: true,
         }
@@ -421,6 +429,7 @@ fn heic_probe(info: &heic_rs::ImageInfo, bits: ExifBits, modified_at: i64) -> Pr
         focal_mm: bits.focal_mm,
         gps_lat: bits.gps_lat,
         gps_lon: bits.gps_lon,
+        zone: bits.zone,
         duration: 0.0,
         complete: true,
     }
@@ -752,6 +761,9 @@ fn bits_from_raw(metadata: &rawler::decoders::RawMetadata) -> ExifBits {
             .unwrap_or(0.0),
         gps_lat: gps.and_then(raw_latitude),
         gps_lon: gps.and_then(raw_longitude),
+        zone: [&metadata.exif.offset_time_original, &metadata.exif.offset_time]
+            .into_iter()
+            .find_map(|text| parse_utc_offset(text.as_deref()?)),
     }
 }
 

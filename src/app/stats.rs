@@ -20,6 +20,9 @@ use super::{Mode, PicassoApp};
 
 /// Rows a ranked list shows; the rest are summed up below it.
 const TOP: usize = 8;
+/// Rows of the rest of a ranked list in view at once when it is opened.
+const REST_ROWS: f32 = 12.0;
+const BAR_ROW_H: f32 = 40.0;
 /// Zoom level whose cluster squares, 64 pixels wide, make a place: about
 /// 40 km across.
 const PLACE_ZOOM: u8 = 8;
@@ -219,7 +222,7 @@ impl PicassoApp {
             let half = if two { (width - CARD_GAP) / 2.0 } else { width };
             let mut camera = None;
             pair(ui, two, |ui| card(ui, half, tr("Places"), |ui| self.places_section(ui, &stats, &mut go)), |ui| {
-                card(ui, half, tr("Cameras"), |ui| ranked_section(ui, &stats.cameras, "{} without camera info", &mut camera))
+                card(ui, half, tr("Cameras"), |ui| ranked_section(ui, &stats.cameras, &CAMERAS, &mut camera))
             });
             go = go.take().or(camera);
             ui.add_space(CARD_GAP);
@@ -229,7 +232,7 @@ impl PicassoApp {
                 }
             });
             ui.add_space(CARD_GAP);
-            pair(ui, two, |ui| card(ui, half, tr("Lenses"), |ui| ranked_section(ui, &stats.lenses, "{} without lens info", &mut go)), |ui| {
+            pair(ui, two, |ui| card(ui, half, tr("Lenses"), |ui| ranked_section(ui, &stats.lenses, &LENSES, &mut go)), |ui| {
                 card(ui, half, tr("Focal length"), |ui| focal_section(ui, &stats))
             });
             ui.add_space(24.0);
@@ -460,27 +463,74 @@ fn time_section(ui: &mut egui::Ui, stats: &Stats, go: &mut Option<Go>) {
     }
 }
 
+/// One of the ranked lists: its key for the state kept between frames, the
+/// line counting photos without a name, and the line shown when there are no
+/// names at all.
+struct RankedText {
+    key: &'static str,
+    unknown: &'static str,
+    empty: &'static str,
+}
+
+const CAMERAS: RankedText = RankedText {
+    key: "cameras",
+    unknown: "{} without camera info",
+    empty: "Photos taken with a camera that records it show up here.",
+};
+
+const LENSES: RankedText = RankedText {
+    key: "lenses",
+    unknown: "{} without lens info",
+    empty: "Photos with a recorded lens show up here.",
+};
+
 /// Names with how many photos each, most first, then how many more there
-/// are and how many photos have no name recorded.
-fn ranked_section(ui: &mut egui::Ui, ranked: &Ranked, unknown: &'static str, go: &mut Option<Go>) {
+/// are and how many photos have no name recorded. Clicking the "more" line
+/// lists the rest in a box of their own, so the card grows by at most
+/// [`REST_ROWS`] rows.
+fn ranked_section(ui: &mut egui::Ui, ranked: &Ranked, text: &RankedText, go: &mut Option<Go>) {
     let known = ranked.known();
     if ranked.rows.is_empty() {
-        ui.label(egui::RichText::new(tr("Photos taken with a camera that records it show up here.")).size(12.0).color(theme::muted()));
+        ui.label(egui::RichText::new(tr(text.empty)).size(12.0).color(theme::muted()));
     }
+    let id = egui::Id::unique(("stats-ranked-all", text.key));
+    let all = ui.ctx().data(|data| data.get_temp::<bool>(id)).unwrap_or(false);
     let most = ranked.rows.first().map_or(1, |(_, count)| *count);
     ui.spacing_mut().item_spacing.y = 2.0;
-    for (name, count) in ranked.rows.iter().take(TOP) {
+    let mut row = |ui: &mut egui::Ui, (name, count): &(String, usize)| {
         if bar_row(ui, name, *count, most, known) {
             *go = Some(Go::Search(name.clone()));
         }
+    };
+    for entry in ranked.rows.iter().take(TOP) {
+        row(ui, entry);
+    }
+    if all && ranked.rows.len() > TOP {
+        egui::ScrollArea::vertical()
+            .id_salt(("stats-ranked-rest", text.key))
+            .max_height(REST_ROWS * (BAR_ROW_H + 2.0))
+            .auto_shrink([false, true])
+            .show(ui, |ui| {
+                for entry in &ranked.rows[TOP..] {
+                    row(ui, entry);
+                }
+            });
     }
     if ranked.rows.len() > TOP {
-        let rest: usize = ranked.rows[TOP..].iter().map(|(_, count)| count).sum();
-        more_line(ui, ranked.rows.len() - TOP, rest);
+        let toggled = if all {
+            more_link(ui, tr("Show fewer").to_string(), tr("Show only the top names"))
+        } else {
+            let rest: usize = ranked.rows[TOP..].iter().map(|(_, count)| count).sum();
+            let line = trf("and {} more · {}", &[&grouped(ranked.rows.len() - TOP), &super::photo_count(rest)]);
+            more_link(ui, line, tr("Show the full list"))
+        };
+        if toggled {
+            ui.ctx().data_mut(|data| data.insert_temp(id, !all));
+        }
     }
     if ranked.unknown > 0 {
         ui.add_space(4.0);
-        ui.label(egui::RichText::new(trf(unknown, &[&grouped(ranked.unknown)])).size(11.5).color(theme::muted()));
+        ui.label(egui::RichText::new(trf(text.unknown, &[&grouped(ranked.unknown)])).size(11.5).color(theme::muted()));
     }
 }
 
@@ -559,7 +609,7 @@ fn columns(ui: &mut egui::Ui, bars: &[(String, usize)], height: f32, clickable: 
 /// part of `most`. Returns whether it was clicked.
 fn bar_row(ui: &mut egui::Ui, name: &str, count: usize, most: usize, total: usize) -> bool {
     let width = ui.available_width();
-    let (rect, response) = ui.allocate_exact_size(Vec2::new(width, 40.0), Sense::click());
+    let (rect, response) = ui.allocate_exact_size(Vec2::new(width, BAR_ROW_H), Sense::click());
     if !ui.is_rect_visible(rect) {
         return false;
     }
@@ -597,6 +647,21 @@ fn more_line(ui: &mut egui::Ui, more: usize, photos: usize) {
         ui.add_space(8.0);
         ui.label(egui::RichText::new(text).size(11.5).color(theme::muted()));
     });
+}
+
+/// The line under a ranked list that shows all of it or cuts it short
+/// again. Returns whether it was clicked.
+fn more_link(ui: &mut egui::Ui, text: String, hint: &str) -> bool {
+    ui.add_space(2.0);
+    ui.horizontal(|ui| {
+        ui.add_space(8.0);
+        let link = ui
+            .add(egui::Label::new(egui::RichText::new(text).size(11.5).color(theme::muted())).sense(Sense::click()))
+            .on_hover_cursor(egui::CursorIcon::PointingHand)
+            .on_hover_text(hint);
+        link.clicked()
+    })
+    .inner
 }
 
 /// `part` of `total` as a whole percentage, at least 1 when `part` isn't 0.

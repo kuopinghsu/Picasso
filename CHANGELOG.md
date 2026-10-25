@@ -12,7 +12,9 @@ section of this file as the release notes.
   shows where photos were taken (how many have a location, the top places, and the GPS track
   distance) and which cameras, lenses and focal lengths were used. Clicking a year, the busiest
   day, a camera or a lens shows those photos in the Library; clicking a place shows it on the map.
-  With a search typed in, the page counts only the matching photos.
+  The Cameras and Lenses cards list the eight most used; clicking **and N more** lists the rest
+  in a scrolling box, and **Show fewer** puts it away. With a search typed in, the page counts only
+  the matching photos.
 - **Places clusters:** nearby photos merge into one circle sized by how many photos it holds, and
   zooming in splits it into smaller groups and finally single photos. Hovering a circle shows a
   card with the date, folder, count and thumbnails, plus **Open**, **Select these photos** and
@@ -30,9 +32,23 @@ section of this file as the release notes.
 - The scan reads each photo's **lens** and **focal length** (35 mm equivalent when the file records
   it). Search also finds photos by lens name. Existing libraries read this once on the next scan.
 - Traditional Chinese README (`README_zh-TW.md`).
+- **Geotag from GPS track:** right-click a folder and choose **Geotag from GPS track…**, or run
+  `picasso geotag <track> <folder> [--offset +01:00] [--dry-run]`. Each photo in the folder and
+  the folders below it gets the place a GPX, KML or KMZ track was at when the photo was taken,
+  along the track between points up to 30 minutes apart. Photos with GPS from the camera, and
+  photos pinned by hand, keep their place.
+  The places go to the library and to a `.picasso-geotags.json` file in each folder; the photo
+  files stay as they are, and a later scan of a new library reads the places back. The camera
+  time zone is optional: without it, each photo's recorded UTC offset is used, else this
+  computer's time zone. Videos, and photos that record no capture time and so go by the file's
+  modification time, already carry an exact moment and use it as it is. Running again with the
+  same track replaces its earlier places.
 
 ### Changed
 
+- Thumbnails grow to 320 points, up from 220. A tile larger than the cached thumbnail gets a
+  sharper copy decoded for it, which the window keeps in memory, so the thumbnail cache stays
+  the same size.
 - Release packages include `CHANGELOG.md` and the Traditional Chinese README, and the GitHub release
   notes come from this file.
 

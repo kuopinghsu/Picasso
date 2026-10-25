@@ -2,12 +2,13 @@
 //! below it, gets the place the track was at when the photo was taken. The
 //! places go to the library and to a `.picasso-geotags.json` file in each
 //! folder; the photo files stay as they are. Photos whose camera recorded GPS
-//! keep it.
+//! keep it, and so do photos pinned by hand.
 //!
 //! GPS tracks keep time in UTC, while a camera's clock shows the local time
 //! where it was set. A photo's time is turned into UTC with the offset given,
 //! else the offset the photo records (`OffsetTimeOriginal`), else this
-//! computer's time zone. Videos already record UTC.
+//! computer's time zone. Videos already record UTC, and so does a photo
+//! without a capture time, which goes by its file's modification time.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -27,10 +28,13 @@ pub const SIDECAR: &str = ".picasso-geotags.json";
 /// Track files the geotagger reads, lower case.
 pub const TRACK_EXTENSIONS: [&str; 3] = ["gpx", "kml", "kmz"];
 /// Longest stretch between two track points that a photo is placed along.
-const MAX_GAP: i64 = 10 * 60;
+/// Tracks thinned by an app keep a point only where the path turns, and
+/// one while standing still, so points can be many minutes apart. The
+/// limits match ExifTool's.
+const MAX_GAP: i64 = 30 * 60;
 /// Farthest in time a photo may be from a track point and still take its
 /// place, past the ends of the track or in a longer gap.
-pub const NEAR: i64 = 2 * 60;
+pub const NEAR: i64 = 30 * 60;
 
 pub fn is_geotag_track(path: &Path) -> bool {
     path.extension()
@@ -55,8 +59,26 @@ pub struct Match {
     /// When it was taken, in UTC.
     pub time: i64,
     pub place: Option<(f64, f64)>,
-    /// The camera recorded GPS, so the photo was left alone.
-    pub had_gps: bool,
+    /// Why the photo was left alone, if it was.
+    pub kept: Option<Kept>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Kept {
+    /// The camera recorded GPS.
+    Gps,
+    /// It was pinned by hand, to a place no track gave it.
+    Pin,
+}
+
+/// One folder's geotag file after a run.
+#[derive(Clone, Debug)]
+pub struct Written {
+    pub path: PathBuf,
+    /// Places from this track it holds.
+    pub count: usize,
+    /// No places were left, so the file was removed.
+    pub removed: bool,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -68,15 +90,24 @@ pub struct Report {
     pub photos: usize,
     pub tagged: usize,
     pub had_gps: usize,
+    /// Photos pinned by hand, which keep their pin.
+    pub hand_pinned: usize,
     /// Photos without GPS that no track point was near.
     pub unmatched: usize,
     pub unreadable: usize,
+    /// Photos without GPS that recorded no offset and were given this
+    /// computer's time zone, with no offset typed.
+    pub zone_guessed: usize,
     /// First and last times, in UTC, of the photos without GPS.
     pub photo_span: Option<(i64, i64)>,
-    /// Geotag files written, with how many places from this track each holds.
-    pub sidecars: Vec<(PathBuf, usize)>,
+    /// Geotag files written or removed.
+    pub sidecars: Vec<Written>,
+    /// Folders whose geotag file couldn't be written, with the reason.
+    pub failed: Vec<(PathBuf, String)>,
     /// Photos pinned in the library.
     pub library: usize,
+    /// Why the library couldn't be updated.
+    pub library_error: Option<String>,
     pub matches: Vec<Match>,
 }
 
@@ -236,6 +267,8 @@ struct Seen {
     /// When it was taken in UTC; `None` when the file couldn't be read.
     time: Option<i64>,
     zone: Option<i32>,
+    /// The time came from a video or the file's modification time, so no time zone applies.
+    exact: bool,
     had_gps: bool,
 }
 
@@ -267,21 +300,24 @@ pub fn run(options: &Options, db: Option<&Database>, progress: &(dyn Fn(usize, u
         .map(|path| {
             let known = library.get(path.to_string_lossy().as_ref());
             let video = is_video_path(path);
+            let modified_at = std::fs::metadata(path).map(|meta| image_io::file_mtime(&meta)).ok();
             let probe = (known.is_none() || (options.offset.is_none() && !video))
-                .then(|| {
-                    let modified_at = std::fs::metadata(path).map(|meta| image_io::file_mtime(&meta)).ok()?;
-                    image_io::probe(path, modified_at).ok()
-                })
+                .then(|| image_io::probe(path, modified_at?).ok())
                 .flatten();
             progress(done.fetch_add(1, Ordering::Relaxed) + 1, total);
-            let zone = if video { None } else { options.offset.or_else(|| probe.as_ref().and_then(|probe| probe.zone)) };
             let taken_at = known.map(|photo| photo.taken_at).or_else(|| probe.as_ref().map(|probe| probe.taken_at));
+            // Without a recorded capture time the library falls back to the file's modification time,
+            // which already is an exact moment; only a camera clock needs its time zone.
+            let clock = !video
+                && taken_at.is_some_and(|taken_at| Some(taken_at) != known.map(|photo| photo.modified_at).or(modified_at));
+            let zone = if clock { options.offset.or_else(|| probe.as_ref().and_then(|probe| probe.zone)) } else { None };
             Seen {
                 path: path.clone(),
                 id: known.map(|photo| photo.id),
                 pin: known.and_then(|photo| photo.pin_lat.zip(photo.pin_lon)),
-                time: taken_at.map(|taken_at| if video { taken_at } else { utc_time(taken_at, zone) }),
+                time: taken_at.map(|taken_at| if clock { utc_time(taken_at, zone) } else { taken_at }),
                 zone,
+                exact: !clock,
                 had_gps: known.is_some_and(|photo| photo.gps_lat.is_some())
                     || probe.as_ref().is_some_and(|probe| probe.gps_lat.is_some()),
             }
@@ -294,27 +330,45 @@ pub fn run(options: &Options, db: Option<&Database>, progress: &(dyn Fn(usize, u
         photos: total,
         ..Report::default()
     };
+    let mut dirs: Vec<PathBuf> = Vec::new();
+    for item in &seen {
+        let dir = item.path.parent().unwrap_or(&folder).to_path_buf();
+        if !dirs.contains(&dir) {
+            dirs.push(dir);
+        }
+    }
+    let mut sidecars: HashMap<PathBuf, Sidecar> = dirs.iter().map(|dir| (dir.clone(), Sidecar::load(dir))).collect();
     let mut found: HashMap<PathBuf, Vec<(String, Value)>> = HashMap::new();
     let mut pins = Vec::new();
-    let mut dirs: Vec<PathBuf> = Vec::new();
     let mut by_path: HashMap<&Path, &Seen> = HashMap::new();
     for item in &seen {
         by_path.insert(item.path.as_path(), item);
-        let dir = item.path.parent().unwrap_or(&folder).to_path_buf();
-        if !dirs.contains(&dir) {
-            dirs.push(dir.clone());
-        }
         let Some(time) = item.time else {
             report.unreadable += 1;
             continue;
         };
-        let place = if item.had_gps { None } else { timeline.locate(time) };
-        report.matches.push(Match { path: item.path.clone(), time, place, had_gps: item.had_gps });
-        if item.had_gps {
-            report.had_gps += 1;
-            continue;
+        let dir = item.path.parent().unwrap_or(&folder).to_path_buf();
+        let name = item.path.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
+        // A pin that no geotag file explains was placed by hand.
+        let by_hand = item.pin.is_some_and(|pin| !sidecars[&dir].place(&name).is_some_and(|place| same_place(place, pin)));
+        let kept = if item.had_gps { Some(Kept::Gps) } else { by_hand.then_some(Kept::Pin) };
+        let place = if kept.is_some() { None } else { timeline.locate(time) };
+        report.matches.push(Match { path: item.path.clone(), time, place, kept });
+        match kept {
+            Some(Kept::Gps) => {
+                report.had_gps += 1;
+                continue;
+            }
+            Some(Kept::Pin) => {
+                report.hand_pinned += 1;
+                continue;
+            }
+            None => {}
         }
         report.photo_span = Some(report.photo_span.map_or((time, time), |(first, last)| (first.min(time), last.max(time))));
+        if item.zone.is_none() && !item.exact {
+            report.zone_guessed += 1;
+        }
         let Some((lat, lon)) = place else {
             report.unmatched += 1;
             continue;
@@ -325,7 +379,6 @@ pub fn run(options: &Options, db: Option<&Database>, progress: &(dyn Fn(usize, u
         if let Some(zone) = item.zone {
             entry["offset"] = Value::String(format_utc_offset(zone));
         }
-        let name = item.path.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
         found.entry(dir).or_default().push((name, entry));
         if let Some(id) = item.id {
             pins.push((id, lat, lon));
@@ -334,9 +387,10 @@ pub fn run(options: &Options, db: Option<&Database>, progress: &(dyn Fn(usize, u
 
     // Each folder's file keeps the places from other tracks; those from this
     // track are replaced, so a run with a corrected offset drops stale ones.
+    // A folder that can't be written is listed, and the others go on.
     let mut cleared = Vec::new();
     for dir in &dirs {
-        let mut sidecar = Sidecar::load(dir);
+        let Some(mut sidecar) = sidecars.remove(dir) else { continue };
         let new = found.remove(dir).unwrap_or_default();
         let names: HashSet<&str> = new.iter().map(|(name, _)| name.as_str()).collect();
         let stale: Vec<String> = sidecar
@@ -363,16 +417,22 @@ pub fn run(options: &Options, db: Option<&Database>, progress: &(dyn Fn(usize, u
         for (name, entry) in new {
             sidecar.entries.insert(name, entry);
         }
+        let path = dir.join(SIDECAR);
         if !options.dry_run {
-            sidecar.save(dir)?;
+            if let Err(err) = sidecar.save(dir) {
+                report.failed.push((path, err));
+                continue;
+            }
         }
-        report.sidecars.push((dir.join(SIDECAR), count));
-    }
-    if let Some(db) = db.filter(|_| !options.dry_run) {
-        db.set_pin_each(&pins);
-        db.clear_pins(&cleared);
+        report.sidecars.push(Written { path, count, removed: sidecar.entries.is_empty() });
     }
     report.library = pins.len();
+    if let Some(db) = db.filter(|_| !options.dry_run) {
+        if let Err(err) = db.set_pin_each(&pins, &cleared) {
+            report.library = 0;
+            report.library_error = Some(err);
+        }
+    }
     Ok(report)
 }
 
@@ -394,8 +454,8 @@ Usage: picasso geotag <track> <folder> [--offset <zone>] [--dry-run]
 Matches the photos in <folder>, and in the folders below it, to the GPS
 track <track> (.gpx, .kml, or .kmz) by the time each photo was taken. The
 places go to a .picasso-geotags.json file in each folder and to the Picasso
-library; the photo files are not changed. Photos with GPS from the camera
-keep it.
+library; the photo files are not changed. Photos with GPS from the camera,
+and photos pinned by hand, keep their place.
 
 Options:
   -o, --offset <zone>  The camera clock's offset from UTC, such as +01:00 or
@@ -470,19 +530,21 @@ pub fn cli(args: &[PathBuf]) -> i32 {
     }
     if dry_run {
         for item in &report.matches {
-            let what = match (item.had_gps, item.place) {
-                (true, _) => "has GPS from the camera".to_string(),
-                (false, Some((lat, lon))) => format!("{lat:.6}, {lon:.6}"),
-                (false, None) => "no track point near".to_string(),
+            let what = match (item.kept, item.place) {
+                (Some(Kept::Gps), _) => "has GPS from the camera".to_string(),
+                (Some(Kept::Pin), _) => "pinned by hand".to_string(),
+                (None, Some((lat, lon))) => format!("{lat:.6}, {lon:.6}"),
+                (None, None) => "no track point near".to_string(),
             };
             println!("  {}  {}  {what}", utc(item.time), shown(&item.path));
         }
     }
     println!(
-        "{} files: {} tagged, {} already had GPS, {} not near the track{}",
+        "{} files: {} tagged, {} already had GPS, {}{} not near the track{}",
         report.photos,
         report.tagged,
         report.had_gps,
+        if report.hand_pinned > 0 { format!("{} pinned by hand, ", report.hand_pinned) } else { String::new() },
         report.unmatched,
         if report.unreadable > 0 { format!(", {} unreadable", report.unreadable) } else { String::new() }
     );
@@ -490,17 +552,38 @@ pub fn cli(args: &[PathBuf]) -> i32 {
         println!("Dry run: nothing was written.");
         return 0;
     }
-    for (path, count) in &report.sidecars {
-        println!("Wrote {} ({count} from this track)", shown(path));
+    for written in &report.sidecars {
+        if written.removed {
+            println!("Removed {} (no places left)", shown(&written.path));
+        } else {
+            println!("Wrote {} ({} from this track)", shown(&written.path), written.count);
+        }
     }
-    match &db {
-        Some(_) => println!("Pinned {} photos in the Picasso library.", report.library),
-        None => println!("No Picasso library yet; it reads the places when the folder is added."),
+    for (path, err) in &report.failed {
+        println!("Couldn't write {}: {err}", shown(path));
+    }
+    match (&db, &report.library_error) {
+        (_, Some(err)) => println!("The Picasso library wasn't updated: {err}"),
+        (Some(_), None) => println!("Pinned {} photos in the Picasso library.", report.library),
+        (None, None) => println!("No Picasso library yet; it reads the places when the folder is added."),
+    }
+    if report.zone_guessed > 0 {
+        println!(
+            "{} photos record no time zone, so this computer's ({}) was used. If they were taken elsewhere, run again on their folder with --offset.",
+            report.zone_guessed,
+            local_offset()
+        );
     }
     if report.tagged == 0 && report.unmatched > 0 {
         println!("No photo fell within the track. Compare the times above and try --offset.");
     }
     0
+}
+
+/// This computer's offset from UTC now, as `+08:00`.
+pub fn local_offset() -> String {
+    use chrono::Offset;
+    format_utc_offset(chrono::Local::now().offset().fix().local_minus_utc())
 }
 
 fn shown(path: &Path) -> String {
@@ -554,7 +637,7 @@ mod tests {
         assert_eq!(line.locate(1100), Some((11.0, 22.0)));
         assert_eq!(line.locate(3000), None);
         assert_eq!(line.locate(4900), Some((12.0, 24.0)));
-        // Past the ends, within two minutes.
+        // Past the ends, within NEAR.
         assert_eq!(line.locate(1000 - NEAR), Some((10.0, 20.0)));
         assert_eq!(line.locate(1000 - NEAR - 1), None);
         assert_eq!(line.locate(9010 + 60), Some((31.0, 41.0)));
@@ -585,10 +668,15 @@ mod tests {
     /// A library photo `name` under `folder`, taken when the camera's clock
     /// read 10:00 plus `minutes` on 2026-10-11, with GPS when `gps`.
     fn add(db: &Database, folder_id: i64, folder: &Path, name: &str, minutes: u32, gps: bool) -> i64 {
-        let path = folder.join(name);
-        std::fs::write(&path, b"not decoded").unwrap();
         let clock = chrono::NaiveDate::from_ymd_opt(2026, 10, 11).unwrap().and_hms_opt(10, minutes, 0).unwrap();
         let taken_at = chrono::Local.from_local_datetime(&clock).single().unwrap().timestamp();
+        add_at(db, folder_id, folder, name, taken_at, taken_at + 86_400, gps)
+    }
+
+    /// A library photo `name` under `folder` with the given times.
+    fn add_at(db: &Database, folder_id: i64, folder: &Path, name: &str, taken_at: i64, modified_at: i64, gps: bool) -> i64 {
+        let path = folder.join(name);
+        std::fs::write(&path, b"not decoded").unwrap();
         let record = crate::db::ScanRecord {
             photo: crate::types::NewPhoto {
                 folder_id,
@@ -598,7 +686,7 @@ mod tests {
                 height: 1,
                 bytes: 11,
                 taken_at,
-                modified_at: taken_at,
+                modified_at,
                 camera: String::new(),
                 lens: String::new(),
                 focal_mm: 0.0,
@@ -623,8 +711,12 @@ mod tests {
         let b = add(&db, folder_id, &folder, &format!("day{}b.jpg", std::path::MAIN_SEPARATOR), 1, false);
         let phone = add(&db, folder_id, &folder, "phone.jpg", 0, true);
         let late = add(&db, folder_id, &folder, "late.jpg", 50, false);
+        let hand = add(&db, folder_id, &folder, "hand.jpg", 0, false);
+        db.set_pins(&[hand], 1.0, 2.0);
         // The camera was set to UTC+1: 10:00 on its clock is 09:00 UTC.
         let start = chrono::Utc.with_ymd_and_hms(2026, 10, 11, 9, 0, 0).unwrap().timestamp();
+        // No capture time: the library keeps the file's modification time, an exact moment.
+        let saved = add_at(&db, folder_id, &folder, "saved.jpg", start + 60, start + 60, false);
         let gpx = format!(
             r#"<gpx><trk><name>Lisbon</name><trkseg>
                 <trkpt lat="38.70" lon="-9.10"><time>{}</time></trkpt>
@@ -637,30 +729,45 @@ mod tests {
         std::fs::write(&track, gpx).unwrap();
         let options = Options { track: track.clone(), folder: folder.clone(), offset: Some(3600), dry_run: true };
         let report = run(&options, Some(&db), &|_, _| {}).unwrap();
-        assert_eq!((report.photos, report.tagged, report.had_gps, report.unmatched), (4, 2, 1, 1));
+        assert_eq!((report.photos, report.tagged, report.had_gps, report.hand_pinned, report.unmatched), (6, 3, 1, 1, 1));
+        assert_eq!(report.zone_guessed, 0, "the offset was typed");
         assert_eq!(report.track_name, "Lisbon");
         assert!(!folder.join(SIDECAR).exists(), "a dry run writes nothing");
         assert_eq!(db.photo(a).unwrap().pin_lat, None);
 
         let report = run(&Options { dry_run: false, ..options }, Some(&db), &|_, _| {}).unwrap();
-        assert_eq!(report.library, 2);
+        assert_eq!(report.library, 3);
         let pin = |id| db.photo(id).and_then(|photo| photo.pin_lat.zip(photo.pin_lon));
         assert_eq!(pin(a), Some((38.70, -9.10)));
         let (lat, lon) = pin(b).unwrap();
         assert!((lat - 38.71).abs() < 1e-9 && (lon + 9.11).abs() < 1e-9);
         assert_eq!(pin(phone), None);
         assert_eq!(pin(late), None);
+        assert_eq!(pin(saved), pin(b), "the offset leaves modification times alone");
+        assert_eq!(pin(hand), Some((1.0, 2.0)), "a hand pin stays");
         assert_eq!(Sidecar::load(&folder).place("A.JPG"), Some((38.70, -9.10)));
         assert!(Sidecar::load(&folder.join("day")).place("b.jpg").is_some());
         let text = std::fs::read_to_string(folder.join(SIDECAR)).unwrap();
         assert!(text.contains("\"offset\": \"+01:00\"") && text.contains("\"track\": \"run.gpx\"") && !text.contains("phone.jpg"));
 
-        // A wrong offset matches nothing, and drops this track's old places.
-        let wrong = Options { track, folder: folder.clone(), offset: Some(5 * 3600), dry_run: false };
+        // A wrong offset misses the camera photos, and drops this track's old places for them.
+        let wrong = Options { track: track.clone(), folder: folder.clone(), offset: Some(5 * 3600), dry_run: false };
         let report = run(&wrong, Some(&db), &|_, _| {}).unwrap();
-        assert_eq!((report.tagged, report.unmatched), (0, 3));
-        assert!(!folder.join(SIDECAR).exists());
-        assert_eq!(pin(a), None);
+        assert_eq!((report.tagged, report.unmatched), (1, 3), "the track's own pins are no hand pins");
+        assert!(!folder.join("day").join(SIDECAR).exists());
+        assert!(report.sidecars.iter().any(|written| written.removed && written.path == folder.join("day").join(SIDECAR)));
+        assert_eq!((pin(a), Sidecar::load(&folder).place("a.jpg")), (None, None));
+        assert!(pin(saved).is_some());
+
+        // A folder whose file can't be written is listed; the rest goes on.
+        std::fs::create_dir_all(folder.join("card").join(SIDECAR)).unwrap();
+        let card = add(&db, folder_id, &folder, &format!("card{}c.jpg", std::path::MAIN_SEPARATOR), 0, false);
+        let right = Options { track, folder: folder.clone(), offset: Some(3600), dry_run: false };
+        let report = run(&right, Some(&db), &|_, _| {}).unwrap();
+        assert_eq!(report.failed.len(), 1);
+        assert_eq!(report.failed[0].0, folder.join("card").join(SIDECAR));
+        assert_eq!((report.library, report.library_error.as_deref()), (4, None));
+        assert!(pin(card).is_some() && folder.join("day").join(SIDECAR).is_file());
         let _ = std::fs::remove_dir_all(folder.parent().unwrap());
     }
 

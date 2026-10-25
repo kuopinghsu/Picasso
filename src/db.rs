@@ -79,6 +79,8 @@ pub struct ScanRecord {
     pub caption: Option<String>,
     /// Clockwise rotation imported from `.picasa.ini` for a new file.
     pub rotation: Option<i32>,
+    /// Place imported from the folder's geotag file for a new file.
+    pub pin: Option<(f64, f64)>,
     /// False when the file could only be read in part (a video while FFmpeg
     /// is missing), so the next scan probes it again.
     pub complete: bool,
@@ -703,11 +705,11 @@ impl Database {
                     "INSERT INTO photos(
                         id, folder_id, path, filename, width, height, bytes, taken_at, modified_at,
                         camera, gps_lat, gps_lon, indexed_version, starred, caption, rotation, duration,
-                        added_at, file_taken_at, lens, focal_mm
+                        added_at, file_taken_at, lens, focal_mm, pin_lat, pin_lon
                      ) VALUES (
                         max(coalesce((SELECT max(id) FROM photos), 0),
                             coalesce((SELECT value FROM id_floor WHERE name = 'photos'), 0)) + 1,
-                        ?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?7,?18,?19)
+                        ?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?7,?18,?19,?20,?21)
                      ON CONFLICT(path) DO UPDATE SET
                         width=excluded.width, height=excluded.height, bytes=excluded.bytes,
                         taken_at=CASE WHEN date_set != 0 THEN taken_at ELSE excluded.taken_at END,
@@ -768,6 +770,8 @@ impl Database {
                                 now,
                                 photo.lens,
                                 f64::from(photo.focal_mm),
+                                record.pin.map(|(lat, _)| lat),
+                                record.pin.map(|(_, lon)| lon),
                             ], |row| row.get(0))
                             .map_err(|err| err.to_string())?;
                         result.inserted += 1;
@@ -797,6 +801,23 @@ impl Database {
 
     pub fn set_pins(&self, ids: &[i64], lat: f64, lon: f64) {
         self.for_each_id("UPDATE photos SET pin_lat=?2, pin_lon=?3 WHERE id=?1", ids, &[&lat, &lon]);
+    }
+
+    /// Pins each photo in `pins` to its own place and unpins `cleared`, all
+    /// in one transaction.
+    pub fn set_pin_each(&self, pins: &[(i64, f64, f64)], cleared: &[i64]) -> Result<(), String> {
+        let tx = self.conn.unchecked_transaction().map_err(|err| err.to_string())?;
+        {
+            let mut pin = tx.prepare("UPDATE photos SET pin_lat=?2, pin_lon=?3 WHERE id=?1").map_err(|err| err.to_string())?;
+            for (id, lat, lon) in pins {
+                pin.execute(params![id, lat, lon]).map_err(|err| err.to_string())?;
+            }
+            let mut unpin = tx.prepare("UPDATE photos SET pin_lat=NULL, pin_lon=NULL WHERE id=?1").map_err(|err| err.to_string())?;
+            for id in cleared {
+                unpin.execute([id]).map_err(|err| err.to_string())?;
+            }
+        }
+        tx.commit().map_err(|err| err.to_string())
     }
 
     pub fn clear_pins(&self, ids: &[i64]) {
@@ -1367,6 +1388,7 @@ mod tests {
             star: None,
             caption: None,
             rotation: None,
+            pin: None,
             complete: true,
         }
     }

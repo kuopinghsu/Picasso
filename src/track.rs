@@ -41,17 +41,20 @@ pub struct Track {
 }
 
 impl Track {
-    /// Reads a GPX or KML file. A file without a name of its own is named
-    /// after the file.
+    /// Reads a GPX, KML, or KMZ (zipped KML) file. A file without a name of
+    /// its own is named after the file.
     pub fn read(path: &Path) -> Result<Track, String> {
         let bytes = std::fs::metadata(path).map_err(|err| err.to_string())?.len();
         if bytes > MAX_BYTES {
             return Err(tr("The track file is too large").to_string());
         }
-        let data = std::fs::read(path).map_err(|err| err.to_string())?;
+        let mut data = std::fs::read(path).map_err(|err| err.to_string())?;
+        let ext = path.extension().and_then(|ext| ext.to_str()).unwrap_or_default().to_ascii_lowercase();
+        if ext == "kmz" {
+            data = kmz_document(&data)?;
+        }
         let text = String::from_utf8_lossy(&data);
-        let kml = path.extension().and_then(|ext| ext.to_str()).is_some_and(|ext| ext.eq_ignore_ascii_case("kml"));
-        let mut track = if kml { Track::parse_kml(&text) } else { Track::parse_gpx(&text) }?;
+        let mut track = if ext == "gpx" { Track::parse_gpx(&text) } else { Track::parse_kml(&text) }?;
         if track.name.is_empty() {
             track.name = path.file_stem().map(|stem| stem.to_string_lossy().into_owned()).unwrap_or_default();
         }
@@ -296,6 +299,61 @@ pub fn format_distance(meters: f64) -> String {
     }
 }
 
+/// The KML document inside a KMZ archive: `doc.kml` when there is one,
+/// otherwise the first `.kml` entry. Stored and deflated entries are read.
+fn kmz_document(zip: &[u8]) -> Result<Vec<u8>, String> {
+    use std::io::Read;
+    let broken = || tr("The KMZ file is damaged").to_string();
+    let u16_at = |at: usize| zip.get(at..at + 2).map(|b| u16::from_le_bytes([b[0], b[1]]) as usize);
+    let u32_at = |at: usize| zip.get(at..at + 4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]) as usize);
+    // The end record sits in the last 64 KB, after an optional comment.
+    let floor = zip.len().saturating_sub(22 + 65_535);
+    let end = (floor..zip.len().saturating_sub(21)).rev().find(|&at| u32_at(at) == Some(0x0605_4b50)).ok_or_else(broken)?;
+    let (count, mut at) = (u16_at(end + 10).ok_or_else(broken)?, u32_at(end + 16).ok_or_else(broken)?);
+    let mut found: Option<(String, usize, usize, usize)> = None;
+    for _ in 0..count {
+        if u32_at(at) != Some(0x0201_4b50) {
+            return Err(broken());
+        }
+        let method = u16_at(at + 10).ok_or_else(broken)?;
+        let packed = u32_at(at + 20).ok_or_else(broken)?;
+        let name_len = u16_at(at + 28).ok_or_else(broken)?;
+        let skip = name_len + u16_at(at + 30).ok_or_else(broken)? + u16_at(at + 32).ok_or_else(broken)?;
+        let local = u32_at(at + 42).ok_or_else(broken)?;
+        let name = String::from_utf8_lossy(zip.get(at + 46..at + 46 + name_len).ok_or_else(broken)?).into_owned();
+        let lower = name.to_ascii_lowercase();
+        let better = match &found {
+            None => true,
+            Some((current, ..)) => lower.rsplit('/').next() == Some("doc.kml") && !current.to_ascii_lowercase().ends_with("doc.kml"),
+        };
+        if lower.ends_with(".kml") && better {
+            found = Some((name, method, packed, local));
+        }
+        at += 46 + skip;
+    }
+    let (_, method, packed, local) = found.ok_or_else(|| tr("No KML document in the KMZ file").to_string())?;
+    if u32_at(local) != Some(0x0403_4b50) {
+        return Err(broken());
+    }
+    let start = local + 30 + u16_at(local + 26).ok_or_else(broken)? + u16_at(local + 28).ok_or_else(broken)?;
+    let body = zip.get(start..start + packed).ok_or_else(broken)?;
+    match method {
+        0 => Ok(body.to_vec()),
+        8 => {
+            let mut out = Vec::new();
+            flate2::read::DeflateDecoder::new(body)
+                .take(MAX_BYTES + 1)
+                .read_to_end(&mut out)
+                .map_err(|_| broken())?;
+            if out.len() as u64 > MAX_BYTES {
+                return Err(tr("The track file is too large").to_string());
+            }
+            Ok(out)
+        }
+        _ => Err(broken()),
+    }
+}
+
 fn parse_xml(text: &str) -> Result<roxmltree::Document<'_>, String> {
     roxmltree::Document::parse(text.trim_start_matches('\u{feff}')).map_err(|err| err.to_string())
 }
@@ -460,6 +518,72 @@ mod tests {
         assert_eq!(track.segments[0][2], Point { lat: 25.2, lon: 121.7, time: None });
         assert_eq!(track.segments[1][1].time, Some(1_714_550_410));
         assert!(Track::parse_kml(r#"<kml><Placemark><Point><coordinates>1,2</coordinates></Point></Placemark></kml>"#).is_err());
+    }
+
+    /// A zip archive of `entries`, deflated when `deflate` is set.
+    fn zip(entries: &[(&str, &[u8])], deflate: bool) -> Vec<u8> {
+        use std::io::Write;
+        let (mut out, mut central) = (Vec::new(), Vec::new());
+        for (name, data) in entries {
+            let body = if deflate {
+                let mut encoder = flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::default());
+                encoder.write_all(data).unwrap();
+                encoder.finish().unwrap()
+            } else {
+                data.to_vec()
+            };
+            let method: u16 = if deflate { 8 } else { 0 };
+            let offset = out.len() as u32;
+            out.extend_from_slice(&0x0403_4b50u32.to_le_bytes());
+            out.extend_from_slice(&[20, 0, 0, 0]);
+            out.extend_from_slice(&method.to_le_bytes());
+            out.extend_from_slice(&[0; 8]);
+            out.extend_from_slice(&(body.len() as u32).to_le_bytes());
+            out.extend_from_slice(&(data.len() as u32).to_le_bytes());
+            out.extend_from_slice(&(name.len() as u16).to_le_bytes());
+            out.extend_from_slice(&[0, 0]);
+            out.extend_from_slice(name.as_bytes());
+            out.extend_from_slice(&body);
+            central.extend_from_slice(&0x0201_4b50u32.to_le_bytes());
+            central.extend_from_slice(&[20, 0, 20, 0, 0, 0]);
+            central.extend_from_slice(&method.to_le_bytes());
+            central.extend_from_slice(&[0; 8]);
+            central.extend_from_slice(&(body.len() as u32).to_le_bytes());
+            central.extend_from_slice(&(data.len() as u32).to_le_bytes());
+            central.extend_from_slice(&(name.len() as u16).to_le_bytes());
+            central.extend_from_slice(&[0; 12]);
+            central.extend_from_slice(&offset.to_le_bytes());
+            central.extend_from_slice(name.as_bytes());
+        }
+        let start = out.len() as u32;
+        out.extend_from_slice(&central);
+        out.extend_from_slice(&0x0605_4b50u32.to_le_bytes());
+        out.extend_from_slice(&[0; 4]);
+        out.extend_from_slice(&(entries.len() as u16).to_le_bytes());
+        out.extend_from_slice(&(entries.len() as u16).to_le_bytes());
+        out.extend_from_slice(&(central.len() as u32).to_le_bytes());
+        out.extend_from_slice(&start.to_le_bytes());
+        out.extend_from_slice(&[0, 0]);
+        out
+    }
+
+    #[test]
+    fn kmz_archives_are_unpacked() {
+        let kml = br#"<kml><Document><name>Run</name><Placemark><LineString><coordinates>1,2 3,4</coordinates></LineString></Placemark></Document></kml>"#;
+        for deflate in [false, true] {
+            let archive = zip(&[("files/icon.png", b"png"), ("other.kml", b"<kml/>"), ("doc.kml", kml)], deflate);
+            assert_eq!(kmz_document(&archive).unwrap(), kml.to_vec());
+        }
+        let dir = std::env::temp_dir().join(format!("picasso-kmz-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("run.KMZ");
+        std::fs::write(&path, zip(&[("doc.kml", kml)], true)).unwrap();
+        let track = Track::read(&path).unwrap();
+        assert_eq!(track.name, "Run");
+        assert_eq!(track.segments[0][1], Point { lat: 4.0, lon: 3.0, time: None });
+        assert!(kmz_document(b"not a zip").is_err());
+        assert!(kmz_document(&zip(&[("a.txt", b"x")], false)).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

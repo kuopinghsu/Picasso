@@ -242,16 +242,28 @@ pub fn limit_rgba(image: DynamicImage, max_edge: u32) -> ImageBuffer<Rgba<u8>, V
 /// Encodes in memory and writes the file in one go. The bytes go to a
 /// temporary name first, so a reader never sees half a file.
 pub fn save_jpeg(path: &Path, rgba: &ImageBuffer<Rgba<u8>, Vec<u8>>, quality: u8) -> Result<(), String> {
+    write_whole(path, &encode_jpeg(rgba, quality)?)
+}
+
+/// [`save_jpeg`] for PNG and TIFF.
+pub fn save_lossless(path: &Path, rgba: &ImageBuffer<Rgba<u8>, Vec<u8>>, format: image::ImageFormat) -> Result<(), String> {
+    let mut encoded = Cursor::new(Vec::new());
+    rgba.write_to(&mut encoded, format).map_err(|err| err.to_string())?;
+    write_whole(path, encoded.get_ref())
+}
+
+/// Writes `bytes` under a temporary name, then renames it to `path`. A full
+/// disk or a crash leaves the temporary file, never half of `path`.
+fn write_whole(path: &Path, bytes: &[u8]) -> Result<(), String> {
     static NEXT: AtomicU64 = AtomicU64::new(0);
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|err| err.to_string())?;
     }
-    let encoded = encode_jpeg(rgba, quality)?;
     let mut temporary = path.as_os_str().to_owned();
     temporary.push(format!(".{}-{}.tmp", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
     let temporary = PathBuf::from(temporary);
-    std::fs::write(&temporary, &encoded).map_err(|err| err.to_string())?;
-    std::fs::rename(&temporary, path).map_err(|err| {
+    let written = std::fs::write(&temporary, bytes).and_then(|()| std::fs::rename(&temporary, path));
+    written.map_err(|err| {
         let _ = std::fs::remove_file(&temporary);
         err.to_string()
     })

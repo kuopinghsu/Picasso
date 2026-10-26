@@ -218,15 +218,24 @@ pub fn export(source: &Path, target: &Path, settings: &Settings, rotation: i32, 
         .map(|ext| ext.to_string_lossy().to_ascii_lowercase())
         .unwrap_or_default();
     match extension.as_str() {
-        "png" => rgba.save_with_format(target, image::ImageFormat::Png).map_err(|err| err.to_string()),
-        "tif" | "tiff" => rgba.save_with_format(target, image::ImageFormat::Tiff).map_err(|err| err.to_string()),
+        "png" => crate::image_io::save_lossless(target, &rgba, image::ImageFormat::Png),
+        "tif" | "tiff" => crate::image_io::save_lossless(target, &rgba, image::ImageFormat::Tiff),
         _ => crate::image_io::save_jpeg(target, &rgba, options.quality.clamp(1, 100)),
     }
 }
 
+/// True when `a` and `b` name one file, also through a link or another
+/// letter case on a disk that ignores case.
 fn same_file(a: &Path, b: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if let (Ok(a), Ok(b)) = (std::fs::metadata(a), std::fs::metadata(b)) {
+            return a.dev() == b.dev() && a.ino() == b.ino();
+        }
+    }
     match (a.canonicalize(), b.canonicalize()) {
-        (Ok(a), Ok(b)) => a == b,
+        (Ok(a), Ok(b)) => a == b || (cfg!(windows) && a.to_string_lossy().to_lowercase() == b.to_string_lossy().to_lowercase()),
         _ => false,
     }
 }

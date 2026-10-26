@@ -103,7 +103,7 @@ impl PicassoApp {
         self.track_hot = None;
         self.paint_selected_pins(&painter, rect);
         let on_track = on_track.filter(|_| hovered.is_none() && !response.dragged());
-        self.paint_map_notes(&painter, rect);
+        self.paint_map_notes(&painter, rect, view);
         if hovered.is_some() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
         }
@@ -124,7 +124,7 @@ impl PicassoApp {
                 self.selection.insert(id);
                 self.anchor = Some(id);
             } else if let Some(members) = hit {
-                if self.map_zoom < MAX_ZOOM {
+                if self.map_zoom < MAX_ZOOM && self.split_closer(members) {
                     self.zoom_to_photos(&members.to_vec());
                 } else {
                     self.select_photos(members);
@@ -281,7 +281,7 @@ impl PicassoApp {
     /// Zooms the Places map by `steps` levels, keeping the place under
     /// `pointer` where it is.
     fn zoom_map_at(&mut self, steps: i32, pointer: Pos2, rect: Rect) {
-        let next = (self.map_zoom as i32 + steps).clamp(2, i32::from(MAX_ZOOM)) as u8;
+        let next = (self.map_zoom as i32 + steps).clamp(i32::from(MIN_ZOOM), i32::from(MAX_ZOOM)) as u8;
         if next == self.map_zoom {
             return;
         }
@@ -327,28 +327,38 @@ impl PicassoApp {
                     Pos2::new(origin_x + x as f32 * TILE_PX as f32, origin_y + y as f32 * TILE_PX as f32),
                     Vec2::splat(TILE_PX as f32),
                 );
-                if let Some(loaded) = self.tiles.get(&(z, x, y)) {
-                    painter.image(
-                        loaded.texture.id(),
-                        tile,
-                        Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
-                        Color32::WHITE,
-                    );
+                // A tile the source doesn't have, such as imagery closer
+                // than a place was photographed from the air, is drawn as
+                // the enlarged part of the closest tile above it that it has.
+                let Some(depth) = (0..=MAX_ENLARGE.min(z)).find(|depth| !self.tile_fail.contains(&covering(z, x, y, *depth)))
+                else {
+                    continue;
+                };
+                let key = covering(z, x, y, depth);
+                let Some(loaded) = self.tiles.get(&key) else {
+                    if !wanted.contains(&key) {
+                        wanted.push(key);
+                    }
+                    continue;
+                };
+                let cells = (1u32 << depth) as f32;
+                let mask = (1u32 << depth) - 1;
+                let min = egui::pos2((x & mask) as f32 / cells, (y & mask) as f32 / cells);
+                painter.image(loaded.texture.id(), tile, Rect::from_min_size(min, Vec2::splat(1.0 / cells)), Color32::WHITE);
+                if depth == 0 {
                     labels.extend(
                         loaded.labels.iter().map(|label| (tile.min + Vec2::from(label.pos) * TILE_PX as f32, label)),
                     );
-                } else {
-                    wanted.push((x, y));
                 }
             }
         }
         paint_labels(painter, rect, labels);
-        for (x, y) in wanted.into_iter().take(8) {
-            let key = (z, x, y);
-            if self.tile_wait.contains(&key) || self.tile_fail.contains(&key) {
+        for key in wanted.into_iter().take(8) {
+            if self.tile_wait.contains(&key) {
                 continue;
             }
             self.tile_wait.insert(key);
+            let (z, x, y) = key;
             let _ = self.tile_tx.send(TileJob { source, key: self.carto_key.clone(), z, x, y });
         }
     }
@@ -358,12 +368,13 @@ impl PicassoApp {
     }
 
     /// The provider's credit in the bottom-right corner of the map in
-    /// `rect`, and a note in the middle when the source needs a key.
-    pub(super) fn paint_map_notes(&self, painter: &egui::Painter, rect: Rect) {
+    /// `rect`, a scale bar in the bottom-left one, and a note in the middle
+    /// when the source needs a key.
+    pub(super) fn paint_map_notes(&self, painter: &egui::Painter, rect: Rect, view: MapView) {
         let ink = Color32::from_gray(60);
         if self.map_key_missing() {
             let galley = painter.layout(
-                tr("CartoDB Positron needs an API key. Add it in Settings → Map.").to_string(),
+                trf("{} needs an API key. Add it in Settings → Map.", &[&self.map_source.name()]),
                 FontId::proportional(13.0),
                 ink,
                 (rect.width() - 48.0).clamp(80.0, 320.0),
@@ -379,8 +390,31 @@ impl PicassoApp {
             (rect.width() - 16.0).max(60.0),
         );
         let at = rect.right_bottom() - galley.size() - Vec2::new(4.0, 2.0);
-        painter.rect_filled(Rect::from_min_size(at, galley.size()).expand(2.0), 2, Color32::from_white_alpha(190));
+        let credit = Rect::from_min_size(at, galley.size()).expand(2.0);
+        painter.rect_filled(credit, 2, Color32::from_white_alpha(190));
         painter.galley(at, galley, ink);
+        self.paint_scale_bar(painter, rect, view, credit);
+    }
+
+    /// A round distance about a hundred points long at the latitude in the
+    /// middle of the map, above `credit` when they would overlap.
+    fn paint_scale_bar(&self, painter: &egui::Painter, rect: Rect, view: MapView, credit: Rect) {
+        let (cx, cy) = geo::latlon_to_world(view.lat, view.lon, view.zoom);
+        let (lat, _) = geo::world_to_latlon(cx - f64::from(view.pan.x), cy - f64::from(view.pan.y), view.zoom);
+        let (meters, width) = scale_bar(geo::meters_per_point(lat, view.zoom), 100.0);
+        let label = if meters >= 1000.0 { format!("{} km", meters / 1000.0) } else { format!("{meters} m") };
+        let ink = Color32::from_gray(50);
+        let galley = painter.layout_no_wrap(label, FontId::proportional(10.5), ink);
+        let size = Vec2::new(width.max(galley.size().x) + 8.0, galley.size().y + 11.0);
+        let mut back = Rect::from_min_size(rect.left_bottom() + Vec2::new(6.0, -size.y - 4.0), size);
+        if back.intersects(credit) {
+            back = back.translate(Vec2::new(0.0, credit.top() - 4.0 - back.bottom()));
+        }
+        painter.rect_filled(back, 3, Color32::from_white_alpha(190));
+        let base = back.left_bottom() + Vec2::new(4.0, -4.0);
+        let stroke = egui::Stroke::new(1.5, ink);
+        painter.line(vec![base - Vec2::new(0.0, 5.0), base, base + Vec2::new(width, 0.0), base + Vec2::new(width, -5.0)], stroke);
+        painter.galley(back.left_top() + Vec2::new(4.0, 2.0), galley, ink);
     }
 
     /// Forgets loaded and failed tiles, after the map source or its key changes.
@@ -445,6 +479,18 @@ impl PicassoApp {
     fn select_photos(&mut self, indices: &[usize]) {
         self.selection = indices.iter().map(|index| self.photos[*index].id).collect();
         self.anchor = indices.first().map(|index| self.photos[*index].id);
+    }
+
+    /// False when the photos at `indices` lie so close together that they
+    /// would still form one cluster at the closest zoom.
+    fn split_closer(&self, indices: &[usize]) -> bool {
+        let mut bounds = Bounds::EMPTY;
+        for (lat, lon) in indices.iter().filter_map(|index| self.photos[*index].place()) {
+            let (x, y) = geo::latlon_to_world(lat, lon, MAX_ZOOM);
+            bounds.add([x, y]);
+        }
+        let [w, h] = bounds.size();
+        w.max(h) >= CLUSTER_CELL
     }
 
     /// Frames the photos at `indices`, at least two levels closer than now.
@@ -847,17 +893,14 @@ impl PicassoApp {
         Bounds { min: [(cx - half_w) / scale, (cy - half_h) / scale], max: [(cx + half_w) / scale, (cy + half_h) / scale] }
     }
 
-    /// The + and − buttons in the top-left corner of the map.
+    /// The zoom control in the top-left corner of the map.
     fn map_zoom_buttons(&mut self, ui: &mut egui::Ui, rect: Rect) {
         let corner = rect.left_top() + Vec2::new(10.0, 10.0);
-        for (n, (label, steps, tip)) in [("+", 1, "Zoom in"), ("−", -1, "Zoom out")].into_iter().enumerate() {
-            let button = Rect::from_min_size(corner + Vec2::new(0.0, n as f32 * 32.0), Vec2::splat(28.0));
-            let text = egui::RichText::new(label).size(16.0);
-            if ui.put(button, egui::Button::new(text)).on_hover_text(tr(tip)).clicked() {
-                self.zoom_map_at(steps, rect.center(), rect);
-                self.map_card = None;
-                ui.ctx().request_repaint();
-            }
+        let step = zoom_step(rect.height() - 40.0);
+        if let Some(next) = zoom_control(ui, corner, self.map_zoom, step, "places-zoom") {
+            self.zoom_map_at(i32::from(next) - i32::from(self.map_zoom), rect.center(), rect);
+            self.map_card = None;
+            ui.ctx().request_repaint();
         }
     }
 
@@ -943,8 +986,107 @@ impl PinCells {
     }
 }
 
-/// Closest zoom level of the Places map.
-const MAX_ZOOM: u8 = 16;
+/// Closest zoom level of the Places map and the Map panel, where a hundred
+/// points cover about 30 meters.
+pub(super) const MAX_ZOOM: u8 = 19;
+
+/// Farthest zoom level of the Places map and the Map panel.
+pub(super) const MIN_ZOOM: u8 = 2;
+
+/// Side of the zoom buttons.
+const ZOOM_BUTTON: f32 = 28.0;
+/// Space above and below the ends of the zoom bar.
+const ZOOM_BAR_PAD: f32 = 7.0;
+/// Seconds the zoom control stays at full strength after the zoom changes.
+const ZOOM_LINGER: f64 = 1.2;
+
+/// Points per zoom level on the zoom bar, for a control at most `room`
+/// points tall.
+pub(super) fn zoom_step(room: f32) -> f32 {
+    let levels = f32::from(MAX_ZOOM - MIN_ZOOM);
+    ((room - 2.0 * (ZOOM_BUTTON + 4.0) - 2.0 * ZOOM_BAR_PAD) / levels).clamp(3.0, 8.0)
+}
+
+/// A + button, a bar with one stop per zoom level, and a − button, from
+/// `top_left` down. Clicking or dragging along the bar goes straight to a
+/// level. Returns the level picked, if it differs from `zoom`.
+pub(super) fn zoom_control(ui: &mut egui::Ui, top_left: Pos2, zoom: u8, step: f32, id: &str) -> Option<u8> {
+    let levels = f32::from(MAX_ZOOM - MIN_ZOOM);
+    let height = 2.0 * (ZOOM_BUTTON + 4.0) + levels * step + 2.0 * ZOOM_BAR_PAD;
+    let area = Rect::from_min_size(top_left, Vec2::new(ZOOM_BUTTON, height));
+    // Faded into the map until the pointer comes near, the bar is dragged,
+    // or the zoom changes some other way, such as a pinch or the wheel.
+    let now = ui.input(|input| input.time);
+    let memory = egui::Id::unique((id, "zoomed"));
+    let (seen, changed_at) = ui.ctx().data(|data| data.get_temp::<(u8, f64)>(memory)).unwrap_or((zoom, f64::NEG_INFINITY));
+    let changed_at = if seen == zoom { changed_at } else { now };
+    ui.ctx().data_mut(|data| data.insert_temp(memory, (zoom, changed_at)));
+    let zooming = now - changed_at < ZOOM_LINGER;
+    if zooming {
+        ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(ZOOM_LINGER - (now - changed_at)));
+    }
+    let active = zooming || ui.rect_contains_pointer(area.expand(8.0)) || ui.ctx().is_being_dragged(egui::Id::unique(id));
+    let presence = ui.ctx().animate_bool_with_time(egui::Id::unique((id, "fade")), active, 0.15);
+    // Over the map, without moving what the map's parent lays out after it.
+    let ui = &mut ui.new_child(egui::UiBuilder::new().max_rect(area));
+    ui.set_opacity(0.5 + 0.5 * presence);
+    let button = |ui: &mut egui::Ui, at: Pos2, label: &str, tip: &'static str| {
+        let text = egui::RichText::new(label).size(16.0);
+        ui.put(Rect::from_min_size(at, Vec2::splat(ZOOM_BUTTON)), egui::Button::new(text).fill(theme::bg()))
+            .on_hover_text(tr(tip))
+            .clicked()
+    };
+    let mut next = None;
+    if button(ui, top_left, "+", "Zoom in") {
+        next = Some(zoom.saturating_add(1));
+    }
+    let bar = Rect::from_min_size(top_left + Vec2::new(0.0, ZOOM_BUTTON + 4.0), Vec2::new(ZOOM_BUTTON, levels * step + 2.0 * ZOOM_BAR_PAD));
+    if button(ui, bar.left_bottom() + Vec2::new(0.0, 4.0), "−", "Zoom out") {
+        next = Some(zoom.saturating_sub(1));
+    }
+    let bottom = bar.bottom() - ZOOM_BAR_PAD;
+    let response = ui.interact(bar, egui::Id::unique(id), Sense::click_and_drag()).on_hover_cursor(egui::CursorIcon::PointingHand);
+    if response.clicked() || response.dragged() {
+        if let Some(pointer) = response.interact_pointer_pos() {
+            next = Some(MIN_ZOOM + ((bottom - pointer.y) / step).round().clamp(0.0, levels) as u8);
+        }
+    }
+
+    let painter = ui.painter_at(bar.expand(2.0));
+    painter.rect(bar, 6, theme::bg(), egui::Stroke::new(1.0, theme::hairline()), egui::StrokeKind::Inside);
+    let x = bar.center().x;
+    let shown = next.unwrap_or(zoom).clamp(MIN_ZOOM, MAX_ZOOM);
+    let knob = Pos2::new(x, bottom - f32::from(shown - MIN_ZOOM) * step);
+    if step >= 5.0 {
+        for level in 0..=MAX_ZOOM - MIN_ZOOM {
+            let y = bottom - f32::from(level) * step;
+            painter.line_segment([Pos2::new(x - 4.0, y), Pos2::new(x + 4.0, y)], egui::Stroke::new(1.0, theme::hairline()));
+        }
+    }
+    painter.line_segment([Pos2::new(x, bar.top() + ZOOM_BAR_PAD), Pos2::new(x, bottom)], egui::Stroke::new(3.0, theme::hairline()));
+    painter.line_segment([knob, Pos2::new(x, bottom)], egui::Stroke::new(3.0, ACCENT));
+    let lit = response.hovered() || response.dragged();
+    painter.circle(knob, if lit { 6.5 } else { 5.5 }, ACCENT, egui::Stroke::new(2.0, Color32::WHITE));
+    next.map(|level| level.clamp(MIN_ZOOM, MAX_ZOOM)).filter(|level| *level != zoom)
+}
+
+/// Levels a tile may be enlarged by to stand in for a closer one the
+/// source doesn't have.
+const MAX_ENLARGE: u8 = 4;
+
+/// The tile `depth` levels above tile `x`, `y` at zoom `z` that covers it.
+fn covering(z: u8, x: u32, y: u32, depth: u8) -> (u8, u32, u32) {
+    (z - depth, x >> depth, y >> depth)
+}
+
+/// The longest round distance (1, 2 or 5 times a power of ten meters) that
+/// fits in `room` points, and its length in points.
+fn scale_bar(meters_per_point: f64, room: f32) -> (f64, f32) {
+    let most = meters_per_point * f64::from(room);
+    let power = 10f64.powf(most.log10().floor());
+    let meters = [5.0, 2.0, 1.0].into_iter().map(|step| step * power).find(|meters| *meters <= most).unwrap_or(power);
+    (meters, (meters / meters_per_point) as f32)
+}
 
 /// Side, in screen points, of the squares photos are grouped by.
 const CLUSTER_CELL: f64 = 64.0;
@@ -1332,6 +1474,26 @@ pub(super) fn open_osm(lat: f64, lon: f64, zoom: u8) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scale_bar_rounds_down_to_one_two_or_five() {
+        assert_eq!(scale_bar(0.27, 100.0), (20.0, 20.0 / 0.27));
+        assert_eq!(scale_bar(4.0, 100.0), (200.0, 50.0));
+        assert_eq!(scale_bar(60.0, 100.0), (5000.0, 5000.0 / 60.0));
+        assert_eq!(scale_bar(0.1, 100.0).0, 10.0);
+    }
+
+    #[test]
+    fn a_missing_tile_falls_back_to_the_one_above() {
+        assert_eq!(covering(19, 448935, 878371, 0), (19, 448935, 878371));
+        assert_eq!(covering(19, 448935, 878371, 2), (17, 112233, 219592));
+    }
+
+    #[test]
+    fn closest_zoom_shows_about_thirty_meters_per_hundred_points() {
+        let meters = geo::meters_per_point(25.03, MAX_ZOOM) * 100.0;
+        assert!((26.0..29.0).contains(&meters), "{meters}");
+    }
 
     #[test]
     fn a_wheel_notch_spread_over_frames_zooms_one_level() {

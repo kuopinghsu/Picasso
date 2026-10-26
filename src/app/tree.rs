@@ -169,7 +169,7 @@ impl PicassoApp {
                         ui.close();
                     }
                     if ui.button(crate::i18n::tr("Remove from Picasso…")).clicked() {
-                        self.remove_folder(id);
+                        self.remove_asked = Some(id);
                         ui.close();
                     }
                 }

@@ -73,7 +73,10 @@ pub fn create(data_dir: &Path) -> Result<PathBuf, String> {
     let flags = OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX;
     let conn = Connection::open_with_flags(data_dir.join(LIBRARY), flags).map_err(|err| err.to_string())?;
     conn.busy_timeout(Duration::from_secs(30)).map_err(|err| err.to_string())?;
-    conn.execute("VACUUM INTO ?1", [partial.to_string_lossy()]).map_err(|err| err.to_string())?;
+    if let Err(err) = conn.execute("VACUUM INTO ?1", [partial.to_string_lossy()]) {
+        let _ = std::fs::remove_file(&partial);
+        return Err(err.to_string());
+    }
     drop(conn);
     std::fs::rename(&partial, &target).map_err(|err| err.to_string())?;
     for old in list(data_dir).into_iter().skip(KEEP) {
@@ -143,6 +146,45 @@ fn swap_in(data_dir: &Path, staged: &Path) -> Result<(), String> {
     std::fs::rename(staged, &library).map_err(|err| err.to_string())
 }
 
+/// Moves a library that can't be opened aside as
+/// `picasso-damaged-YYYYMMDD-HHMMSS.db`, with its `-wal` and `-shm` files, so
+/// it is kept for repair tools, then puts `backup` in its place, or nothing,
+/// in which case Picasso starts a new library. Returns the moved library.
+pub fn replace_damaged(data_dir: &Path, backup: Option<&Path>) -> Result<PathBuf, String> {
+    if let Some(backup) = backup {
+        check(backup)?;
+    }
+    let library = data_dir.join(LIBRARY);
+    let aside = data_dir.join(format!("picasso-damaged-{}.db", Local::now().format(STAMP)));
+    if aside.exists() {
+        return Err(format!("{} already exists", aside.display()));
+    }
+    move_with_sidecars(&library, &aside).map_err(|err| err.to_string())?;
+    if let Some(backup) = backup {
+        let partial = library.with_extension("partial");
+        let copied = std::fs::copy(backup, &partial).and_then(|_| std::fs::rename(&partial, &library));
+        if let Err(err) = copied {
+            let _ = std::fs::remove_file(&partial);
+            let _ = move_with_sidecars(&aside, &library);
+            return Err(err.to_string());
+        }
+    }
+    Ok(aside)
+}
+
+/// Renames a database together with its `-wal` and `-shm` files, which hold
+/// changes not yet written into it.
+fn move_with_sidecars(from: &Path, to: &Path) -> std::io::Result<()> {
+    std::fs::rename(from, to)?;
+    for suffix in ["-wal", "-shm"] {
+        let side = |path: &Path| PathBuf::from(format!("{}{suffix}", path.display()));
+        if side(from).exists() {
+            std::fs::rename(side(from), side(to))?;
+        }
+    }
+    Ok(())
+}
+
 /// Starts Picasso again and returns; the caller then closes this window.
 pub fn relaunch() -> Result<(), String> {
     let exe = std::env::current_exe().map_err(|err| err.to_string())?;
@@ -205,6 +247,168 @@ mod tests {
         let conn = Connection::open(&newest.path).unwrap();
         let count: i64 = conn.query_row("SELECT count(*) FROM albums", [], |row| row.get(0)).unwrap();
         assert_eq!(count, 2);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_restored_backup_brings_back_everything_the_user_set() {
+        use crate::db::{Database, ScanRecord};
+        use crate::track::{Point, Track};
+        use crate::types::{Nav, NewPhoto, Sort, Unreadable};
+
+        let dir = library("everything");
+        let photos = dir.join("photos");
+        std::fs::create_dir_all(photos.join("skip")).unwrap();
+        let db = Database::open(&dir.join(LIBRARY)).unwrap();
+        let folder_id = db.add_folder(&photos).unwrap();
+        let photos = photos.canonicalize().unwrap();
+        let path = |name: &str| photos.join(name).to_string_lossy().into_owned();
+        let record = |name: &str| ScanRecord {
+            photo: NewPhoto {
+                folder_id,
+                path: path(name),
+                filename: name.into(),
+                width: 4000,
+                height: 3000,
+                bytes: 1234,
+                taken_at: 1_700_000_000,
+                modified_at: 1_700_000_100,
+                camera: "Camera".into(),
+                lens: "Lens".into(),
+                focal_mm: 35.0,
+                gps_lat: Some(25.03),
+                gps_lon: Some(121.56),
+                duration: 0.0,
+            },
+            existing: None,
+            star: None,
+            caption: None,
+            rotation: None,
+            pin: None,
+            complete: true,
+        };
+        let ids = db.write_batch(&[record("a.jpg"), record("b.jpg"), record("gone.jpg")]).unwrap().ids;
+        let (a, b) = (ids[0], ids[1]);
+        db.set_stars(&[a], true);
+        db.set_caption(a, "Sunset");
+        db.rotate(&[a], 90);
+        db.set_pins(&[b], 1.5, 2.5);
+        db.shift_taken(&[b], 3600);
+        let album = db.albums()[0].id;
+        db.add_to_album(album, &[a, b]);
+        let steps = r#"[{"control":"exposure","value":0.5}]"#;
+        db.save_edit_history(a, steps, 1, 1);
+        db.set_setting("user_presets", r#"[{"name":"Mine"}]"#);
+        let track = Track {
+            name: "Walk".into(),
+            segments: vec![vec![Point { lat: 25.0, lon: 121.0, time: Some(1) }, Point { lat: 25.1, lon: 121.1, time: Some(60) }]],
+        };
+        db.store_track(folder_id, &path("walk.gpx"), 10, 1, &track).unwrap();
+        db.exclude_dir(&photos.join("skip")).unwrap();
+        let broken = Unreadable { path: path("broken.jpg"), reason: "damaged".into(), folder: false, bytes: 5, modified_at: 6 };
+        db.store_unreadable(folder_id, &[broken], true, &Default::default());
+        db.set_caption(ids[2], "kept for 90 days");
+        db.remove_missing(folder_id, &[path("a.jpg"), path("b.jpg")]);
+        drop(db);
+
+        let backup = create(&dir).unwrap();
+        let clean = library("everything-restored");
+        std::fs::remove_file(clean.join(LIBRARY)).unwrap();
+        stage_restore(&clean, &backup).unwrap();
+        apply_staged(&clean).unwrap().unwrap();
+
+        let db = Database::open(&clean.join(LIBRARY)).unwrap();
+        let a = db.photo(a).unwrap();
+        assert!(a.starred);
+        assert_eq!((a.caption.as_str(), a.rotation, a.camera.as_str(), a.lens.as_str()), ("Sunset", 90, "Camera", "Lens"));
+        assert_eq!((a.gps_lat, a.gps_lon), (Some(25.03), Some(121.56)));
+        let b = db.photo(b).unwrap();
+        assert_eq!((b.pin_lat, b.pin_lon, b.taken_at), (Some(1.5), Some(2.5), 1_700_003_600));
+        assert_eq!(db.photos(&Nav::Album(album), "", Sort::Name).len(), 2);
+        assert_eq!(db.albums()[0].name, "Trip");
+        assert_eq!(db.edit_history(a.id), Some((steps.to_string(), 1)));
+        assert_eq!(db.setting("user_presets").as_deref(), Some(r#"[{"name":"Mine"}]"#));
+        assert_eq!(db.tracks()[0].3, track);
+        assert_eq!(db.excluded_dirs().len(), 1);
+        assert_eq!(db.unreadable().len(), 1);
+        assert_eq!(db.folders().len(), 1);
+        let back = db.write_batch(&[record("gone.jpg")]).unwrap().ids[0];
+        assert_eq!(db.adopt_archived(), vec![back], "the archive of removed photos came along");
+        assert_eq!(db.photo(back).unwrap().caption, "kept for 90 days");
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&clean);
+    }
+
+    #[test]
+    fn a_backup_that_cannot_be_written_reports_it_and_leaves_nothing_behind() {
+        let dir = library("unwritable");
+        std::fs::write(super::dir(&dir), b"a file where the backups folder goes").unwrap();
+        assert!(create(&dir).is_err());
+
+        let missing = library("no-library");
+        std::fs::remove_file(missing.join(LIBRARY)).unwrap();
+        assert!(create(&missing).is_err());
+        let left: Vec<_> = std::fs::read_dir(super::dir(&missing)).unwrap().flatten().collect();
+        assert!(left.is_empty(), "no partial copy is left");
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&missing);
+    }
+
+    fn damage(dir: &Path) -> Vec<u8> {
+        let garbage = b"not a database, just some bytes that SQLite cannot read".repeat(200);
+        std::fs::write(dir.join(LIBRARY), &garbage).unwrap();
+        assert!(crate::db::Database::open(&dir.join(LIBRARY)).is_err());
+        std::fs::write(dir.join(format!("{LIBRARY}-wal")), b"wal").unwrap();
+        garbage
+    }
+
+    fn damaged_copies(dir: &Path) -> Vec<PathBuf> {
+        let mut found: Vec<PathBuf> = std::fs::read_dir(dir)
+            .unwrap()
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| path.file_name().unwrap().to_string_lossy().starts_with("picasso-damaged-"))
+            .collect();
+        found.sort();
+        found
+    }
+
+    #[test]
+    fn a_damaged_library_is_kept_aside_and_a_backup_takes_its_place() {
+        let dir = library("damaged");
+        let backup = create(&dir).unwrap();
+        let garbage = damage(&dir);
+        let aside = replace_damaged(&dir, Some(&backup)).unwrap();
+        assert_eq!(std::fs::read(&aside).unwrap(), garbage, "the damaged library is kept as it was");
+        let wal = PathBuf::from(format!("{}-wal", aside.display()));
+        assert_eq!(std::fs::read(&wal).unwrap(), b"wal", "unsaved changes go with it");
+        assert!(damaged_copies(&dir).contains(&aside));
+        assert!(!dir.join(format!("{LIBRARY}-wal")).exists());
+        let db = crate::db::Database::open(&dir.join(LIBRARY)).unwrap();
+        assert_eq!(db.albums().len(), 1, "the backup's album is back");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_damaged_library_can_make_way_for_a_new_one() {
+        let dir = library("damaged-new");
+        let garbage = damage(&dir);
+        let aside = replace_damaged(&dir, None).unwrap();
+        assert_eq!(std::fs::read(&aside).unwrap(), garbage);
+        let db = crate::db::Database::open(&dir.join(LIBRARY)).unwrap();
+        assert!(db.albums().is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_bad_backup_leaves_the_damaged_library_where_it_was() {
+        let dir = library("damaged-bad-backup");
+        let garbage = damage(&dir);
+        let bad = dir.join("bad.db");
+        std::fs::write(&bad, b"also not a database").unwrap();
+        assert!(replace_damaged(&dir, Some(&bad)).is_err());
+        assert_eq!(std::fs::read(dir.join(LIBRARY)).unwrap(), garbage);
+        assert!(damaged_copies(&dir).is_empty());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

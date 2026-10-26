@@ -21,23 +21,33 @@ pub enum MapSource {
     #[default]
     OpenFreeMap,
     OpenStreetMap,
+    CartoVoyager,
     CartoPositron,
+    CartoDarkMatter,
     EsriImagery,
 }
 
 impl MapSource {
-    pub const ALL: [MapSource; 4] = [
+    pub const ALL: [MapSource; 6] = [
         MapSource::OpenFreeMap,
         MapSource::OpenStreetMap,
+        MapSource::CartoVoyager,
         MapSource::CartoPositron,
+        MapSource::CartoDarkMatter,
         MapSource::EsriImagery,
     ];
+
+    /// The CARTO styles, which Settings offers as one source.
+    pub const CARTO_STYLES: [MapSource; 3] =
+        [MapSource::CartoVoyager, MapSource::CartoPositron, MapSource::CartoDarkMatter];
 
     pub fn code(self) -> &'static str {
         match self {
             MapSource::OpenFreeMap => "openfreemap",
             MapSource::OpenStreetMap => "openstreetmap",
+            MapSource::CartoVoyager => "carto-voyager",
             MapSource::CartoPositron => "carto-positron",
+            MapSource::CartoDarkMatter => "carto-dark-matter",
             MapSource::EsriImagery => "esri-imagery",
         }
     }
@@ -51,9 +61,16 @@ impl MapSource {
         match self {
             MapSource::OpenFreeMap => "OpenFreeMap Liberty",
             MapSource::OpenStreetMap => "OpenStreetMap",
-            MapSource::CartoPositron => "CartoDB Positron",
+            MapSource::CartoVoyager => "CARTO Voyager",
+            MapSource::CartoPositron => "CARTO Positron",
+            MapSource::CartoDarkMatter => "CARTO Dark Matter",
             MapSource::EsriImagery => "Esri World Imagery",
         }
+    }
+
+    /// Name of a CARTO style without the provider.
+    pub fn style_name(self) -> &'static str {
+        self.name().trim_start_matches("CARTO ")
     }
 
     /// Credit the provider asks to show on the map.
@@ -61,14 +78,16 @@ impl MapSource {
         match self {
             MapSource::OpenFreeMap => "OpenFreeMap © OpenMapTiles · Data © OpenStreetMap contributors",
             MapSource::OpenStreetMap => "© OpenStreetMap contributors",
-            MapSource::CartoPositron => "© CARTO · © OpenStreetMap contributors",
+            MapSource::CartoVoyager | MapSource::CartoPositron | MapSource::CartoDarkMatter => {
+                "© CARTO · © OpenStreetMap contributors"
+            }
             MapSource::EsriImagery => "Tiles © Esri · Esri, Maxar, Earthstar Geographics, and the GIS User Community",
         }
     }
 
     /// CARTO serves its tiles only with a (free) API key.
     pub fn needs_key(self) -> bool {
-        self == MapSource::CartoPositron
+        matches!(self, MapSource::CartoVoyager | MapSource::CartoPositron | MapSource::CartoDarkMatter)
     }
 
     /// Folder of this source's tiles under the tile cache. OpenStreetMap
@@ -84,19 +103,26 @@ impl MapSource {
         match self {
             MapSource::OpenFreeMap => "pbf",
             MapSource::EsriImagery => "jpg",
-            MapSource::OpenStreetMap | MapSource::CartoPositron => "png",
+            MapSource::OpenStreetMap | MapSource::CartoVoyager | MapSource::CartoPositron | MapSource::CartoDarkMatter => "png",
         }
     }
 
     fn picture_url(self, z: u8, x: u32, y: u32, key: &str) -> String {
         match self {
             MapSource::OpenStreetMap | MapSource::OpenFreeMap => format!("https://tile.openstreetmap.org/{z}/{x}/{y}.png"),
-            MapSource::CartoPositron => {
-                format!("https://basemaps.cartocdn.com/rastertiles/light_all/{z}/{x}/{y}@2x.png?key={}", key.trim())
+            MapSource::CartoVoyager | MapSource::CartoPositron | MapSource::CartoDarkMatter => {
+                let style = match self {
+                    MapSource::CartoVoyager => "voyager",
+                    MapSource::CartoDarkMatter => "dark_all",
+                    _ => "light_all",
+                };
+                format!("https://basemaps.cartocdn.com/rastertiles/{style}/{z}/{x}/{y}@2x.png?key={}", key.trim())
             }
-            MapSource::EsriImagery => {
-                format!("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}")
-            }
+            // Without `blankTile=false`, places without imagery this close
+            // come back as a "Map data not yet available" picture.
+            MapSource::EsriImagery => format!(
+                "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}?blankTile=false"
+            ),
         }
     }
 }
@@ -136,6 +162,12 @@ pub fn latlon_to_world(lat: f64, lon: f64, zoom: u8) -> (f64, f64) {
     let lat_rad = lat.to_radians();
     let y = (1.0 - (lat_rad.tan() + 1.0 / lat_rad.cos()).ln() / std::f64::consts::PI) / 2.0 * n * TILE_PX;
     (x, y)
+}
+
+/// Ground distance one point of a 256 px tile covers at `lat` and `zoom`.
+pub fn meters_per_point(lat: f64, zoom: u8) -> f64 {
+    const EQUATOR: f64 = 40_075_016.686;
+    EQUATOR * lat.to_radians().cos() / (f64::from(1u32 << zoom) * TILE_PX)
 }
 
 pub fn world_to_latlon(x: f64, y: f64, zoom: u8) -> (f64, f64) {
@@ -282,8 +314,13 @@ mod tests {
         let tiles = Path::new("tiles");
         assert_eq!(MapSource::OpenStreetMap.cache_dir(tiles), tiles);
         assert_eq!(MapSource::EsriImagery.cache_dir(tiles), tiles.join("esri-imagery"));
-        assert!(MapSource::EsriImagery.picture_url(3, 5, 2, "").ends_with("/tile/3/2/5"), "Esri puts the row first");
-        assert!(MapSource::CartoPositron.picture_url(3, 5, 2, " abc ").ends_with("/3/5/2@2x.png?key=abc"));
+        assert!(MapSource::EsriImagery.picture_url(3, 5, 2, "").ends_with("/tile/3/2/5?blankTile=false"), "Esri puts the row first");
+        assert!(MapSource::CartoPositron.picture_url(3, 5, 2, " abc ").ends_with("/light_all/3/5/2@2x.png?key=abc"));
+        assert!(MapSource::CartoVoyager.picture_url(3, 5, 2, "abc").contains("/voyager/3/5/2@2x.png"));
+        assert!(MapSource::CartoDarkMatter.picture_url(3, 5, 2, "abc").contains("/dark_all/3/5/2@2x.png"));
+        assert!(MapSource::ALL.iter().all(|source| MapSource::from_code(source.code()) == Some(*source)));
+        assert!(MapSource::CARTO_STYLES.iter().all(|style| style.needs_key()));
+        assert_eq!(MapSource::CartoDarkMatter.style_name(), "Dark Matter");
     }
 
     #[test]

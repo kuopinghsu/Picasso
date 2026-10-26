@@ -12,6 +12,10 @@ use crate::types::{unix_now, Album, Folder, Nav, NewPhoto, Photo, Sort, Unreadab
 /// rows written by an older build are probed once more on the next scan.
 pub const INDEX_VERSION: i64 = 3;
 
+/// Layout of the library, kept in `PRAGMA user_version`. 0 is any library
+/// from before the number was kept; `docs/DATABASE.md` lists each change.
+pub const SCHEMA_VERSION: i64 = 1;
+
 const PHOTO_COLS: &str = "\
 p.id, p.folder_id, p.path, p.filename, p.width, p.height, p.bytes, \
 p.taken_at, p.modified_at, p.starred, p.caption, p.camera, \
@@ -125,12 +129,34 @@ impl Database {
         Ok(Self { conn })
     }
 
+    #[cfg(test)]
+    pub fn conn_for_tests(&self) -> &Connection {
+        &self.conn
+    }
+
     /// Rows this connection has changed since it opened.
     pub fn changes(&self) -> u64 {
         self.conn.total_changes()
     }
 
+    /// Brings the schema up to [`SCHEMA_VERSION`] in one transaction, so an
+    /// upgrade that fails or is cut short leaves the library as it was.
     fn migrate(&self) -> Result<(), String> {
+        let tx = rusqlite::Transaction::new_unchecked(&self.conn, rusqlite::TransactionBehavior::Immediate)
+            .map_err(|err| err.to_string())?;
+        self.upgrade()?;
+        let found: i64 = self.conn.query_row("PRAGMA user_version", [], |row| row.get(0)).map_err(|err| err.to_string())?;
+        // A library a newer Picasso upgraded keeps its number; its additions
+        // are only ever new tables and columns, which this build ignores.
+        if found < SCHEMA_VERSION {
+            self.conn
+                .execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION}"))
+                .map_err(|err| err.to_string())?;
+        }
+        tx.commit().map_err(|err| err.to_string())
+    }
+
+    fn upgrade(&self) -> Result<(), String> {
         self.conn
             .execute_batch(
                 "\
@@ -414,8 +440,15 @@ impl Database {
         Ok(self.conn.last_insert_rowid())
     }
 
-    pub fn remove_folder(&self, id: i64) {
-        let _ = self.conn.execute("DELETE FROM folders WHERE id=?1", [id]);
+    /// Drops an added folder and its photos from the library; the files
+    /// stay. Their stars, captions, albums, and edits are archived, so they
+    /// come back if the folder is added again or turns up somewhere else.
+    pub fn remove_folder(&self, id: i64) -> Result<(), String> {
+        let tx = self.conn.unchecked_transaction().map_err(|err| err.to_string())?;
+        let archive = format!("{ARCHIVE_SQL}p.folder_id = ?1 AND {HAS_USER_DATA}");
+        tx.execute(&archive, params![id, unix_now()]).map_err(|err| err.to_string())?;
+        tx.execute("DELETE FROM folders WHERE id=?1", [id]).map_err(|err| err.to_string())?;
+        tx.commit().map_err(|err| err.to_string())
     }
 
     /// Stops scanning `dir`, a folder below one of the added folders, and
@@ -1587,7 +1620,7 @@ mod tests {
         assert!(db.photo(back).unwrap().starred);
 
         db.exclude_dir(&skip).unwrap();
-        db.remove_folder(folder_id);
+        db.remove_folder(folder_id).unwrap();
         assert!(db.excluded_dirs().is_empty());
     }
 
@@ -1624,7 +1657,7 @@ mod tests {
         assert!(db.forget_track(&ride));
         assert!(!db.forget_track(&ride));
         db.store_track(folder_id, &ride, 10, 1, &track("Ride", 25.0)).unwrap();
-        db.remove_folder(folder_id);
+        db.remove_folder(folder_id).unwrap();
         assert!(db.tracks().is_empty());
     }
 
@@ -1642,7 +1675,7 @@ mod tests {
         std::fs::create_dir_all(&other).unwrap();
         let other_id = db.add_folder(&other).unwrap();
         let d = db.write_batch(&[record(other_id, &other, "d.jpg", 10)]).unwrap().ids[0];
-        db.remove_folder(other_id);
+        db.remove_folder(other_id).unwrap();
         let e = db.write_batch(&[record(folder_id, &folder, "e.jpg", 10)]).unwrap().ids[0];
         assert!(e > d, "an id from a removed folder came back");
         assert_eq!(db.remove_missing(folder_id, &[]), 3);
@@ -1677,6 +1710,35 @@ mod tests {
         assert_eq!(db.photos(&Nav::Album(album), "", Sort::Name).len(), 1);
         assert_eq!(db.edit_history(back).map(|(_, applied)| applied), Some(1));
         assert_eq!(archive_count(&db), 0);
+    }
+
+    #[test]
+    fn a_removed_folder_gives_its_data_back_when_added_again_or_moved() {
+        let (db, folder_id, folder) = library("archive-folder");
+        let ids = db.write_batch(&[record(folder_id, &folder, "a.jpg", 10), record(folder_id, &folder, "plain.jpg", 11)])
+            .unwrap()
+            .ids;
+        let album = db.create_album("Trip").unwrap();
+        db.set_stars(&[ids[0]], true);
+        db.add_to_album(album, &[ids[0]]);
+        db.save_edit_history(ids[0], r#"[{"control":"light.exposure","value":0.5}]"#, 1, 1);
+
+        db.remove_folder(folder_id).unwrap();
+        assert!(db.folders().is_empty());
+        assert!(db.photos(&Nav::Library, "", Sort::Name).is_empty());
+        assert_eq!(archive_count(&db), 1, "only photos with user data are archived");
+
+        // The folder was moved, and its new place is added.
+        let moved = folder.with_file_name("archive-folder-moved");
+        std::fs::create_dir_all(&moved).unwrap();
+        let moved_id = db.add_folder(&moved).unwrap();
+        let back = db.write_batch(&[record(moved_id, &moved, "a.jpg", 10), record(moved_id, &moved, "plain.jpg", 11)])
+            .unwrap()
+            .ids[0];
+        assert_eq!(db.adopt_archived(), vec![back]);
+        assert!(db.photo(back).unwrap().starred);
+        assert_eq!(db.photos(&Nav::Album(album), "", Sort::Name).len(), 1);
+        assert_eq!(db.edit_history(back).map(|(_, applied)| applied), Some(1));
     }
 
     #[test]
@@ -1798,6 +1860,76 @@ mod tests {
         assert_eq!(db.photo(7).unwrap().rotation, 90, "rotation from an older build is kept");
         let known = db.folder_snapshot(1, "/pics")["/pics/a.jpg"];
         assert!(!known.current(0, 0), "rows from an older build are probed again");
+        assert_eq!(schema_version(&db.conn), SCHEMA_VERSION);
+    }
+
+    fn schema_version(conn: &Connection) -> i64 {
+        conn.query_row("PRAGMA user_version", [], |row| row.get(0)).unwrap()
+    }
+
+    fn schema(path: &Path) -> Vec<String> {
+        let conn = Connection::open(path).unwrap();
+        let mut statement = conn.prepare("SELECT coalesce(sql, name) FROM sqlite_master ORDER BY name").unwrap();
+        let rows = statement.query_map([], |row| row.get(0)).unwrap();
+        rows.map(Result::unwrap).collect()
+    }
+
+    #[test]
+    fn a_failed_upgrade_leaves_the_library_as_it_was() {
+        let dir = temp_dir("migrate-fail");
+        let path = dir.join("old.db");
+        {
+            let conn = Connection::open(&path).unwrap();
+            // A `tracks` table without `folder_id` makes the upgrade fail
+            // after it has created other tables.
+            conn.execute_batch(
+                "CREATE TABLE folders (id INTEGER PRIMARY KEY, path TEXT NOT NULL UNIQUE, added_at INTEGER NOT NULL);
+                 CREATE TABLE photos (id INTEGER PRIMARY KEY, folder_id INTEGER NOT NULL, path TEXT NOT NULL UNIQUE,
+                     filename TEXT NOT NULL, starred INTEGER NOT NULL DEFAULT 0);
+                 INSERT INTO folders VALUES (1, '/pics', 0);
+                 INSERT INTO photos VALUES (7, 1, '/pics/a.jpg', 'a.jpg', 1);
+                 CREATE TABLE tracks (id INTEGER PRIMARY KEY, path TEXT);",
+            )
+            .unwrap();
+        }
+        let before = schema(&path);
+        assert!(Database::open(&path).is_err());
+        assert_eq!(schema(&path), before, "nothing of the upgrade is kept");
+        let conn = Connection::open(&path).unwrap();
+        assert_eq!(schema_version(&conn), 0);
+        let starred: i64 = conn.query_row("SELECT starred FROM photos WHERE id = 7", [], |row| row.get(0)).unwrap();
+        assert_eq!(starred, 1);
+    }
+
+    #[test]
+    fn a_library_from_a_newer_version_still_opens() {
+        let dir = temp_dir("migrate-newer");
+        let path = dir.join("t.db");
+        {
+            let db = Database::open(&path).unwrap();
+            db.create_album("Trip").unwrap();
+            db.conn
+                .execute_batch(&format!(
+                    "PRAGMA user_version = {}; CREATE TABLE later_feature (id INTEGER PRIMARY KEY);
+                     ALTER TABLE photos ADD COLUMN later_column TEXT;",
+                    SCHEMA_VERSION + 5
+                ))
+                .unwrap();
+        }
+        let db = Database::open(&path).unwrap();
+        assert_eq!(schema_version(&db.conn), SCHEMA_VERSION + 5, "the newer number is kept");
+        assert_eq!(db.albums().len(), 1);
+        assert!(db.columns("photos").iter().any(|name| name == "later_column"));
+    }
+
+    #[test]
+    fn opening_again_changes_nothing() {
+        let dir = temp_dir("migrate-again");
+        let path = dir.join("t.db");
+        drop(Database::open(&path).unwrap());
+        let first = schema(&path);
+        drop(Database::open(&path).unwrap());
+        assert_eq!(schema(&path), first);
     }
 
     #[test]

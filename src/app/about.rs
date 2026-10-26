@@ -99,7 +99,10 @@ fn close_button(ui: &mut egui::Ui) -> egui::Response {
 }
 
 fn body(ui: &mut egui::Ui) {
-    let build = env!("PICASSO_BUILD_DATE");
+    let build = match env!("PICASSO_COMMIT") {
+        "" => env!("PICASSO_BUILD_DATE").to_string(),
+        commit => format!("{} · {commit}", env!("PICASSO_BUILD_DATE")),
+    };
     let mut title = egui::text::LayoutJob::default();
     let parts = [
         RichText::new(format!("Picasso {}  ", env!("CARGO_PKG_VERSION"))).size(26.0).strong().color(theme::text()),
@@ -128,7 +131,7 @@ fn body(ui: &mut egui::Ui) {
     let repository = env!("CARGO_PKG_REPOSITORY");
     let label = RichText::new(repository.trim_start_matches("https://")).size(13.5).color(ui.visuals().hyperlink_color);
     ui.hyperlink_to(label, repository);
-    let year = build.get(..4).unwrap_or(build);
+    let year = build.get(..4).unwrap_or(&build);
     text(
         ui,
         &trf("© {} Picasso contributors. Licensed under the {} License.", &[&year, &env!("CARGO_PKG_LICENSE")]),

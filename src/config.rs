@@ -110,6 +110,11 @@ impl Config {
     }
 }
 
+/// A text setting from `settings.json` in `dir`, read without the library.
+pub fn stored_text(dir: &Path, key: &str) -> Option<String> {
+    read(&dir.join("settings.json"))?.get(key)?.as_str().map(str::to_string)
+}
+
 fn read(path: &Path) -> Option<Map<String, Value>> {
     let text = std::fs::read_to_string(path).ok()?;
     match serde_json::from_str::<Value>(&text).ok()? {

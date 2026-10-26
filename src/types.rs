@@ -351,11 +351,16 @@ pub fn displayed_size(photo: &Photo) -> (f32, f32) {
 }
 
 pub fn format_bytes(bytes: u64) -> String {
+    bytes_in(bytes, crate::i18n::current())
+}
+
+fn bytes_in(bytes: u64, lang: crate::i18n::Lang) -> String {
+    use crate::i18n::Lang;
     const KB: f64 = 1024.0;
     const MB: f64 = 1024.0 * 1024.0;
     const GB: f64 = 1024.0 * 1024.0 * 1024.0;
     let n = bytes as f64;
-    if n < KB {
+    let text = if n < KB {
         format!("{bytes} B")
     } else if n < MB {
         format!("{:.0} KB", n / KB)
@@ -363,6 +368,10 @@ pub fn format_bytes(bytes: u64) -> String {
         format!("{:.1} MB", n / MB)
     } else {
         format!("{:.2} GB", n / GB)
+    };
+    match lang {
+        Lang::German | Lang::Spanish | Lang::French | Lang::Italian | Lang::Portuguese => text.replace('.', ","),
+        _ => text,
     }
 }
 
@@ -614,6 +623,16 @@ mod tests {
         assert_eq!(month_year(2026, 3, Lang::German), "März 2026");
         assert_eq!(month_year(2026, 8, Lang::Spanish), "agosto de 2026");
         assert_eq!(month_year(2026, 8, Lang::French), "août 2026");
+    }
+
+    #[test]
+    fn sizes_use_the_decimal_mark_of_the_language() {
+        use crate::i18n::Lang;
+        assert_eq!(bytes_in(512, Lang::German), "512 B");
+        assert_eq!(bytes_in(1_572_864, Lang::English), "1.5 MB");
+        assert_eq!(bytes_in(1_572_864, Lang::TraditionalChinese), "1.5 MB");
+        assert_eq!(bytes_in(1_572_864, Lang::German), "1,5 MB");
+        assert_eq!(bytes_in(3 * 1024 * 1024 * 1024 / 2, Lang::French), "1,50 GB");
     }
 
     #[test]

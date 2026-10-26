@@ -72,8 +72,18 @@ fn source_note(source: MapSource) -> &'static str {
     match source {
         MapSource::OpenFreeMap => "Free, with no key. Picasso draws it from OpenStreetMap data.",
         MapSource::OpenStreetMap => "The standard OpenStreetMap map.",
-        MapSource::CartoPositron => "A light, quiet map. Needs a free CARTO API key.",
+        MapSource::CartoVoyager | MapSource::CartoPositron | MapSource::CartoDarkMatter => {
+            "Clean maps in three styles. Needs a free CARTO API key."
+        }
         MapSource::EsriImagery => "Satellite and aerial photos.",
+    }
+}
+
+fn style_note(style: MapSource) -> &'static str {
+    match style {
+        MapSource::CartoVoyager => "Colorful and detailed.",
+        MapSource::CartoDarkMatter => "Dark, suited to the dark theme.",
+        _ => "Light and quiet.",
     }
 }
 
@@ -182,8 +192,20 @@ impl PicassoApp {
         if source != self.map_source {
             self.map_source = source;
             self.config.set("map_source", source.code());
+            if source.needs_key() {
+                self.config.set("carto_style", source.code());
+            }
             self.reset_tiles();
         }
+    }
+
+    /// The CARTO style picked last, for when CARTO is chosen again.
+    fn carto_style(&self) -> MapSource {
+        self.config
+            .text("carto_style")
+            .and_then(MapSource::from_code)
+            .filter(|style| style.needs_key())
+            .unwrap_or(MapSource::CartoPositron)
     }
 
     /// Saves a newly typed key. An empty field keeps the saved key, which
@@ -207,7 +229,7 @@ impl PicassoApp {
             self.config.set("carto_key", sealed);
         }
         self.carto_key = key;
-        if self.map_source == MapSource::CartoPositron {
+        if self.map_source.needs_key() {
             self.reset_tiles();
         }
     }
@@ -362,12 +384,15 @@ impl PicassoApp {
         heading(ui, tr("Map source"));
         note(ui, tr("Places and the Map panel show this map."));
         ui.add_space(2.0);
-        for source in MapSource::ALL {
-            let chosen = self.map_source == source;
+        let carto = MapSource::CARTO_STYLES[0];
+        for source in MapSource::ALL.into_iter().filter(|source| !source.needs_key() || *source == carto) {
+            let chosen = if source.needs_key() { self.map_source.needs_key() } else { self.map_source == source };
+            let name = if source.needs_key() { "CARTO" } else { source.name() };
             ui.scope(|ui| {
                 ui.spacing_mut().item_spacing.y = 2.0;
-                if ui.radio(chosen, RichText::new(source.name()).strong()).clicked() {
-                    self.set_map_source(source);
+                if ui.radio(chosen, RichText::new(name).strong()).clicked() && !chosen {
+                    let picked = if source.needs_key() { self.carto_style() } else { source };
+                    self.set_map_source(picked);
                 }
                 ui.horizontal(|ui| {
                     ui.add_space(24.0);
@@ -375,6 +400,16 @@ impl PicassoApp {
                 });
             });
             if source.needs_key() && chosen {
+                ui.horizontal(|ui| {
+                    ui.add_space(24.0);
+                    ui.label(tr("Style"));
+                    for style in MapSource::CARTO_STYLES {
+                        let button = ui.selectable_label(self.map_source == style, style.style_name());
+                        if button.on_hover_text(tr(style_note(style))).clicked() {
+                            self.set_map_source(style);
+                        }
+                    }
+                });
                 ui.horizontal(|ui| {
                     ui.add_space(24.0);
                     ui.label(tr("CARTO API key"));
@@ -503,7 +538,7 @@ impl PicassoApp {
         ui.horizontal(|ui| {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui.button(tr("Remove")).on_hover_text(tr("Remove from Picasso…")).clicked() {
-                    self.remove_folder(id);
+                    self.remove_asked = Some(id);
                 }
                 if ui.button(tr("Refresh")).on_hover_text(tr("Refresh Thumbnails")).clicked() {
                     let _ = self.cmd_tx.send(Command::Scan(id));
@@ -768,7 +803,7 @@ fn extension_list(kind: FileType) -> String {
 }
 
 /// Unix seconds as local date and time, e.g. `2026-10-23 09:58`.
-fn local_time(secs: i64) -> String {
+pub(super) fn local_time(secs: i64) -> String {
     chrono::DateTime::from_timestamp(secs, 0)
         .map(|time| time.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M").to_string())
         .unwrap_or_default()

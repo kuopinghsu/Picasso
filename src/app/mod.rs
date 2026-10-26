@@ -7,11 +7,13 @@ mod editor;
 mod editor_panel;
 mod editor_stage;
 mod export;
+mod frame_stats;
 mod geotagging;
 mod help;
 mod library;
 mod loader;
 mod places;
+mod recovery;
 mod settings;
 mod side;
 mod stats;
@@ -356,10 +358,24 @@ pub struct PicassoApp {
     tile_rx: Receiver<crate::geo::TileDone>,
     tile_wait: HashSet<(u8, u32, u32)>,
     tile_fail: HashSet<(u8, u32, u32)>,
+    /// Set by `PICASSO_FRAME_STATS=1`.
+    frame_stats: Option<frame_stats::FrameStats>,
+    /// Added folder whose removal waits for confirmation. It is asked over
+    /// whatever window is open, as Settings and the folder tree both offer it.
+    remove_asked: Option<i64>,
+}
+
+/// The library window, or the recovery window when the library can't be
+/// opened.
+pub fn start(ctx: &egui::Context, args: Vec<PathBuf>) -> Box<dyn eframe::App> {
+    match PicassoApp::new(ctx, args) {
+        Ok(app) => Box::new(app),
+        Err(err) => Box::new(recovery::Recovery::new(ctx, db::app_dirs().0, err)),
+    }
 }
 
 impl PicassoApp {
-    pub fn new(ctx: &egui::Context, args: Vec<PathBuf>) -> Self {
+    fn new(ctx: &egui::Context, args: Vec<PathBuf>) -> Result<Self, String> {
         let (data_dir, cache) = db::app_dirs();
         let _ = std::fs::create_dir_all(&data_dir);
         let _ = std::fs::create_dir_all(cache.join("tiles"));
@@ -372,7 +388,7 @@ impl PicassoApp {
             .name("picasso-thumbs-migrate".into())
             .spawn(move || thumbs::migrate_files(&migrate_cache));
         let restored = crate::backup::apply_staged(&data_dir);
-        let database = Database::open(&data_dir.join("picasso.db")).expect("open Picasso library");
+        let database = Database::open(&data_dir.join("picasso.db"))?;
         if crate::backup::due(&data_dir) {
             let data_dir = data_dir.clone();
             let _ = std::thread::Builder::new().name("picasso-backup".into()).spawn(move || {
@@ -534,6 +550,8 @@ impl PicassoApp {
             user_presets: Vec::new(),
             events_tx,
             slideshow: None,
+            frame_stats: frame_stats::FrameStats::from_env(),
+            remove_asked: None,
             activity: String::new(),
             last_trashed: None,
             unreadable: HashMap::new(),
@@ -635,7 +653,7 @@ impl PicassoApp {
         }
         app.reload();
         app.sync_watches();
-        app
+        Ok(app)
     }
 
     /// Re-reads the folders, their tree, and the albums, then the view.
@@ -1589,6 +1607,48 @@ impl PicassoApp {
         if !matches!(self.modal, Modal::Settings) {
             self.settings_closed();
         }
+        self.remove_folder_window(ctx);
+    }
+
+    fn remove_folder_window(&mut self, ctx: &egui::Context) {
+        let Some(id) = self.remove_asked else { return };
+        let Some(folder) = self.folders.iter().find(|folder| folder.id == id).cloned() else {
+            self.remove_asked = None;
+            return;
+        };
+        let mut close = false;
+        let mut confirm = false;
+        egui::Window::new(tr("Remove from Picasso"))
+            .id(egui::Id::unique("remove-folder"))
+            .collapsible(false)
+            .resizable(false)
+            .default_width(420.0)
+            .order(egui::Order::Foreground)
+            .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
+            .show(ctx, |ui| {
+                ui.label(trf("Remove {} from Picasso?", &[&settings::display_path(Path::new(&folder.path))]));
+                let photos = photo_count(folder.count as usize);
+                let note = trf(
+                    "This takes {} out of the library; the files stay where they are. Stars, captions, albums, and edits are kept for 90 days and come back if you add the folder again, even from a new place.",
+                    &[&photos],
+                );
+                ui.add(egui::Label::new(egui::RichText::new(note).size(12.5).color(theme::muted())).wrap());
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if ui.add(theme::danger_button(tr("Remove"))).clicked() {
+                        confirm = true;
+                    }
+                    if ui.button(tr("Cancel")).clicked() {
+                        close = true;
+                    }
+                });
+            });
+        if close || confirm || ctx.input(|input| input.key_pressed(Key::Escape)) {
+            self.remove_asked = None;
+        }
+        if confirm {
+            self.remove_folder(id);
+        }
     }
 
     fn add_folder_modal(&mut self, ctx: &egui::Context) {
@@ -1707,12 +1767,14 @@ impl PicassoApp {
     fn trash_modal(&mut self, ctx: &egui::Context) {
         let Modal::Trash { ids } = &self.modal else { return };
         let ids = ids.clone();
+        let bytes: u64 = ids.iter().filter_map(|id| self.db.photo(*id)).map(|photo| photo.bytes).sum();
         let mut close = false;
         let mut confirm = false;
         egui::Window::new(tr("Move to trash"))
             .id(egui::Id::unique("trash"))
             .collapsible(false)
             .resizable(false)
+            .default_width(400.0)
             .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
             .show(ctx, |ui| {
                 let question = if ids.len() == 1 {
@@ -1720,7 +1782,13 @@ impl PicassoApp {
                 } else {
                     trf("Move {} photos to the system trash?", &[&ids.len()])
                 };
-                ui.label(question);
+                ui.label(format!("{question} ({})", crate::types::format_bytes(bytes)));
+                let undo = if crate::shell::CAN_RESTORE {
+                    "You can undo this from the status bar for two minutes. Stars, captions, albums, and edits are kept for 90 days in case the files come back."
+                } else {
+                    "To undo it, put the files back from the Trash. Stars, captions, albums, and edits are kept for 90 days in case the files come back."
+                };
+                ui.add(egui::Label::new(egui::RichText::new(tr(undo)).size(12.5).color(theme::muted())).wrap());
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
                     if ui.add(theme::danger_button(tr("Move to trash"))).clicked() {
@@ -1751,7 +1819,10 @@ impl PicassoApp {
 
     /// Drops the folder and its photos from the catalog. The files stay.
     fn remove_folder(&mut self, id: i64) {
-        self.db.remove_folder(id);
+        if let Err(err) = self.db.remove_folder(id) {
+            self.activity = trf("Couldn't remove the folder: {}", &[&err]);
+            return;
+        }
         self.unreadable.remove(&id);
         self.tracks.retain(|track| track.folder_id != id);
         self.excluded = self.db.excluded_dirs();
@@ -2045,29 +2116,37 @@ impl PicassoApp {
         if photos.is_empty() {
             return Vec::new();
         }
+        let before: Vec<bool> = photos.iter().map(|photo| Path::new(&photo.path).exists()).collect();
+        let present = photos.iter().zip(&before).filter(|(_, there)| **there).map(|(photo, _)| photo.path.as_str());
         // One call for all files: the system trash is slow file by file.
-        let result = trash::delete_all(photos.iter().map(|photo| photo.path.as_str()));
+        let result = trash::delete_all(present);
+        let after: Vec<bool> = photos.iter().map(|photo| Path::new(&photo.path).exists()).collect();
+        let outcome = trash_outcome(&before, &after);
+        let mut notes = Vec::new();
+        if let [only] = outcome.failed[..] {
+            let reason = result.as_ref().err().map_or_else(|| tr("it is still there").to_string(), ToString::to_string);
+            notes.push(trf("Couldn't trash {}: {}", &[&photos[only].filename, &reason]));
+        } else if !outcome.failed.is_empty() {
+            let reason = result.as_ref().err().map_or_else(|| tr("they are still there").to_string(), ToString::to_string);
+            notes.push(trf("Couldn't move {} photos to the trash: {}", &[&outcome.failed.len(), &reason]));
+        }
+        if !outcome.missing.is_empty() {
+            notes.push(trf("{} files weren't found, so they stay in the library. Is their drive connected?", &[&outcome.missing.len()]));
+        }
+        self.activity = notes.join(" · ");
         let mut removed = Vec::new();
         let mut trashed = Vec::new();
-        for photo in photos {
-            if Path::new(&photo.path).exists() {
-                if let Err(err) = &result {
-                    self.activity = trf("Couldn't trash {}: {}", &[&photo.filename, err]);
-                }
-            } else {
-                removed.push(photo.id);
-                trashed.push((photo.path, photo.folder_id));
-            }
+        for index in outcome.trashed {
+            let photo = &photos[index];
+            removed.push(photo.id);
+            trashed.push((photo.path.clone(), photo.folder_id));
         }
         if !removed.is_empty() {
             self.db.delete_photos(&removed);
             if crate::shell::CAN_RESTORE {
                 // The status bar says so next to its Undo button.
-                if removed.len() == ids.len() {
-                    self.activity.clear();
-                }
                 self.last_trashed = Some((Instant::now(), trashed));
-            } else {
+            } else if notes.is_empty() {
                 self.activity = trf("Moved {} to trash", &[&removed.len()]);
             }
             self.drop_from_view(&removed);
@@ -2289,7 +2368,10 @@ impl eframe::App for PicassoApp {
         }
     }
 
-    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        if let Some(stats) = &mut self.frame_stats {
+            stats.record(frame.info().cpu_usage);
+        }
         let dark = self.theme_mode.is_dark(system_dark(ctx));
         if dark != theme::is_dark() {
             theme::set_dark(ctx, dark);
@@ -2351,6 +2433,30 @@ impl eframe::App for PicassoApp {
         self.modals(ui.ctx());
         self.publish_wanted_thumbs();
     }
+}
+
+/// Photos sent to the trash, by index, sorted by whether each file was there
+/// before and after.
+#[derive(Debug, Default, PartialEq)]
+struct TrashOutcome {
+    trashed: Vec<usize>,
+    /// Still there: the trash refused it.
+    failed: Vec<usize>,
+    /// Gone before the trash was asked, as when its drive is disconnected.
+    /// It wasn't trashed, so it stays in the library.
+    missing: Vec<usize>,
+}
+
+fn trash_outcome(before: &[bool], after: &[bool]) -> TrashOutcome {
+    let mut outcome = TrashOutcome::default();
+    for (index, (&was, &is)) in before.iter().zip(after).enumerate() {
+        match (was, is) {
+            (false, _) => outcome.missing.push(index),
+            (true, true) => outcome.failed.push(index),
+            (true, false) => outcome.trashed.push(index),
+        }
+    }
+    outcome
 }
 
 fn upload(ctx: &egui::Context, name: &str, w: usize, h: usize, rgba: &[u8]) -> Option<TextureHandle> {
@@ -2438,5 +2544,34 @@ fn paint_glyph(painter: &egui::Painter, center_left: egui::Pos2, glyph: Glyph) {
             painter.line_segment([center - Vec2::new(6.0, 0.0), center + Vec2::new(6.0, 0.0)], line);
             painter.add(egui::Shape::ellipse_stroke(center, Vec2::new(2.6, 6.0), line));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_files_that_left_count_as_trashed() {
+        let outcome = trash_outcome(&[true, true, false, false], &[false, true, false, false]);
+        assert_eq!(outcome, TrashOutcome { trashed: vec![0], failed: vec![1], missing: vec![2, 3] });
+        assert!(trash_outcome(&[], &[]).trashed.is_empty());
+    }
+
+    #[test]
+    fn a_file_on_a_disconnected_drive_is_never_reported_as_trashed() {
+        let dir = std::env::temp_dir().join(format!("picasso-trash-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let there = dir.join("there.jpg");
+        std::fs::write(&there, b"x").unwrap();
+        let gone = dir.join("unplugged").join("gone.jpg");
+        let paths = [there.as_path(), gone.as_path()];
+        let before: Vec<bool> = paths.iter().map(|path| path.exists()).collect();
+        // Stands in for the trash, which here removes only the file that was there.
+        std::fs::remove_file(&there).unwrap();
+        let after: Vec<bool> = paths.iter().map(|path| path.exists()).collect();
+        assert_eq!(trash_outcome(&before, &after), TrashOutcome { trashed: vec![0], failed: vec![], missing: vec![1] });
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

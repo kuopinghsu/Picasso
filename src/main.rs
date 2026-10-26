@@ -5,7 +5,11 @@
 
 mod app;
 mod backup;
+#[cfg(test)]
+mod bench;
 mod config;
+#[cfg(test)]
+mod corpus;
 mod db;
 mod edit;
 mod geo;
@@ -36,6 +40,10 @@ fn main() -> eframe::Result {
     let args: Vec<std::path::PathBuf> = std::env::args_os().skip(1).map(std::path::PathBuf::from).collect();
     if args.first().is_some_and(|arg| arg.as_os_str() == "geotag") {
         std::process::exit(geotag::cli(&args[1..]));
+    }
+    if args.first().is_some_and(|arg| arg.as_os_str() == "--version") {
+        println!("Picasso {} ({} {})", env!("CARGO_PKG_VERSION"), env!("PICASSO_BUILD_DATE"), env!("PICASSO_COMMIT"));
+        return Ok(());
     }
     prefer_wsl_gl();
     let renderer = match std::env::var("PICASSO_RENDERER").ok().as_deref() {
@@ -93,7 +101,7 @@ fn run(args: &[std::path::PathBuf], renderer: eframe::Renderer) -> eframe::Resul
         options,
         Box::new(move |cc| {
             cc.egui_ctx.add_font_provider(std::sync::Arc::new(SystemFonts::default()));
-            Ok(Box::new(app::PicassoApp::new(&cc.egui_ctx, args)))
+            Ok(app::start(&cc.egui_ctx, args))
         }),
     )
 }

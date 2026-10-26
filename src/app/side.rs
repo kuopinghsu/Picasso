@@ -8,7 +8,7 @@ use crate::geo;
 use crate::i18n::{tr, trf};
 use crate::types::{displayed_size, folder_label, format_bytes, format_timestamp, Nav, Photo};
 
-use super::places::MapView;
+use super::places::{MapView, MAX_ZOOM, MIN_ZOOM};
 use super::theme::{self, ACCENT, WHITE};
 use super::PicassoApp;
 
@@ -43,8 +43,6 @@ pub(super) enum TrayIcon {
     Map,
 }
 
-const MIN_ZOOM: u8 = 2;
-const MAX_ZOOM: u8 = 16;
 
 impl PicassoApp {
     /// Opens `panel`, or closes it when it is already showing.
@@ -283,16 +281,12 @@ impl PicassoApp {
         }
         paint_pin(&painter, rect.center() + self.side_pan);
         painter.rect_stroke(rect, theme::THUMB_RADIUS, Stroke::new(1.0, theme::hairline()), egui::StrokeKind::Inside);
-        self.paint_map_notes(&painter, rect);
+        self.paint_map_notes(&painter, rect, view);
 
-        let buttons = Rect::from_min_size(rect.right_top() + Vec2::new(-36.0, 8.0), Vec2::new(28.0, 60.0));
-        let mut overlay = ui.new_child(egui::UiBuilder::new().max_rect(buttons));
-        overlay.spacing_mut().item_spacing.y = 4.0;
-        if overlay.add_sized([28.0, 28.0], egui::Button::new("+").fill(theme::bg())).clicked() {
-            zoom_by = 1;
-        }
-        if overlay.add_sized([28.0, 28.0], egui::Button::new("−").fill(theme::bg())).clicked() {
-            zoom_by = -1;
+        // Clear of the provider's credit, which may wrap onto two lines.
+        let step = super::places::zoom_step(rect.height() - 52.0);
+        if let Some(next) = super::places::zoom_control(ui, rect.right_top() + Vec2::new(-36.0, 8.0), self.side_zoom, step, "side-zoom") {
+            zoom_by = i32::from(next) - i32::from(self.side_zoom);
         }
         if zoom_by != 0 {
             let next = (self.side_zoom as i32 + zoom_by).clamp(MIN_ZOOM as i32, MAX_ZOOM as i32) as u8;

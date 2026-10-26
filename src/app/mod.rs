@@ -1333,7 +1333,7 @@ impl PicassoApp {
                 if ui.button(tr("Slideshow")).on_hover_text(tr("Play Fullscreen Slideshow")).clicked() {
                     self.start_slideshow();
                 }
-                if ui.button(tr("Refresh")).on_hover_text(tr("Refresh Thumbnails")).clicked() {
+                if ui.button(tr("Refresh")).on_hover_text(tr("Rescan folders")).clicked() {
                     self.rescan();
                 }
                 if ui

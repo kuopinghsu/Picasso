@@ -164,7 +164,7 @@ impl PicassoApp {
                     }
                 }
                 if let Nav::Folder(id) = row.nav {
-                    if ui.button(crate::i18n::tr("Refresh Thumbnails")).clicked() {
+                    if ui.button(crate::i18n::tr("Rescan this folder")).clicked() {
                         let _ = self.cmd_tx.send(crate::worker::Command::Scan(id));
                         ui.close();
                     }

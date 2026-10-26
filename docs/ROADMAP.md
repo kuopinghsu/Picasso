@@ -4,7 +4,7 @@ Ideas that were weighed against what Picasso already does, with where each stand
 
 ## Searching with more than words
 
-**Today:** search matches every word typed against the file name, the folder path, the caption, the camera, the lens, and album names, and a date such as `2019-05` finds the photos of that month. The star filter, **Sort by Name, edited**, albums, Places, and Duplicates narrow the grid in other ways, and clicking a year, camera, or lens in **Statistics** shows those photos.
+**Today:** search matches every word typed against the file name, the folder path, the caption, the camera, the lens, and album names, and a date such as `2019-05` finds the photos of that month. The star filter, **Sort by Name, edited**, and albums narrow the grid in other ways; Places finds photos on a map, and **Duplicates** lists files with the same content. In **Statistics**, clicking a day, month, camera, or lens shows those photos, and clicking a year narrows the statistics to it.
 
 **Not yet:** focal length, ISO, aperture, shutter speed, file format, pixel size, having GPS, and having edits can't be searched, and words can't be limited to one field. The library keeps the camera, lens, focal length, pixel size, and GPS position of each photo; ISO, aperture, and shutter speed are read from the file when the Info panel shows them.
 
@@ -18,9 +18,9 @@ Ideas that were weighed against what Picasso already does, with where each stand
 
 ## Working on many photos at once
 
-**Today:** with photos selected, the Photo Tray adds them to an album, rotates, stars, deletes, and exports them, and **Paste** applies copied edit settings to all of them. **Adjust date…** shifts the dates of a selection. **Export…** saves edited copies of a selection at one size, format, and quality.
+**Today:** with photos selected, the toolbar above the grid stars, rotates, and adds them to an album, the Photo Tray deletes and exports them, and **Paste settings** (Ctrl+Shift+V) applies copied edit settings to all of them; the right-click menu has most of these too. **Adjust date…** shifts the dates of a selection. **Export…** saves edited copies of a selection at one size, format, and quality.
 
-**Not yet:** renaming files. Renaming changes the user's files themselves, which Picasso otherwise does only when moving them to the trash; it would need a preview of every new name, a check that no name is taken, and Undo, as the trash has. Other export choices, such as a name pattern or keeping the folder layout, are smaller and can follow requests.
+**Not yet:** renaming files. Renaming changes the user's files themselves, which Picasso otherwise does only when moving them to the trash; it would need a preview of every new name, a check that no name is taken, and Undo, as the trash has on Windows and Linux. Other export choices, such as a name pattern or keeping the folder layout, are smaller and can follow requests.
 
 ## Before and after
 
@@ -34,7 +34,7 @@ Done: `\` shows the original while editing, **Side by side** (Y) shows both, and
 
 ## Maps, places, and tracks
 
-**Today:** Places, the Map panel, and the Travel Map share the map providers, zoom, and scale bar. Places shows clusters of photos and GPS tracks; clicking a colored country on the Travel Map opens its photos in Places.
+**Today:** Places and the Map panel share the map providers, the zoom control, and the scale bar. Places shows clusters of photos and GPS tracks. The Travel Map is drawn offline from built-in country borders; clicking a colored place opens a card whose **Show photos** shows them in Places.
 
 **To review:** whether the search and star filter of the grid should also narrow Places, and whether a track can show the photos taken along it. Both need a look at how people use Places first.
 

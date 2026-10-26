@@ -104,10 +104,10 @@ for dir in "$app"/usr/lib/picasso/*; do
     package=
     texts=
     if command -v rpm >/dev/null; then
-        name=$(rpm -qf --qf '%{NAME}\n' "$file" 2>/dev/null | head -n 1 || true)
-        if [ -n "$name" ]; then
-            package=$name-$(rpm -q --qf '%{VERSION}\n' "$name" | head -n 1)
-            texts=$(rpm -qL "$name" | grep -v '^(contains no files)' || true)
+        owner=$(rpm -qf --qf '%{NAME}\n' "$file" 2>/dev/null | head -n 1 || true)
+        if [ -n "$owner" ]; then
+            package=$owner-$(rpm -q --qf '%{VERSION}\n' "$owner" | head -n 1)
+            texts=$(rpm -qL "$owner" | grep -v '^(contains no files)' || true)
         fi
     elif command -v dpkg >/dev/null; then
         package=$(dpkg -S "$file" 2>/dev/null | head -n 1 | cut -d: -f1 || true)

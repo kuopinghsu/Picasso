@@ -540,7 +540,7 @@ impl PicassoApp {
                 if ui.button(tr("Remove…")).on_hover_text(tr("Remove from Picasso…")).clicked() {
                     self.remove_asked = Some(id);
                 }
-                if ui.button(tr("Refresh")).on_hover_text(tr("Refresh Thumbnails")).clicked() {
+                if ui.button(tr("Refresh")).on_hover_text(tr("Rescan this folder")).clicked() {
                     let _ = self.cmd_tx.send(Command::Scan(id));
                 }
                 if ui.button(tr("Open folder")).clicked() {

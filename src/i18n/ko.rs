@@ -6,7 +6,6 @@ pub(super) const TABLE: &[(&str, &str)] = &[
     ("Slideshow", "슬라이드쇼"),
     ("Play Fullscreen Slideshow", "전체 화면 슬라이드쇼 재생"),
     ("Refresh", "새로 고침"),
-    ("Refresh Thumbnails", "미리보기 이미지 새로 고침"),
     ("+  Import", "+  가져오기"),
     ("Add Folder to Picasso…", "Picasso에 폴더 추가…"),
     ("Language", "언어"),
@@ -821,4 +820,5 @@ pub(super) const TABLE: &[(&str, &str)] = &[
     ("The library file itself is intact, so Picasso won't replace it. Close other programs that may be using it, or free some disk space, then try again.", "라이브러리 파일 자체는 손상되지 않았으므로 Picasso가 교체하지 않습니다. 이 파일을 사용 중일 수 있는 다른 프로그램을 닫거나 디스크 공간을 확보한 다음 다시 시도하세요."),
     ("Checking the library…", "라이브러리를 확인하는 중…"),
     ("Picasso isn't allowed to read the library file. Check who owns it and its permissions, then try again.", "Picasso에 라이브러리 파일을 읽을 권한이 없습니다. 파일의 소유자와 권한을 확인한 다음 다시 시도하세요."),
+    ("Rescan this folder", "이 폴더 다시 검색"),
 ];

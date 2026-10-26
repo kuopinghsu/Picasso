@@ -6,7 +6,6 @@ pub(super) const TABLE: &[(&str, &str)] = &[
     ("Slideshow", "幻灯片放映"),
     ("Play Fullscreen Slideshow", "全屏播放幻灯片"),
     ("Refresh", "刷新"),
-    ("Refresh Thumbnails", "刷新缩略图"),
     ("+  Import", "+  导入"),
     ("Add Folder to Picasso…", "将文件夹添加到 Picasso…"),
     ("Language", "语言"),
@@ -821,4 +820,5 @@ pub(super) const TABLE: &[(&str, &str)] = &[
     ("The library file itself is intact, so Picasso won't replace it. Close other programs that may be using it, or free some disk space, then try again.", "图库文件本身完好，因此 Picasso 不会替换它。请关闭可能正在使用它的其他程序，或释放一些磁盘空间，然后再试一次。"),
     ("Checking the library…", "正在检查图库…"),
     ("Picasso isn't allowed to read the library file. Check who owns it and its permissions, then try again.", "Picasso 没有读取图库文件的权限。请检查文件的所有者和权限，然后再试一次。"),
+    ("Rescan this folder", "重新扫描此文件夹"),
 ];

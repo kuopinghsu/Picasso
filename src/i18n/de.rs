@@ -6,7 +6,6 @@ pub(super) const TABLE: &[(&str, &str)] = &[
     ("Slideshow", "Diashow"),
     ("Play Fullscreen Slideshow", "Diashow im Vollbild abspielen"),
     ("Refresh", "Aktualisieren"),
-    ("Refresh Thumbnails", "Miniaturansichten aktualisieren"),
     ("+  Import", "+  Importieren"),
     ("Add Folder to Picasso…", "Ordner zu Picasso hinzufügen…"),
     ("Language", "Sprache"),
@@ -821,4 +820,5 @@ pub(super) const TABLE: &[(&str, &str)] = &[
     ("The library file itself is intact, so Picasso won't replace it. Close other programs that may be using it, or free some disk space, then try again.", "Die Bibliotheksdatei selbst ist intakt, daher ersetzt Picasso sie nicht. Schließen Sie andere Programme, die sie verwenden könnten, oder geben Sie Speicherplatz frei, und versuchen Sie es dann erneut."),
     ("Checking the library…", "Die Bibliothek wird geprüft…"),
     ("Picasso isn't allowed to read the library file. Check who owns it and its permissions, then try again.", "Picasso darf die Bibliotheksdatei nicht lesen. Prüfen Sie ihren Besitzer und ihre Berechtigungen, und versuchen Sie es dann erneut."),
+    ("Rescan this folder", "Diesen Ordner neu einlesen"),
 ];

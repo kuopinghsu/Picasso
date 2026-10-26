@@ -3,7 +3,7 @@
 `make check-docs`.
 
 - Every link and image to a file in the repository points at one that exists.
-- Every <<anchor>> in an AsciiDoc file has its [#anchor].
+- Every <<anchor>> and xref:anchor[] in an AsciiDoc file leads to an ID it defines.
 - Every `make` target and `scripts/` file the documents name exists.
 - Every PICASSO_* setting the documents name is read somewhere in src/.
 - The version in Cargo.toml has a section in CHANGELOG.md, and every
@@ -34,14 +34,16 @@ def documents():
 
 
 # ``` blocks in Markdown, and ---- blocks in AsciiDoc.
-BLOCK = r"^```[^\n]*\n(.*?)^```|^----\n(.*?)^----$"
+MARKDOWN_BLOCK = r"^```[^\n]*\n(.*?)^```"
+ASCIIDOC_BLOCK = r"^----\n(.*?)^----$"
 
 
-def code(text):
+def code(doc, text):
     """The `code` spans and the lines of code blocks."""
-    blocks = [a or b for a, b in re.findall(BLOCK, text, flags=re.S | re.M)]
-    spans = re.findall(r"`([^`\n]+)`", re.sub(BLOCK, "", text, flags=re.S | re.M))
-    return spans + [line.strip() for block in blocks for line in block.splitlines()]
+    block = ASCIIDOC_BLOCK if doc.endswith(".adoc") else MARKDOWN_BLOCK
+    blocks = re.findall(block, text, flags=re.S | re.M)
+    spans = re.findall(r"`([^`\n]+)`", re.sub(block, "", text, flags=re.S | re.M))
+    return spans + [line.strip() for lines in blocks for line in lines.splitlines()]
 
 
 def linked_paths(doc, text):
@@ -50,7 +52,9 @@ def linked_paths(doc, text):
     folder = os.path.dirname(doc)
     found = re.findall(r"\]\(([^)\s]+)\)", text)
     if doc.endswith(".adoc"):
-        found += re.findall(r"(?<![A-Za-z])(?:link|xref):([^\s\[]+)\[", text)
+        found += re.findall(r"(?<![A-Za-z])link:([^\s\[]+)\[", text)
+        # xref:name[] without .adoc is an anchor in the same document.
+        found += [t for t in re.findall(r"(?<![A-Za-z])xref:([^\s\[]+)\[", text) if ".adoc" in t]
         images = re.search(r"^:imagesdir:\s*(\S+)", text, flags=re.M)
         for image in re.findall(r"^image::([^\[]+)\[", text, flags=re.M):
             found.append(os.path.join(images.group(1), image) if images else image)
@@ -58,6 +62,23 @@ def linked_paths(doc, text):
         if re.match(r"[a-z]+:", target) or target.startswith("#"):
             continue
         yield target, os.path.normpath(os.path.join(folder, target.split("#")[0]))
+
+
+def anchors(text):
+    """The IDs an AsciiDoc document defines: [#id], [[id]], and the ones
+    Asciidoctor makes from section titles, such as _getting_help."""
+    found = set(re.findall(r"^\[#([\w-]+)", text, flags=re.M))
+    found |= set(re.findall(r"\[\[([\w-]+)(?:,[^\]]*)?\]\]", text))
+    for title in re.findall(r"^=+ (.+)$", text, flags=re.M):
+        title = re.sub(r"[^ \w.-]", "", title.lower())
+        found.add("_" + re.sub(r"[ .-]+", "_", title).strip("_"))
+    return found
+
+
+def anchor_refs(text):
+    """The anchors an AsciiDoc document links to within itself."""
+    refs = re.findall(r"<<([\w-]+)(?:,[^>]*)?>>", text)
+    return refs + re.findall(r"(?<![A-Za-z])xref:([\w-]+)\[", text)
 
 
 def main():
@@ -74,11 +95,12 @@ def main():
         for target, path in linked_paths(doc, text):
             if not os.path.exists(os.path.join(ROOT, path)):
                 problems.append("{}: the link to {} leads nowhere".format(doc, target))
-        anchors = set(re.findall(r"^\[#([\w-]+)\]", text, flags=re.M))
-        for anchor in re.findall(r"<<([\w-]+)(?:,[^>]*)?>>", text) if doc.endswith(".adoc") else []:
-            if anchor not in anchors:
-                problems.append("{}: <<{}>> has no [#{}]".format(doc, anchor, anchor))
-        for snippet in code(text):
+        if doc.endswith(".adoc"):
+            defined = anchors(text)
+            for anchor in anchor_refs(text):
+                if anchor not in defined:
+                    problems.append("{}: the link to #{} leads nowhere".format(doc, anchor))
+        for snippet in code(doc, text):
             for target in re.findall(r"(?:^|[;&|]\s*)make ([a-z][a-z0-9-]*)", snippet):
                 if target not in targets:
                     problems.append("{}: `make {}` is not in the Makefile".format(doc, target))

@@ -6,7 +6,9 @@
 :imagesdir: ../images
 :lang: en
 
+ifndef::backend-pdf[]
 English | xref:USER_GUIDE_zh-TW.adoc[繁體中文]
+endif::[]
 
 Picasso is a photo library, viewer, and editor for your own computer, in the spirit of Picasa.
 It watches the folders you give it, shows their photos and videos by date, and edits photos without changing the files.
@@ -58,7 +60,7 @@ Without it, photos work and videos are skipped; they are added once FFmpeg is in
 * macOS: `brew install ffmpeg`
 * Linux: `sudo apt install ffmpeg`, or your distribution's package
 
-If you can't install software, put `ffmpeg` and `ffprobe` in the folder that holds Picasso.
+On Windows and Linux, if you can't install software, put `ffmpeg` and `ffprobe` in the folder that holds Picasso, or the AppImage.
 
 == The first start
 
@@ -421,10 +423,10 @@ Where the library, the cache, and the settings are kept, how much space each tak
 
 Right-click a folder in the sidebar for:
 
+* *Show in Finder* on a Mac, *Show in Explorer* on Windows, or *Show in folder* on Linux, which opens the folder
 * *Geotag from GPS track…*
-* *Exclude from scanning*, for a subfolder you don't want in the library
-* *Remove from Picasso…*, for a folder you added
-* *Rescan this folder*
+* *Exclude from scanning*, on a subfolder you don't want in the library
+* *Rescan this folder* and *Remove from Picasso…*, on a folder you added
 
 == Your library and its backups
 

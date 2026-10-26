@@ -146,7 +146,13 @@ impl PicassoApp {
             }
             let path = row.path.clone();
             response.context_menu(|ui| {
-                let reveal = if cfg!(target_os = "macos") { "Show in Finder" } else { "Show in Explorer" };
+                let reveal = if cfg!(target_os = "macos") {
+                    "Show in Finder"
+                } else if cfg!(windows) {
+                    "Show in Explorer"
+                } else {
+                    "Show in folder"
+                };
                 if ui.button(crate::i18n::tr(reveal)).clicked() {
                     let _ = open::that(&path);
                     ui.close();

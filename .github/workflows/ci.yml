@@ -4,11 +4,11 @@
 # Picasso.app in a .dmg and a .zip for macOS, and the User Guide as PDF. Every
 # package but the bare .exe carries THIRD-PARTY-NOTICES.txt. The .deb is
 # installed, started, and removed, and the AppImage is started on Ubuntu and
-# RHEL-compatible systems, before they are published. Pushing a tag like `v0.9.5` also publishes
-# every package on a GitHub release, with the version's section of
-# CHANGELOG.md as the release notes. The tag must match the version in
-# Cargo.toml, CHANGELOG.md must have a dated section for it, and a version is
-# published only once.
+# RHEL-compatible systems, before they are published. Pushing a tag like
+# `v0.9.5` also publishes every package on a GitHub release, with the
+# version's section of CHANGELOG.md as the release notes. The tag must match
+# the version in Cargo.toml, CHANGELOG.md must have a dated section for it,
+# and a version is published only once.
 # docs/RELEASING.md has the checklist.
 name: CI
 

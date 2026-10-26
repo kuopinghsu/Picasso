@@ -12,7 +12,9 @@
 :table-caption: 表
 :last-update-label: 最後更新
 
+ifndef::backend-pdf[]
 xref:USER_GUIDE.adoc[English] | 繁體中文
+endif::[]
 
 Picasso 是一套在你自己的電腦上執行的相片圖庫、檢視器與編輯器，承襲 Picasa 的精神。它會監看你指定的資料夾，依日期排列其中的相片與影片，編輯相片時也不會改動檔案。Picasso 不會上傳任何資料：它只會從網路下載地圖圖磚，以及在你允許時查詢最新的版本號碼。
 
@@ -53,7 +55,7 @@ Picasso 使用 link:https://ffmpeg.org[FFmpeg] 播放影片。沒有安裝時，
 * macOS：`brew install ffmpeg`
 * Linux：`sudo apt install ffmpeg`，或使用你的發行版提供的套件
 
-如果無法安裝軟體，可以把 `ffmpeg` 與 `ffprobe` 放在 Picasso 所在的資料夾中。
+在 Windows 與 Linux 上，如果無法安裝軟體，可以把 `ffmpeg` 與 `ffprobe` 放在 Picasso 或 AppImage 所在的資料夾中。
 
 == 第一次啟動
 
@@ -340,10 +342,10 @@ image::travelmap.png[旅行地圖]
 
 在側邊欄的資料夾上按右鍵，可以選擇：
 
+* Mac 上的「在 Finder 中顯示」、Windows 上的「在檔案總管中顯示」，或 Linux 上的「在資料夾中顯示」，會開啟該資料夾
 * 「依 GPS 軌跡標記地點…」
-* 「不要掃描」，用於不想放進圖庫的子資料夾
-* 「從 Picasso 移除…」，用於你加入的資料夾
-* 「重新掃描這個資料夾」
+* 「不要掃描」，出現在不想放進圖庫的子資料夾上
+* 「重新掃描這個資料夾」與「從 Picasso 移除…」，出現在你加入的資料夾上
 
 == 圖庫與備份
 

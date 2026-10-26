@@ -11,11 +11,12 @@ font:
       bold: DroidSansFallbackFull.ttf
       italic: DroidSansFallbackFull.ttf
       bold_italic: DroidSansFallbackFull.ttf
+    # fonts-dejavu-core has no oblique faces.
     DejaVu Sans:
       normal: DejaVuSans.ttf
       bold: DejaVuSans-Bold.ttf
-      italic: DejaVuSans-Oblique.ttf
-      bold_italic: DejaVuSans-BoldOblique.ttf
+      italic: DejaVuSans.ttf
+      bold_italic: DejaVuSans-Bold.ttf
   fallbacks:
     - Droid Sans Fallback
     - DejaVu Sans

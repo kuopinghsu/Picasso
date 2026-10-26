@@ -85,7 +85,7 @@ AppImage 會透過 FUSE 自行掛載。在沒有 FUSE 的環境（例如容器�
 
 macOS 版是同時支援 Apple 晶片與 Intel 處理器的通用執行檔，可在 macOS 11 及更新的版本上執行。打開 `.dmg`，把 Picasso 拖到「應用程式」資料夾即可。除非發行說明表示應用程式已經過 Apple 簽署與公證，否則它只有臨時簽章，第一次啟動會被系統阻擋：請到「系統設定 → 隱私權與安全性」按一下「強制打開」，再確認一次。在 macOS 14 及更舊的版本上，也可以按住 Control 鍵並按一下 Picasso，再選擇「打開」。也可以在終端機執行 `xattr -dr com.apple.quarantine /Applications/Picasso.app`，效果相同。
 
-推送 `v0.9.4` 這類標籤時，工作流程會建立新的 GitHub 發行版本，並附上全部十二種套件（檔名如 `picasso-0.9.4-windows-x64.exe`）、依其授權要求附上的 RAW 解碼器 rawler 原始碼（`rawler-<version>-source.tar.gz`），以及 `SHA256SUMS.txt`。標籤必須與 `Cargo.toml` 中的版本一致；標籤含有連字號時（例如 `v1.0.0-beta.1`），會標示為預先發行版本。正式版本啟動時不會開啟主控台視窗。
+推送 `v0.9.4` 這類標籤時，工作流程會建立新的 GitHub 發行版本，並附上全部十二種套件（檔名如 `picasso-0.9.4-windows-x64.exe`）、英文與繁體中文的 PDF 版使用者指南（`picasso-0.9.4-user-guide.pdf` 與 `picasso-0.9.4-user-guide-zh-TW.pdf`）、依其授權要求附上的 RAW 解碼器 rawler 原始碼（`rawler-<version>-source.tar.gz`），以及 `SHA256SUMS.txt`。標籤必須與 `Cargo.toml` 中的版本一致；標籤含有連字號時（例如 `v1.0.0-beta.1`），會標示為預先發行版本。正式版本啟動時不會開啟主控台視窗。
 
 發行說明取自 [`CHANGELOG.md`](CHANGELOG.md) 中該版本的段落，後面再附上下載說明。推送標籤前，這個段落必須已經寫好，並標上發行日期：工作流程一開始的「Changelog」工作會檢查這點，如果標籤與 `Cargo.toml` 不一致，或段落不存在、仍標示為 `Unreleased`，流程會在幾秒內失敗。執行 `scripts/release-notes.sh 0.9.4`（或 `make release-notes`）可預覽某個版本的發行說明。CI 只會讀取 `CHANGELOG.md`，不會修改它。
 
@@ -173,7 +173,7 @@ Picasso 每次啟動時都會重新掃描所有資料夾，執行期間也會持
 
 ## 編輯
 
-開啟相片後按 E，或按一下檢視器工具列上的「編輯」，編輯器就會取代詳細資料面板。最上方有三個工具（「調整」、「裁切」、「遮罩」）、即時色階分佈圖，以及步驟記錄、比較、剪裁警告、自動、全部重設與複製／貼上等按鈕。
+開啟相片後按 E，或按一下檢視器工具列上的「編輯」，編輯器就會取代詳細資料面板。最上方有四個工具（「調整」、「裁切」、「變形」、「遮罩」），接著是復原與重做、內含全部復原、全部重做、全部重設與複製／貼上的 ··· 選單、即時色階分佈圖，以及比較與剪裁警告按鈕。
 
 「調整」工具包含以下區塊：
 
@@ -277,6 +277,7 @@ Picasso 提供英文、繁體中文、簡體中文、日文、韓文、德文、
 
 ## 文件
 
+- [`docs/USER_GUIDE_zh-TW.adoc`](docs/USER_GUIDE_zh-TW.adoc)：使用者指南，從安裝到復原圖庫，逐步說明如何使用 Picasso；英文版是 [`docs/USER_GUIDE.adoc`](docs/USER_GUIDE.adoc)。執行 `make guide` 可建置 HTML 版本，`make guide-pdf` 則建置 PDF 版本。
 - [`docs/DATABASE.md`](docs/DATABASE.md)：圖庫存放的內容、各個版本，以及舊圖庫如何升級
 - [`docs/TESTING.md`](docs/TESTING.md)：測試涵蓋的範圍，以及發行前要手動試用的項目
 - [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md)：效能測試、基準數值，以及 Picasso 在外接與網路磁碟上的表現

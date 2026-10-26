@@ -6,6 +6,7 @@
 :experimental:
 :imagesdir: ../images
 :lang: zh-TW
+:scripts: cjk
 :note-caption: 附註
 :figure-caption: 圖
 :table-caption: 表

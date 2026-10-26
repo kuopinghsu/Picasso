@@ -30,7 +30,7 @@ A release is made by pushing a tag like `v0.9.5`. CI builds and tests the tagged
 
 - [ ] The version in `Cargo.toml`, the tag, and the heading in `CHANGELOG.md` agree, and the changelog says everything a user will notice.
 - [ ] CI passed on Windows and Linux for x64 and Arm64 and on macOS, including the .deb install tests, the AppImage tests on Ubuntu and AlmaLinux, the performance checks, and `cargo deny`.
-- [ ] The release has the twelve packages, each named `picasso-<version>-<platform>`: `windows-x64.exe`, `windows-x64.zip`, `linux-x64.tar.gz`, `linux-x64.deb`, and `linux-x64.AppImage`, the same five with `arm64` in place of `x64`, and `macos-universal.dmg` and `macos-universal.zip`, plus `rawler-<version>-source.tar.gz` and `SHA256SUMS.txt`.
+- [ ] The release has the twelve packages, each named `picasso-<version>-<platform>`: `windows-x64.exe`, `windows-x64.zip`, `linux-x64.tar.gz`, `linux-x64.deb`, and `linux-x64.AppImage`, the same five with `arm64` in place of `x64`, and `macos-universal.dmg` and `macos-universal.zip`, plus the User Guide as `picasso-<version>-user-guide.pdf` and `picasso-<version>-user-guide-zh-TW.pdf`, `rawler-<version>-source.tar.gz`, and `SHA256SUMS.txt`.
 - [ ] A downloaded package matches its line in `SHA256SUMS.txt` (`sha256sum --check --ignore-missing SHA256SUMS.txt`, or `shasum -a 256 --check` on a Mac).
 - [ ] The notes name the commit, and **About** and `picasso --version` in the packages name the same one.
 - [ ] The notes say whether the Mac app is notarized, and opening it behaves as they say.

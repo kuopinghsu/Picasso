@@ -1,10 +1,10 @@
 # Builds and tests Picasso on Windows, Linux, and macOS for every push and
 # pull request, then packages it: picasso.exe plus a .zip for Windows, a
 # .tar.gz, a .deb, and an AppImage for Linux, each for x64 and Arm64, and
-# Picasso.app in a .dmg and a .zip for macOS. Every package but the bare .exe
-# carries THIRD-PARTY-NOTICES.txt. The .deb is installed, started, and
-# removed, and the AppImage is started on Ubuntu and RHEL-compatible systems,
-# before they are published. Pushing a tag like `v0.9.5` also publishes
+# Picasso.app in a .dmg and a .zip for macOS, and the User Guide as PDF. Every
+# package but the bare .exe carries THIRD-PARTY-NOTICES.txt. The .deb is
+# installed, started, and removed, and the AppImage is started on Ubuntu and
+# RHEL-compatible systems, before they are published. Pushing a tag like `v0.9.5` also publishes
 # every package on a GitHub release, with the version's section of
 # CHANGELOG.md as the release notes. The tag must match the version in
 # Cargo.toml, CHANGELOG.md must have a dated section for it, and a version is
@@ -611,9 +611,50 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
+  # The User Guide as PDF in English and Traditional Chinese (make guide-pdf),
+  # kept with every run and published with each release. A character none of
+  # the fonts has fails the job rather than printing as a box.
+  guide:
+    name: User Guide PDF
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ env.SOURCE_COMMIT }}
+
+      - name: Install Asciidoctor PDF and fonts
+        run: |
+          set -euo pipefail
+          sudo gem install --no-document asciidoctor-pdf -v 2.3.15
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends fonts-droid-fallback fonts-dejavu-core
+
+      - name: Build
+        id: guide
+        run: |
+          set -euo pipefail
+          version=$(sed -n 's/^version *= *"\(.*\)"/\1/p' Cargo.toml | head -n 1)
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            label=$version
+          else
+            label=$version-${SOURCE_COMMIT:0:7}
+          fi
+          make guide-pdf
+          mkdir -p dist
+          cp target/guide/USER_GUIDE.pdf "dist/picasso-$label-user-guide.pdf"
+          cp target/guide/USER_GUIDE_zh-TW.pdf "dist/picasso-$label-user-guide-zh-TW.pdf"
+          ls -l dist
+          echo "name=picasso-$label-user-guide" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ steps.guide.outputs.name }}
+          path: dist/*
+          if-no-files-found: error
+
   release:
     name: GitHub release
-    needs: [changelog, deny, windows, linux, appimage, appimage-test, macos]
+    needs: [changelog, deny, windows, linux, appimage, appimage-test, macos, guide]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
     permissions:
@@ -650,7 +691,7 @@ jobs:
           set -euo pipefail
           version=${GITHUB_REF_NAME#v}
           missing=0
-          suffixes="macos-universal.dmg macos-universal.zip"
+          suffixes="macos-universal.dmg macos-universal.zip user-guide.pdf user-guide-zh-TW.pdf"
           for arch in x64 arm64; do
             suffixes="$suffixes windows-$arch.exe windows-$arch.zip linux-$arch.tar.gz linux-$arch.deb linux-$arch.AppImage"
           done
@@ -715,6 +756,8 @@ jobs:
           **macOS 11 or later (Apple silicon and Intel):** open `picasso-*-macos-universal.dmg` and drag Picasso to Applications. @@MAC_OPEN@@ `picasso-*-macos-universal.zip` holds the same app.
 
           Check downloads against `SHA256SUMS.txt`. Videos need [FFmpeg](https://ffmpeg.org) (`winget install Gyan.FFmpeg` on Windows, `sudo apt install ffmpeg` on Debian or Ubuntu, `brew install ffmpeg` on macOS). Without permission to install it, put `ffmpeg` and `ffprobe` beside the AppImage. Photos work without it. Every package but the bare `.exe` carries `THIRD-PARTY-NOTICES.txt`, the licenses of the libraries built into Picasso. `rawler-*-source.tar.gz` is the source of rawler, the RAW decoder Picasso is built with, as its license (LGPL-2.1) asks.
+
+          **User Guide:** `picasso-*-user-guide.pdf` in English and `picasso-*-user-guide-zh-TW.pdf` in Traditional Chinese.
 
           Built from commit @@COMMIT@@.
           EOF

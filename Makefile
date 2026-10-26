@@ -26,7 +26,7 @@ endif
 .DEFAULT_GOAL := release
 
 .PHONY: help release debug run run-stats version check lint test corpus bench bench-check check-docs deny ci \
-	notices release-notes appimage install uninstall world-map clean
+	notices release-notes guide guide-pdf appimage install uninstall world-map clean
 
 # Each target's `##` text is what `make help` prints; `##@` starts a section.
 help: ## List the targets and the variables they take
@@ -117,6 +117,28 @@ notices: ## Write THIRD-PARTY-NOTICES.txt for this platform
 # The release notes CI publishes for the version in Cargo.toml, from CHANGELOG.md.
 release-notes: ## Print the release notes for this version, from CHANGELOG.md
 	bash scripts/release-notes.sh $(VERSION)
+
+# The User Guide in both languages, each one HTML file with its pictures inside
+# that opens offline. Needs Asciidoctor: brew install asciidoctor, or
+# sudo apt install asciidoctor.
+guide: ## Build the User Guide as HTML in target/guide (needs asciidoctor)
+	asciidoctor -a data-uri -a webfonts! -a relfilesuffix=.html -D target/guide \
+		docs/USER_GUIDE.adoc docs/USER_GUIDE_zh-TW.adoc
+	@echo "Open target/guide/USER_GUIDE.html or target/guide/USER_GUIDE_zh-TW.html"
+
+# The same as PDF, as CI publishes it. The themes in docs/ take the Chinese and
+# symbols from Droid Sans Fallback and DejaVu Sans, looked for in GUIDE_FONTS:
+# on Debian and Ubuntu, gem install asciidoctor-pdf, then
+# sudo apt install fonts-droid-fallback fonts-dejavu-core. A character no font
+# has fails the build.
+GUIDE_FONTS ?= /usr/share/fonts/truetype/droid;/usr/share/fonts/truetype/dejavu
+# --verbose, because asciidoctor-pdf reports a missing character only then.
+GUIDE_PDF = asciidoctor-pdf --verbose --failure-level=WARN -a pdf-themesdir=docs \
+	-a 'pdf-fontsdir=$(GUIDE_FONTS);GEM_FONTS_DIR' -D target/guide
+
+guide-pdf: ## Build the User Guide as PDF in target/guide (needs asciidoctor-pdf)
+	$(GUIDE_PDF) -a pdf-theme=guide docs/USER_GUIDE.adoc
+	$(GUIDE_PDF) -a pdf-theme=guide-zh-TW docs/USER_GUIDE_zh-TW.adoc
 
 # Linux AppImage for this machine (x86_64 or aarch64) in dist/, the same AppDir
 # as the CI AppImage job.

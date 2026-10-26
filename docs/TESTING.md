@@ -7,7 +7,7 @@ What the automated tests cover, how to run the slower checks, and what has to be
 ```sh
 make test                 # every unit and integration test, as CI runs them
 make bench-check          # the performance limits, as CI runs them (docs/PERFORMANCE.md)
-make check-docs           # links, make targets, scripts, and settings named in the documents
+make check-docs           # links, images, make targets, scripts, and settings named in the documents
 make deny                 # security advisories and licenses of the dependencies
 make ci                   # all four of the above
 make test T=backup        # only the tests whose name contains "backup"
@@ -27,7 +27,7 @@ The last line puts every photo in a folder of your own and its subfolders (HEIC,
 | Formats and orientation | `src/corpus.rs`, `src/image_io.rs`, `src/raw_tiff.rs`, `src/photo_info.rs` | JPEG with each of the 8 EXIF orientations and without EXIF, PNG with transparency, TIFF, BMP, GIF, WebP: size read upright, decoded upright, thumbnails; damaged and empty files fail without crashing. |
 | Editing | `src/corpus.rs`, `src/edit/` | Exports keep orientation, rotation, crop, straightening, flips, and perspective, at the size the editor reports; an edit and its undo point survive a restart; an export never replaces its original, even through a link or another letter case; an export over an older one replaces it whole and leaves no temporary file; each adjustment, curve, filter, HDR, and preset. |
 | Maps and GPS | `src/geo.rs`, `src/track.rs`, `src/geotag.rs`, `src/app/places.rs`, `src/app/travel.rs`, `src/world.rs`, `src/mvt.rs` | Tile math and map sources, GPX and KML tracks, geotagging from a track with time zones, place clusters, the travel map's countries. |
-| Languages | `src/i18n.rs`, `src/types.rs` | Every text in the source is translated in all ten languages with the same placeholders; Asian languages leave only names in English; Traditional Chinese keeps one word for each thing in the window and in `README_zh-TW.md`; the two READMEs have the same sections, lists, tables, and code; dates and sizes are written the way each language writes them. |
+| Languages | `src/i18n.rs`, `src/types.rs` | Every text in the source is translated in all ten languages with the same placeholders; Asian languages leave only names in English; Traditional Chinese keeps one word for each thing in the window, `README_zh-TW.md`, and `docs/USER_GUIDE_zh-TW.adoc`; the two READMEs, and the two user guides, have the same sections, lists, tables, and code; dates and sizes are written the way each language writes them. |
 | Settings | `src/config.rs`, `src/secret.rs` | Settings move from older libraries to `settings.json`; the CARTO key is encrypted. |
 | Performance | `src/bench.rs` | Catalog queries, scanning, thumbnails, and memory, with limits in CI. |
 

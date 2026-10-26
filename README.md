@@ -85,7 +85,7 @@ The `.deb` and `.tar.gz` are built on Ubuntu 22.04, so they run on that release 
 
 The macOS app is a universal binary for Apple silicon and Intel Macs, and runs on macOS 11 and newer. Open the `.dmg` and drag Picasso to Applications. Unless the release notes say it is signed and notarized by Apple, the app has only an ad-hoc signature, so the first launch is blocked: click **Open Anyway** in **System Settings → Privacy & Security**, then confirm. On macOS 14 and older, Control-clicking Picasso and choosing **Open** also works. From a terminal, `xattr -dr com.apple.quarantine /Applications/Picasso.app` does the same.
 
-Pushing a tag such as `v0.9.4` publishes all twelve packages (named `picasso-0.9.4-windows-x64.exe` and so on), the source of the RAW decoder rawler as its license asks (`rawler-<version>-source.tar.gz`), and `SHA256SUMS.txt` on a new GitHub release. The tag must match the version in `Cargo.toml`, and a tag with a hyphen, such as `v1.0.0-beta.1`, is marked as a pre-release. Release builds open no console window.
+Pushing a tag such as `v0.9.4` publishes all twelve packages (named `picasso-0.9.4-windows-x64.exe` and so on), the User Guide as PDF in English and Traditional Chinese (`picasso-0.9.4-user-guide.pdf` and `picasso-0.9.4-user-guide-zh-TW.pdf`), the source of the RAW decoder rawler as its license asks (`rawler-<version>-source.tar.gz`), and `SHA256SUMS.txt` on a new GitHub release. The tag must match the version in `Cargo.toml`, and a tag with a hyphen, such as `v1.0.0-beta.1`, is marked as a pre-release. Release builds open no console window.
 
 The release notes are the version's section of [`CHANGELOG.md`](CHANGELOG.md), followed by download instructions. The section must be there and carry the release date before tagging: a first **Changelog** job checks this, and the tag's run fails within seconds if the tag doesn't match `Cargo.toml` or the section is missing or still says `Unreleased`. `scripts/release-notes.sh 0.9.4` (or `make release-notes`) prints the notes for a version. CI only reads `CHANGELOG.md`; it never edits it.
 
@@ -173,7 +173,7 @@ The app icon is `build/picasso.ico`, which holds every size from 16 to 256 px. A
 
 ## Editing
 
-Open a photo and press E, or click "Edit" in the viewer toolbar. The editor replaces the details panel. At the top are three tools (**Adjust**, **Crop**, **Mask**), a live histogram, and buttons for history, comparing, clipping, Auto, Reset all, and copy/paste.
+Open a photo and press E, or click "Edit" in the viewer toolbar. The editor replaces the details panel. At the top are four tools (**Adjust**, **Crop**, **Transform**, **Masks**), then undo and redo with a ··· menu for Undo all, Redo all, Reset all, and copy/paste, a live histogram, and buttons for comparing and clipping.
 
 The **Adjust** tool has these sections:
 
@@ -201,7 +201,7 @@ The **Adjust** tool has these sections:
 
 **Transform** (T) puts a handle on each of the photo's four corners and on the middle of each side, so one tool turns, tilts in perspective, skews, and stretches. Drag a corner anywhere to move just that corner; drag the middle of a side to slide that side along itself (skew) or across (keystone and stretch); drag inside the outline to shift the whole photo; and drag outside it to turn it about its middle. The grid stays on to line things up against, and the thin frame shows the crop that will be kept. The Straighten and Perspective sliders work here too, and **Reset corners** puts just the corners back.
 
-**Mask** adds linear (graduated) or radial masks. Drag a mask's handles on the photo to place it, then set feather, invert, and its own exposure, contrast, highlights, shadows, temperature, tint, saturation, clarity, and dehaze. A checkbox shows the selected mask's area in red.
+**Masks** adds linear (graduated) or radial masks. Drag a mask's handles on the photo to place it, then set feather, invert, and its own exposure, contrast, highlights, shadows, temperature, tint, saturation, clarity, and dehaze. A checkbox shows the selected mask's area in red.
 
 Edited photos show a small sliders badge in the top-right corner of their thumbnail in the library and filmstrip. Click the badge in the library to open the photo in the editor.
 
@@ -277,6 +277,7 @@ Videos (MP4, MOV, M4V, AVI, MKV, WebM, WMV, MPEG, MTS/M2TS, 3GP, and more) show 
 
 ## Documentation
 
+- [`docs/USER_GUIDE.adoc`](docs/USER_GUIDE.adoc): the User Guide, how to use Picasso from installing it to recovering a library; in Traditional Chinese, [`docs/USER_GUIDE_zh-TW.adoc`](docs/USER_GUIDE_zh-TW.adoc). `make guide` builds it as HTML and `make guide-pdf` as PDF.
 - [`docs/DATABASE.md`](docs/DATABASE.md): what the library holds, its versions, and how an older one is upgraded
 - [`docs/TESTING.md`](docs/TESTING.md): what the tests cover, and what to try by hand before a release
 - [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md): the benchmark, its baselines, and how Picasso does on external and network drives

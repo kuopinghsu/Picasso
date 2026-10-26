@@ -39,6 +39,11 @@ section of this file as the release notes.
 - Documentation: a Quick start at the top of the README, what a backup holds and how to recover
   or move a library, and `docs/DATABASE.md`, `docs/TESTING.md`, `docs/PERFORMANCE.md`,
   `docs/RELEASING.md`, and `docs/ROADMAP.md`.
+- A User Guide in English and Traditional Chinese, `docs/USER_GUIDE.adoc` and
+  `docs/USER_GUIDE_zh-TW.adoc`, that walks through Picasso from installing it to recovering a
+  library. `make guide` builds each as one HTML file that opens offline, and `make guide-pdf` as
+  PDF. Each release carries both PDFs, `picasso-…-user-guide.pdf` and
+  `picasso-…-user-guide-zh-TW.pdf`.
 - For developers: `make bench` measures scanning, thumbnails, search, and memory on a made-up
   library, and `make bench-check` fails when they pass the limits in `docs/PERFORMANCE.md`.
   `PICASSO_FRAME_STATS=1` prints how long frames take. `make deny` checks the dependencies for

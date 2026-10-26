@@ -236,7 +236,7 @@ mod tests {
     }
 
     /// Words with more than one Traditional Chinese form, and the one Picasso
-    /// uses in the window and in README_zh-TW.md. The others are mostly the
+    /// uses in the window, README_zh-TW.md, and the user guide. The others are mostly the
     /// words of mainland China, and appear when text is copied from the
     /// Simplified Chinese table.
     const ZH_HANT_TERMS: &[(&str, &str)] = &[
@@ -293,9 +293,11 @@ mod tests {
     #[test]
     fn traditional_chinese_uses_one_word_for_each_thing() {
         let mut found: Vec<String> = zh_hant::TABLE.iter().flat_map(|(_, text)| zh_hant_wording("window", text)).collect();
-        let readme = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("README_zh-TW.md")).unwrap();
-        for (line, text) in readme.lines().enumerate() {
-            found.extend(zh_hant_wording(&format!("README_zh-TW.md:{}", line + 1), text));
+        for name in ["README_zh-TW.md", "docs/USER_GUIDE_zh-TW.adoc"] {
+            let doc = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(name)).unwrap();
+            for (line, text) in doc.lines().enumerate() {
+                found.extend(zh_hant_wording(&format!("{name}:{}", line + 1), text));
+            }
         }
         assert!(found.is_empty(), "{}", found.join("\n"));
     }
@@ -329,11 +331,49 @@ mod tests {
         (outline, spans)
     }
 
-    #[test]
-    fn the_two_readmes_say_the_same_things() {
-        let (en_outline, en_spans) = markdown_outline("README.md");
-        let (zh_outline, zh_spans) = markdown_outline("README_zh-TW.md");
-        assert_eq!(en_outline, zh_outline, "README.md and README_zh-TW.md have different sections, lists, or tables");
+    /// The same for an AsciiDoc file, with its anchors, description list
+    /// terms, images, and notes as well.
+    fn asciidoc_outline(name: &str) -> (Vec<String>, Vec<String>) {
+        let text = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(name)).unwrap();
+        let mut outline = Vec::new();
+        let mut spans = Vec::new();
+        let mut in_code = false;
+        for line in text.lines() {
+            if line == "----" {
+                in_code = !in_code;
+                outline.push("code block".to_string());
+                continue;
+            }
+            if in_code {
+                continue;
+            }
+            if line.starts_with('=') {
+                outline.push(line.split(' ').next().unwrap_or_default().to_string());
+            } else if line.starts_with("[#") {
+                outline.push(line.to_string());
+            } else if line.starts_with("* ") || line.starts_with(". ") {
+                outline.push("list item".into());
+            } else if line.ends_with("::") {
+                outline.push("term".into());
+            } else if line == "|===" {
+                outline.push("table".into());
+            } else if line.starts_with('|') {
+                outline.push(format!("table row of {} cells", line.matches('|').count()));
+            } else if line.starts_with("image::") {
+                outline.push("image".into());
+            } else if line.starts_with("NOTE:") {
+                outline.push("note".into());
+            }
+            spans.extend(line.split('`').skip(1).step_by(2).map(str::to_string));
+        }
+        spans.sort();
+        (outline, spans)
+    }
+
+    fn assert_same_outline(en: &str, zh: &str, outline: fn(&str) -> (Vec<String>, Vec<String>)) {
+        let (en_outline, en_spans) = outline(en);
+        let (zh_outline, zh_spans) = outline(zh);
+        assert_eq!(en_outline, zh_outline, "{en} and {zh} have different sections, lists, or tables");
         let only = |a: &[String], b: &[String]| -> Vec<String> {
             let mut rest = b.to_vec();
             a.iter()
@@ -349,10 +389,20 @@ mod tests {
         };
         assert!(
             en_spans == zh_spans,
-            "code spans differ\nonly in README.md: {:?}\nonly in README_zh-TW.md: {:?}",
+            "code spans differ\nonly in {en}: {:?}\nonly in {zh}: {:?}",
             only(&en_spans, &zh_spans),
             only(&zh_spans, &en_spans)
         );
+    }
+
+    #[test]
+    fn the_two_readmes_say_the_same_things() {
+        assert_same_outline("README.md", "README_zh-TW.md", markdown_outline);
+    }
+
+    #[test]
+    fn the_two_user_guides_say_the_same_things() {
+        assert_same_outline("docs/USER_GUIDE.adoc", "docs/USER_GUIDE_zh-TW.adoc", asciidoc_outline);
     }
 
     /// The string literals in the first argument of a call, given the code

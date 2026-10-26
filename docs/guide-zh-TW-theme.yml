@@ -1,0 +1,7 @@
+# The PDF look of docs/USER_GUIDE_zh-TW.adoc: guide-theme.yml with the text
+# in the Chinese font, so a line doesn't switch fonts at every Latin word.
+extends: guide-theme.yml
+base:
+  font-family: Droid Sans Fallback
+heading:
+  font-family: Droid Sans Fallback

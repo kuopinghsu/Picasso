@@ -1,0 +1,531 @@
+= Picasso User Guide
+:toc: left
+:toclevels: 2
+:sectanchors:
+:experimental:
+:imagesdir: ../images
+:lang: en
+
+English | xref:USER_GUIDE_zh-TW.adoc[繁體中文]
+
+Picasso is a photo library, viewer, and editor for your own computer, in the spirit of Picasa.
+It watches the folders you give it, shows their photos and videos by date, and edits photos without changing the files.
+Nothing is uploaded: the only things Picasso fetches from the internet are map tiles and, if you allow it, the number of the latest version.
+
+This guide walks through Picasso as you use it.
+To build Picasso from source, see the https://github.com/kuopinghsu/picasso/blob/main/README.md[README].
+
+NOTE: Shortcuts are written with kbd:[Ctrl].
+On a Mac, use kbd:[⌘] instead, so kbd:[Ctrl+A] is kbd:[⌘+A].
+
+image::picasso.png[The Picasso library: folder tree on the left, thumbnail grid in the middle, and photo details on the right]
+
+[#install]
+== Installing Picasso
+
+Download Picasso from the https://github.com/kuopinghsu/picasso/releases/latest[latest release].
+Use `x64` packages on Intel and AMD processors, and `arm64` ones on 64-bit Arm processors.
+
+Windows::
+Download the `.exe` and run it; it needs no installing.
+The `.zip` holds the same program with the READMEs and the license.
+
+macOS::
+Open the `.dmg` and drag Picasso to *Applications*.
+Unless the release notes say the app is notarized, the first launch is blocked.
+Click *Open Anyway* in *System Settings → Privacy & Security*, then confirm.
+On macOS 14 and older, Control-clicking Picasso and choosing *Open* also works.
+
+Linux::
+The `.AppImage` runs on most distributions without installing:
++
+[source,bash]
+----
+chmod +x picasso-<version>-linux-x64.AppImage
+./picasso-<version>-linux-x64.AppImage
+----
++
+On Debian and Ubuntu, `sudo apt install ./picasso-<version>-linux-x64.deb` installs Picasso with its menu entry.
+The README describes the `.tar.gz` and what to do where FUSE is missing.
+
+[#ffmpeg]
+=== Videos need FFmpeg
+
+Picasso plays videos with https://ffmpeg.org[FFmpeg].
+Without it, photos work and videos are skipped; they are added once FFmpeg is installed.
+
+* Windows: `winget install Gyan.FFmpeg`
+* macOS: `brew install ffmpeg`
+* Linux: `sudo apt install ffmpeg`, or your distribution's package
+
+If you can't install software, put `ffmpeg` and `ffprobe` in the folder that holds Picasso.
+
+== The first start
+
+On its first start Picasso adds your Pictures folder and reads it in the background.
+The status bar shows how far it has got, and photos appear by date as they are found.
+You can use Picasso while it scans.
+
+To add another folder, click *+ Import* at the top right, or drag the folder onto the window.
+Picasso adds every subfolder too.
+
+Picasso never moves, renames, or rewrites your photos.
+Stars, captions, albums, places, dates you fix, and edits are kept in Picasso's own library, and only *Move to trash* changes a photo file.
+
+== The library window
+
+The window has four parts:
+
+The sidebar::
+*Library* shows every photo.
+Below it are *Starred Photos*, *Places*, *Statistics*, *Travel Map*, and *Duplicates*, then your albums and the folder tree.
+Each folder shows how many photos it holds.
+
+The top bar and the toolbar::
+The top bar holds the search field.
+Above the grid are the title and photo count, the sort order, and buttons that act on the selected photos.
+
+The grid::
+Thumbnails grouped by the day they were taken.
+When the photos are sorted by date, a strip beside the grid lists the years, with the months of the year in view; click one to jump there.
+Dragging the scroll bar shows the date in view.
+
+The status bar::
+Scanning progress, the *Photo Tray* with the selected photos, and a link to files that couldn't be read, when there are any.
+
+At the top right are *Slideshow*, *Refresh*, *+ Import*, the gear for *Settings*, and *?* for *Help & Shortcuts*.
+Click the logo at the top left for *About Picasso*, which shows the version.
+
+Press kbd:[I] to show or hide the Info and Map panel beside the grid.
+It shows the selected photo's camera details and where it was taken.
+
+== Finding photos
+
+=== Sorting
+
+The sort menu in the toolbar offers:
+
+* *Sort by Date*, newest first, or *Sort by Date, oldest*
+* *Sort by Name*
+* *Sort by Name, edited*, which shows only the photos you have edited
+
+=== Searching
+
+Type in *Search photos* at the top of the window to find photos that match every word you type.
+Picasso looks in the file name, the folder path, the caption, the camera, the lens, and album names.
+
+A date finds the photos taken then:
+`2019` finds that year, `2019-05` that month, and `2019-05-17` that day.
+You can also write `2019/05` or `2019.05`.
+Dates and words combine, so `2019-05 beach` finds the May 2019 photos that match "beach".
+
+=== Selecting
+
+* Click a photo to select it.
+* kbd:[Ctrl]-click adds a photo to the selection or takes it out.
+* kbd:[Shift]-click selects every photo between the last one you clicked and this one.
+* kbd:[Ctrl+A] selects every photo in the grid.
+* The arrow keys move the selection.
+* The ★ button in the toolbar selects the starred photos in view.
+
+The selected photos appear in the *Photo Tray* in the status bar.
+*Clear* empties it.
+
+== Organizing photos
+
+Most actions are in three places: the toolbar above the grid, the *Photo Tray*, and the menu you get by right-clicking a thumbnail.
+They act on every selected photo.
+
+=== Stars
+
+Press kbd:[S], or click the star in the toolbar, to star the selected photos; do it again to take the star off.
+*Starred Photos* in the sidebar lists them all.
+
+=== Captions
+
+Open a photo, press kbd:[I] for the details panel, and type in the *Caption* field.
+Search finds photos by their captions.
+
+=== Albums
+
+Albums group photos from any folders without moving the files.
+
+* To make an album, select photos and choose *New album…* from *Add to Album* in the toolbar.
+* To add photos to an album, select them and pick the album from *Add to Album*.
+* In an album, *Remove from Album* takes the selected photos out.
+The files are not touched.
+* To delete an album, right-click it in the sidebar and choose *Delete album*.
+The photos stay in the library.
+
+=== Rotating
+
+Press kbd:[R] to turn the selected photos clockwise, or kbd:[Shift+R] to turn them counterclockwise.
+The rotation is kept in the library; the file is not rewritten.
+
+=== Fixing the date taken
+
+For a camera whose clock was wrong, or a scanned print, select the photos, right-click one, and choose *Adjust date…*.
+
+* *Shift* moves every selected photo by a number of days, hours, and minutes.
+* *Set to* sets the earliest photo to a date and time, and moves the others with it.
+* *Use the date in the file* undoes your changes.
+
+The new date is kept in the library and survives rescans; the files are not changed.
+
+=== Moving photos to the trash
+
+Press kbd:[Delete], or click *Delete* in the *Photo Tray*, to move the selected photos to the system trash.
+Picasso asks first unless you turned that off in *Settings → General*.
+
+On Windows and Linux, the status bar offers *Undo* for two minutes, which puts the files back where they were.
+On a Mac, restore files from the Trash in the Finder.
+Either way, a photo that comes back within 90 days gets its stars, caption, albums, and edits back.
+
+== Viewing photos and videos
+
+Double-click a photo, or select it and press kbd:[Enter], to open the viewer.
+
+* kbd:[←] and kbd:[→] go to the previous and next photo; kbd:[Home] and kbd:[End] go to the first and last.
+* Zoom with the mouse wheel, kbd:[Ctrl] and the wheel, a trackpad pinch, or kbd:[+] and kbd:[−].
+Drag to pan.
+* kbd:[0] fits the photo to the window, and kbd:[1] shows it at actual size, every pixel.
+* The filmstrip along the bottom shows the photos around this one; click one to go there.
+* kbd:[I] shows the details panel with the camera settings, a histogram, the *Caption*, *Show in folder*, and *Show on map*.
+* kbd:[F11] switches to full screen, and kbd:[Esc] goes back to the library.
+
+The viewer's toolbar also flips between the light and dark themes.
+
+=== Slideshows
+
+Click *Slideshow*, or press kbd:[Space] in the viewer, to play the photos from the selected one.
+kbd:[Space] pauses and resumes, and kbd:[Esc] ends the slideshow.
+*Settings → General* sets how long each photo shows.
+
+=== Videos
+
+Videos show in the grid with a play badge and their length.
+In the viewer, kbd:[Space] plays and pauses, and kbd:[M] mutes.
+Videos can't be edited.
+
+== Editing photos
+
+Open a photo and press kbd:[E], or click *Edit*, to open the editor in place of the details panel.
+Editing never changes the file.
+Each change is a step saved in the library, and the photo is drawn from the original plus those steps.
+An edited photo has a small sliders badge on its thumbnail; click it to edit the photo again.
+
+image::editor.png[The editor]
+
+At the top of the editor are four tools, *Adjust*, *Crop*, *Transform*, and *Masks*.
+Below them are undo and redo, a ··· menu with *Undo all*, *Redo all*, *Reset all*, *Copy*, and *Paste*, a live histogram, and the *Before*, *Side by side*, and *Split* buttons with the clipping button.
+
+=== Adjust
+
+*Adjust* holds the sliders, in sections:
+
+[cols="1,3"]
+|===
+| Section | What it does
+
+| Profile | A starting look under the sliders: Color, Neutral, Vivid, Landscape, Portrait, or Monochrome
+| Presets | 25 built-in looks with an *Amount* slider; save your own settings as a preset to reuse them
+| Transform | Turn, tilt, rotate by 90°, and flip without leaving *Adjust*
+| Light | Exposure, contrast, highlights, shadows, whites, and blacks
+| Tone curve | A curve with four zones, and point curves for RGB, red, green, and blue
+| HDR | Opens shadows and brings back highlights in one photo
+| Color | White balance, with an eyedropper for something neutral; vibrance and saturation
+| Color mixer | Hue, saturation, and luminance for eight colors
+| Color grading | Color wheels for shadows, midtones, highlights, and the whole photo
+| Effects | Texture, clarity, dehaze, vignette, and grain
+| Detail | Sharpening and noise reduction
+| Black & White | Monochrome with an eight-color gray mix
+| History | Every step, from the first
+|===
+
+Double-click a slider's name to set it back to zero.
+For a quick start, *Auto tone* in *Light* balances exposure and contrast, and *Auto* in *Color* sets the white balance.
+
+=== Crop
+
+Press kbd:[C] for *Crop*.
+Drag the edges or corners of the frame, or drag inside it to move it.
+Pick an aspect ratio, or *Free*; ⇄ swaps portrait and landscape.
+The *Straighten* slider turns the photo and keeps the crop inside it.
+Press kbd:[Enter], kbd:[Esc], or *Done* when you finish.
+
+=== Transform
+
+Press kbd:[T] for *Transform*, which puts a handle on each corner and on the middle of each side.
+
+* Drag a corner to move just that corner, for example to make a leaning building stand straight.
+* Drag the middle of a side to skew or stretch the photo.
+* Drag inside the outline to move the photo, or outside it to turn it.
+
+The thin frame shows the part that will be kept.
+*Reset corners* puts the corners back.
+
+=== Masks
+
+*Masks* adjusts part of a photo.
+Click *+ Linear gradient* for a graduated mask, such as for a sky, or *+ Radial gradient* for a round one.
+Drag the mask's handles on the photo, then set its *Feather*, *Invert*, and its own exposure, contrast, color, clarity, and dehaze.
+A checkbox shows the mask's area in red.
+
+=== Undo, history, and comparing
+
+* kbd:[Ctrl+Z] undoes a step, and kbd:[Ctrl+Y] or kbd:[Ctrl+Shift+Z] redoes it.
+* *History*, at the end of *Adjust*, lists every step; click one to go back to it.
+* *Before* (kbd:[\ ]) shows the original, *Side by side* (kbd:[Y]) shows both, and *Split* (kbd:[Shift+Y]) puts a divider between them.
+* The clipping button (kbd:[J]) marks blown highlights in red and crushed shadows in blue.
+* *Reset all* in the ··· menu starts over from the original, as one more step you can undo.
+
+=== Copying edits to other photos
+
+*Copy* (kbd:[Ctrl+Shift+C]) copies the photo's settings, and *Paste* (kbd:[Ctrl+Shift+V]) applies them to another photo.
+In the library, *Paste settings* on the right-click menu applies them to every selected photo.
+The crop and the *Transform* settings are not copied, because they belong to one photo.
+
+=== Exporting
+
+Edits stay inside Picasso until you export.
+
+* In the editor, *Export…* saves the photo you are editing as a new file, `name-edited.jpg` by default.
+* For many photos, select them and click *Export…* in the *Photo Tray*, or right-click one.
+Choose a *Folder*, a *Format* (JPEG, PNG, or TIFF), a *Size* (*Full size* or a long edge of 4096, 2048, 1600, or 1080 px), and the JPEG *Quality*.
+
+Exported files keep their names with the new extension and are numbered when a name is taken, so nothing is overwritten.
+Videos are left out.
+The status bar shows the progress with *Stop*, then *Open folder*.
+
+== Maps and places
+
+Maps need an internet connection.
+Picasso keeps the map tiles it has shown, so places you have looked at work offline later.
+
+=== Places
+
+image::places.png[Places]
+
+*Places* in the sidebar shows every photo with a location on a map.
+Drag to move the map, and zoom with the wheel or a pinch.
+Nearby photos join into one pin with a count.
+Point at a pin for a card with its photos: click one to open it, or use *Select these photos* or *Zoom in*.
+Clicking a pin of several photos zooms in on them, and double-clicking a single photo's pin opens it.
+*Open in OpenStreetMap* opens the same view in your web browser.
+
+From a photo, *Show on map* opens Places at that photo.
+
+=== Placing photos by hand
+
+For photos without GPS:
+
+. Select the photos in the library.
+. Open *Places*; it keeps the selection.
+. Click *Geotag*, then click the map where the photos were taken.
+
+*Clear geotag* removes the pin you placed.
+A location from the camera's GPS is never changed.
+
+=== GPS tracks
+
+Picasso reads the `.gpx` and `.kml` files in your folders and draws them as colored paths under the photo pins.
+Point at a track for its name, start time, distance, and duration, and double-click it to zoom to it.
+*Tracks* in the Places toolbar turns the paths off.
+
+=== Placing photos from a GPS track
+
+If you carried a GPS logger or a phone app while shooting, Picasso can place your photos by matching their times to the track:
+
+. Right-click the folder in the folder tree and choose *Geotag from GPS track…*.
+. Choose the *GPS track* file (`.gpx`, `.kml`, or `.kmz`) and check the *Folder*.
+. Set the *Camera time zone*: the offset of the camera's clock from UTC, such as `+01:00`.
+Cameras usually keep local time without a time zone.
+. Click *Geotag*.
+
+Photos that already have GPS from the camera, or a pin you placed, keep their location.
+Picasso writes the places to its library and to a `.picasso-geotags.json` file in the folder, never into the photos.
+
+The same works from a terminal, and `--dry-run` shows what would happen without saving anything:
+
+[source,bash]
+----
+picasso geotag track.gpx ~/Pictures/Trip --offset +01:00 --dry-run
+----
+
+== Statistics
+
+image::statistics.png[Statistics]
+
+*Statistics* in the sidebar shows your library in numbers: photos per year and month, the days you took photos, your cameras, lenses, and focal lengths, and how many photos have a location.
+Click *All years* or a year to look at one year.
+Most items have *Show these photos*, and places have *Show on map*.
+
+== Travel Map
+
+image::travelmap.png[Travel Map]
+
+*Travel Map* colors the countries where your geotagged photos were taken, and the states and provinces of the largest countries.
+A deeper color means more photos.
+
+* Switch between *Globe* and *Flat*.
+* The side panel counts *Countries visited* and *Continents*, with the *Coverage by continent*.
+* Search for a country to find it on the map.
+* Click a colored place for a card; *Show photos* shows them in Places.
+
+The Travel Map follows the photos' GPS only, so place more photos to color more of it.
+It works offline.
+
+== Finding duplicates
+
+*Duplicates* in the sidebar finds files whose content is identical, byte for byte, even under other names or in other folders.
+The search runs in the background and goes on when you close the window; the sidebar shows how many groups it has found.
+
+In each group one file is *Kept*: a starred or edited one when there is one.
+Move the other copies to the trash one by one, with *Trash extra copies* for a group, or with *Move all extra copies to trash*.
+*Search again* looks once more.
+
+== Files that couldn't be read
+
+When a scan finds files it can't read, such as a damaged photo, a link appears in the status bar.
+It opens the list, with *Show in folder* and *Move to trash* for each file.
+
+== Settings
+
+Click the gear at the top right, or press kbd:[Ctrl+,], to open *Settings*.
+Settings apply right away.
+
+General::
+Language, color theme, thumbnail size, slideshow interval, and whether to ask before moving photos to the trash.
+*Updates* can check once a day for a newer version; when there is one, a link to it appears at the top right.
+The check only asks GitHub for the latest version number.
+
+Folders::
+The folders Picasso watches, each with buttons to open it, rescan it, or remove it from Picasso.
+Removing a folder leaves its files on disk.
+*Excluded folders* lists subfolders Picasso skips; *Exclude a folder…* adds one and *Include again* brings it back.
+
+File types::
+Which files Picasso adds: JPEG, PNG, GIF, WebP, BMP, TIFF, HEIC/HEIF, camera RAW, and videos.
+Files of a type you turn off leave the library but stay on disk.
+
+Map::
+The map in Places and the Map panel.
+*OpenFreeMap Liberty*, the default, and *OpenStreetMap* need nothing more.
+*CARTO* has three styles and needs a free key: *Get a free key* opens CARTO's sign-up page, and you paste the key into the field.
+*Esri World Imagery* shows satellite photos.
+
+Storage::
+Where the library, the cache, and the settings are kept, how much space each takes, *Clear cache*, and the backups.
+
+=== Folders in the tree
+
+Right-click a folder in the sidebar for:
+
+* *Geotag from GPS track…*
+* *Exclude from scanning*, for a subfolder you don't want in the library
+* *Remove from Picasso…*, for a folder you added
+* *Rescan this folder*
+
+== Your library and its backups
+
+=== What is kept where
+
+The library, `picasso.db`, holds the folders you added, every photo's stars, caption, rotation, place, fixed date, albums, and edits, your presets, and your GPS tracks.
+It does not hold the photos themselves, so back up your photos as you would any files.
+
+The cache holds thumbnails and map tiles; clearing it is safe, and Picasso makes them again.
+Your choices in Settings are kept in `settings.json`, apart from the library.
+*Settings → Storage* shows where each one is.
+
+=== Backups
+
+Picasso backs up the library once a week when it starts, and keeps the five newest.
+In *Settings → Storage*, *Back up now* makes one, and *Restore…* puts one back: Picasso backs up the current library first, then restarts with the one you chose.
+
+[#recovery]
+=== When the library can't be opened
+
+If the library can't be opened, for example after a disk error, Picasso explains what went wrong instead of starting, and never overwrites the library:
+
+* *Try again*, for when the library was only busy, such as while a backup or sync tool had it open.
+* *Restore the backup of …* puts the newest readable backup in its place.
+Changes since that backup are lost.
+* *Start a new library* starts over with your Pictures folder.
+* *Open library folder* shows the files, and *Quit* leaves everything as it is.
+
+Restoring and starting over are offered only when the library file is damaged.
+The old file is kept beside the new one, renamed `picasso-damaged-` with the date, so nothing is lost.
+
+=== Moving and renaming folders
+
+Picasso rescans your folders when it starts and watches them while it runs; kbd:[F5] rescans them now.
+
+* Moving photos between folders Picasso already watches needs nothing; the next scan finds them.
+* To move a whole folder somewhere new, move it, remove the old place in *Settings → Folders*, and add the new one with *+ Import*.
+The photos are recognized and get their stars, captions, albums, and edits back.
+* A folder on a drive that isn't plugged in keeps its photos until the drive is back.
+
+A photo that leaves the library keeps its stars, caption, albums, and edits for 90 days, in case it comes back.
+
+== Keyboard shortcuts
+
+Press kbd:[F1] or kbd:[?] to see every shortcut and mouse gesture in Picasso.
+
+[cols="1,2"]
+|===
+| Key | Action
+
+| kbd:[Enter] | Open the selected photo
+| kbd:[Esc] | Close the editor, go back, or leave the slideshow
+| Arrow keys | Move the selection, or go to the previous or next photo
+| kbd:[Home] / kbd:[End] | First or last photo in the viewer
+| kbd:[Ctrl+A] | Select every photo in the grid
+| kbd:[Space] | Play or pause a video or the slideshow
+| kbd:[M] | Mute or unmute a video
+| kbd:[S] | Star
+| kbd:[R] / kbd:[Shift+R] | Rotate clockwise or counterclockwise
+| kbd:[I] | Details panel
+| kbd:[E] | Edit the photo
+| kbd:[Ctrl+Z] / kbd:[Ctrl+Y] | Undo or redo an edit step
+| kbd:[\ ] | Show the original while editing
+| kbd:[Y] / kbd:[Shift+Y] | Side-by-side or split before and after
+| kbd:[J] | Show clipped highlights and shadows
+| kbd:[C] | Crop
+| kbd:[T] | Transform
+| kbd:[Ctrl+Shift+C] / kbd:[Ctrl+Shift+V] | Copy or paste edit settings
+| kbd:[+] / kbd:[−] | Zoom
+| kbd:[0] / kbd:[1] | Fit or actual size
+| kbd:[Delete] | Move to the trash
+| kbd:[F1] / kbd:[?] | Help & Shortcuts
+| kbd:[Ctrl+,] | Settings
+| kbd:[F5] | Rescan
+| kbd:[F11] | Full screen
+|===
+
+== Troubleshooting
+
+Videos don't show or don't play::
+Install FFmpeg (see <<ffmpeg>>) and start Picasso again.
+Videos found while FFmpeg was missing are added then.
+
+The map is blank::
+Maps need an internet connection.
+If you picked *CARTO*, check that its key is entered in *Settings → Map*, or switch to *OpenFreeMap Liberty*.
+
+A photo is missing::
+Check that its folder is in *Settings → Folders* and not under *Excluded folders*, and that its type is ticked in *Settings → File types*.
+Press kbd:[F5] to rescan, and look at the files that couldn't be read in the status bar.
+
+The Mac says Picasso can't be opened::
+See <<install>>: use *Open Anyway* in *System Settings → Privacy & Security*.
+
+The AppImage doesn't start::
+Run it with `--appimage-extract-and-run` where FUSE is missing, as in containers.
+
+Picasso says the library can't be opened::
+See <<recovery>>.
+
+== Getting help
+
+Press kbd:[F1] in Picasso for *Help & Shortcuts*.
+Report problems and ideas at https://github.com/kuopinghsu/picasso/issues[GitHub issues], with the version from *About Picasso*.

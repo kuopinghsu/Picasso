@@ -1,0 +1,24 @@
+# The PDF look of docs/USER_GUIDE.adoc for asciidoctor-pdf (make guide-pdf).
+# The default fonts have no Chinese or symbols such as ⌘ and ⇄, so characters
+# they lack come from Droid Sans Fallback and DejaVu Sans, which Prawn can
+# embed because they are TrueType. make guide-pdf finds them in GUIDE_FONTS.
+extends: default
+font:
+  catalog:
+    merge: true
+    Droid Sans Fallback:
+      normal: DroidSansFallbackFull.ttf
+      bold: DroidSansFallbackFull.ttf
+      italic: DroidSansFallbackFull.ttf
+      bold_italic: DroidSansFallbackFull.ttf
+    DejaVu Sans:
+      normal: DejaVuSans.ttf
+      bold: DejaVuSans-Bold.ttf
+      italic: DejaVuSans-Oblique.ttf
+      bold_italic: DejaVuSans-BoldOblique.ttf
+  fallbacks:
+    - Droid Sans Fallback
+    - DejaVu Sans
+# The default puts narrow no-break spaces around the +, which these fonts lack.
+kbd:
+  separator: "+"

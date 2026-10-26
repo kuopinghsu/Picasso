@@ -17,7 +17,7 @@ The benchmark (`src/bench.rs`) is a test that `cargo test` skips. It runs in two
 
 It also reports the peak memory of the process after each part (macOS and Linux).
 
-`make bench-check` sets `PICASSO_BENCH_CHECK=1` with 20,000 rows and 500 files. A result past its limit fails the run. The limits are loose, because CI machines are slow and shared: one second for each listed query and for opening the library, at least 200 photos a second for the scan and 20 for thumbnails, half a second to open a photo, and 400 MB of memory. They catch large regressions only; compare against the baselines below for anything finer.
+`make bench-check` sets `PICASSO_BENCH_CHECK=1` with 20,000 rows and 500 files. A result past its limit fails the run. The limits are loose, because CI machines are slow and shared: one second for opening the library and for each query, at least 200 photos a second for the scan and 20 for thumbnails, half a second to open a photo, and 400 MB of memory. They catch large regressions only; compare against the baselines below for anything finer.
 
 ### Cold and warm cache
 

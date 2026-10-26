@@ -816,4 +816,9 @@ pub(super) const TABLE: &[(&str, &str)] = &[
     ("Remove {} from Picasso?", "要從 Picasso 移除 {} 嗎？"),
     ("This takes {} out of the library; the files stay where they are. Stars, captions, albums, and edits are kept for 90 days and come back if you add the folder again, even from a new place.", "這會把 {} 移出圖庫，檔案本身仍留在原處。星號、說明、相簿與編輯會保留 90 天，只要再次加入這個資料夾（即使已移到新位置），就會恢復。"),
     ("Couldn't remove the folder: {}", "無法移除資料夾：{}"),
+    ("Remove…", "移除…"),
+    ("{} wasn't found, so it stays in the library. Is its drive connected?", "找不到 {}，因此仍保留在圖庫中。它所在的磁碟已連接嗎？"),
+    ("The library file itself is intact, so Picasso won't replace it. Close other programs that may be using it, or free some disk space, then try again.", "圖庫檔案本身完好，因此 Picasso 不會取代它。請關閉可能正在使用它的其他程式，或釋放一些磁碟空間，然後再試一次。"),
+    ("Checking the library…", "正在檢查圖庫…"),
+    ("Picasso isn't allowed to read the library file. Check who owns it and its permissions, then try again.", "Picasso 沒有讀取圖庫檔案的權限。請檢查檔案的擁有者與權限，然後再試一次。"),
 ];

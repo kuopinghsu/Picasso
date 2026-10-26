@@ -467,7 +467,7 @@ Options:
 
 /// `picasso geotag …`; returns the exit code.
 pub fn cli(args: &[PathBuf]) -> i32 {
-    attach_console();
+    crate::attach_console();
     let mut positional = Vec::new();
     let (mut offset, mut dry_run) = (None, false);
     let mut args = args.iter().map(|arg| arg.to_string_lossy().into_owned());
@@ -589,25 +589,6 @@ pub fn local_offset() -> String {
 fn shown(path: &Path) -> String {
     path.display().to_string().trim_start_matches(r"\\?\").to_string()
 }
-
-/// A release build on Windows has no console of its own; the command line
-/// output goes to the console it was started from.
-#[cfg(windows)]
-fn attach_console() {
-    #[link(name = "kernel32")]
-    extern "system" {
-        fn AttachConsole(process: u32) -> i32;
-    }
-    const ATTACH_PARENT_PROCESS: u32 = u32::MAX;
-    // SAFETY: AttachConsole takes a plain process id and fails harmlessly
-    // when there is no console or one is attached already.
-    unsafe {
-        AttachConsole(ATTACH_PARENT_PROCESS);
-    }
-}
-
-#[cfg(not(windows))]
-fn attach_console() {}
 
 #[cfg(test)]
 mod tests {

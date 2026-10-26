@@ -9,17 +9,19 @@ make test                 # every unit and integration test, as CI runs them
 make bench-check          # the performance limits, as CI runs them (docs/PERFORMANCE.md)
 make check-docs           # links, make targets, scripts, and settings named in the documents
 make deny                 # security advisories and licenses of the dependencies
-PICASSO_CORPUS=~/corpus cargo test --release corpus -- --nocapture
+make ci                   # all four of the above
+make test T=backup        # only the tests whose name contains "backup"
+make corpus CORPUS=~/corpus
 ```
 
-The last line puts every photo and video in a folder of your own (HEIC, camera RAW, odd JPEGs) through the reading checks of the test corpus below. Each file must have its size and date read, decode upright at the size read, and give a thumbnail of the right shape.
+The last line puts every photo in a folder of your own and its subfolders (HEIC, camera RAW, odd JPEGs) through the reading checks of the test corpus below; videos are skipped. Each photo must have its size read, decode upright at that size, and give a thumbnail of the same shape. The date and camera read are printed for a look, and a folder without photos fails rather than passing empty.
 
 ## What the tests cover
 
 | Area | Where | What is checked |
 | --- | --- | --- |
 | Library database | `src/db.rs` | Upgrades from an old layout, an upgrade that fails halfway (nothing changes), opening twice, a library from a newer version; scanning, renames and moves, the 90-day archive of removed photos, albums, edits, dates, places, unreadable files, duplicates. |
-| Backups and recovery | `src/backup.rs` | A restored backup brings back stars, captions, rotations, places, dates, albums, edits, presets, tracks, excluded folders, and archived photos; a backup that can't be written leaves nothing behind; a damaged library is kept aside, never overwritten, and a bad backup leaves it where it was. |
+| Backups and recovery | `src/backup.rs` | A restored backup brings back stars, captions, rotations, places, dates, albums, edits, presets, tracks, excluded folders, and archived photos; a backup that can't be written leaves nothing behind; a damaged library is kept aside, never overwritten, and a bad backup leaves it where it was; a library another program is writing to passes the integrity check, so it is never offered for replacement, and neither is one Picasso isn't allowed to read (`src/app/recovery.rs`). |
 | Trash | `src/app/mod.rs` | Only files that really left are reported as trashed; a file on a disconnected drive stays in the library and is reported. |
 | Formats and orientation | `src/corpus.rs`, `src/image_io.rs`, `src/raw_tiff.rs`, `src/photo_info.rs` | JPEG with each of the 8 EXIF orientations and without EXIF, PNG with transparency, TIFF, BMP, GIF, WebP: size read upright, decoded upright, thumbnails; damaged and empty files fail without crashing. |
 | Editing | `src/corpus.rs`, `src/edit/` | Exports keep orientation, rotation, crop, straightening, flips, and perspective, at the size the editor reports; an edit and its undo point survive a restart; an export never replaces its original; PNG and TIFF exports are written whole or not at all; each adjustment, curve, filter, HDR, and preset. |

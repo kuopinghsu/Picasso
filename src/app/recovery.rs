@@ -1,8 +1,14 @@
 //! Shown instead of the library when `picasso.db` can't be opened: damaged,
 //! locked by another program, or unreadable. Nothing is changed until the
-//! user picks a way out, and the library that failed is always kept.
+//! user picks a way out, and the library that failed is always kept. Only a
+//! library that fails its integrity check is offered a replacement: one that
+//! is merely busy may be open in another Picasso, which would go on writing
+//! to it under its new name.
+//!
+//! A thread runs the check, so the window shows at once.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::mpsc::{self, Receiver, TryRecvError};
 
 use eframe::egui::{self, Margin, RichText, Vec2};
 
@@ -14,10 +20,42 @@ use super::{about, settings::local_time, theme, theme::ThemeMode};
 pub(super) struct Recovery {
     data_dir: PathBuf,
     error: String,
-    backups: Vec<Backup>,
+    /// Arrives from a thread, as checking a large library takes a while.
+    findings: Option<Findings>,
+    findings_rx: Receiver<Findings>,
+    /// A backup or a new library took its place; only a restart is left.
+    replaced: bool,
     logo: egui::TextureHandle,
     /// Why the latest choice didn't work.
     note: String,
+}
+
+struct Findings {
+    /// The library file fails its integrity check, so it may be replaced.
+    damaged: bool,
+    /// Why the library file can't be read, so it can't be checked: no
+    /// permission, or on Windows another program holding it.
+    unreadable: Option<std::io::ErrorKind>,
+    /// The newest backup that passes the check.
+    backup: Option<Backup>,
+}
+
+impl Findings {
+    fn of(data_dir: &Path) -> Self {
+        let library = data_dir.join("picasso.db");
+        let unreadable = if library.is_file() { std::fs::File::open(&library).err().map(|err| err.kind()) } else { None };
+        // A check that waited in vain for a lock, or couldn't read the file,
+        // says nothing about damage.
+        let damaged = library.is_file() && unreadable.is_none() && backup::check(&library).is_err_and(|err| !busy(&err));
+        let backup = if damaged { backup::list(data_dir).into_iter().find(|backup| backup::check(&backup.path).is_ok()) } else { None };
+        Findings { damaged, unreadable, backup }
+    }
+}
+
+/// True for SQLite's errors about another connection holding the file.
+fn busy(error: &str) -> bool {
+    let error = error.to_lowercase();
+    error.contains("locked") || error.contains("busy")
 }
 
 impl Recovery {
@@ -28,8 +66,26 @@ impl Recovery {
         let mode = ThemeMode::from_code(&stored("theme").unwrap_or_default());
         theme::apply(ctx, mode.is_dark(super::system_dark(ctx)));
         i18n::set(stored("language").as_deref().and_then(Lang::from_code).unwrap_or_else(i18n::system));
-        let backups = backup::list(&data_dir).into_iter().filter(|backup| backup::check(&backup.path).is_ok()).collect();
-        Self { data_dir, error, backups, logo: theme::load_logo(ctx), note: String::new() }
+        let (findings_tx, findings_rx) = mpsc::channel();
+        let (dir, repaint) = (data_dir.clone(), ctx.clone());
+        let _ = std::thread::Builder::new().name("picasso-recovery".into()).spawn(move || {
+            let _ = findings_tx.send(Findings::of(&dir));
+            repaint.request_repaint();
+        });
+        Self { data_dir, error, findings: None, findings_rx, replaced: false, logo: theme::load_logo(ctx), note: String::new() }
+    }
+
+    /// The findings once the thread has them. A thread that died found
+    /// nothing, so nothing is offered for replacement.
+    fn findings(&mut self) -> Option<&Findings> {
+        if self.findings.is_none() {
+            match self.findings_rx.try_recv() {
+                Ok(findings) => self.findings = Some(findings),
+                Err(TryRecvError::Disconnected) => self.findings = Some(Findings { damaged: false, unreadable: None, backup: None }),
+                Err(TryRecvError::Empty) => {}
+            }
+        }
+        self.findings.as_ref()
     }
 
     /// Restarts Picasso, which opens the library again.
@@ -42,7 +98,10 @@ impl Recovery {
 
     fn replace(&mut self, ctx: &egui::Context, backup: Option<PathBuf>) {
         match backup::replace_damaged(&self.data_dir, backup.as_deref()) {
-            Ok(_) => self.restart(ctx),
+            Ok(_) => {
+                self.replaced = true;
+                self.restart(ctx);
+            }
             Err(err) => self.note = trf("That didn't work: {}", &[&err]),
         }
     }
@@ -56,10 +115,18 @@ impl Recovery {
         let library = self.data_dir.join("picasso.db");
         ui.label(RichText::new(library.display().to_string()).size(12.5).color(theme::text()));
         ui.label(RichText::new(&self.error).monospace().size(12.0).color(theme::DANGER));
-        let locked = ["locked", "busy"].iter().any(|word| self.error.to_lowercase().contains(word));
-        if locked {
-            ui.add_space(4.0);
+        let unreadable = self.findings().and_then(|found| found.unreadable);
+        let findings = self.findings().map(|found| (found.damaged, found.backup.as_ref().map(|backup| (backup.path.clone(), backup.made_at))));
+        let damaged = findings.as_ref().is_some_and(|(damaged, _)| *damaged);
+        ui.add_space(4.0);
+        if unreadable == Some(std::io::ErrorKind::PermissionDenied) {
+            note(ui, tr("Picasso isn't allowed to read the library file. Check who owns it and its permissions, then try again."));
+        } else if busy(&self.error) || unreadable.is_some() {
             note(ui, tr("Another program may be using the library, such as a backup or sync tool. Close it, then try again."));
+        } else if findings.is_none() {
+            note(ui, tr("Checking the library…"));
+        } else if !damaged {
+            note(ui, tr("The library file itself is intact, so Picasso won't replace it. Close other programs that may be using it, or free some disk space, then try again."));
         }
 
         ui.add_space(16.0);
@@ -74,18 +141,19 @@ impl Recovery {
         if choice(ui, tr("Try again"), tr("Opens Picasso again, for when the library was only busy.")) {
             self.restart(&ctx);
         }
-        let kept = tr("The library that can't be opened stays in the same folder, renamed picasso-damaged with today's date.");
-        if let Some(newest) = self.backups.first() {
-            let label = trf("Restore the backup of {}", &[&local_time(newest.made_at)]);
-            let text = format!("{} {kept}", tr("Changes since that backup are lost."));
-            if choice(ui, &label, &text) {
-                let path = newest.path.clone();
-                self.replace(&ctx, Some(path));
+        if damaged && !self.replaced {
+            let kept = tr("The library that can't be opened stays in the same folder, renamed picasso-damaged with today's date.");
+            if let Some((path, made_at)) = findings.and_then(|(_, backup)| backup) {
+                let label = trf("Restore the backup of {}", &[&local_time(made_at)]);
+                let text = format!("{} {kept}", tr("Changes since that backup are lost."));
+                if choice(ui, &label, &text) {
+                    self.replace(&ctx, Some(path));
+                }
             }
-        }
-        let text = format!("{} {kept}", tr("The new library starts with your Pictures folder; add your other folders again. Stars, captions, albums, and edits start empty."));
-        if choice(ui, tr("Start a new library"), &text) {
-            self.replace(&ctx, None);
+            let text = format!("{} {kept}", tr("The new library starts with your Pictures folder; add your other folders again. Stars, captions, albums, and edits start empty."));
+            if choice(ui, tr("Start a new library"), &text) {
+                self.replace(&ctx, None);
+            }
         }
 
         ui.horizontal(|ui| {
@@ -126,4 +194,64 @@ impl eframe::App for Recovery {
 
 fn note(ui: &mut egui::Ui, text: &str) {
     ui.add(egui::Label::new(RichText::new(text).size(12.5).color(theme::muted())).wrap());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn data_dir(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("picasso-recovery-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        crate::db::Database::open(&dir.join("picasso.db")).unwrap().create_album("Trip").unwrap();
+        dir
+    }
+
+    #[test]
+    fn only_a_damaged_library_is_offered_a_replacement() {
+        let dir = data_dir("healthy");
+        backup::create(&dir).unwrap();
+        let healthy = Findings::of(&dir);
+        assert!(!healthy.damaged && healthy.backup.is_none());
+
+        std::fs::write(dir.join("picasso.db"), b"not a database".repeat(500)).unwrap();
+        let damaged = Findings::of(&dir);
+        assert!(damaged.damaged);
+        assert!(damaged.backup.is_some(), "the newest good backup is offered");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_missing_library_is_not_called_damaged() {
+        let dir = data_dir("missing");
+        std::fs::remove_file(dir.join("picasso.db")).unwrap();
+        assert!(!Findings::of(&dir).damaged);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_library_picasso_may_not_read_is_not_called_damaged() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = data_dir("unreadable");
+        let library = dir.join("picasso.db");
+        std::fs::set_permissions(&library, std::fs::Permissions::from_mode(0o000)).unwrap();
+        // Root reads any file, so there is nothing to test.
+        if std::fs::File::open(&library).is_err() {
+            let found = Findings::of(&dir);
+            assert_eq!(found.unreadable, Some(std::io::ErrorKind::PermissionDenied));
+            assert!(!found.damaged && found.backup.is_none());
+        }
+        std::fs::set_permissions(&library, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert_eq!(Findings::of(&dir).unreadable, None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn lock_errors_count_as_busy() {
+        assert!(busy("database is locked"));
+        assert!(busy("Database Busy"));
+        assert!(!busy("file is not a database"));
+    }
 }

@@ -9,12 +9,11 @@ A release is made by pushing a tag like `v0.9.5`. CI builds and tests the tagged
 3. Run the checks CI runs, so that a failure shows up before the tag:
 
    ```bash
-   make test          # unit and integration tests
-   make check-docs    # links, make targets, and settings named in the docs
-   make deny          # security advisories, licenses, and crate sources
-   make bench-check   # 20,000 photos within the limits in docs/PERFORMANCE.md
+   make ci            # docs, deny, tests, and bench-check, as below
    make release-notes # the notes as they will be published
    ```
+
+   `make ci` runs `make check-docs` (links, make targets, and settings named in the docs), `make deny` (security advisories, licenses, and crate sources), `make test` (unit and integration tests), and `make bench-check` (20,000 photos within the limits in docs/PERFORMANCE.md).
 
 4. Commit, push to `main`, and wait for CI to pass on every platform. The tag builds the commit it points to, so a commit that fails CI makes a release that fails.
 5. Tag that commit and push the tag:
@@ -31,7 +30,7 @@ A release is made by pushing a tag like `v0.9.5`. CI builds and tests the tagged
 
 - [ ] The version in `Cargo.toml`, the tag, and the heading in `CHANGELOG.md` agree, and the changelog says everything a user will notice.
 - [ ] CI passed on Windows and Linux for x64 and Arm64 and on macOS, including the .deb install tests, the AppImage tests on Ubuntu and RHEL, the performance checks, and `cargo deny`.
-- [ ] The release has the twelve packages, each named `picasso-<version>-<platform>`: `windows-x64.exe`, `windows-x64.zip`, `linux-x64.tar.gz`, `linux-x64.deb`, and `linux-x64.AppImage`, the same five with `arm64` in place of `x64`, and `macos-universal.dmg` and `macos-universal.zip`, plus `SHA256SUMS.txt`.
+- [ ] The release has the twelve packages, each named `picasso-<version>-<platform>`: `windows-x64.exe`, `windows-x64.zip`, `linux-x64.tar.gz`, `linux-x64.deb`, and `linux-x64.AppImage`, the same five with `arm64` in place of `x64`, and `macos-universal.dmg` and `macos-universal.zip`, plus `rawler-<version>-source.tar.gz` and `SHA256SUMS.txt`.
 - [ ] A downloaded package matches its line in `SHA256SUMS.txt` (`sha256sum --check --ignore-missing SHA256SUMS.txt`, or `shasum -a 256 --check` on a Mac).
 - [ ] The notes name the commit, and **About** and `picasso --version` in the packages name the same one.
 - [ ] The notes say whether the Mac app is notarized, and opening it behaves as they say.
@@ -52,7 +51,7 @@ Once a release is published, its tag and packages stay as they are, because peop
 
 ## Signing and notarizing the Mac app
 
-Without these secrets, CI gives the Mac app an ad-hoc signature, and users have to choose **Open** the first time. With them, it signs the app with a Developer ID and has Apple notarize the app and the `.dmg`, so they open like any downloaded app. Set them in the repository's **Settings → Secrets and variables → Actions**:
+Without these secrets, CI gives the Mac app an ad-hoc signature, and users have to allow it with **Open Anyway** in **System Settings → Privacy & Security** the first time. With them, it signs the app with a Developer ID and has Apple notarize the app and the `.dmg`, so they open like any downloaded app. Set them in the repository's **Settings → Secrets and variables → Actions**:
 
 | Secret | What it is |
 | --- | --- |
@@ -70,4 +69,4 @@ A Developer ID certificate needs a paid Apple Developer Program membership. Make
 
 `make notices` writes `THIRD-PARTY-NOTICES.txt`, the license of every crate built into Picasso, which CI puts in every package. It fails when a crate has no license file and its license has no standard text in `build/licenses`; add the text there. The Linux AppImage also carries the license files of the system libraries it bundles.
 
-rawler, which reads raw camera files, is under the LGPL-2.1. Picasso is linked to it statically, so anyone who receives Picasso must be able to rebuild it with a changed rawler. Picasso's own source being public under the MIT license meets that; the notices say where to find it.
+rawler, which reads raw camera files, is under the LGPL-2.1. Picasso is linked to it statically, so anyone who receives Picasso must be able to rebuild it with a changed rawler. Picasso's own source being public under the MIT license meets that. The license also asks that rawler's source be offered from the same place as the program, so the release job attaches the crate Picasso was built with, checked against `Cargo.lock`, as `rawler-<version>-source.tar.gz`. The notices say where to find both.

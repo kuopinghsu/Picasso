@@ -814,6 +814,11 @@ pub(super) const TABLE: &[(&str, &str)] = &[
     ("To undo it, put the files back from the Trash. Stars, captions, albums, and edits are kept for 90 days in case the files come back.", "Per annullare, ripristina i file dal cestino. Stelle, didascalie, album e modifiche restano conservati per 90 giorni nel caso i file tornino."),
     ("Remove from Picasso", "Rimuovi da Picasso"),
     ("Remove {} from Picasso?", "Rimuovere {} da Picasso?"),
-    ("This takes {} out of the library; the files stay where they are. Stars, captions, albums, and edits are kept for 90 days and come back if you add the folder again, even from a new place.", "In questo modo {} escono dalla libreria; i file restano dove sono. Stelle, didascalie, album e modifiche sono conservati per 90 giorni e tornano se aggiungi di nuovo la cartella, anche da una nuova posizione."),
+    ("This takes {} out of the library; the files stay where they are. Stars, captions, albums, and edits are kept for 90 days and come back if you add the folder again, even from a new place.", "In questo modo Picasso toglie {} dalla libreria; i file restano dove sono. Stelle, didascalie, album e modifiche sono conservati per 90 giorni e tornano se aggiungi di nuovo la cartella, anche da una nuova posizione."),
     ("Couldn't remove the folder: {}", "Impossibile rimuovere la cartella: {}"),
+    ("Remove…", "Rimuovi…"),
+    ("{} wasn't found, so it stays in the library. Is its drive connected?", "{} non è stato trovato, quindi resta nella libreria. Il suo disco è collegato?"),
+    ("The library file itself is intact, so Picasso won't replace it. Close other programs that may be using it, or free some disk space, then try again.", "Il file della libreria è integro, quindi Picasso non lo sostituisce. Chiudi gli altri programmi che potrebbero usarlo o libera spazio sul disco, poi riprova."),
+    ("Checking the library…", "Controllo della libreria…"),
+    ("Picasso isn't allowed to read the library file. Check who owns it and its permissions, then try again.", "Picasso non ha il permesso di leggere il file della libreria. Controlla il proprietario e i permessi del file, poi riprova."),
 ];

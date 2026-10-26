@@ -16,6 +16,15 @@ A fast local photo library, viewer, and editor in the spirit of Picasa. It watch
 | --- | --- |
 | ![statistics](images/statistics.png) | ![travel map](images/travelmap.png) |
 
+## Quick start
+
+1. Download Picasso from the [latest release](https://github.com/kuopinghsu/picasso/releases/latest): the `.exe` for Windows, the `.dmg` for a Mac, or the `.AppImage` for Linux. **Releases** below lists the other packages and how to install each. On a Mac, unless the release notes say the app is notarized, the first launch is blocked: allow it with **Open Anyway** in **System Settings → Privacy & Security**.
+2. Start it. Picasso adds your Pictures folder and reads it in the background: the status bar shows how far it has got, and photos appear by date as they are found. Add other folders with **+ Import**, or drag a folder onto the window.
+3. Click a photo and press Enter to view it, E to edit it, or S to star it. Edits never change the file; **Export…** saves an edited copy. F1 lists every shortcut.
+4. Stars, captions, albums, and edits are kept in the library, which Picasso backs up every week (**Data** below). Videos need FFmpeg and the maps need an internet connection; everything else works offline.
+
+To build Picasso yourself, read on.
+
 ## Prerequisites
 
 - [Rust](https://rustup.rs) 1.95 or newer (`rustup update stable`)
@@ -43,6 +52,8 @@ cargo run --release -- ~/Pictures ~/Photos
 
 The first launch also adds your Pictures folder when it exists. Later launches rescan every folder you have added. Debug builds are usable, but scanning, thumbnails, and editing are much faster with `--release`.
 
+The Makefile wraps these and the other tasks: `make run`, `make test`, `make ci` for the checks CI runs, `make install` on Linux, and more. `make help` lists them all.
+
 Picasso draws with OpenGL. On WSL that uses the desktop GPU. Set `PICASSO_RENDERER=wgpu` to use Vulkan instead.
 
 ## Releases
@@ -59,6 +70,8 @@ GitHub Actions (`.github/workflows/ci.yml`) builds and tests Picasso on Windows,
 | `picasso-<version>-<commit>-macos-universal.dmg` | A disk image with `Picasso.app`, a shortcut to Applications, the READMEs, the changelog, and the license |
 | `picasso-<version>-<commit>-macos-universal.zip` | `Picasso.app` on its own |
 
+Each Windows and Linux package is also made for 64-bit Arm processors, with `arm64` in its name in place of `x64`: `picasso-<version>-<commit>-windows-arm64.exe` and its `.zip` for Windows on Arm, such as laptops with a Snapdragon processor, and `picasso-<version>-<commit>-linux-arm64.AppImage`, `.deb`, and `.tar.gz` for Arm Linux. They are built and tested on Arm machines, not cross-compiled, and the Arm `.deb` and AppImage go through the same install and start checks as the x64 ones.
+
 The AppImage needs no installing and no administrator rights, so it suits computers where you can't add system packages. It is built on AlmaLinux 8, so it runs on RHEL 8, Ubuntu 20.04, Debian 10, and newer. It carries every library Picasso uses (ALSA, fontconfig, X11, Wayland, and xkbcommon, with their dependencies) except glibc and the OpenGL driver, which come from the system. On start, it uses the system's copy of each library when there is one and its own copy otherwise. Run it with:
 
 ```bash
@@ -70,28 +83,15 @@ AppImages mount themselves with FUSE. Where FUSE is missing, as in containers, r
 
 The `.deb` and `.tar.gz` are built on Ubuntu 22.04, so they run on that release and newer. Install the `.deb` with `sudo apt install ./picasso-<version>-linux-x64.deb`, which also pulls in the ALSA and OpenGL libraries. To use the `.tar.gz` instead, put `picasso` on your `PATH`, copy `picasso.desktop` to `~/.local/share/applications/`, and copy `picasso.png` to `~/.local/share/icons/hicolor/256x256/apps/`.
 
-The macOS app is a universal binary for Apple silicon and Intel Macs, and runs on macOS 11 and newer. Open the `.dmg` and drag Picasso to Applications. The app has an ad-hoc signature but is not notarized by Apple, so the first launch is blocked: Control-click Picasso and choose **Open**, or click **Open Anyway** in **System Settings → Privacy & Security**. From a terminal, `xattr -dr com.apple.quarantine /Applications/Picasso.app` does the same.
+The macOS app is a universal binary for Apple silicon and Intel Macs, and runs on macOS 11 and newer. Open the `.dmg` and drag Picasso to Applications. Unless the release notes say it is signed and notarized by Apple, the app has only an ad-hoc signature, so the first launch is blocked: click **Open Anyway** in **System Settings → Privacy & Security**, then confirm. On macOS 14 and older, Control-clicking Picasso and choosing **Open** also works. From a terminal, `xattr -dr com.apple.quarantine /Applications/Picasso.app` does the same.
 
-Pushing a tag such as `v0.9.4` publishes all seven packages (named `picasso-0.9.4-windows-x64.exe` and so on) and `SHA256SUMS.txt` on a new GitHub release. The tag must match the version in `Cargo.toml`, and a tag with a hyphen, such as `v1.0.0-beta.1`, is marked as a pre-release. Release builds open no console window.
+Pushing a tag such as `v0.9.4` publishes all twelve packages (named `picasso-0.9.4-windows-x64.exe` and so on), the source of the RAW decoder rawler as its license asks (`rawler-<version>-source.tar.gz`), and `SHA256SUMS.txt` on a new GitHub release. The tag must match the version in `Cargo.toml`, and a tag with a hyphen, such as `v1.0.0-beta.1`, is marked as a pre-release. Release builds open no console window.
 
 The release notes are the version's section of [`CHANGELOG.md`](CHANGELOG.md), followed by download instructions. The section must be there and carry the release date before tagging: a first **Changelog** job checks this, and the tag's run fails within seconds if the tag doesn't match `Cargo.toml` or the section is missing or still says `Unreleased`. `scripts/release-notes.sh 0.9.4` (or `make release-notes`) prints the notes for a version. CI only reads `CHANGELOG.md`; it never edits it.
 
-To make a release:
+Every package but the bare `.exe` carries `THIRD-PARTY-NOTICES.txt`, the licenses of the libraries built into Picasso (in `Picasso.app` it is in `Contents/Resources`). **About** and `picasso --version` name the commit a build was made from, and the release notes name it too.
 
-1. Set `version` in `Cargo.toml` and run `cargo build` so `Cargo.lock` picks it up.
-2. In `CHANGELOG.md`, change the version's heading from `## [0.9.4] - Unreleased` to the release date, for example `## [0.9.4] - 2026-10-26`, and check its entries. At the bottom, point the version's link at the tag, for example `[0.9.4]: https://github.com/kuopinghsu/picasso/compare/v0.9.3...v0.9.4`.
-3. Run `make test`, and preview the notes with `make release-notes`.
-4. Commit and push to `main`, then wait for CI to pass on every platform. Tagging builds the commit the tag points at, so a commit that fails CI fails the release too.
-5. Tag that commit and push the tag:
-
-   ```bash
-   git tag -a v0.9.4 -m "Picasso 0.9.4"
-   git push origin v0.9.4
-   ```
-
-6. Start the next version: add a `## [0.9.5] - Unreleased` section at the top of `CHANGELOG.md`, with a `[0.9.5]: https://github.com/kuopinghsu/picasso/compare/v0.9.4...HEAD` link at the bottom, and record changes there as they land.
-
-If a release build fails, fix it on `main`, then move the tag to the new commit and push it again (`git tag -f -a v0.9.4 -m "Picasso 0.9.4"` and `git push -f origin v0.9.4`).
+[`docs/RELEASING.md`](docs/RELEASING.md) has the steps and the checklist for making a release. A published version never changes: a problem found afterwards is fixed in the next patch version, not by moving the tag, and CI refuses to publish a version twice.
 
 ## Data
 
@@ -109,17 +109,30 @@ The library database (`picasso.db`) lives in the app data directory. Thumbnails 
 
 Picasso backs up the library database once a week, when it starts, into a `backups` folder next to `picasso.db`, and keeps the five newest (`picasso-YYYYMMDD-HHMMSS.db`). **Settings → Storage** makes one on demand and restores one: Picasso backs up the current library first, then restarts with the restored one. The cache also holds `hashes.db`, the file hashes of the last duplicate search, so the next search reads only new or changed files.
 
+A backup holds everything in the library: the folders you added and excluded, every photo's stars, caption, rotation, place, changed date, albums, and edits with their undo history, your edit presets, GPS tracks, and the data of photos removed in the last 90 days. It doesn't hold the photos and videos themselves, which you back up as you would any files; `settings.json`, which you can copy; or the cache, which Picasso makes again. Places set with **Geotag from GPS track** are also in a `.picasso-geotags.json` file beside the photos. `docs/DATABASE.md` describes the library in detail.
+
+If the library can't be opened, for example after a disk error, Picasso shows what went wrong instead of starting, and never overwrites the library:
+
+- **Try again** starts Picasso again, for when the library was only busy, such as while a backup or sync tool had it open.
+- **Restore the backup of …** puts the newest backup that can be read in its place. Changes since that backup are lost.
+- **Start a new library** starts over with your Pictures folder; add your other folders again.
+- **Open library folder** shows the files, and **Quit** leaves everything as it is.
+
+Restoring and starting over are offered only when the library file itself is damaged; a library that is only busy, perhaps because another Picasso has it open, or that Picasso isn't allowed to read, is never replaced. They keep the library that couldn't be opened in the same folder, renamed `picasso-damaged-YYYYMMDD-HHMMSS.db`, so nothing is lost. To restore by hand instead, quit Picasso, rename `picasso.db` (and its `-wal` and `-shm` files, if any), and copy a file from `backups` to `picasso.db`.
+
+Picasso rescans every folder when it starts and watches them while it runs; **F5** rescans them. Unchanged files are skipped without being opened. A folder that is missing, such as on an unplugged drive, keeps its photos until it is back. To move a photo folder to a new place, move it, remove the old place from **Settings → Folders**, then add the new one with **+ Import**. The photos are recognized by their size, modification time, and date taken, and get their stars, captions, albums, and edits back. Moving photos between folders Picasso already watches needs nothing: a rescan finds them.
+
 ## Settings
 
 Click the gear at the top right, or press Ctrl+, (⌘, on macOS), to open **Settings**:
 
 - **General:** interface language, color theme, thumbnail size, slideshow interval, whether to ask before moving photos to the trash, and **Updates**: whether to check once a day for a newer release, with **Check now**. The check only asks GitHub for the latest version number; when there is a newer one, a link to its download page appears at the top right.
-- **Folders:** every folder Picasso watches, each with buttons to open it, rescan it, or remove it from the library (the files stay on disk), plus **Import** and **Rescan all folders**. **Excluded folders** lists subfolders Picasso skips, with **Include again**; **Exclude a folder…** adds one, as does **Exclude from scanning** on a subfolder's right-click menu in the folder tree. An excluded folder's photos leave the library, and their stars, captions, and edits come back if you include it again within 90 days.
+- **Folders:** every folder Picasso watches, each with buttons to open it, rescan it, or remove it from the library after asking (the files stay on disk, and the photos' stars, captions, albums, and edits come back if you add the folder again within 90 days), plus **Import** and **Rescan all folders**. **Excluded folders** lists subfolders Picasso skips, with **Include again**; **Exclude a folder…** adds one, as does **Exclude from scanning** on a subfolder's right-click menu in the folder tree. An excluded folder's photos leave the library, and their stars, captions, and edits come back if you include it again within 90 days.
 - **File types:** which files Picasso adds when it scans: JPEG, PNG, GIF, WebP, BMP, TIFF, HEIC/HEIF, camera RAW, and videos, with **Select all**. When the dialog closes, every folder is rescanned. Files of a type you turned off leave the library, with their stars, captions, and edits, but stay on disk.
 - **Map:** the map shown in Places and the Map panel:
   - **OpenFreeMap Liberty** (the default) is free and needs no key. Picasso downloads OpenFreeMap's vector data and draws it in the colors of the Liberty style, with place, water, and road names in the app language.
   - **OpenStreetMap** is the standard OpenStreetMap map.
-  - **CartoDB Positron** is a light, quiet map. It needs a free CARTO API key, which you paste into the field under it; **Get a free key** opens CARTO's sign-up page. The key is saved encrypted with a key derived from this computer's machine ID, so it shows as `********` afterwards and a copied `settings.json` doesn't work on another computer. **Remove** clears it.
+  - **CARTO** offers three styles, picked under it: **Voyager** (colorful and detailed), **Positron** (light and quiet), and **Dark Matter** (dark, suited to the dark theme). They share one free CARTO API key, which you paste into the field below the styles; **Get a free key** opens CARTO's sign-up page. The key is saved encrypted with a key derived from this computer's machine ID, so it shows as `********` afterwards and a copied `settings.json` doesn't work on another computer. **Remove** clears it.
   - **Esri World Imagery** shows satellite and aerial photos.
 
   Each source keeps its own tiles in the cache.
@@ -138,8 +151,8 @@ The first time a new version starts, it copies the settings an older version kep
 ## What it does
 
 - Folder library with a date-grouped thumbnail grid, search, star filter, and sorting by date (newest or oldest first) or by name. **Sort by Name, edited** shows only the photos you have edited. Dragging the scroll bar shows the date in view, or the first file name when sorted by name. When sorted by date, a strip beside the grid lists the years, with the months of the year in view; click one to jump there. The library is read on a background thread, so the window stays responsive while a large library loads or a scan adds photos.
-- Search finds photos that match every word you type, in the file name, the folder path below the library folder, the caption, the camera, or an album name. A date such as `2019`, `2019-05`, or `2019-05-17` (also with `/` or `.`) finds photos taken in that year, month, or day, so `2019-05 beach` finds the May 2019 beach photos.
-- Folder tree with photo counts, albums, starred photos, and Places, a map of every photo with GPS. The map comes from OpenFreeMap, OpenStreetMap, CARTO, or Esri; pick one in **Settings → Map**.
+- Search finds photos that match every word you type, in the file name, the folder path below the library folder, the caption, the camera, the lens, or an album name. A date such as `2019`, `2019-05`, or `2019-05-17` (also with `/` or `.`) finds photos taken in that year, month, or day, so `2019-05 beach` finds the May 2019 beach photos.
+- Folder tree with photo counts, albums, starred photos, and Places, a map of every photo with GPS. The map comes from OpenFreeMap, OpenStreetMap, CARTO, or Esri; pick one in **Settings → Map**. Places and the Map panel zoom in to street level, about 30 m across a hundred points, with a scale bar in the corner.
 - GPS tracks: `.gpx` and `.kml` files in your folders are read by the scan and drawn as colored paths under the photo pins, in Places and on the Map panel. GPX tracks and routes are read, as are KML lines and `gx:Track` recordings; KMZ files and the outlines of areas are not. Hover over a track for its name, start time, distance, and duration, and double-click it to zoom to it. **Tracks** in the Places toolbar turns them off. Like photos, a track file is read again only when it changes, and one that can't be read is listed with the other unreadable files.
 - **Travel Map** in the sidebar colors the countries, and the states and provinces of the largest countries, where your geotagged photos were taken, on a globe or a flat map. Places with more photos are a deeper color. It counts your countries and continents, shows the next goal and the coverage of each continent, and clicking a colored place shows its photos in Places. The map follows the photos' GPS tags only; nothing is marked by hand. It works offline: the borders are public-domain [Natural Earth](https://www.naturalearthdata.com) data built into the app by `scripts/world-map.py`.
 - Info and Map panel beside the grid with the photo's EXIF and location, and a details panel in the viewer with a histogram
@@ -154,7 +167,7 @@ The first time a new version starts, it copies the settings an older version kep
 - Import of stars, captions, and rotation from a folder's `.picasa.ini`
 - Non-destructive editor modeled on Lightcraft's Develop module: light, tone curve, color mixer, color grading, detail, crop, masks, presets, and export to a new file
 - Light, dark, or system color theme, and ten interface languages
-- About dialog with the version and build date: click the logo at the top left
+- About dialog with the version, build date, and commit: click the logo at the top left
 
 The app icon is `build/picasso.ico`, which holds every size from 16 to 256 px. At build time `build.rs` unpacks the 256 px image for the window and the in-app logo. On Windows it also embeds the icon in `picasso.exe` together with the version details. Without the Windows SDK, the build still succeeds and prints a warning, and the window still shows the icon. To change the icon, replace `build/picasso.ico` with one whose 256 px image is stored as a 32-bit bitmap rather than PNG, then rebuild. The Linux packages use `build/picasso.png`, the same 256 px image, with `build/picasso.desktop`, and the macOS app turns the PNG into `picasso.icns`; update the PNG along with the `.ico`.
 
@@ -262,6 +275,14 @@ JPEG, PNG, GIF, WebP, BMP, TIFF, HEIC/HEIF, and camera RAW (DNG, CR2, CR3, NEF, 
 
 Videos (MP4, MOV, M4V, AVI, MKV, WebM, WMV, MPEG, MTS/M2TS, 3GP, and more) show in the grid with a play badge and their length, and play inside the viewer with sound. Video needs FFmpeg; see [Prerequisites](#prerequisites). Videos found while FFmpeg is missing are indexed again once it is installed.
 
+## Documentation
+
+- [`docs/DATABASE.md`](docs/DATABASE.md): what the library holds, its versions, and how an older one is upgraded
+- [`docs/TESTING.md`](docs/TESTING.md): what the tests cover, and what to try by hand before a release
+- [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md): the benchmark, its baselines, and how Picasso does on external and network drives
+- [`docs/RELEASING.md`](docs/RELEASING.md): making a release
+- [`docs/ROADMAP.md`](docs/ROADMAP.md): ideas that were weighed, and where they stand
+
 ## License
 
-MIT. See [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE). The libraries Picasso is built from are listed with their licenses in `THIRD-PARTY-NOTICES.txt`, which comes with the packages and is made by `make notices`.

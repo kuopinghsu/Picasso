@@ -816,4 +816,9 @@ pub(super) const TABLE: &[(&str, &str)] = &[
     ("Remove {} from Picasso?", "Picasso에서 {}을(를) 제거할까요?"),
     ("This takes {} out of the library; the files stay where they are. Stars, captions, albums, and edits are kept for 90 days and come back if you add the folder again, even from a new place.", "{}이(가) 라이브러리에서 빠지며 파일은 그대로 남습니다. 별표, 캡션, 앨범, 편집은 90일 동안 보관되며, 폴더를 다시 추가하면(새 위치로 옮긴 경우에도) 돌아옵니다."),
     ("Couldn't remove the folder: {}", "폴더를 제거할 수 없습니다: {}"),
+    ("Remove…", "제거…"),
+    ("{} wasn't found, so it stays in the library. Is its drive connected?", "{}을(를) 찾을 수 없어 라이브러리에 남겨 둡니다. 드라이브가 연결되어 있나요?"),
+    ("The library file itself is intact, so Picasso won't replace it. Close other programs that may be using it, or free some disk space, then try again.", "라이브러리 파일 자체는 손상되지 않았으므로 Picasso가 교체하지 않습니다. 이 파일을 사용 중일 수 있는 다른 프로그램을 닫거나 디스크 공간을 확보한 다음 다시 시도하세요."),
+    ("Checking the library…", "라이브러리를 확인하는 중…"),
+    ("Picasso isn't allowed to read the library file. Check who owns it and its permissions, then try again.", "Picasso에 라이브러리 파일을 읽을 권한이 없습니다. 파일의 소유자와 권한을 확인한 다음 다시 시도하세요."),
 ];

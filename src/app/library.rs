@@ -837,7 +837,7 @@ impl PicassoApp {
                 ui.close();
             }
             if ui.button(tr("Move to trash")).clicked() {
-                self.modal = super::Modal::Trash { ids: vec![id] };
+                self.modal = super::Modal::trash(vec![id]);
                 ui.close();
             }
         });

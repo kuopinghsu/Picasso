@@ -157,7 +157,7 @@ impl PicassoApp {
             rows.push(("Library folder", folder_label(&folder.path)));
         }
         if let Some((lat, lon)) = photo.place() {
-            let kind = tr(if photo.pinned() { "pinned" } else { "GPS" });
+            let kind = if photo.pinned() { tr("pinned") } else { "GPS" };
             rows.push(("Location", format!("{lat:.5}, {lon:.5} ({kind})")));
         }
         property_grid(ui, ("props", photo.id), &rows);

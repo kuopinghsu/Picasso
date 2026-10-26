@@ -1,7 +1,7 @@
 //! Image decode, EXIF orientation, and thumbnail encoding.
 
 use std::fs::File;
-use std::io::{BufReader, Cursor, Read};
+use std::io::{BufReader, Cursor, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -253,7 +253,8 @@ pub fn save_lossless(path: &Path, rgba: &ImageBuffer<Rgba<u8>, Vec<u8>>, format:
 }
 
 /// Writes `bytes` under a temporary name, then renames it to `path`. A full
-/// disk or a crash leaves the temporary file, never half of `path`.
+/// disk or a crash leaves the temporary file, never half of `path`; the bytes
+/// reach the disk before the rename, so a power cut can't leave `path` empty.
 fn write_whole(path: &Path, bytes: &[u8]) -> Result<(), String> {
     static NEXT: AtomicU64 = AtomicU64::new(0);
     if let Some(parent) = path.parent() {
@@ -262,7 +263,12 @@ fn write_whole(path: &Path, bytes: &[u8]) -> Result<(), String> {
     let mut temporary = path.as_os_str().to_owned();
     temporary.push(format!(".{}-{}.tmp", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
     let temporary = PathBuf::from(temporary);
-    let written = std::fs::write(&temporary, bytes).and_then(|()| std::fs::rename(&temporary, path));
+    let written = std::fs::File::create(&temporary)
+        .and_then(|mut file| {
+            file.write_all(bytes)?;
+            file.sync_all()
+        })
+        .and_then(|()| std::fs::rename(&temporary, path));
     written.map_err(|err| {
         let _ = std::fs::remove_file(&temporary);
         err.to_string()

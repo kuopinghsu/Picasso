@@ -3,6 +3,80 @@
 All notable changes to Picasso are listed here, newest first. Each release on GitHub uses its
 section of this file as the release notes.
 
+## [0.9.5] - Unreleased
+
+### Added
+
+- Places and the Map panel zoom three levels closer, to about 30 m across a hundred points, and
+  show a scale bar in the bottom-left corner. Where a map source has no tiles that close, such as
+  Esri imagery in some places, the closest tiles it has are enlarged instead of showing a "Map data
+  not yet available" picture. Clicking a cluster whose photos were taken at one spot selects them
+  rather than zooming further.
+- A zoom bar between the + and − buttons of Places and the Map panel, with a stop for each zoom
+  level: click or drag along it to go straight to a level. The control fades into the map until
+  the pointer comes near it, and shows at full strength while you zoom with a two-finger pinch or
+  the wheel.
+- Two more CARTO map styles: **Voyager**, colorful and detailed, and **Dark Matter**, a dark map
+  that suits the dark theme. **Settings → Map** lists CARTO once, with a style picker for Voyager,
+  Positron, and Dark Matter, which share one API key.
+- Packages for 64-bit Arm: `picasso-…-windows-arm64.exe` and `.zip` for Windows on Arm, and
+  `picasso-…-linux-arm64.AppImage`, `.deb`, and `.tar.gz` for Arm Linux. They are built and tested
+  on Arm machines.
+- When the library can't be opened, for example after a disk error, Picasso shows a window
+  instead of closing: **Try again**, **Restore the backup of …** (the newest one that can be
+  read), **Start a new library**, **Open library folder**, or **Quit**. The library that couldn't
+  be opened is never overwritten; it stays beside the new one as `picasso-damaged-….db`. Restoring
+  and starting over are offered only when the library file itself is damaged, not when it is only
+  busy or Picasso isn't allowed to read it.
+- **About** and `picasso --version` show the commit a build was made from, and the release notes
+  name it too.
+- Every package except the bare `.exe` includes `THIRD-PARTY-NOTICES.txt` with the licenses of
+  the libraries built into Picasso; the AppImage also carries the licenses of the system libraries
+  it bundles. `make notices` writes the file. Each release also carries the source of rawler, the
+  RAW decoder, as its license asks.
+- The Mac app is signed with a Developer ID and notarized by Apple when the project's signing
+  secrets are set up; the release notes say which.
+- Documentation: a Quick start at the top of the README, what a backup holds and how to recover
+  or move a library, and `docs/DATABASE.md`, `docs/TESTING.md`, `docs/PERFORMANCE.md`,
+  `docs/RELEASING.md`, and `docs/ROADMAP.md`.
+- For developers: `make bench` measures scanning, thumbnails, search, and memory on a made-up
+  library, and `make bench-check` fails when they pass the limits in `docs/PERFORMANCE.md`.
+  `PICASSO_FRAME_STATS=1` prints how long frames take. `make deny` checks the dependencies for
+  security advisories and licenses, and `make check-docs` checks links, `make` targets, and
+  settings named in the docs. CI runs all three, and installs, starts, and removes the `.deb`.
+- `make help` lists the Makefile's targets. New ones: `make ci` runs the checks CI runs, `make test
+  T=name` runs only matching tests, `make install` and `make uninstall` put Picasso under
+  `~/.local` on Linux, and `make debug`, `make check`, `make lint`, `make run-stats`,
+  `make corpus`, `make world-map`, and `make version`.
+
+### Changed
+
+- The CartoDB Positron map is now called **CARTO Positron**, after the company's current name.
+- **Remove** in **Settings → Folders** and on the folder tree asks first, and says the files stay
+  where they are.
+- The library records its layout version, and an upgrade from an older version happens in one
+  step: if it is interrupted, the library stays as it was and the upgrade runs again next time.
+- Sizes use a decimal comma in German, Spanish, French, Italian, and Portuguese, such as 1,5 MB,
+  and French units in French, such as 1,5 Mo.
+- The Traditional Chinese window calls the library 圖庫 everywhere.
+- A release can no longer be published twice under one version, and is published only when all
+  twelve packages are there; a problem found later is fixed in the next version.
+- Dependencies updated for security advisories in rustls and webpki.
+
+### Fixed
+
+- Removing a folder lost the stars, captions, albums, and edits of its photos at once. They are
+  now kept for 90 days, and come back when the folder is added again, even from a new place.
+- Making thumbnails held on to about 1 MB of memory for each photo, 4.7 GB for 2,000 photos,
+  because the JPEG decoder started threads for every photo. The same run now peaks at 126 MB.
+- **Move to trash** counted photos as trashed when their drive was disconnected, so they left the
+  library although the files weren't touched. They now stay, with a note to connect the drive, and
+  files the trash refuses are reported instead of being counted as trashed.
+- An export to PNG or TIFF that failed partway could leave half a file under the final name; like
+  JPEG, it is now written in full before it takes the name. Saving an edited copy over the original
+  photo through a link or a name in another letter case is refused, as saving to the same path was.
+- A backup that couldn't be written left a partial file in the `backups` folder.
+
 ## [0.9.4] - 2026-10-25
 
 ### Added
@@ -158,6 +232,7 @@ First release.
 - Light, dark or system theme, ten interface languages, and Help & Shortcuts.
 - Packages for Windows (`.exe` and `.zip`) and Linux (`.deb` and `.tar.gz`).
 
+[0.9.5]: https://github.com/kuopinghsu/picasso/compare/v0.9.4...HEAD
 [0.9.4]: https://github.com/kuopinghsu/picasso/compare/v0.9.3...v0.9.4
 [0.9.3]: https://github.com/kuopinghsu/picasso/compare/v0.9.2...v0.9.3
 [0.9.2]: https://github.com/kuopinghsu/picasso/compare/v0.9.1...v0.9.2

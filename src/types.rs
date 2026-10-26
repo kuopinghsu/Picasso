@@ -370,7 +370,9 @@ fn bytes_in(bytes: u64, lang: crate::i18n::Lang) -> String {
         format!("{:.2} GB", n / GB)
     };
     match lang {
-        Lang::German | Lang::Spanish | Lang::French | Lang::Italian | Lang::Portuguese => text.replace('.', ","),
+        // French counts in octets: o, Ko, Mo, Go.
+        Lang::French => text.replace('.', ",").replace('B', "o"),
+        Lang::German | Lang::Spanish | Lang::Italian | Lang::Portuguese => text.replace('.', ","),
         _ => text,
     }
 }
@@ -632,7 +634,9 @@ mod tests {
         assert_eq!(bytes_in(1_572_864, Lang::English), "1.5 MB");
         assert_eq!(bytes_in(1_572_864, Lang::TraditionalChinese), "1.5 MB");
         assert_eq!(bytes_in(1_572_864, Lang::German), "1,5 MB");
-        assert_eq!(bytes_in(3 * 1024 * 1024 * 1024 / 2, Lang::French), "1,50 GB");
+        assert_eq!(bytes_in(3 * 1024 * 1024 * 1024 / 2, Lang::French), "1,50 Go");
+        assert_eq!(bytes_in(512, Lang::French), "512 o");
+        assert_eq!(bytes_in(2048, Lang::French), "2 Ko");
     }
 
     #[test]

@@ -42,7 +42,9 @@ fn main() -> eframe::Result {
         std::process::exit(geotag::cli(&args[1..]));
     }
     if args.first().is_some_and(|arg| arg.as_os_str() == "--version") {
-        println!("Picasso {} ({} {})", env!("CARGO_PKG_VERSION"), env!("PICASSO_BUILD_DATE"), env!("PICASSO_COMMIT"));
+        attach_console();
+        let build = [env!("PICASSO_BUILD_DATE"), env!("PICASSO_COMMIT")].join(" ");
+        println!("Picasso {} ({})", env!("CARGO_PKG_VERSION"), build.trim_end());
         return Ok(());
     }
     prefer_wsl_gl();
@@ -56,6 +58,25 @@ fn main() -> eframe::Result {
     };
     run(&args, renderer)
 }
+
+/// A release build on Windows has no console of its own; the command line
+/// output goes to the console it was started from.
+#[cfg(windows)]
+fn attach_console() {
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn AttachConsole(process: u32) -> i32;
+    }
+    const ATTACH_PARENT_PROCESS: u32 = u32::MAX;
+    // SAFETY: AttachConsole takes a plain process id and fails harmlessly
+    // when there is no console or one is attached already.
+    unsafe {
+        AttachConsole(ATTACH_PARENT_PROCESS);
+    }
+}
+
+#[cfg(not(windows))]
+fn attach_console() {}
 
 /// WSLg exposes the GPU through `/dev/dxg`. Its Wayland EGL path binds the
 /// dummy `/dev/dri` device, then the compositor closes the socket

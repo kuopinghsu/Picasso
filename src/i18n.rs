@@ -355,7 +355,47 @@ mod tests {
         );
     }
 
-    /// Text in each `tr("…")` and `trf("…", …)` call of the source files.
+    /// The string literals in the first argument of a call, given the code
+    /// after its opening parenthesis: `"A"`, or both of `if x { "A" } else { "B" }`.
+    fn first_argument_literals(code: &str) -> Vec<String> {
+        let mut found = Vec::new();
+        let mut depth = 0;
+        let mut chars = code.chars().peekable();
+        while let Some(c) = chars.next() {
+            match c {
+                '(' | '[' | '{' => depth += 1,
+                ')' | ']' | '}' if depth == 0 => break,
+                ')' | ']' | '}' => depth -= 1,
+                ',' if depth == 0 => break,
+                '/' if chars.peek() == Some(&'/') => {
+                    chars.by_ref().find(|c| *c == '\n');
+                }
+                '"' => {
+                    let mut text = String::new();
+                    while let Some(c) = chars.next() {
+                        match c {
+                            '"' => break,
+                            '\\' => match chars.next() {
+                                Some('n') => text.push('\n'),
+                                // A line continuation: the break and the next line's indent go.
+                                Some('\n') => while chars.next_if(|c| c.is_whitespace()).is_some() {},
+                                Some(other) => text.push(other),
+                                None => break,
+                            },
+                            other => text.push(other),
+                        }
+                    }
+                    found.push(text);
+                }
+                _ => {}
+            }
+        }
+        found
+    }
+
+    /// Text in each `tr(…)` and `trf(…, …)` call of the source files: the
+    /// literals written in the call itself, not those it reaches through a
+    /// variable, a constant, or a function.
     fn source_texts() -> Vec<(String, String)> {
         fn walk(dir: &std::path::Path, files: &mut Vec<std::path::PathBuf>) {
             for entry in std::fs::read_dir(dir).unwrap().flatten() {
@@ -381,26 +421,23 @@ mod tests {
                     if before.is_some_and(|c| c.is_alphanumeric() || c == '_' || c == ':') && !code[..at].ends_with("i18n::") {
                         continue;
                     }
-                    let rest = code[at + call.len()..].trim_start();
-                    let Some(literal) = rest.strip_prefix('"') else { continue };
-                    let mut text = String::new();
-                    let mut chars = literal.chars();
-                    while let Some(c) = chars.next() {
-                        match c {
-                            '"' => break,
-                            '\\' => match chars.next() {
-                                Some('n') => text.push('\n'),
-                                Some(other) => text.push(other),
-                                None => break,
-                            },
-                            other => text.push(other),
-                        }
+                    for text in first_argument_literals(&code[at + call.len()..]) {
+                        found.push((name.clone(), text));
                     }
-                    found.push((name.clone(), text));
                 }
             }
         }
         found
+    }
+
+    #[test]
+    fn the_source_scan_reads_every_literal_of_the_first_argument() {
+        assert_eq!(first_argument_literals(r#""Star")"#), ["Star"]);
+        assert_eq!(first_argument_literals(r#"if on { "Unstar" } else { "Star" }).clicked()"#), ["Unstar", "Star"]);
+        assert_eq!(first_argument_literals(r#"match sort { Sort::Name => "Name", _ => "Date" })"#), ["Name", "Date"]);
+        assert_eq!(first_argument_literals("\"{} of {}\", &[&\"a\", &\"b\"])"), ["{} of {}"]);
+        assert_eq!(first_argument_literals("\n    // a \"quote\"\n    \"Said \\\"hi\\\"\",\n)"), ["Said \"hi\""]);
+        assert!(first_argument_literals("label).to_string()").is_empty());
     }
 
     #[test]

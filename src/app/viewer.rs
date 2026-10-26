@@ -259,7 +259,7 @@ impl PicassoApp {
             }
             ui.separator();
             if ui.button(tr("Move to trash")).clicked() {
-                self.modal = super::Modal::Trash { ids: vec![photo.id] };
+                self.modal = super::Modal::trash(vec![photo.id]);
             }
         });
         if popup.is_none() {
@@ -481,11 +481,11 @@ impl PicassoApp {
                 detail(ui, "Folder", &folder_label(&folder.path));
             }
             if let Some((lat, lon)) = photo.place() {
-                let kind = tr(if photo.pinned() { "pinned" } else { "GPS" });
+                let kind = if photo.pinned() { tr("pinned") } else { "GPS" };
                 detail(ui, "Place", &format!("{lat:.5}, {lon:.5} ({kind})"));
             }
             ui.add_space(10.0);
-            ui.label(egui::RichText::new(tr(if photo.is_video() { "Video" } else { "EXIF" })).strong());
+            ui.label(egui::RichText::new(if photo.is_video() { tr("Video") } else { "EXIF" }).strong());
             ui.add_space(4.0);
             match &info {
                 None => {
@@ -542,7 +542,7 @@ impl PicassoApp {
                 super::places::open_osm(lat, lon, zoom);
             }
             if ui.button(tr("Move to trash")).clicked() {
-                self.modal = super::Modal::Trash { ids: vec![photo.id] };
+                self.modal = super::Modal::trash(vec![photo.id]);
             }
         }
     }

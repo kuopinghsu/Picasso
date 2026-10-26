@@ -47,7 +47,8 @@ exceptions = [
     # The RAW decoder. Picasso is open source, so anyone can rebuild it with
     # a changed copy, as the LGPL asks of a statically linked library.
     { allow = ["LGPL-2.1"], crate = "rawler" },
-    # Used unmodified; the MPL asks only that changes to its files be shared.
+    # Used unmodified. The MPL asks that its source be available and that
+    # recipients be told where, which THIRD-PARTY-NOTICES.txt does.
     { allow = ["MPL-2.0"], crate = "option-ext" },
 ]
 

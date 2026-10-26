@@ -298,33 +298,67 @@ fn an_export_never_replaces_its_original() {
         assert!(edit::export(&source, &link, &Settings::default(), 0, options).is_err(), "a link to the original");
     }
     assert_eq!(std::fs::read(&source).unwrap(), bytes);
-    let leftovers: Vec<_> = std::fs::read_dir(&dir).unwrap().flatten().filter(|entry| entry.path().extension().is_some_and(|ext| ext == "tmp")).collect();
-    assert!(leftovers.is_empty());
+    let copy = dir.join("copy.jpg");
+    edit::export(&source, &copy, &Settings::default(), 0, options).unwrap();
+    std::fs::write(&copy, b"an older export").unwrap();
+    edit::export(&source, &copy, &Settings::default(), 0, options).unwrap();
+    assert_eq!(image::image_dimensions(&copy).unwrap(), (96, 64), "the second export replaces the first");
+    assert_eq!(std::fs::read(&source).unwrap(), bytes);
+    let names: Vec<_> = std::fs::read_dir(&dir).unwrap().flatten().map(|entry| entry.file_name()).collect();
+    assert!(names.iter().all(|name| !name.to_string_lossy().ends_with(".tmp")), "temporary files left: {names:?}");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// The photos under `dir` and its subfolders, in name order. Videos are left
+/// out: they are read by ffmpeg, not by these checks.
+fn photos_under(dir: &Path) -> Vec<PathBuf> {
+    let mut photos = Vec::new();
+    let mut folders = vec![dir.to_path_buf()];
+    while let Some(folder) = folders.pop() {
+        let entries = std::fs::read_dir(&folder).unwrap_or_else(|err| panic!("{}: {err}", folder.display()));
+        for path in entries.flatten().map(|entry| entry.path()) {
+            if path.is_dir() {
+                folders.push(path);
+            } else if crate::types::is_media_path(&path) && !crate::types::is_video_path(&path) {
+                photos.push(path);
+            }
+        }
+    }
+    photos.sort();
+    photos
+}
+
 /// Real photos from `PICASSO_CORPUS`, when set: each must be read, decode
-/// upright to the size its probe reported, and make a thumbnail.
+/// upright to the size its probe reported, and make a thumbnail of the same
+/// shape. The date and camera read are printed, not checked, since some
+/// photos have neither.
 #[test]
 fn real_photos_in_picasso_corpus_read_and_decode() {
     let Some(root) = std::env::var_os("PICASSO_CORPUS") else { return };
+    let photos = photos_under(Path::new(&root));
+    assert!(!photos.is_empty(), "no photos in {}", Path::new(&root).display());
     let mut checked = 0;
     let mut failed = Vec::new();
-    for entry in std::fs::read_dir(&root).unwrap().flatten() {
-        let path = entry.path();
-        if !path.is_file() || !crate::types::is_media_path(&path) || crate::types::is_video_path(&path) {
-            continue;
-        }
+    for path in photos {
         let name = path.display().to_string();
         let started = std::time::Instant::now();
         let result = (|| -> Result<String, String> {
             let probe = image_io::probe(&path, 0)?;
             let image = image_io::load_oriented(&path)?;
-            if (image.width(), image.height()) != (probe.width, probe.height) {
-                return Err(format!("probe says {}×{}, decode gives {}×{}", probe.width, probe.height, image.width(), image.height()));
+            let (w, h) = (probe.width, probe.height);
+            if (image.width(), image.height()) != (w, h) {
+                return Err(format!("probe says {w}×{h}, decode gives {}×{}", image.width(), image.height()));
             }
-            image_io::load_for_tile(&path, 256)?;
-            Ok(format!("{}×{} {}", probe.width, probe.height, probe.camera))
+            let tile = image_io::thumbnail_rgba(&image_io::load_for_tile(&path, 256)?, 256);
+            let (tw, th) = tile.dimensions();
+            // The short side follows from the long one, give or take rounding.
+            let off = if w >= h { th as f64 - tw as f64 * h as f64 / w as f64 } else { tw as f64 - th as f64 * w as f64 / h as f64 };
+            if off.abs() > 1.5 {
+                return Err(format!("{w}×{h} gives a {tw}×{th} thumbnail"));
+            }
+            let date = if probe.taken_at == 0 { "no date".to_string() } else { crate::types::format_timestamp(probe.taken_at) };
+            let camera = if probe.camera.is_empty() { "no camera" } else { probe.camera.as_str() };
+            Ok(format!("{w}×{h}, {date}, {camera}"))
         })();
         match result {
             Ok(summary) => println!("ok   {name}: {summary} in {:?}", started.elapsed()),

@@ -1,4 +1,6 @@
+*.bak
 /target
 **/*.rs.bk
 /dist
+/THIRD-PARTY-NOTICES.txt
 .DS_Store

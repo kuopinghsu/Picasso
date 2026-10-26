@@ -11,13 +11,18 @@
 here=$(dirname "$(readlink -f "$0")")
 
 tab=$(printf '\t')
+# The ABI that ldconfig -p shows for this machine's libraries.
+case $(uname -m) in
+    aarch64) abi=AArch64 ;;
+    *) abi=x86-64 ;;
+esac
 installed=$({ /sbin/ldconfig -p || ldconfig -p; } 2>/dev/null)
 bundled=
 for dir in "$here"/usr/lib/picasso/*/; do
     dir=${dir%/}
     name=${dir##*/}
     case $installed in
-        *"$tab$name (libc6,x86-64"*) ;;
+        *"$tab$name (libc6,$abi"*) ;;
         *) bundled=$bundled${bundled:+:}$dir ;;
     esac
 done

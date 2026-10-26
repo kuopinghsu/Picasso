@@ -814,6 +814,11 @@ pub(super) const TABLE: &[(&str, &str)] = &[
     ("To undo it, put the files back from the Trash. Stars, captions, albums, and edits are kept for 90 days in case the files come back.", "Zum Rückgängigmachen legen Sie die Dateien aus dem Papierkorb zurück. Sterne, Beschriftungen, Alben und Bearbeitungen bleiben 90 Tage erhalten, falls die Dateien zurückkommen."),
     ("Remove from Picasso", "Aus Picasso entfernen"),
     ("Remove {} from Picasso?", "{} aus Picasso entfernen?"),
-    ("This takes {} out of the library; the files stay where they are. Stars, captions, albums, and edits are kept for 90 days and come back if you add the folder again, even from a new place.", "Damit verlassen {} die Bibliothek; die Dateien bleiben, wo sie sind. Sterne, Beschriftungen, Alben und Bearbeitungen werden 90 Tage lang aufbewahrt und kehren zurück, wenn Sie den Ordner erneut hinzufügen, auch von einem neuen Ort."),
+    ("This takes {} out of the library; the files stay where they are. Stars, captions, albums, and edits are kept for 90 days and come back if you add the folder again, even from a new place.", "Damit nimmt Picasso {} aus der Bibliothek; die Dateien bleiben, wo sie sind. Sterne, Beschriftungen, Alben und Bearbeitungen werden 90 Tage lang aufbewahrt und kehren zurück, wenn Sie den Ordner erneut hinzufügen, auch von einem neuen Ort."),
     ("Couldn't remove the folder: {}", "Der Ordner konnte nicht entfernt werden: {}"),
+    ("Remove…", "Entfernen…"),
+    ("{} wasn't found, so it stays in the library. Is its drive connected?", "{} wurde nicht gefunden und bleibt daher in der Bibliothek. Ist das Laufwerk angeschlossen?"),
+    ("The library file itself is intact, so Picasso won't replace it. Close other programs that may be using it, or free some disk space, then try again.", "Die Bibliotheksdatei selbst ist intakt, daher ersetzt Picasso sie nicht. Schließen Sie andere Programme, die sie verwenden könnten, oder geben Sie Speicherplatz frei, und versuchen Sie es dann erneut."),
+    ("Checking the library…", "Die Bibliothek wird geprüft…"),
+    ("Picasso isn't allowed to read the library file. Check who owns it and its permissions, then try again.", "Picasso darf die Bibliotheksdatei nicht lesen. Prüfen Sie ihren Besitzer und ihre Berechtigungen, und versuchen Sie es dann erneut."),
 ];

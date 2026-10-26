@@ -816,4 +816,9 @@ pub(super) const TABLE: &[(&str, &str)] = &[
     ("Remove {} from Picasso?", "Remover {} do Picasso?"),
     ("This takes {} out of the library; the files stay where they are. Stars, captions, albums, and edits are kept for 90 days and come back if you add the folder again, even from a new place.", "Isso tira {} da biblioteca; os arquivos ficam onde estão. Estrelas, legendas, álbuns e edições são mantidos por 90 dias e voltam se você adicionar a pasta de novo, mesmo de um novo local."),
     ("Couldn't remove the folder: {}", "Não foi possível remover a pasta: {}"),
+    ("Remove…", "Remover…"),
+    ("{} wasn't found, so it stays in the library. Is its drive connected?", "{} não foi encontrado, então continua na biblioteca. A unidade dele está conectada?"),
+    ("The library file itself is intact, so Picasso won't replace it. Close other programs that may be using it, or free some disk space, then try again.", "O arquivo da biblioteca está intacto, então o Picasso não vai substituí-lo. Feche outros programas que possam estar usando-o ou libere espaço em disco e tente novamente."),
+    ("Checking the library…", "Verificando a biblioteca…"),
+    ("Picasso isn't allowed to read the library file. Check who owns it and its permissions, then try again.", "O Picasso não tem permissão para ler o arquivo da biblioteca. Verifique o proprietário e as permissões dele e tente novamente."),
 ];

@@ -1,11 +1,15 @@
 # Builds and tests Picasso on Windows, Linux, and macOS for every push and
 # pull request, then packages it: picasso.exe plus a .zip for Windows, a
-# .tar.gz, a .deb, and an AppImage for Linux, and Picasso.app in a .dmg and a
-# .zip for macOS. The AppImage is started on Ubuntu and RHEL-compatible
-# systems before it is published. Pushing a tag like `v0.9.3` also publishes
+# .tar.gz, a .deb, and an AppImage for Linux, each for x64 and Arm64, and
+# Picasso.app in a .dmg and a .zip for macOS. Every package but the bare .exe
+# carries THIRD-PARTY-NOTICES.txt. The .deb is installed, started, and
+# removed, and the AppImage is started on Ubuntu and RHEL-compatible systems,
+# before they are published. Pushing a tag like `v0.9.5` also publishes
 # every package on a GitHub release, with the version's section of
 # CHANGELOG.md as the release notes. The tag must match the version in
-# Cargo.toml, and CHANGELOG.md must have a dated section for it.
+# Cargo.toml, CHANGELOG.md must have a dated section for it, and a version is
+# published only once.
+# docs/RELEASING.md has the checklist.
 name: CI
 
 on:
@@ -25,21 +29,26 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
+  # The commit built, tested, and named in package names and `picasso
+  # --version` (build.rs). For a pull request it is the branch's own commit
+  # rather than the merge GitHub would test, which is in no branch; main is
+  # tested again once the pull request is merged.
+  SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
 
 jobs:
   # Fails in seconds, not after the builds, when a tag doesn't match
-  # Cargo.toml or CHANGELOG.md has no dated section for it.
+  # Cargo.toml, CHANGELOG.md has no dated section for it, or the documents
+  # name links, make targets, scripts, or settings that don't exist.
   changelog:
-    name: Changelog
+    name: Changelog and docs
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
         with:
-          sparse-checkout: |
-            Cargo.toml
-            CHANGELOG.md
-            scripts/release-notes.sh
-          sparse-checkout-cone-mode: false
+          ref: ${{ env.SOURCE_COMMIT }}
+
+      - name: Docs
+        run: python3 scripts/check-docs.py
 
       - name: Check
         run: |
@@ -61,11 +70,57 @@ jobs:
             }
           fi
 
-  windows:
-    name: Windows x64
-    runs-on: windows-latest
+  # Security advisories, licenses, and sources of the dependencies (deny.toml).
+  # A new advisory fails this job even without a change here, which is the
+  # point: a release waits until the dependency is updated.
+  deny:
+    name: Dependencies
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ env.SOURCE_COMMIT }}
+
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
+          arguments: --locked
+
+  # Each architecture builds and tests on its own kind of machine, so the
+  # tests run on the processor the package is for.
+  windows:
+    name: Windows ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: windows-latest
+            target: x86_64-pc-windows-msvc
+          - arch: arm64
+            runner: windows-11-arm
+            target: aarch64-pc-windows-msvc
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ env.SOURCE_COMMIT }}
+
+      # The Arm image may come without rustup, which rust-toolchain needs.
+      - name: Install rustup
+        if: matrix.arch == 'arm64'
+        shell: pwsh
+        run: |
+          if (-not (Get-Command rustup -ErrorAction SilentlyContinue)) {
+            Invoke-WebRequest https://static.rust-lang.org/rustup/dist/aarch64-pc-windows-msvc/rustup-init.exe -OutFile "$env:RUNNER_TEMP\rustup-init.exe"
+            & "$env:RUNNER_TEMP\rustup-init.exe" -y --default-toolchain none --profile minimal
+            if ($LASTEXITCODE -ne 0) { exit 1 }
+            "$env:USERPROFILE\.cargo\bin" >> $env:GITHUB_PATH
+          }
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.x"
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -89,13 +144,16 @@ jobs:
             }
             $label = $version
           } else {
-            $label = "$version-$($env:GITHUB_SHA.Substring(0, 7))"
+            $label = "$version-$($env:SOURCE_COMMIT.Substring(0, 7))"
           }
-          $name = "picasso-$label-windows-x64"
+          $name = "picasso-$label-windows-${{ matrix.arch }}"
+
+          python scripts/third-party-notices.py --target ${{ matrix.target }} -o THIRD-PARTY-NOTICES.txt
+          if ($LASTEXITCODE -ne 0) { exit 1 }
 
           New-Item -ItemType Directory -Force -Path dist, "staging/$name" | Out-Null
           Copy-Item target/release/picasso.exe "dist/$name.exe"
-          Copy-Item target/release/picasso.exe, README.md, README_zh-TW.md, CHANGELOG.md, LICENSE "staging/$name/"
+          Copy-Item target/release/picasso.exe, README.md, README_zh-TW.md, CHANGELOG.md, LICENSE, THIRD-PARTY-NOTICES.txt "staging/$name/"
           Compress-Archive -Path "staging/$name" -DestinationPath "dist/$name.zip"
 
           Get-ChildItem dist | Format-Table Name, Length
@@ -108,11 +166,25 @@ jobs:
           if-no-files-found: error
 
   linux:
-    name: Linux x64
-    # The oldest supported runner, so the binary runs on older glibc too.
-    runs-on: ubuntu-22.04
+    name: Linux ${{ matrix.arch }}
+    # The oldest supported runners, so the binary runs on older glibc too.
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            deb_arch: amd64
+          - arch: arm64
+            runner: ubuntu-22.04-arm
+            target: aarch64-unknown-linux-gnu
+            deb_arch: arm64
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ env.SOURCE_COMMIT }}
 
       - name: Install build dependencies
         run: |
@@ -125,6 +197,9 @@ jobs:
 
       - name: Test
         run: cargo test --release --locked
+
+      - name: Performance check
+        run: make bench-check
 
       - name: Build
         run: cargo build --release --locked
@@ -142,14 +217,16 @@ jobs:
             fi
             label=$version
           else
-            label="$version-${GITHUB_SHA::7}"
+            label="$version-${SOURCE_COMMIT::7}"
           fi
-          name="picasso-$label-linux-x64"
+          name="picasso-$label-linux-${{ matrix.arch }}"
           strip target/release/picasso
+          file target/release/picasso
           mkdir -p dist "staging/$name"
+          python3 scripts/third-party-notices.py --target ${{ matrix.target }} -o THIRD-PARTY-NOTICES.txt
 
           install -m 755 target/release/picasso "staging/$name/"
-          install -m 644 README.md README_zh-TW.md CHANGELOG.md LICENSE build/picasso.desktop build/picasso.png "staging/$name/"
+          install -m 644 README.md README_zh-TW.md CHANGELOG.md LICENSE THIRD-PARTY-NOTICES.txt build/picasso.desktop build/picasso.png "staging/$name/"
           tar -C staging -czf "dist/$name.tar.gz" "$name"
 
           # Debian versions can't contain "-" without a revision; "~" also
@@ -163,11 +240,12 @@ jobs:
           install -Dm 644 README.md "$root/usr/share/doc/picasso/README.md"
           install -Dm 644 README_zh-TW.md "$root/usr/share/doc/picasso/README_zh-TW.md"
           install -Dm 644 CHANGELOG.md "$root/usr/share/doc/picasso/CHANGELOG.md"
+          install -Dm 644 THIRD-PARTY-NOTICES.txt "$root/usr/share/doc/picasso/THIRD-PARTY-NOTICES.txt"
           mkdir -p "$root/DEBIAN"
           cat > "$root/DEBIAN/control" <<EOF
           Package: picasso
           Version: $deb_version
-          Architecture: amd64
+          Architecture: ${{ matrix.deb_arch }}
           Maintainer: ${GITHUB_REPOSITORY_OWNER} <${GITHUB_REPOSITORY_OWNER}@users.noreply.github.com>
           Installed-Size: $(du -sk "$root/usr" | cut -f1)
           Depends: libc6 (>= 2.35), libasound2 | libasound2t64, libgl1, libegl1, libxkbcommon0, libxkbcommon-x11-0, libx11-6, libxcursor1, libxrandr2, libxi6
@@ -185,6 +263,38 @@ jobs:
           ls -l dist
           echo "name=$name" >> "$GITHUB_OUTPUT"
 
+      # Installs the .deb as a user would, checks that every library it needs
+      # is there and that the window opens, then removes it and checks that
+      # nothing is left behind.
+      - name: Install, start, and remove the .deb
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get install -y --no-install-recommends xvfb xauth libgl1-mesa-dri desktop-file-utils "./dist/${{ steps.package.outputs.name }}.deb"
+          dpkg -s picasso | grep -E '^(Status|Version):'
+          desktop-file-validate /usr/share/applications/picasso.desktop
+          if ldd /usr/bin/picasso | grep 'not found'; then
+            echo "::error::The installed picasso needs the libraries above"
+            exit 1
+          fi
+          picasso --version | tee version.txt
+          grep -q "${SOURCE_COMMIT::7}" version.txt || { echo "::error::picasso --version doesn't name commit ${SOURCE_COMMIT::7}"; exit 1; }
+
+          status=0
+          HOME=$(mktemp -d) LIBGL_ALWAYS_SOFTWARE=1 xvfb-run -a timeout 20 picasso || status=$?
+          if [ "$status" != 124 ]; then
+            echo "::error::Picasso quit with status $status within 20 seconds"
+            exit 1
+          fi
+
+          sudo apt-get remove -y picasso
+          for path in /usr/bin/picasso /usr/share/applications/picasso.desktop /usr/share/icons/hicolor/256x256/apps/picasso.png /usr/share/doc/picasso; do
+            if [ -e "$path" ]; then
+              echo "::error::$path is still there after removing the package"
+              exit 1
+            fi
+          done
+
       - uses: actions/upload-artifact@v7
         with:
           name: ${{ steps.package.outputs.name }}
@@ -192,16 +302,22 @@ jobs:
           if-no-files-found: error
 
   appimage:
-    name: Linux AppImage
+    name: Linux AppImage ${{ matrix.arch }}
     # AlmaLinux 8 has glibc 2.28, so the AppImage runs on RHEL 8, Ubuntu 20.04,
     # Debian 10, and newer.
-    runs-on: ubuntu-24.04
+    runs-on: ${{ matrix.runner }}
     container: almalinux:8
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
     defaults:
       run:
         shell: bash
-    outputs:
-      artifact: ${{ steps.package.outputs.artifact }}
     steps:
       # The libraries Picasso loads at runtime are installed without their
       # -devel packages, so the build does not record AlmaLinux's library
@@ -209,11 +325,13 @@ jobs:
       - name: Install build dependencies
         run: |
           dnf install -y --setopt=install_weak_deps=False \
-            gcc make pkgconf-pkg-config alsa-lib-devel git curl tar gzip jq file desktop-file-utils \
+            gcc make pkgconf-pkg-config alsa-lib-devel git curl tar gzip jq file desktop-file-utils python3 \
             fontconfig libX11 libX11-xcb libxcb libXcursor libXi libxkbcommon libxkbcommon-x11 \
             libwayland-client libwayland-cursor libwayland-egl
 
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ env.SOURCE_COMMIT }}
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -234,12 +352,13 @@ jobs:
             fi
             label=$version
           else
-            label="$version-${GITHUB_SHA::7}"
+            label="$version-${SOURCE_COMMIT::7}"
           fi
-          # Same script as `make appimage`.
+          # Same script as `make appimage`; it builds for the machine it runs on.
           VERSION=$label bash scripts/package-appimage.sh
+          test -s "dist/picasso-$label-linux-${{ matrix.arch }}.AppImage"
           ls -l dist
-          echo "artifact=picasso-$label-linux-x64-appimage" >> "$GITHUB_OUTPUT"
+          echo "artifact=picasso-$label-linux-${{ matrix.arch }}-appimage" >> "$GITHUB_OUTPUT"
 
       - uses: actions/upload-artifact@v7
         with:
@@ -248,13 +367,15 @@ jobs:
           if-no-files-found: error
 
   appimage-test:
-    name: AppImage on ${{ matrix.system }}
+    name: AppImage ${{ matrix.arch }} on ${{ matrix.system }}
     needs: appimage
-    runs-on: ubuntu-24.04
+    runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
     container: ${{ matrix.image }}
     strategy:
       fail-fast: false
       matrix:
+        arch: [x64, arm64]
+        system: [Ubuntu 22.04, Ubuntu 24.04, RHEL 8 (AlmaLinux 8), RHEL 9 (AlmaLinux 9)]
         include:
           - system: Ubuntu 22.04
             image: ubuntu:22.04
@@ -270,13 +391,16 @@ jobs:
     steps:
       - uses: actions/download-artifact@v8
         with:
-          name: ${{ needs.appimage.outputs.artifact }}
+          pattern: picasso-*-linux-${{ matrix.arch }}-appimage
+          merge-multiple: true
 
       - name: Unpack
         run: |
           chmod +x picasso-*.AppImage
           ./picasso-*.AppImage --appimage-extract >/dev/null
           ls squashfs-root/usr/lib/picasso
+          test -s squashfs-root/usr/share/doc/picasso/THIRD-PARTY-NOTICES.txt
+          cat squashfs-root/usr/share/doc/picasso/libraries/README.txt
 
       # The bare image has no display, sound, or font libraries, so AppRun
       # would use every bundled one: together with glibc they must cover
@@ -320,13 +444,24 @@ jobs:
           fi
           echo "Picasso was still running after 20 seconds"
 
+  # With the secrets below set in the repository, the app and the disk image
+  # are signed with a Developer ID and notarized by Apple, so they open
+  # without a warning. Without them, the app gets an ad-hoc signature.
+  #   MACOS_CERTIFICATE           base64 of the Developer ID Application .p12
+  #   MACOS_CERTIFICATE_PASSWORD  password of the .p12
+  #   APPLE_ID, APPLE_TEAM_ID     the Apple account and team that notarize
+  #   APPLE_APP_PASSWORD          an app-specific password of that account
   macos:
     name: macOS universal
     runs-on: macos-14
+    outputs:
+      notarized: ${{ steps.package.outputs.notarized }}
     env:
       MACOSX_DEPLOYMENT_TARGET: "11.0"
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ env.SOURCE_COMMIT }}
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -345,6 +480,12 @@ jobs:
       - name: Package
         id: package
         shell: bash
+        env:
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
         run: |
           set -euo pipefail
           version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')
@@ -355,9 +496,10 @@ jobs:
             fi
             label=$version
           else
-            label="$version-${GITHUB_SHA::7}"
+            label="$version-${SOURCE_COMMIT::7}"
           fi
           name="picasso-$label-macos-universal"
+          python3 scripts/third-party-notices.py --target aarch64-apple-darwin --target x86_64-apple-darwin -o THIRD-PARTY-NOTICES.txt
           app=staging/dmg/Picasso.app
           mkdir -p dist "$app/Contents/MacOS" "$app/Contents/Resources"
 
@@ -406,13 +548,41 @@ jobs:
           </plist>
           EOF
           plutil -lint "$app/Contents/Info.plist"
-          cp README.md README_zh-TW.md CHANGELOG.md LICENSE staging/dmg/
+          cp THIRD-PARTY-NOTICES.txt "$app/Contents/Resources/"
+          cp README.md README_zh-TW.md CHANGELOG.md LICENSE THIRD-PARTY-NOTICES.txt staging/dmg/
 
-          # Ad-hoc signature: Apple silicon refuses to run unsigned code. The
-          # app is not notarized, so the first launch needs Open from the
-          # context menu, or System Settings > Privacy & Security > Open Anyway.
-          codesign --force --deep --sign - "$app"
+          notarize=false
+          if [ -n "$MACOS_CERTIFICATE" ] && [ -n "$APPLE_ID" ] && [ -n "$APPLE_TEAM_ID" ] && [ -n "$APPLE_APP_PASSWORD" ]; then
+            notarize=true
+          fi
+          if $notarize; then
+            keychain=$RUNNER_TEMP/signing.keychain-db
+            keychain_password=$(uuidgen)
+            echo "$MACOS_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
+            security create-keychain -p "$keychain_password" "$keychain"
+            security set-keychain-settings -lut 3600 "$keychain"
+            security unlock-keychain -p "$keychain_password" "$keychain"
+            security import "$RUNNER_TEMP/certificate.p12" -k "$keychain" -P "$MACOS_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+            security set-key-partition-list -S apple-tool:,apple: -s -k "$keychain_password" "$keychain" >/dev/null
+            security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+            rm "$RUNNER_TEMP/certificate.p12"
+            identity="Developer ID Application"
+            # Hardened runtime and a secure timestamp, as notarization requires.
+            codesign --force --options runtime --timestamp --sign "$identity" "$app"
+          else
+            # Ad-hoc signature: Apple silicon refuses to run unsigned code. The
+            # app is not notarized, so the first launch needs System Settings >
+            # Privacy & Security > Open Anyway (or, up to macOS 14, Open from
+            # the context menu).
+            codesign --force --deep --sign - "$app"
+          fi
           codesign --verify --deep --strict "$app"
+
+          if $notarize; then
+            ditto -c -k --keepParent "$app" "$RUNNER_TEMP/notarize.zip"
+            xcrun notarytool submit "$RUNNER_TEMP/notarize.zip" --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_PASSWORD" --wait
+            xcrun stapler staple "$app"
+          fi
 
           ditto -c -k --keepParent "$app" "dist/$name.zip"
           ln -s /Applications staging/dmg/Applications
@@ -423,8 +593,17 @@ jobs:
             sleep 10
           done
 
+          if $notarize; then
+            codesign --force --timestamp --sign "$identity" "dist/$name.dmg"
+            xcrun notarytool submit "dist/$name.dmg" --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_PASSWORD" --wait
+            xcrun stapler staple "dist/$name.dmg"
+            spctl --assess --type open --context context:primary-signature -v "dist/$name.dmg"
+            security delete-keychain "$keychain"
+          fi
+
           ls -l dist
           echo "name=$name" >> "$GITHUB_OUTPUT"
+          echo "notarized=$notarize" >> "$GITHUB_OUTPUT"
 
       - uses: actions/upload-artifact@v7
         with:
@@ -434,7 +613,7 @@ jobs:
 
   release:
     name: GitHub release
-    needs: [changelog, windows, linux, appimage, appimage-test, macos]
+    needs: [changelog, deny, windows, linux, appimage, appimage-test, macos]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
     permissions:
@@ -444,8 +623,20 @@ jobs:
         with:
           sparse-checkout: |
             CHANGELOG.md
+            Cargo.lock
             scripts/release-notes.sh
           sparse-checkout-cone-mode: false
+
+      # A published release is never replaced: a fix ships as the next patch
+      # version, so a version always names the same files.
+      - name: Check that this version isn't published yet
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "::error::$GITHUB_REF_NAME is already published. Release the fix as the next patch version instead of moving the tag."
+            exit 1
+          fi
 
       - uses: actions/download-artifact@v8
         with:
@@ -453,32 +644,83 @@ jobs:
           path: dist
           merge-multiple: true
 
+      - name: Check the packages
+        working-directory: dist
+        run: |
+          set -euo pipefail
+          version=${GITHUB_REF_NAME#v}
+          missing=0
+          suffixes="macos-universal.dmg macos-universal.zip"
+          for arch in x64 arm64; do
+            suffixes="$suffixes windows-$arch.exe windows-$arch.zip linux-$arch.tar.gz linux-$arch.deb linux-$arch.AppImage"
+          done
+          for suffix in $suffixes; do
+            file="picasso-$version-$suffix"
+            if [ ! -s "$file" ]; then
+              echo "::error::$file is missing"
+              missing=1
+            fi
+          done
+          extra=$(ls | grep -v "^picasso-$version-" || true)
+          if [ -n "$extra" ]; then
+            echo "::error::Unexpected files: $extra"
+            missing=1
+          fi
+          exit $missing
+
+      # rawler is under the LGPL-2.1, which asks that its source be offered
+      # from the same place as the program. This is the crate the packages
+      # were built from, checked against Cargo.lock.
+      - name: rawler source
+        run: |
+          set -euo pipefail
+          read -r version checksum < <(awk '
+            /^name = / { name = $3 }
+            name == "\"rawler\"" && /^version = / { version = $3 }
+            name == "\"rawler\"" && /^checksum = / { print version, $3; exit }
+          ' Cargo.lock | tr -d '"')
+          file="dist/rawler-$version-source.tar.gz"
+          curl -fsSL -o "$file" "https://static.crates.io/crates/rawler/rawler-$version.crate"
+          echo "$checksum  $file" | sha256sum --check
+
       - name: Checksums
         working-directory: dist
         run: |
           sha256sum * > SHA256SUMS.txt
+          sha256sum --check SHA256SUMS.txt
           cat SHA256SUMS.txt
 
       # The release notes are this version's section of CHANGELOG.md, followed
       # by the download instructions.
       - name: Release notes
+        env:
+          NOTARIZED: ${{ needs.macos.outputs.notarized }}
         run: |
           set -euo pipefail
+          if [ "$NOTARIZED" = true ]; then
+            mac_open="The app is signed and notarized by Apple."
+          else
+            mac_open="The app is not notarized, so the first launch is blocked: click **Open Anyway** in **System Settings → Privacy & Security**. On macOS 14 and older, Control-clicking it and choosing **Open** also works."
+          fi
           {
             bash scripts/release-notes.sh --release "$GITHUB_REF_NAME"
             echo
             echo "## Downloads"
             echo
             cat <<'EOF'
-          **Windows x64:** download `picasso-*-windows-x64.exe` and run it, or unzip `picasso-*-windows-x64.zip`.
+          **Windows:** download `picasso-*-windows-x64.exe` and run it, or unzip `picasso-*-windows-x64.zip`. On a Windows PC with an Arm processor, such as a Snapdragon laptop, use `picasso-*-windows-arm64.exe` or `picasso-*-windows-arm64.zip`.
 
-          **Linux x64:** `picasso-*-linux-x64.AppImage` runs without installing anything on Ubuntu 20.04, RHEL 8, Debian 10, and newer: `chmod +x picasso-*-linux-x64.AppImage`, then run it. It carries the libraries Picasso needs besides glibc and the graphics driver. Without FUSE, start it with `--appimage-extract-and-run`. On Ubuntu 22.04 or newer, `sudo apt install ./picasso-*-linux-x64.deb` installs Picasso instead, and `picasso-*-linux-x64.tar.gz` holds the bare program.
+          **Linux:** `picasso-*-linux-x64.AppImage` runs without installing anything on Ubuntu 20.04, RHEL 8, Debian 10, and newer: `chmod +x picasso-*-linux-x64.AppImage`, then run it. It carries the libraries Picasso needs besides glibc and the graphics driver. Without FUSE, start it with `--appimage-extract-and-run`. On Ubuntu 22.04 or newer, `sudo apt install ./picasso-*-linux-x64.deb` installs Picasso instead, and `picasso-*-linux-x64.tar.gz` holds the bare program. On 64-bit Arm Linux, use the same packages named `linux-arm64`.
 
-          **macOS 11 or later (Apple silicon and Intel):** open `picasso-*-macos-universal.dmg` and drag Picasso to Applications. The app is not notarized, so the first time, Control-click it and choose **Open**, or allow it in **System Settings → Privacy & Security**. `picasso-*-macos-universal.zip` holds the same app.
+          **macOS 11 or later (Apple silicon and Intel):** open `picasso-*-macos-universal.dmg` and drag Picasso to Applications. @@MAC_OPEN@@ `picasso-*-macos-universal.zip` holds the same app.
 
-          Check downloads against `SHA256SUMS.txt`. Videos need [FFmpeg](https://ffmpeg.org) (`winget install Gyan.FFmpeg` on Windows, `sudo apt install ffmpeg` on Debian or Ubuntu, `brew install ffmpeg` on macOS). Without permission to install it, put `ffmpeg` and `ffprobe` beside the AppImage. Photos work without it.
+          Check downloads against `SHA256SUMS.txt`. Videos need [FFmpeg](https://ffmpeg.org) (`winget install Gyan.FFmpeg` on Windows, `sudo apt install ffmpeg` on Debian or Ubuntu, `brew install ffmpeg` on macOS). Without permission to install it, put `ffmpeg` and `ffprobe` beside the AppImage. Photos work without it. Every package but the bare `.exe` carries `THIRD-PARTY-NOTICES.txt`, the licenses of the libraries built into Picasso. `rawler-*-source.tar.gz` is the source of rawler, the RAW decoder Picasso is built with, as its license (LGPL-2.1) asks.
+
+          Built from commit @@COMMIT@@.
           EOF
           } > release-notes.md
+          mac_open=${mac_open//&/\\&}
+          sed -i "s|@@MAC_OPEN@@|$mac_open|; s|@@COMMIT@@|$SOURCE_COMMIT|" release-notes.md
           cat release-notes.md
 
       - uses: softprops/action-gh-release@v3

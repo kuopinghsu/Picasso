@@ -39,7 +39,7 @@ pub(super) const TABLE: &[(&str, &str)] = &[
     ("Folders", "フォルダ"),
     ("Show in Explorer", "エクスプローラーで表示"),
     ("Show in Finder", "Finder で表示"),
-    ("Remove from Picasso…", "Picasso から削除…"),
+    ("Remove from Picasso…", "Picasso から外す…"),
     // Help
     // Dialogs
     ("Add folder", "フォルダを追加"),
@@ -812,8 +812,13 @@ pub(super) const TABLE: &[(&str, &str)] = &[
     ("{} files weren't found, so they stay in the library. Is their drive connected?", "{} 個のファイルが見つからないため、ライブラリに残します。ドライブは接続されていますか？"),
     ("You can undo this from the status bar for two minutes. Stars, captions, albums, and edits are kept for 90 days in case the files come back.", "2 分間はステータスバーから元に戻せます。スター、キャプション、アルバム、編集は、ファイルが戻った場合に備えて 90 日間保持されます。"),
     ("To undo it, put the files back from the Trash. Stars, captions, albums, and edits are kept for 90 days in case the files come back.", "元に戻すには、ゴミ箱からファイルを戻してください。スター、キャプション、アルバム、編集は、ファイルが戻った場合に備えて 90 日間保持されます。"),
-    ("Remove from Picasso", "Picasso から削除"),
-    ("Remove {} from Picasso?", "{} を Picasso から削除しますか？"),
+    ("Remove from Picasso", "Picasso から外す"),
+    ("Remove {} from Picasso?", "{} を Picasso から外しますか？"),
     ("This takes {} out of the library; the files stay where they are. Stars, captions, albums, and edits are kept for 90 days and come back if you add the folder again, even from a new place.", "{} がライブラリから外れます。ファイルはそのまま残ります。スター、キャプション、アルバム、編集は 90 日間保持され、フォルダを再び追加すると（別の場所に移した場合も）元に戻ります。"),
-    ("Couldn't remove the folder: {}", "フォルダを削除できませんでした：{}"),
+    ("Couldn't remove the folder: {}", "フォルダを外せませんでした：{}"),
+    ("Remove…", "外す…"),
+    ("{} wasn't found, so it stays in the library. Is its drive connected?", "{} が見つからないため、ライブラリに残します。ドライブは接続されていますか？"),
+    ("The library file itself is intact, so Picasso won't replace it. Close other programs that may be using it, or free some disk space, then try again.", "ライブラリのファイル自体は壊れていないため、Picasso は置き換えません。使用中の可能性があるほかのプログラムを閉じるか、ディスクの空き容量を増やしてから、もう一度お試しください。"),
+    ("Checking the library…", "ライブラリを確認しています…"),
+    ("Picasso isn't allowed to read the library file. Check who owns it and its permissions, then try again.", "Picasso にはライブラリのファイルを読み取る権限がありません。ファイルの所有者とアクセス権を確認してから、もう一度お試しください。"),
 ];

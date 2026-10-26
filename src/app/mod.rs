@@ -82,7 +82,8 @@ enum Modal {
     None,
     AddFolder { path: String, error: String },
     NewAlbum { name: String, error: String },
-    Trash { ids: Vec<i64> },
+    /// `bytes` is their total size, added up when the dialog first shows.
+    Trash { ids: Vec<i64>, bytes: Option<u64> },
     /// Files the scans could not read; `confirm_all` while asking before
     /// moving them all to the trash.
     Unreadable { confirm_all: bool },
@@ -95,6 +96,12 @@ enum Modal {
     Help,
     About,
     Settings,
+}
+
+impl Modal {
+    fn trash(ids: Vec<i64>) -> Self {
+        Modal::Trash { ids, bytes: None }
+    }
 }
 
 struct ThumbTex {
@@ -1063,6 +1070,10 @@ impl PicassoApp {
         // left for it rather than also leaving the viewer.
         let escape = !egui::Popup::is_any_open(ctx) && ctx.input_mut(|input| input.consume_key(Modifiers::NONE, Key::Escape));
         if escape {
+            // The folder removal is asked over any window, so it closes first.
+            if self.remove_asked.take().is_some() {
+                return;
+            }
             if !matches!(self.modal, Modal::None) {
                 self.modal = Modal::None;
                 return;
@@ -1087,7 +1098,7 @@ impl PicassoApp {
             }
             return;
         }
-        if ctx.egui_wants_keyboard_input() || !matches!(self.modal, Modal::None) {
+        if ctx.egui_wants_keyboard_input() || !matches!(self.modal, Modal::None) || self.remove_asked.is_some() {
             return;
         }
         let command = |key| ctx.input_mut(|input| input.consume_key(Modifiers::COMMAND, key));
@@ -1200,7 +1211,7 @@ impl PicassoApp {
             }
             if plain(Key::Delete) && !self.selection.is_empty() {
                 let ids: Vec<i64> = self.selection.iter().copied().collect();
-                self.modal = Modal::Trash { ids };
+                self.modal = Modal::trash(ids);
             }
         } else {
             if plain(Key::ArrowLeft) {
@@ -1234,7 +1245,7 @@ impl PicassoApp {
             }
             if plain(Key::Delete) {
                 if let Some(id) = self.photos.get(self.viewer_index).map(|photo| photo.id) {
-                    self.modal = Modal::Trash { ids: vec![id] };
+                    self.modal = Modal::trash(vec![id]);
                 }
             }
             if plain(Key::Plus) || plain(Key::Equals) {
@@ -1405,7 +1416,7 @@ impl PicassoApp {
                 }
                 if ui.button(tr("Delete")).clicked() {
                     let ids: Vec<i64> = self.selection.iter().copied().collect();
-                    self.modal = Modal::Trash { ids };
+                    self.modal = Modal::trash(ids);
                 }
                 if ui.button(tr("Export…")).on_hover_text(tr("Save the selected photos with their edits")).clicked() {
                     let ids = self.selection_in_order();
@@ -1586,7 +1597,7 @@ impl PicassoApp {
             }
             Modal::AddFolder { .. } => self.add_folder_modal(ctx),
             Modal::NewAlbum { .. } => self.new_album_modal(ctx),
-            Modal::Trash { ref ids } if !self.confirm_trash => {
+            Modal::Trash { ref ids, .. } if !self.confirm_trash => {
                 let ids = ids.clone();
                 self.modal = Modal::None;
                 self.trash_ids(&ids);
@@ -1635,7 +1646,7 @@ impl PicassoApp {
                 ui.add(egui::Label::new(egui::RichText::new(note).size(12.5).color(theme::muted())).wrap());
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
-                    if ui.add(theme::danger_button(tr("Remove"))).clicked() {
+                    if ui.add(theme::danger_button(tr("Remove from Picasso"))).clicked() {
                         confirm = true;
                     }
                     if ui.button(tr("Cancel")).clicked() {
@@ -1643,7 +1654,7 @@ impl PicassoApp {
                     }
                 });
             });
-        if close || confirm || ctx.input(|input| input.key_pressed(Key::Escape)) {
+        if close || confirm {
             self.remove_asked = None;
         }
         if confirm {
@@ -1765,9 +1776,9 @@ impl PicassoApp {
     }
 
     fn trash_modal(&mut self, ctx: &egui::Context) {
-        let Modal::Trash { ids } = &self.modal else { return };
-        let ids = ids.clone();
-        let bytes: u64 = ids.iter().filter_map(|id| self.db.photo(*id)).map(|photo| photo.bytes).sum();
+        let Modal::Trash { ids, bytes } = &mut self.modal else { return };
+        let count = ids.len();
+        let bytes = *bytes.get_or_insert_with(|| total_bytes(&self.photos, &self.db, ids));
         let mut close = false;
         let mut confirm = false;
         egui::Window::new(tr("Move to trash"))
@@ -1777,10 +1788,10 @@ impl PicassoApp {
             .default_width(400.0)
             .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
             .show(ctx, |ui| {
-                let question = if ids.len() == 1 {
+                let question = if count == 1 {
                     tr("Move 1 photo to the system trash?").to_string()
                 } else {
-                    trf("Move {} photos to the system trash?", &[&ids.len()])
+                    trf("Move {} photos to the system trash?", &[&count])
                 };
                 ui.label(format!("{question} ({})", crate::types::format_bytes(bytes)));
                 let undo = if crate::shell::CAN_RESTORE {
@@ -1802,8 +1813,9 @@ impl PicassoApp {
         if close {
             self.modal = Modal::None;
         } else if confirm {
-            self.modal = Modal::None;
-            self.trash_ids(&ids);
+            if let Modal::Trash { ids, .. } = std::mem::replace(&mut self.modal, Modal::None) {
+                self.trash_ids(&ids);
+            }
         }
     }
 
@@ -2117,9 +2129,9 @@ impl PicassoApp {
             return Vec::new();
         }
         let before: Vec<bool> = photos.iter().map(|photo| Path::new(&photo.path).exists()).collect();
-        let present = photos.iter().zip(&before).filter(|(_, there)| **there).map(|(photo, _)| photo.path.as_str());
+        let present: Vec<&str> = photos.iter().zip(&before).filter(|(_, there)| **there).map(|(photo, _)| photo.path.as_str()).collect();
         // One call for all files: the system trash is slow file by file.
-        let result = trash::delete_all(present);
+        let result = if present.is_empty() { Ok(()) } else { trash::delete_all(present) };
         let after: Vec<bool> = photos.iter().map(|photo| Path::new(&photo.path).exists()).collect();
         let outcome = trash_outcome(&before, &after);
         let mut notes = Vec::new();
@@ -2130,7 +2142,9 @@ impl PicassoApp {
             let reason = result.as_ref().err().map_or_else(|| tr("they are still there").to_string(), ToString::to_string);
             notes.push(trf("Couldn't move {} photos to the trash: {}", &[&outcome.failed.len(), &reason]));
         }
-        if !outcome.missing.is_empty() {
+        if let [only] = outcome.missing[..] {
+            notes.push(trf("{} wasn't found, so it stays in the library. Is its drive connected?", &[&photos[only].filename]));
+        } else if !outcome.missing.is_empty() {
             notes.push(trf("{} files weren't found, so they stay in the library. Is their drive connected?", &[&outcome.missing.len()]));
         }
         self.activity = notes.join(" · ");
@@ -2433,6 +2447,15 @@ impl eframe::App for PicassoApp {
         self.modals(ui.ctx());
         self.publish_wanted_thumbs();
     }
+}
+
+/// Total size of the photos `ids`, taken from the loaded view where they are
+/// in it, so a large selection doesn't query the library once per photo.
+fn total_bytes(photos: &[Photo], db: &Database, ids: &[i64]) -> u64 {
+    let loaded: HashMap<i64, u64> = photos.iter().map(|photo| (photo.id, photo.bytes)).collect();
+    ids.iter()
+        .map(|id| loaded.get(id).copied().or_else(|| db.photo(*id).map(|photo| photo.bytes)).unwrap_or(0))
+        .sum()
 }
 
 /// Photos sent to the trash, by index, sorted by whether each file was there

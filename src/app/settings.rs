@@ -537,7 +537,7 @@ impl PicassoApp {
     fn folder_row(&mut self, ui: &mut egui::Ui, id: i64, path: &str, count: i64) {
         ui.horizontal(|ui| {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.button(tr("Remove")).on_hover_text(tr("Remove from Picasso…")).clicked() {
+                if ui.button(tr("Remove…")).on_hover_text(tr("Remove from Picasso…")).clicked() {
                     self.remove_asked = Some(id);
                 }
                 if ui.button(tr("Refresh")).on_hover_text(tr("Refresh Thumbnails")).clicked() {

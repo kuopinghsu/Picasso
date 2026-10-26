@@ -109,11 +109,25 @@ def main():
         "Rust crates below, each under the license shown. Where a crate offers a\n"
         "choice of licenses, Picasso uses it under any one of them.\n"
     )
-    out.append(
-        "rawler, which reads camera RAW files, is under the GNU Lesser General Public\n"
-        "License 2.1. Picasso's complete source is at {} so that\n"
-        "Picasso can be rebuilt with a changed rawler, as that license allows.\n".format(picasso["repository"])
-    )
+    rawler = [package for package in crates if package["name"] == "rawler"]
+    if rawler:
+        out.append(
+            "rawler, which reads camera RAW files, is under the GNU Lesser General Public\n"
+            "License 2.1. Its source, version {0}, comes with each Picasso release on\n"
+            "GitHub as rawler-{0}-source.tar.gz, and is also at\n"
+            "https://crates.io/crates/rawler/{0} and {1}.\n"
+            "Picasso's complete source is at {2} so that\n"
+            "Picasso can be rebuilt with a changed rawler, as that license allows.\n".format(
+                rawler[0]["version"], rawler[0]["repository"] or "its authors' repository", picasso["repository"]
+            )
+        )
+    for package in crates:
+        if license_ids(package["license"]) == ["MPL-2.0"]:
+            out.append(
+                "{0} is under the Mozilla Public License 2.0 and is used unchanged. Its\n"
+                "source, version {1}, is at https://crates.io/crates/{0}/{1}\n"
+                "and {2}.\n".format(package["name"], package["version"], package["repository"] or "its authors' repository")
+            )
     out.append("The country borders of the Travel Map are public-domain Natural Earth data.\n")
 
     out.append("\n== Crates ==\n")

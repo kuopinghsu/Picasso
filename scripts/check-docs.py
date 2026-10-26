@@ -47,8 +47,6 @@ def main():
             sources += file.read()
 
     for doc in documents():
-        if doc.startswith("TODO"):
-            continue
         text = read(doc)
         folder = os.path.dirname(doc)
         for target in re.findall(r"\]\(([^)\s]+)\)", text):

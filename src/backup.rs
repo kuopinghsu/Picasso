@@ -85,10 +85,11 @@ pub fn create(data_dir: &Path) -> Result<PathBuf, String> {
     Ok(target)
 }
 
-/// Number of photos in a backup, or why it can't be used.
+/// Number of photos in a backup or library, or why it can't be used.
 pub fn check(path: &Path) -> Result<i64, String> {
     let flags = OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX;
     let conn = Connection::open_with_flags(path, flags).map_err(|err| err.to_string())?;
+    conn.busy_timeout(Duration::from_secs(8)).map_err(|err| err.to_string())?;
     let ok: String = conn.query_row("PRAGMA quick_check", [], |row| row.get(0)).map_err(|err| err.to_string())?;
     if ok != "ok" {
         return Err(ok);
@@ -155,6 +156,9 @@ pub fn replace_damaged(data_dir: &Path, backup: Option<&Path>) -> Result<PathBuf
         check(backup)?;
     }
     let library = data_dir.join(LIBRARY);
+    if !library.is_file() {
+        return Err(format!("{} doesn't exist", library.display()));
+    }
     let aside = data_dir.join(format!("picasso-damaged-{}.db", Local::now().format(STAMP)));
     if aside.exists() {
         return Err(format!("{} already exists", aside.display()));
@@ -173,13 +177,20 @@ pub fn replace_damaged(data_dir: &Path, backup: Option<&Path>) -> Result<PathBuf
 }
 
 /// Renames a database together with its `-wal` and `-shm` files, which hold
-/// changes not yet written into it.
+/// changes not yet written into it. If one can't be moved, those already
+/// moved go back, so a database is never parted from its `-wal`.
 fn move_with_sidecars(from: &Path, to: &Path) -> std::io::Result<()> {
-    std::fs::rename(from, to)?;
-    for suffix in ["-wal", "-shm"] {
-        let side = |path: &Path| PathBuf::from(format!("{}{suffix}", path.display()));
-        if side(from).exists() {
-            std::fs::rename(side(from), side(to))?;
+    let side = |path: &Path, suffix: &str| PathBuf::from(format!("{}{suffix}", path.display()));
+    let moves: Vec<(PathBuf, PathBuf)> = std::iter::once((from.to_path_buf(), to.to_path_buf()))
+        .chain(["-wal", "-shm"].into_iter().map(|suffix| (side(from, suffix), side(to, suffix))))
+        .filter(|(source, _)| source.exists())
+        .collect();
+    for (done, (source, target)) in moves.iter().enumerate() {
+        if let Err(err) = std::fs::rename(source, target) {
+            for (source, target) in moves[..done].iter().rev() {
+                let _ = std::fs::rename(target, source);
+            }
+            return Err(err);
         }
     }
     Ok(())
@@ -397,6 +408,25 @@ mod tests {
         assert_eq!(std::fs::read(&aside).unwrap(), garbage);
         let db = crate::db::Database::open(&dir.join(LIBRARY)).unwrap();
         assert!(db.albums().is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_library_another_program_is_writing_to_passes_the_check() {
+        let dir = library("busy");
+        let writer = Connection::open(dir.join(LIBRARY)).unwrap();
+        writer.execute_batch("BEGIN IMMEDIATE; INSERT INTO albums (name, created_at) VALUES ('Busy', 0);").unwrap();
+        assert!(check(&dir.join(LIBRARY)).is_ok(), "a busy library is not damaged, so it is never replaced");
+        writer.execute_batch("ROLLBACK").unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn there_is_nothing_to_replace_without_a_library() {
+        let dir = library("no-library-to-replace");
+        std::fs::remove_file(dir.join(LIBRARY)).unwrap();
+        assert!(replace_damaged(&dir, None).is_err());
+        assert!(damaged_copies(&dir).is_empty());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

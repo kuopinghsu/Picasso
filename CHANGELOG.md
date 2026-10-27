@@ -63,8 +63,8 @@ section of this file as the release notes.
 - The Mac app is signed with a Developer ID and notarized by Apple when the project's signing
   secrets are set up; the release notes say which.
 - Documentation: a Quick start at the top of the README, what a backup holds and how to recover
-  or move a library, and `docs/DATABASE.md`, `docs/TESTING.md`, `docs/PERFORMANCE.md`,
-  `docs/RELEASING.md`, and `docs/ROADMAP.md`.
+  or move a library, and `docs/DATABASE.md`, `docs/TESTING.md`, `docs/PERFORMANCE.md`, and
+  `docs/RELEASING.md`.
 - A User Guide in English and Traditional Chinese, `docs/USER_GUIDE.adoc` and
   `docs/USER_GUIDE_zh-TW.adoc`, that walks through Picasso from installing it to recovering a
   library. `make guide` builds each as one HTML file that opens offline, and `make guide-pdf` as
@@ -115,6 +115,10 @@ section of this file as the release notes.
   readable in each. The Travel Map has an aqua sea and stone-colored land, and places with photos
   run from pale gold through amber to burnt amber. The OpenFreeMap sea on Places is the same aqua,
   and places are marked in one coral red on the sidebar, the map pin, and Statistics.
+- The bottom bar has one side panel button instead of separate Info and Map buttons; the panel
+  opens on the tab it last showed, and I does the same. The thumbnail size slider shows only in
+  the views with thumbnails, so not in Places, Statistics, or the Travel Map, which also have no
+  side panel button.
 - The CartoDB Positron map is now called **CARTO Positron**, after the company's current name.
 - **Remove** in **Settings → Folders** and on the folder tree asks first, and says the files stay
   where they are.
@@ -129,6 +133,9 @@ section of this file as the release notes.
 
 ### Fixed
 
+- A large selection, such as the photos along a track in Places, filled the photo tray and pushed
+  the buttons at the right of the bottom bar out of the window. The tray now shows as many
+  thumbnails as fit, with the count of the rest.
 - Removing a folder lost the stars, captions, albums, and edits of its photos at once. They are
   now kept for 90 days, and come back when the folder is added again, even from a new place.
 - Making thumbnails held on to about 1 MB of memory for each photo, 4.7 GB for 2,000 photos,

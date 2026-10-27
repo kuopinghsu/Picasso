@@ -128,7 +128,7 @@ impl PicassoApp {
         let hit = hovered.map(|index| clusters[index].members.as_slice());
         if response.double_clicked() {
             if let Some(&[index]) = hit {
-                self.open_at(index);
+                    self.open_at(index);
             } else if let Some(bounds) = on_track.and_then(|index| self.tracks.get(index)).map(|track| track.bounds) {
                 self.frame_bounds(bounds);
             }
@@ -606,7 +606,7 @@ impl PicassoApp {
                 });
             }
         } else if let Some(card) = self.map_card.as_mut() {
-            let pointer = ui.input(|input| input.pointer.hover_pos());
+        let pointer = ui.input(|input| input.pointer.hover_pos());
             if pointer.is_some_and(|pointer| card.rect.expand(6.0).contains(pointer)) {
                 card.left = None;
             } else {
@@ -1017,7 +1017,7 @@ impl PicassoApp {
                     theme::text(),
                 );
             }
-        }
+                }
     }
 
     pub(super) fn pump_tiles(&mut self, ctx: &egui::Context) {

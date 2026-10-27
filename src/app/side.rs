@@ -1,6 +1,6 @@
-//! Right-hand panel of the library, opened from the Info and Map buttons in
-//! the photo tray as in Picasa 3: properties and EXIF of the selected photo,
-//! or a map of where it was taken.
+//! Right-hand panel of the library, opened from the side panel button in
+//! the photo tray: properties and EXIF of the selected photo, or a map of
+//! where it was taken.
 
 use eframe::egui::{self, Color32, Pos2, Rect, Sense, Stroke, Vec2};
 
@@ -37,18 +37,20 @@ impl SidePanel {
     }
 }
 
-#[derive(Clone, Copy)]
-pub(super) enum TrayIcon {
-    Info,
-    Map,
-}
-
-
 impl PicassoApp {
     /// Opens `panel`, or closes it when it is already showing.
     pub(super) fn toggle_side(&mut self, panel: SidePanel) {
         self.side = if self.side == panel { SidePanel::None } else { panel };
+        if self.side != SidePanel::None {
+            self.side_last = self.side;
+        }
         self.db.set_setting("side_panel", self.side.setting());
+    }
+
+    /// Opens the panel on the tab it last showed, or closes it.
+    pub(super) fn toggle_side_panel(&mut self) {
+        let panel = if self.side == SidePanel::None { self.side_last } else { self.side };
+        self.toggle_side(panel);
     }
 
     /// The photo the panel describes: the focused one of the selection.
@@ -345,8 +347,9 @@ fn paint_pin(painter: &egui::Painter, tip: Pos2) {
     painter.circle_filled(head, 3.0, WHITE);
 }
 
-/// Info and Map toggles in the photo tray.
-pub(super) fn tray_icon(ui: &mut egui::Ui, icon: TrayIcon, on: bool) -> egui::Response {
+/// The side panel toggle in the photo tray: a window with its right-hand
+/// pane filled in.
+pub(super) fn panel_icon(ui: &mut egui::Ui, on: bool) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(Vec2::new(32.0, 28.0), Sense::click());
     let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
     let painter = ui.painter();
@@ -359,14 +362,9 @@ pub(super) fn tray_icon(ui: &mut egui::Ui, icon: TrayIcon, on: bool) -> egui::Re
     };
     painter.rect_filled(rect, theme::RADIUS, background);
     let color = if on { theme::accent() } else { theme::text() };
-    let c = rect.center();
-    match icon {
-        TrayIcon::Info => {
-            painter.circle_stroke(c, 8.0, Stroke::new(1.6, color));
-            painter.circle_filled(c + Vec2::new(0.0, -4.0), 1.3, color);
-            painter.line_segment([c + Vec2::new(0.0, -1.0), c + Vec2::new(0.0, 4.5)], Stroke::new(1.8, color));
-        }
-        TrayIcon::Map => theme::paint_pin(painter, c, 5.5, color, background),
-    }
+    let window = Rect::from_center_size(rect.center(), Vec2::new(18.0, 14.0));
+    let pane = Rect::from_min_max(egui::pos2(window.max.x - 6.5, window.min.y), window.max);
+    painter.rect_filled(pane, egui::CornerRadius { ne: 2, se: 2, ..Default::default() }, color);
+    painter.rect_stroke(window, 2.0, Stroke::new(1.5, color), egui::StrokeKind::Inside);
     response
 }

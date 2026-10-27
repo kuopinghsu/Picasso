@@ -50,7 +50,7 @@ CI can't see the screen, use a real GPU, or plug in a drive. On each platform th
 | Video and sound | With FFmpeg, a video plays with sound. Without it, Picasso says what is missing and photos still work. With no sound device, video still plays. |
 | Maps | Places and the Map panel load tiles. Without a network, a tile that isn't cached shows an enlarged cached tile from up to four levels farther out, or stays blank, and everything else works. |
 | Keyboard | Move through the library, open, edit, and go back with the keyboard alone (**Help & Shortcuts**, F1). Tab moves through Settings and dialogs, and the focused control is visible in both themes. |
-| Screen reader | With VoiceOver, Narrator, or Orca on, buttons and settings are read by name. Note what isn't, for [`ROADMAP.md`](ROADMAP.md). |
+| Screen reader | With VoiceOver, Narrator, or Orca on, buttons and settings are read by name. Note what isn't. |
 | Frame times | `PICASSO_FRAME_STATS=1` with a large library while scrolling: few frames over 16.7 ms (docs/PERFORMANCE.md). |
 
 Write down the platform and version where each was tried, as the checklist in [`RELEASING.md`](RELEASING.md) asks. Passing on one platform says nothing about another.

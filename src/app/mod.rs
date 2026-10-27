@@ -45,7 +45,7 @@ use crate::types::{folder_label, turn, FileType, Nav, Photo, Sort};
 use crate::worker::{self, Command, DisplayGate, ThumbJob, ThumbWanted, UiEvent};
 
 use library::CachedLayout;
-use side::{SidePanel, TrayIcon};
+use side::SidePanel;
 use theme::ThemeMode;
 
 /// How long the status bar offers to undo a Move to trash.
@@ -303,6 +303,10 @@ pub struct PicassoApp {
     stage_rect: Rect,
     show_info: bool,
     side: SidePanel,
+    /// The tab the side panel opens on.
+    side_last: SidePanel,
+    /// Width of the photo tray's buttons and notes on the last frame.
+    tray_rest: f32,
     exif: HashMap<i64, Vec<(&'static str, String)>>,
     exif_waiting: HashSet<i64>,
     side_zoom: u8,
@@ -582,6 +586,8 @@ impl PicassoApp {
             stage_rect: Rect::NOTHING,
             show_info: false,
             side: SidePanel::None,
+            side_last: SidePanel::Info,
+            tray_rest: 0.0,
             exif: HashMap::new(),
             exif_waiting: HashSet::new(),
             side_zoom: 13,
@@ -695,6 +701,9 @@ impl PicassoApp {
         app.user_presets = crate::edit::presets::user_presets_from_json(&app.db.setting("user_presets").unwrap_or_default());
         app.show_info = app.db.setting("viewer_info").as_deref() != Some("0");
         app.side = SidePanel::from_setting(app.db.setting("side_panel").as_deref());
+        if app.side != SidePanel::None {
+            app.side_last = app.side;
+        }
         let config = &app.config;
         app.thumb_size = config.number("thumb_size").map_or(app.thumb_size, |size| size.clamp(MIN_THUMB, MAX_THUMB));
         app.slideshow_interval = config.number("slideshow_interval").map_or(app.slideshow_interval, |secs| secs.clamp(1.0, 15.0));
@@ -825,6 +834,9 @@ impl PicassoApp {
 
     /// Positions of the first `count` selected photos, in view order.
     fn tray_indices(&self, count: usize) -> Vec<usize> {
+        if count == 0 {
+            return Vec::new();
+        }
         if self.selection.len() * 4 > self.photos.len() {
             // Most photos are selected, so the first few turn up at once.
             return self
@@ -1408,7 +1420,7 @@ impl PicassoApp {
             if self.mode == Mode::View {
                 self.toggle_info();
             } else {
-                self.toggle_side(SidePanel::Info);
+                self.toggle_side_panel();
             }
         }
         let _ = command;
@@ -1528,99 +1540,129 @@ impl PicassoApp {
 
     fn status(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            ui.label(egui::RichText::new(tr("Photo Tray")).strong().size(12.0).color(theme::muted()));
-            let held: Vec<(i64, String, i32)> = self
-                .tray_indices(16)
-                .into_iter()
-                .filter_map(|index| self.photos.get(index))
-                .map(|photo| (photo.id, photo.path.clone(), photo.rotation))
-                .collect();
-            let extra = self.selection.len().saturating_sub(held.len());
-            for (id, path, rotation) in &held {
-                self.ensure_thumb(*id, path);
-                let (rect, response) = ui.allocate_exact_size(Vec2::new(46.0, 34.0), egui::Sense::click());
-                if let Some((texture, w, h)) = self.thumb_texture(*id) {
-                    theme::paint_image_rounded(ui.painter(), &texture, rect, theme::cover_uv(w, h), *rotation, 5.0);
-                } else {
-                    ui.painter().rect_filled(rect, 5, theme::placeholder());
-                }
-                ui.painter().rect_stroke(rect, 5, egui::Stroke::new(1.0, Color32::from_black_alpha(20)), egui::StrokeKind::Inside);
-                if response.double_clicked() {
-                    if let Some(index) = self.index_of(*id) {
-                        self.open_at(index);
-                    }
-                } else if response.clicked() {
-                    self.selection.clear();
-                    self.selection.insert(*id);
-                    self.anchor = Some(*id);
-                    self.scroll_to = Some(*id);
-                }
-            }
-            if extra > 0 {
-                ui.label(egui::RichText::new(format!("+{extra}")).color(theme::muted()).size(12.0));
-            }
-            if !self.selection.is_empty() {
-                if ui.button(tr("Clear")).on_hover_text(tr("Clear items from the selection")).clicked() {
-                    self.selection.clear();
-                    self.anchor = None;
-                }
-                if ui.button(tr("Delete")).clicked() {
-                    let ids: Vec<i64> = self.selection.iter().copied().collect();
-                    self.modal = Modal::trash(ids);
-                }
-                if ui.button(tr("Export…")).on_hover_text(tr("Save the selected photos with their edits")).clicked() {
-                    let ids = self.selection_in_order();
-                    self.open_export(&ids);
-                }
-            }
-            let mut text = photo_count(self.photos.len());
-            if !self.activity.is_empty() {
-                text.push_str("  ·  ");
-                text.push_str(&self.activity);
-            }
-            ui.label(egui::RichText::new(text).color(theme::muted()).size(12.0));
-            let unreadable = self.unreadable_count();
-            if unreadable > 0 {
-                ui.label(egui::RichText::new("·").color(theme::muted()).size(12.0));
-                let note = trf("{} files could not be read", &[&unreadable]);
-                if ui.link(egui::RichText::new(note).size(12.0)).on_hover_text(tr("Show the files that could not be read")).clicked() {
-                    self.modal = Modal::Unreadable { confirm_all: false };
-                }
-            }
-            self.export_status(ui);
-            if let Some((at, files)) = &self.last_trashed {
-                let left = UNDO_TRASH_FOR.saturating_sub(at.elapsed());
-                if left.is_zero() {
-                    self.last_trashed = None;
-                } else {
-                    let note = trf("Moved {} to trash", &[&files.len()]);
-                    ui.label(egui::RichText::new(format!("·  {note}")).color(theme::muted()).size(12.0));
-                    if ui.link(egui::RichText::new(tr("Undo")).size(12.0)).on_hover_text(tr("Put these files back where they were")).clicked() {
-                        self.undo_trash();
-                    }
-                    ui.ctx().request_repaint_after(left);
-                }
-            }
-            if self.scans > 0 {
-                ui.add(egui::Spinner::new().size(12.0));
-            }
+            // Statistics and the Travel Map have no side panel, and they and
+            // Places have no thumbnails to size.
+            let charts = matches!(self.nav, Nav::Statistics | Nav::TravelMap);
+            // Laid out from the right first, so the tray gets what is left
+            // and a long selection can't push these off the window.
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let map = side::tray_icon(ui, TrayIcon::Map, self.side == SidePanel::Map);
-                if map.on_hover_text(tr("Show or hide the map of the selected photo")).clicked() {
-                    self.toggle_side(SidePanel::Map);
+                if !charts {
+                    let panel = side::panel_icon(ui, self.side != SidePanel::None);
+                    if panel.on_hover_text(tr("Show or hide the side panel (I)")).clicked() {
+                        self.toggle_side_panel();
+                    }
                 }
-                let info = side::tray_icon(ui, TrayIcon::Info, self.side == SidePanel::Info);
-                if info.on_hover_text(tr("Show or hide photo properties and EXIF (I)")).clicked() {
-                    self.toggle_side(SidePanel::Info);
+                if !charts && self.nav != Nav::Places {
+                    ui.add_space(12.0);
+                    ui.label(egui::RichText::new("▮").size(16.0).color(theme::muted()));
+                    let mut size = self.thumb_size;
+                    let response = ui.add(egui::Slider::new(&mut size, MIN_THUMB..=MAX_THUMB).show_value(false));
+                    ui.label(egui::RichText::new("▮").size(10.0).color(theme::muted()));
+                    self.set_thumb_size(size, &response);
+                    ui.add_space(12.0);
                 }
-                ui.add_space(12.0);
-                ui.label(egui::RichText::new("▮").size(16.0).color(theme::muted()));
-                let mut size = self.thumb_size;
-                let response = ui.add(egui::Slider::new(&mut size, MIN_THUMB..=MAX_THUMB).show_value(false));
-                ui.label(egui::RichText::new("▮").size(10.0).color(theme::muted()));
-                self.set_thumb_size(size, &response);
+                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    ui.set_clip_rect(ui.max_rect().intersect(ui.clip_rect()));
+                    self.tray(ui);
+                });
             });
         });
+    }
+
+    /// The photo tray: as many of the selected photos as fit beside the
+    /// buttons and notes, which were measured on the last frame.
+    fn tray(&mut self, ui: &mut egui::Ui) {
+        const THUMB: Vec2 = Vec2::new(46.0, 34.0);
+        let start = ui.cursor().min.x;
+        let room = ui.available_width() - self.tray_rest;
+        let fit = (room / (THUMB.x + ui.spacing().item_spacing.x)).floor().clamp(0.0, 16.0) as usize;
+        ui.label(egui::RichText::new(tr("Photo Tray")).strong().size(12.0).color(theme::muted()));
+        let mut rest = ui.cursor().min.x - start;
+        let held: Vec<(i64, String, i32)> = self
+            .tray_indices(fit)
+            .into_iter()
+            .filter_map(|index| self.photos.get(index))
+            .map(|photo| (photo.id, photo.path.clone(), photo.rotation))
+            .collect();
+        let extra = self.selection.len().saturating_sub(held.len());
+        for (id, path, rotation) in &held {
+            self.ensure_thumb(*id, path);
+            let (rect, response) = ui.allocate_exact_size(THUMB, egui::Sense::click());
+            if let Some((texture, w, h)) = self.thumb_texture(*id) {
+                theme::paint_image_rounded(ui.painter(), &texture, rect, theme::cover_uv(w, h), *rotation, 5.0);
+            } else {
+                ui.painter().rect_filled(rect, 5, theme::placeholder());
+            }
+            ui.painter().rect_stroke(rect, 5, egui::Stroke::new(1.0, Color32::from_black_alpha(20)), egui::StrokeKind::Inside);
+            if response.double_clicked() {
+                if let Some(index) = self.index_of(*id) {
+                    self.open_at(index);
+                }
+            } else if response.clicked() {
+                self.selection.clear();
+                self.selection.insert(*id);
+                self.anchor = Some(*id);
+                self.scroll_to = Some(*id);
+            }
+        }
+        let notes = ui.cursor().min.x;
+        if extra > 0 {
+            ui.label(egui::RichText::new(format!("+{extra}")).color(theme::muted()).size(12.0));
+        }
+        if !self.selection.is_empty() {
+            if ui.button(tr("Clear")).on_hover_text(tr("Clear items from the selection")).clicked() {
+                self.selection.clear();
+                self.anchor = None;
+            }
+            if ui.button(tr("Delete")).clicked() {
+                let ids: Vec<i64> = self.selection.iter().copied().collect();
+                self.modal = Modal::trash(ids);
+            }
+            if ui.button(tr("Export…")).on_hover_text(tr("Save the selected photos with their edits")).clicked() {
+                let ids = self.selection_in_order();
+                self.open_export(&ids);
+            }
+        }
+        let mut text = photo_count(self.photos.len());
+        if !self.activity.is_empty() {
+            text.push_str("  ·  ");
+            text.push_str(&self.activity);
+        }
+        ui.label(egui::RichText::new(text).color(theme::muted()).size(12.0));
+        let unreadable = self.unreadable_count();
+        if unreadable > 0 {
+            ui.label(egui::RichText::new("·").color(theme::muted()).size(12.0));
+            let note = trf("{} files could not be read", &[&unreadable]);
+            if ui.link(egui::RichText::new(note).size(12.0)).on_hover_text(tr("Show the files that could not be read")).clicked() {
+                self.modal = Modal::Unreadable { confirm_all: false };
+            }
+        }
+        self.export_status(ui);
+        if let Some((at, files)) = &self.last_trashed {
+            let left = UNDO_TRASH_FOR.saturating_sub(at.elapsed());
+            if left.is_zero() {
+                self.last_trashed = None;
+            } else {
+                let note = trf("Moved {} to trash", &[&files.len()]);
+                ui.label(egui::RichText::new(format!("·  {note}")).color(theme::muted()).size(12.0));
+                if ui.link(egui::RichText::new(tr("Undo")).size(12.0)).on_hover_text(tr("Put these files back where they were")).clicked() {
+                    self.undo_trash();
+                }
+                ui.ctx().request_repaint_after(left);
+            }
+        }
+        if self.scans > 0 {
+            ui.add(egui::Spinner::new().size(12.0));
+        }
+        rest += ui.cursor().min.x - notes;
+        // The scan's progress changes the width many times a second, so a
+        // thumbnail goes as soon as it doesn't fit but only comes back once
+        // a whole one does, rather than flickering.
+        let slot = THUMB.x + ui.spacing().item_spacing.x;
+        if rest > self.tray_rest + 0.5 || rest < self.tray_rest - slot {
+            self.tray_rest = rest;
+            ui.ctx().request_repaint();
+        }
     }
 
     fn sidebar(&mut self, ui: &mut egui::Ui) {

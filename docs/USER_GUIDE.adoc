@@ -98,8 +98,10 @@ Scanning progress, the *Photo Tray* with the selected photos, and a link to file
 At the top right are *+ Import*, *Refresh*, *Slideshow*, *?* for *Help & Shortcuts*, and the gear for *Settings*.
 Click the logo at the top left for *About Picasso*, which shows the version.
 
-Press kbd:[I] to show or hide the Info and Map panel beside the grid.
-It shows the selected photo's camera details and where it was taken.
+Press kbd:[I], or click the side panel button at the right of the bottom bar, to show or hide the Info and Map panel beside the grid.
+It shows the selected photo's camera details and where it was taken, on the *Info* and *Map* tabs at its top.
+In Places the same button shows or hides the list of what is on the map.
+The slider beside the button sets the thumbnail size; it shows only where there are thumbnails, so not in Places, Statistics, or the Travel Map, which also have no side panel button.
 
 == Finding photos
 

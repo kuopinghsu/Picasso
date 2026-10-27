@@ -17,7 +17,7 @@ use crate::track_edit::{self, EditPoint, Format, Loaded, Settings};
 use crate::types::{folder_label, format_duration, format_timestamp};
 
 use super::places::{
-    grouped, pinch_steps, truncated, wheel_steps, zoom_control, zoom_step, map_backdrop, MapView, MAX_ZOOM, MIN_ZOOM, ZOOM_BUTTON,
+    grouped, map_backdrop, pinch_steps, truncated, wheel_steps, zoom_control, zoom_step, MapView, MAX_ZOOM, MIN_ZOOM, ZOOM_BUTTON,
 };
 use super::theme::{self, ACCENT, DANGER, WHITE};
 use super::PicassoApp;
@@ -390,7 +390,8 @@ impl TrackEditor {
                         self.take_restored(restored);
                     }
                     self.revision += 1;
-                    self.framed = false;                }
+                    self.framed = false;
+                }
                 Err(err) => match restored {
                     // The edits are kept even when the track itself is gone.
                     Some(restored) => {

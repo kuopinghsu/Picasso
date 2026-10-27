@@ -1,7 +1,7 @@
 //! Light and dark color themes shared by every page.
 //!
 //! Colors that depend on the theme are read through functions such as
-//! [`text`] and [`panel`]; the constants below look the same in both.
+//! [`text`] and [`accent`]; the constants below look the same in both.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -16,6 +16,8 @@ pub const ACCENT: Color32 = Color32::from_rgb(0x09, 0x72, 0x7B);
 pub const GOLD: Color32 = Color32::from_rgb(0xE9, 0xA3, 0x20);
 /// Coral red of map pins and of everything about where photos were taken.
 pub const PIN: Color32 = Color32::from_rgb(0xE5, 0x53, 0x3D);
+/// Green of Statistics, from its sidebar icon to its charts.
+pub const GREEN: Color32 = Color32::from_rgb(0x10, 0xB9, 0x81);
 pub const STAR: Color32 = Color32::from_rgb(0xF5, 0xB4, 0x00);
 pub const FOLDER: Color32 = Color32::from_rgb(0xF2, 0xB5, 0x3B);
 pub const ALBUM: Color32 = Color32::from_rgb(0x8B, 0x5C, 0xF6);
@@ -106,7 +108,7 @@ const LIGHT: Palette = Palette {
     hover: Color32::from_rgb(0xED, 0xEC, 0xE7),
     placeholder: Color32::from_rgb(0xEE, 0xED, 0xE9),
     text: Color32::from_rgb(0x1C, 0x21, 0x24),
-    muted: Color32::from_rgb(0x68, 0x6D, 0x71),
+    muted: Color32::from_rgb(0x63, 0x68, 0x6C),
     hairline: Color32::from_rgb(0xE3, 0xE1, 0xDB),
 };
 
@@ -641,7 +643,7 @@ mod tests {
                 assert!(contrast(p.text, fill) >= 7.0, "{name} text on {place}");
                 assert!(contrast(accent, fill) >= 4.5, "{name} accent text on {place}");
             }
-            for (place, fill) in [("bg", p.bg), ("sidebar", p.sidebar), ("toolbar", p.toolbar)] {
+            for (place, fill) in [("bg", p.bg), ("sidebar", p.sidebar), ("toolbar", p.toolbar), ("select", p.select), ("hover", p.hover)] {
                 assert!(contrast(p.muted, fill) >= 4.5, "{name} muted on {place}");
             }
         }

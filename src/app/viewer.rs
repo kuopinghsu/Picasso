@@ -7,7 +7,7 @@ use crate::photo_info::Histogram;
 use crate::types::{displayed_size, folder_label, format_bytes, format_duration, format_timestamp, Photo};
 use crate::video::Player;
 
-use super::theme::{self, ACCENT, WHITE};
+use super::theme::{self, WHITE};
 use super::{PicassoApp, Zoom};
 
 /// The video on screen in the viewer, with its latest decoded frame.
@@ -779,7 +779,7 @@ fn seek_bar(ui: &mut egui::Ui, width: f32, position: f64, duration: f64, scrub: 
     let painter = ui.painter();
     painter.rect_filled(track, 2, theme::overlay(50));
     let played = Rect::from_min_max(track.min, Pos2::new(track.left() + track.width() * fraction, track.bottom()));
-    painter.rect_filled(played, 2, ACCENT);
+    painter.rect_filled(played, 2, theme::accent());
     let knob = Pos2::new(played.right(), track.center().y);
     let grow = response.hovered() || scrub.is_some();
     painter.circle_filled(knob, if grow { 7.0 } else { 5.0 }, theme::text());

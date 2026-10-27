@@ -522,7 +522,8 @@ impl PicassoApp {
 
     /// Opens the card of the cluster under the pointer, and closes it a
     /// moment after the pointer leaves both, so it can reach the card.
-    fn update_map_card(&mut self, ui: &egui::Ui, rect: Rect, clusters: &[Cluster], hovered: Option<usize>) {        if self.map_card.as_ref().is_some_and(|card| card.zoom != self.map_zoom) {
+    fn update_map_card(&mut self, ui: &egui::Ui, rect: Rect, clusters: &[Cluster], hovered: Option<usize>) {
+        if self.map_card.as_ref().is_some_and(|card| card.zoom != self.map_zoom) {
             self.map_card = None;
         }
         let now = ui.input(|input| input.time);

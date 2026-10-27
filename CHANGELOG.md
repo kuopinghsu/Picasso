@@ -82,11 +82,11 @@ section of this file as the release notes.
 
 ### Changed
 
-- New colors for travel photos: a lagoon-teal accent, warm paper tones in the light theme, and a
-  night-sea charcoal in the dark theme, with the same steps in both and text kept readable in
-  each. The Travel Map has an aqua sea and stone-colored land, and places with photos run from
-  pale gold through amber to burnt amber. The OpenFreeMap sea on Places is the same aqua, and
-  places are marked in one coral red on the sidebar, the map pin, and Statistics.
+- A new color theme in travel-photo tones: a lagoon-teal accent, warm paper tones in the light
+  theme, and a night-sea charcoal in the dark theme, with the same steps in both and text kept
+  readable in each. The Travel Map has an aqua sea and stone-colored land, and places with photos
+  run from pale gold through amber to burnt amber. The OpenFreeMap sea on Places is the same aqua,
+  and places are marked in one coral red on the sidebar, the map pin, and Statistics.
 - The CartoDB Positron map is now called **CARTO Positron**, after the company's current name.
 - **Remove** in **Settings → Folders** and on the folder tree asks first, and says the files stay
   where they are.

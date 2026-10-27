@@ -322,12 +322,20 @@ jobs:
       # The libraries Picasso loads at runtime are installed without their
       # -devel packages, so the build does not record AlmaLinux's library
       # folders and Picasso looks them up by name, as AppRun arranges.
+      # AlmaLinux mirrors now and then serve empty metadata; clearing it and
+      # trying again picks another mirror.
       - name: Install build dependencies
         run: |
-          dnf install -y --setopt=install_weak_deps=False \
-            gcc make pkgconf-pkg-config alsa-lib-devel git curl tar gzip jq file desktop-file-utils python3 \
-            fontconfig libX11 libX11-xcb libxcb libXcursor libXi libxkbcommon libxkbcommon-x11 \
-            libwayland-client libwayland-cursor libwayland-egl
+          for attempt in 1 2 3 4 5; do
+            dnf install -y --setopt=install_weak_deps=False \
+              gcc make pkgconf-pkg-config alsa-lib-devel git curl tar gzip jq file desktop-file-utils python3 \
+              fontconfig libX11 libX11-xcb libxcb libXcursor libXi libxkbcommon libxkbcommon-x11 \
+              libwayland-client libwayland-cursor libwayland-egl && break
+            if [ "$attempt" = 5 ]; then exit 1; fi
+            echo "::warning::dnf install failed (attempt $attempt), trying again"
+            dnf clean all
+            sleep $((attempt * 15))
+          done
 
       - uses: actions/checkout@v6
         with:
@@ -421,12 +429,18 @@ jobs:
       - name: Install a virtual display
         run: |
           if command -v apt-get >/dev/null; then
-            apt-get update
-            DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            apt-get -o Acquire::Retries=5 update
+            DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=5 install -y --no-install-recommends \
               xvfb libgl1 libglx-mesa0 libegl1 libegl-mesa0 libgl1-mesa-dri
           else
-            dnf install -y --setopt=install_weak_deps=False \
-              xorg-x11-server-Xvfb mesa-libGL mesa-libEGL mesa-dri-drivers
+            for attempt in 1 2 3 4 5; do
+              dnf install -y --setopt=install_weak_deps=False \
+                xorg-x11-server-Xvfb mesa-libGL mesa-libEGL mesa-dri-drivers && break
+              if [ "$attempt" = 5 ]; then exit 1; fi
+              echo "::warning::dnf install failed (attempt $attempt), trying again"
+              dnf clean all
+              sleep $((attempt * 15))
+            done
           fi
 
       # Picasso should open its window and keep running until timeout stops it.

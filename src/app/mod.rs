@@ -2592,7 +2592,7 @@ fn paint_glyph(painter: &egui::Painter, center_left: egui::Pos2, glyph: Glyph) {
             for (n, h) in [6.0, 13.0, 9.0].into_iter().enumerate() {
                 let left = origin.x + 1.0 + n as f32 * 4.5;
                 let bar = Rect::from_min_max(egui::pos2(left, origin.y + 14.0 - h), egui::pos2(left + 3.5, origin.y + 14.0));
-                painter.rect_filled(bar, 1, Color32::from_rgb(0x1F, 0xA8, 0x6B));
+                painter.rect_filled(bar, 1, theme::GREEN);
             }
         }
         Glyph::Globe => {

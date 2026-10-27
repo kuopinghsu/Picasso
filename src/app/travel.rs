@@ -39,9 +39,9 @@ const INSET: f32 = 12.0;
 /// Outline points closer than this many pixels to the last one drawn are
 /// skipped; a world view would otherwise draw a hundred thousand.
 const MIN_STEP: f32 = 0.8;
-/// Fill of a place with a single photo, and of the place with the most.
-/// Places with photos run from pale gold through [`theme::GOLD`] amber to
-/// bronze, warm against the sea and the stone of places without.
+/// Fill of a place with a single photo, and of the place with the most:
+/// pale gold through [`theme::GOLD`] to burnt amber, warm against the sea
+/// and the stone of places without photos.
 const FEW: Color32 = Color32::from_rgb(0xFB, 0xDD, 0x8A);
 const MANY: Color32 = Color32::from_rgb(0xC2, 0x65, 0x0A);
 /// Where the globe faces before there are photos to face.

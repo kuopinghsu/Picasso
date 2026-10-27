@@ -52,12 +52,15 @@ const NARROW: f32 = 760.0;
 const PAD: f32 = 18.0;
 /// Seconds the charts take to grow in.
 const GROW: f64 = 0.6;
-const GREEN: Color32 = Color32::from_rgb(0x10, 0xB9, 0x81);
+const GREEN: Color32 = theme::GREEN;
 const ROSE: Color32 = Color32::from_rgb(0xE0, 0x60, 0x7E);
 const SKY: Color32 = Color32::from_rgb(0x3B, 0x8F, 0xD9);
 const RED: Color32 = theme::DANGER;
+
 /// Colors of a donut's slices, in order.
-const SLICE_COLORS: [Color32; SLICES] = [ACCENT, SKY, theme::GOLD, ROSE, theme::ALBUM];
+fn slice_colors() -> [Color32; SLICES] {
+    [theme::accent(), SKY, theme::GOLD, ROSE, theme::ALBUM]
+}
 
 /// A photo shown on a card.
 #[derive(Clone)]
@@ -1178,7 +1181,7 @@ fn ranked_card(ui: &mut egui::Ui, ranked: &Ranked, text: &RankedText, scope: &Sc
     let id = egui::Id::unique(("stats-ranked-all", text.key));
     let all = ui.ctx().data(|data| data.get_temp::<bool>(id)).unwrap_or(false);
     let rest: usize = ranked.rows.iter().skip(SLICES).map(|(_, count)| count).sum();
-    let mut parts: Vec<(f32, Color32)> = ranked.rows.iter().take(SLICES).zip(SLICE_COLORS).map(|((_, count), color)| (*count as f32 / known.max(1) as f32, color)).collect();
+    let mut parts: Vec<(f32, Color32)> = ranked.rows.iter().take(SLICES).zip(slice_colors()).map(|((_, count), color)| (*count as f32 / known.max(1) as f32, color)).collect();
     if rest > 0 {
         parts.push((rest as f32 / known.max(1) as f32, other_color()));
     }
@@ -1189,7 +1192,7 @@ fn ranked_card(ui: &mut egui::Ui, ranked: &Ranked, text: &RankedText, scope: &Sc
         let (donut_response, slice) = donut(ui, size, &parts, scope.grow, &grouped(known), tr("Photos"));
         ui.vertical(|ui| {
             ui.spacing_mut().item_spacing.y = 2.0;
-            for (index, ((name, count), color)) in ranked.rows.iter().take(SLICES).zip(SLICE_COLORS).enumerate() {
+            for (index, ((name, count), color)) in ranked.rows.iter().take(SLICES).zip(slice_colors()).enumerate() {
                 if legend_row(ui, color, name, *count, known, slice == Some(index)).clicked() {
                     *go = Some(Go::Search(search(name)));
                 }

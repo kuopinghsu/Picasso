@@ -309,6 +309,43 @@ impl MapTrack {
             bounds,
         }
     }
+
+    /// Whether a photo taken at `lat`, `lon` at `taken_at` was taken along
+    /// the track: within [`ALONG_METERS`] of it and, for a track with
+    /// times, within [`ALONG_SLACK`] of them.
+    pub fn passes(&self, lat: f64, lon: f64, taken_at: i64) -> bool {
+        if let Some((start, end)) = self.time_span {
+            if taken_at < start - ALONG_SLACK || taken_at > end + ALONG_SLACK {
+                return false;
+            }
+        }
+        let (x, y) = geo::latlon_to_world(lat, lon, 0);
+        let reach = ALONG_METERS / (EQUATOR_M * lat.to_radians().cos().max(0.01) / 256.0);
+        let near = |bounds: &Bounds| {
+            x >= bounds.min[0] - reach && x <= bounds.max[0] + reach && y >= bounds.min[1] - reach && y <= bounds.max[1] + reach
+        };
+        if !near(&self.bounds) {
+            return false;
+        }
+        self.segments.iter().filter(|segment| near(&segment.bounds)).any(|segment| match segment.points.as_slice() {
+            [only] => (only[0] - x).hypot(only[1] - y) <= reach,
+            points => points.windows(2).any(|pair| distance_to_segment([x, y], pair[0], pair[1]) <= reach),
+        })
+    }
+}
+
+/// How far from a track a photo can be and still count as taken along it.
+pub const ALONG_METERS: f64 = 300.0;
+/// Slack on a track's times when finding the photos taken along it, for a
+/// camera clock set to another time zone.
+const ALONG_SLACK: i64 = 14 * 3600;
+const EQUATOR_M: f64 = 40_075_016.686;
+
+fn distance_to_segment(p: [f64; 2], a: [f64; 2], b: [f64; 2]) -> f64 {
+    let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+    let length = dx * dx + dy * dy;
+    let t = if length > 0.0 { (((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / length).clamp(0.0, 1.0) } else { 0.0 };
+    (a[0] + t * dx - p[0]).hypot(a[1] + t * dy - p[1])
 }
 
 /// Great-circle distance in meters.
@@ -679,6 +716,21 @@ mod tests {
         assert!(is_track_path(Path::new("ride.GPX")) && is_track_path(Path::new("a.kml")) && !is_track_path(Path::new("a.kmz")));
         assert!(is_track_path(Path::new("/trip/locations.json")) && is_track_path(Path::new("/2025.07.Spain/spain.JSON")));
         assert!(!is_track_path(Path::new("IMG_0001.jpg.json")) && !is_track_path(Path::new("IMG_0001.HEIC.supplemental-metadata.json")));
+    }
+
+    #[test]
+    fn photos_near_the_track_and_its_times_were_taken_along_it() {
+        let a = Point { lat: 48.0, lon: 2.0, time: Some(1_700_000_000) };
+        let b = Point { lat: 48.0, lon: 2.1, time: Some(1_700_003_600) };
+        let map = MapTrack::new(1, 1, String::new(), &Track { name: "x".into(), segments: vec![vec![a, b]] });
+        // 0.001° of latitude is about 111 m.
+        assert!(map.passes(48.001, 2.05, 1_700_001_000), "beside the middle of a segment");
+        assert!(!map.passes(48.01, 2.05, 1_700_001_000), "a kilometer away");
+        assert!(!map.passes(48.0, 2.2, 1_700_001_000), "past the end");
+        assert!(map.passes(48.0, 2.05, 1_700_003_600 + 9 * 3600), "a camera clock nine hours off");
+        assert!(!map.passes(48.0, 2.05, 1_700_003_600 + 2 * 86_400), "two days later");
+        let untimed = MapTrack::new(2, 1, String::new(), &Track { name: "y".into(), segments: vec![vec![Point { time: None, ..a }]] });
+        assert!(untimed.passes(48.0, 2.0, 0), "a track without times only asks for the place");
     }
 
     #[test]

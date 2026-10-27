@@ -225,6 +225,27 @@ impl Sidecar {
         entry_place(entry)
     }
 
+    /// Moves the places of files renamed in `dir` from the first name of each
+    /// pair to the second. A folder without a geotag file is left as it is.
+    pub fn rename(dir: &Path, renames: &[(String, String)]) -> Result<(), String> {
+        let mut sidecar = Sidecar::load(dir);
+        let mut moved = Vec::new();
+        for (from, to) in renames {
+            let key = match sidecar.entries.contains_key(from) {
+                true => Some(from.clone()),
+                false => sidecar.entries.keys().find(|name| name.eq_ignore_ascii_case(from)).cloned(),
+            };
+            if let Some(entry) = key.and_then(|key| sidecar.entries.remove(&key)) {
+                moved.push((to.clone(), entry));
+            }
+        }
+        if moved.is_empty() {
+            return Ok(());
+        }
+        sidecar.entries.extend(moved);
+        sidecar.save(dir)
+    }
+
     /// Writes the file, or removes it once no places are left. The text goes
     /// to a temporary name first, so a reader never sees half a file.
     fn save(&self, dir: &Path) -> Result<(), String> {
@@ -595,6 +616,23 @@ mod tests {
     use super::*;
     use crate::track::Point;
     use chrono::TimeZone;
+
+    #[test]
+    fn places_follow_renamed_files() {
+        let dir = std::env::temp_dir().join(format!("picasso-sidecar-rename-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut sidecar = Sidecar::default();
+        sidecar.entries.insert("A.JPG".into(), json!({ "lat": 1.0, "lon": 2.0 }));
+        sidecar.entries.insert("b.jpg".into(), json!({ "lat": 3.0, "lon": 4.0 }));
+        sidecar.save(&dir).unwrap();
+        let pair = |from: &str, to: &str| (from.to_string(), to.to_string());
+        Sidecar::rename(&dir, &[pair("a.jpg", "b.jpg"), pair("b.jpg", "c.jpg")]).unwrap();
+        let sidecar = Sidecar::load(&dir);
+        assert_eq!(sidecar.place("b.jpg"), Some((1.0, 2.0)));
+        assert_eq!(sidecar.place("c.jpg"), Some((3.0, 4.0)));
+        assert_eq!(sidecar.place("a.jpg"), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     fn point(time: i64, lat: f64, lon: f64) -> Point {
         Point { lat, lon, time: Some(time) }

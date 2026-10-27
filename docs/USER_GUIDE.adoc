@@ -121,6 +121,23 @@ A date finds the photos taken then:
 You can also write `2019/05` or `2019.05`.
 Dates and words combine, so `2019-05 beach` finds the May 2019 photos that match "beach".
 
+Search words narrow the results further:
+
+* `type:video`, `type:photo`, or `type:raw`, or one format such as `type:jpg` or `type:nef`
+* `gps:yes` or `gps:no`, for photos with or without a place on the map
+* `is:edited` or `is:starred`
+* `camera:` or `lens:` with part of the name, such as `lens:50mm`
+* `focal:35`, or a range such as `focal:24-70` or `focal:200-`, in millimeters
+* `mp:12`, or a range such as `mp:20-` or `mp:-8`, in megapixels
+* a word starting with `-` leaves out the photos it would find, so `beach -type:video` finds the beach photos but not the videos
+
+kbd:[Ctrl+F] jumps to the search box from anywhere but the editor, closing the viewer if it is open.
+
+When you click in the search box, it lists your ten most recent searches, and once you type, only those that contain what you have typed.
+Click one to search for it again, or pick one with kbd:[↑] and kbd:[↓] and press kbd:[Enter].
+A search is added to the list when you press kbd:[Enter] or click away from the box.
+The list is kept in `settings.json`, so it is there the next time you start Picasso; *Clear recent searches* at the bottom of the list empties it.
+
 === Selecting
 
 * Click a photo to select it.
@@ -183,6 +200,36 @@ On Windows and Linux, the status bar offers *Undo* for two minutes, which puts t
 On a Mac, restore files from the Trash in the Finder.
 Either way, a photo that comes back within 90 days gets its stars, caption, albums, and edits back.
 
+=== Renaming files
+
+Right-click a folder in the folder tree and choose *Rename files…* to rename its photos and videos from a pattern, as `+exiftool "-filename<${DateTimeOriginal}%-03c.%le" -d %Y.%m.%d-%Hh%Mm%Ss .+` does.
+Only the files directly in that folder are renamed, not those in its subfolders.
+
+Type the pattern in *New name*, or click the keywords under it to add them:
+
+* `+${DateTimeOriginal}+` is the date taken and `+${FileModifyDate}+` the date the file last changed, both written in the *Date format*
+* `+${Model}+` is the camera, as the Info panel names it
+* `%f` is the old name without its extension
+* `%-03c` is a copy number added only when the name is taken, so photos taken in the same second get `-001`, `-002`, and so on
+* `%le` is the extension in lowercase, and `%e` the extension as it is
+
+In the date format, `%Y` is the year, `%m` the month, `%d` the day, `%H` the hour, `%M` the minute, and `%S` the second, so `%Y.%m.%d-%Hh%Mm%Ss` gives `2023.05.17-14h30m05s`.
+The date taken is the one Picasso shows, including a date you fixed, with a video's time in local time, as exiftool's `-api QuickTimeUTC=1` gives.
+For a file with no date in it, that is the date the file last changed; use *Adjust date…* first to give it another.
+
+*Time offset* moves the dates in the names for a camera whose clock was off, as exiftool's `-globalTimeShift` does: `+1:30` is an hour and a half later, `-0:00:10` ten seconds earlier, and `+2 0:00` two days later.
+It changes only the names and isn't kept for next time; to fix the dates Picasso shows as well, use *Adjust date…* instead.
+
+The list shows every file's new name before anything changes.
+A name that can't be used, such as one without the file's extension or with a `:`, is shown in red, and that file keeps its name.
+A file already named by the pattern keeps its name, so renaming twice changes nothing.
+*Rename* renames all the files or, if one can't be renamed, none of them; the photos keep their stars, captions, albums, edits, and places.
+The `.xmp`, `.aae`, and `.thm` files that go with a photo are renamed with it, so `DSC0001.xmp` and `DSC0001.JPG.xmp` follow `DSC0001.JPG`.
+
+Each renaming is listed in a `.picasso-renames.json` file in the folder, with every old and new name.
+*Undo* puts back the names from before the newest renaming in the list, also after Picasso was closed, and clicking it again goes back one more.
+A file whose earlier name another file has now, such as a new `DSC0001.JPG` from the camera, keeps its name and stays in the list for later.
+
 == Viewing photos and videos
 
 Double-click a photo, or select it and press kbd:[Enter], to open the viewer.
@@ -202,6 +249,16 @@ The viewer's toolbar also flips between the light and dark themes.
 Click *Slideshow*, or press kbd:[Space] in the viewer, to play the photos from the selected one.
 kbd:[Space] pauses and resumes, and kbd:[Esc] ends the slideshow.
 *Settings → General* sets how long each photo shows.
+Each photo fades into the next.
+*Shuffle* in the toolbar, or kbd:[Shift+S], plays the photos in a random order, each once before any comes again.
+
+=== Copying and opening photos elsewhere
+
+* kbd:[Ctrl+C], or *Copy picture*, puts the photo on the clipboard with its edits, at up to 4096 px, to paste into another app.
+* *Copy path* copies the full path of each selected photo, one per line.
+* *Open with default app* opens the file in the app your system uses for it.
+
+They are on a thumbnail's right-click menu and the viewer's *···* menu.
 
 === Videos
 
@@ -315,6 +372,8 @@ Point at a pin for a card with its photos: click one to open it, or use *Select 
 Clicking a pin of several photos zooms in on them, or selects them when they were taken at one spot, and double-clicking a single photo's pin opens it.
 *Open in OpenStreetMap* opens the same view in your web browser.
 
+A search leaves only the matching photos on the map and frames them, and *Starred only* in the toolbar leaves only the starred ones. A search typed in the Library stays when you open Places, and stays when you go back to the Library, so you can see where the results were taken and return to them. *Show on map* clears the search and *Starred only*, so the photo you chose is always on the map.
+
 From a photo, *Show on map* opens Places at that photo.
 
 === Placing photos by hand
@@ -332,6 +391,8 @@ A location from the camera's GPS is never changed.
 
 Picasso reads the `.gpx` and `.kml` files in your folders, and Polarsteps location exports in `.json` files (such as `locations.json`), and draws them as colored paths under the photo pins.
 Point at a track for its name, start time, distance, and duration, and double-click it to zoom to it.
+Click a track to select the photos taken along it: those within 300 m of the path and, for a track with times, taken within 14 hours of them, so a camera clock set to another time zone still matches.
+*Select the photos taken along it* on the right-click menu of a track in the side panel does the same.
 *Tracks* in the Places toolbar turns the paths off.
 
 A folder's tracks are also listed at the top of the library grid, under *GPS tracks*, each with the shape of its path, its format, and its distance.
@@ -466,6 +527,7 @@ Right-click a folder in the sidebar for:
 
 * *Show in Finder* on a Mac, *Show in Explorer* on Windows, or *Show in folder* on Linux, which opens the folder
 * *Geotag from GPS track…*
+* *Rename files…*
 * *Exclude from scanning*, on a subfolder you don't want in the library
 * *Rescan this folder* and *Remove from Picasso…*, on a folder you added
 
@@ -477,8 +539,10 @@ The library, `picasso.db`, holds the folders you added, every photo's stars, cap
 It does not hold the photos themselves, so back up your photos as you would any files.
 
 The cache holds thumbnails and map tiles; clearing it is safe, and Picasso makes them again.
-Your choices in Settings are kept in `settings.json`, apart from the library.
+Your choices in Settings and your recent searches are kept in `settings.json`, apart from the library.
 *Settings → Storage* shows where each one is.
+
+Two small files can sit beside your photos: `.picasso-geotags.json` holds the places set with *Geotag from GPS track…*, and `.picasso-renames.json` the names *Undo* can put back after *Rename files…*.
 
 === Backups
 
@@ -526,6 +590,10 @@ Press kbd:[F1] or kbd:[?] to see every shortcut and mouse gesture in Picasso.
 | kbd:[Space] | Play or pause a video or the slideshow
 | kbd:[M] | Mute or unmute a video
 | kbd:[S] | Star
+| kbd:[Shift+S] | Shuffle the slideshow
+| kbd:[Ctrl+C] | Copy the photo with its edits
+| kbd:[Ctrl+F] | Search
+| kbd:[↑] kbd:[↓], kbd:[Enter] | Pick a recent search in the search box
 | kbd:[R] / kbd:[Shift+R] | Rotate clockwise or counterclockwise
 | kbd:[I] | Details panel
 | kbd:[E] | Edit the photo

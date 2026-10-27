@@ -192,27 +192,7 @@ pub fn export(source: &Path, target: &Path, settings: &Settings, rotation: i32, 
     if same_file(source, target) {
         return Err(tr("Choose a different name than the original").into());
     }
-    let image = std::panic::catch_unwind(|| crate::image_io::load_oriented(source)).unwrap_or_else(|_| Err("decoder fault".into()))?;
-    let mut rgba = image.to_rgba8();
-    drop(image);
-    if !settings.is_identity() {
-        rgba = std::panic::catch_unwind(AssertUnwindSafe(|| pipeline::render(&rgba, settings, &Options::default(), None)))
-            .map_err(|_| tr("The edit couldn't be rendered").to_string())?;
-    }
-    if let Some(edge) = options.long_edge.filter(|edge| *edge < rgba.width().max(rgba.height())) {
-        let scale = edge as f32 / rgba.width().max(rgba.height()) as f32;
-        let (w, h) = (
-            ((rgba.width() as f32 * scale).round() as u32).max(1),
-            ((rgba.height() as f32 * scale).round() as u32).max(1),
-        );
-        rgba = image::imageops::resize(&rgba, w, h, image::imageops::FilterType::Lanczos3);
-    }
-    let rgba = match rotation.rem_euclid(360) {
-        90 => image::imageops::rotate90(&rgba),
-        180 => image::imageops::rotate180(&rgba),
-        270 => image::imageops::rotate270(&rgba),
-        _ => rgba,
-    };
+    let rgba = render_edited(source, settings, rotation, options.long_edge)?;
     let extension = target
         .extension()
         .map(|ext| ext.to_string_lossy().to_ascii_lowercase())
@@ -222,6 +202,32 @@ pub fn export(source: &Path, target: &Path, settings: &Settings, rotation: i32, 
         "tif" | "tiff" => crate::image_io::save_lossless(target, &rgba, image::ImageFormat::Tiff),
         _ => crate::image_io::save_jpeg(target, &rgba, options.quality.clamp(1, 100)),
     }
+}
+
+/// The photo at `source` with the edit applied and turned by the catalog's
+/// clockwise `rotation`, at most `long_edge` pixels on its longest side.
+pub fn render_edited(source: &Path, settings: &Settings, rotation: i32, long_edge: Option<u32>) -> Result<RgbaImage, String> {
+    let image = std::panic::catch_unwind(|| crate::image_io::load_oriented(source)).unwrap_or_else(|_| Err("decoder fault".into()))?;
+    let mut rgba = image.to_rgba8();
+    drop(image);
+    if !settings.is_identity() {
+        rgba = std::panic::catch_unwind(AssertUnwindSafe(|| pipeline::render(&rgba, settings, &Options::default(), None)))
+            .map_err(|_| tr("The edit couldn't be rendered").to_string())?;
+    }
+    if let Some(edge) = long_edge.filter(|edge| *edge < rgba.width().max(rgba.height())) {
+        let scale = edge as f32 / rgba.width().max(rgba.height()) as f32;
+        let (w, h) = (
+            ((rgba.width() as f32 * scale).round() as u32).max(1),
+            ((rgba.height() as f32 * scale).round() as u32).max(1),
+        );
+        rgba = image::imageops::resize(&rgba, w, h, image::imageops::FilterType::Lanczos3);
+    }
+    Ok(match rotation.rem_euclid(360) {
+        90 => image::imageops::rotate90(&rgba),
+        180 => image::imageops::rotate180(&rgba),
+        270 => image::imageops::rotate270(&rgba),
+        _ => rgba,
+    })
 }
 
 /// True when `a` and `b` name one file, also through a link or another

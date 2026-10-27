@@ -685,7 +685,7 @@ impl PicassoApp {
 
     /// The Places map framed on `bounds`, in world pixels at zoom 0.
     pub(super) fn show_area_on_map(&mut self, bounds: Bounds) {
-        self.set_nav(Nav::Places);
+        self.open_places_to_show();
         self.frame_after_load = false;
         self.frame_bounds(bounds);
         self.map_zoom = self.map_zoom.min(14);

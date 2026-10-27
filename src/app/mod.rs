@@ -14,7 +14,9 @@ mod library;
 mod loader;
 mod places;
 mod recovery;
+mod renamer;
 mod settings;
+mod share;
 mod side;
 mod stats;
 mod travel;
@@ -59,7 +61,7 @@ type PhotoInfo = (crate::photo_info::Histogram, Vec<(&'static str, String)>);
 /// EXIF while the next photo's load, so a quick change doesn't blank them.
 const PANEL_HOLD: Duration = Duration::from_millis(600);
 const SEARCH_HINT: &str =
-    "Finds every word in file and folder names, captions, cameras, and albums. Add a date such as 2019, 2019-05, or 2019-05-17.";
+    "Finds every word in file and folder names, captions, cameras, lenses, and albums. Add a date such as 2019, 2019-05, or 2019-05-17, or narrow with type:video, type:raw, gps:no, is:edited, is:starred, camera:, lens:, focal:24-70, or mp:20-. A word starting with - leaves out what it finds, as in -beach.";
 
 #[derive(Clone, Copy, PartialEq)]
 enum Mode {
@@ -77,6 +79,27 @@ struct Slideshow {
     playing: bool,
     interval: f32,
     last: Instant,
+    /// The photo shown before this one, and when the fade from it began.
+    fade: Option<(i64, Instant)>,
+    /// Photos still to show when shuffling, the next one last.
+    queue: Vec<i64>,
+}
+
+/// Seconds one slideshow photo takes to fade into the next.
+const SLIDE_FADE: f32 = 0.7;
+/// Seconds a slideshow waits past its interval for the next photo to load.
+const SLIDE_WAIT: f32 = 3.0;
+
+/// The recent searches listed under the search box.
+#[derive(Default)]
+struct SearchMenu {
+    open: bool,
+    /// Something was typed since the box got the focus, so the list shows
+    /// only the searches that contain it.
+    typed: bool,
+    /// The search picked with the arrow keys, in `shown`.
+    pick: Option<usize>,
+    shown: Vec<String>,
 }
 
 enum Modal {
@@ -91,6 +114,7 @@ enum Modal {
     Export(export::ExportDialog),
     AdjustDate(dates::DateDialog),
     Geotag(geotagging::GeotagDialog),
+    Rename(renamer::RenameDialog),
     /// The duplicate search; `confirm_all` while asking before moving every
     /// extra copy to the trash.
     Duplicates { confirm_all: bool },
@@ -217,6 +241,11 @@ pub struct PicassoApp {
     search: String,
     /// When the typed search runs.
     search_due: Option<Instant>,
+    /// Ctrl+F asked for the search box, with its text selected.
+    focus_search: bool,
+    search_menu: SearchMenu,
+    /// A picture is being rendered for the clipboard.
+    copying: bool,
     mode: Mode,
     viewer_index: usize,
     /// Photo the viewer's filmstrip last brought into view, and how far the
@@ -290,6 +319,8 @@ pub struct PicassoApp {
     theme_mode: ThemeMode,
     /// Seconds each photo stays on screen in a slideshow.
     slideshow_interval: f32,
+    /// Slideshows show the photos in a random order.
+    slideshow_shuffle: bool,
     /// Ask before moving photos to the system trash.
     confirm_trash: bool,
     settings: settings::SettingsState,
@@ -354,11 +385,15 @@ pub struct PicassoApp {
     /// Cluster and track under the pointer in the side panel, lit on the map.
     map_hot: Option<places::ClusterKey>,
     track_hot: Option<usize>,
+    /// Track whose photos were last selected on the map, drawn wider.
+    picked_track: Option<i64>,
     /// Size of the Places map in the latest frame.
     map_size: Vec2,
     /// GPS tracks from the GPX and KML files in the folders.
     tracks: Vec<crate::track::MapTrack>,
     show_tracks: bool,
+    /// Places shows only the starred photos.
+    map_starred: bool,
     map_source: MapSource,
     carto_key: String,
     tiles: HashMap<(u8, u32, u32), places::MapTile>,
@@ -506,6 +541,9 @@ impl PicassoApp {
             sort: Sort::DateNewest,
             search: String::new(),
             search_due: None,
+            focus_search: false,
+            search_menu: SearchMenu::default(),
+            copying: false,
             mode: Mode::Browse,
             viewer_index: 0,
             film_shown: None,
@@ -556,6 +594,7 @@ impl PicassoApp {
             language,
             theme_mode,
             slideshow_interval: 3.0,
+            slideshow_shuffle: false,
             confirm_trash: true,
             settings: settings::SettingsState::default(),
             updates: updates::UpdateState::default(),
@@ -604,9 +643,11 @@ impl PicassoApp {
             map_hover: None,
             map_hot: None,
             track_hot: None,
+            picked_track: None,
             map_size: Vec2::new(800.0, 600.0),
             tracks: Vec::new(),
             show_tracks: true,
+            map_starred: false,
             map_source,
             carto_key,
             tiles: HashMap::new(),
@@ -657,8 +698,10 @@ impl PicassoApp {
         let config = &app.config;
         app.thumb_size = config.number("thumb_size").map_or(app.thumb_size, |size| size.clamp(MIN_THUMB, MAX_THUMB));
         app.slideshow_interval = config.number("slideshow_interval").map_or(app.slideshow_interval, |secs| secs.clamp(1.0, 15.0));
+        app.slideshow_shuffle = config.flag("slideshow_shuffle").unwrap_or(false);
         app.confirm_trash = config.flag("confirm_trash").unwrap_or(true);
         app.show_tracks = config.flag("map_tracks").unwrap_or(true);
+        app.map_starred = config.flag("map_starred").unwrap_or(false);
         app.library_top = config.text("library_top").and_then(|id| id.parse().ok());
         app.scroll_to = app.library_top;
         for (folder, item) in app.db.unreadable() {
@@ -745,6 +788,12 @@ impl PicassoApp {
         self.photos = photos;
         if self.sort.edited_only() {
             self.photos.retain(|photo| self.edits.contains_key(&photo.id));
+        }
+        if self.map_starred && self.nav == Nav::Places {
+            self.photos.retain(|photo| photo.starred);
+        }
+        if let Some(edited) = crate::db::edited_filter(&self.search) {
+            self.photos.retain(|photo| self.edits.contains_key(&photo.id) == edited);
         }
         self.index_of = self.photos.iter().enumerate().map(|(index, photo)| (photo.id, index)).collect();
         self.view_epoch = self.view_epoch.wrapping_add(1);
@@ -922,7 +971,12 @@ impl PicassoApp {
                         exif,
                     });
                     if self.displays.len() > 4 {
-                        self.displays.remove(0);
+                        // A shuffled slideshow loads photos far from the one
+                        // shown, so the oldest can be on screen or fading out.
+                        let shown = self.photos.get(self.viewer_index).map(|photo| photo.id);
+                        let fading = self.slideshow.as_ref().and_then(|show| show.fade).map(|(id, _)| id);
+                        let oldest = self.displays.iter().position(|item| Some(item.id) != shown && Some(item.id) != fading);
+                        self.displays.remove(oldest.unwrap_or(0));
                     }
                 }
             }
@@ -956,6 +1010,13 @@ impl PicassoApp {
             | UiEvent::EditFailed { .. }
             | UiEvent::EditPreview { .. }
             | UiEvent::Exported(_)) => self.on_edit_event(event, ctx),
+            UiEvent::Copied(result) => {
+                self.copying = false;
+                self.activity = match result {
+                    Ok(()) => tr("Copied the picture").to_string(),
+                    Err(err) => trf("Couldn't copy the picture: {}", &[&err]),
+                };
+            }
             UiEvent::BatchExported {
                 exported,
                 failed,
@@ -989,10 +1050,11 @@ impl PicassoApp {
                 }
             }
         }
+        let renaming = self.renaming();
         let due: Vec<i64> = self
             .watch_deadline
             .iter()
-            .filter(|(_, when)| Instant::now() >= **when)
+            .filter(|(_, when)| !renaming && Instant::now() >= **when)
             .map(|(id, _)| *id)
             .collect();
         for id in due {
@@ -1034,17 +1096,48 @@ impl PicassoApp {
     }
 
     fn tick_slideshow(&mut self) {
-        let advance = self
-            .slideshow
-            .as_ref()
-            .map(|show| show.playing && show.last.elapsed().as_secs_f32() >= show.interval)
-            .unwrap_or(false);
-        if advance && !self.photos.is_empty() {
-            if let Some(show) = self.slideshow.as_mut() {
-                show.last = Instant::now();
+        let Some(show) = self.slideshow.as_ref() else { return };
+        if !show.playing || self.photos.is_empty() {
+            return;
+        }
+        let (elapsed, interval) = (show.last.elapsed().as_secs_f32(), show.interval);
+        let Some(next) = self.upcoming_slide() else { return };
+        self.request_display(next);
+        let ready = self.photos.get(next).is_some_and(|photo| {
+            photo.is_video() || self.display_texture(photo.id).is_some() || self.display_failed.contains(&photo.id)
+        });
+        if elapsed < interval || (!ready && elapsed < interval + SLIDE_WAIT) {
+            return;
+        }
+        let from = self.photos.get(self.viewer_index).map(|photo| photo.id);
+        self.set_index(next, true);
+        if let Some(show) = self.slideshow.as_mut() {
+            show.queue.pop();
+            show.fade = from.map(|id| (id, Instant::now()));
+        }
+    }
+
+    /// Index of the photo the slideshow shows next: the following one, or
+    /// with shuffle on, the next of the shuffled order. Every photo comes
+    /// once before any comes again.
+    fn upcoming_slide(&mut self) -> Option<usize> {
+        if !self.slideshow_shuffle || self.photos.len() < 2 {
+            return Some((self.viewer_index + 1) % self.photos.len().max(1));
+        }
+        let current = self.photos.get(self.viewer_index).map(|photo| photo.id);
+        let show = self.slideshow.as_mut()?;
+        loop {
+            match show.queue.last() {
+                Some(id) if Some(*id) != current && self.index_of.contains_key(id) => return self.index_of.get(id).copied(),
+                Some(_) => {
+                    show.queue.pop();
+                }
+                None => {
+                    show.queue = self.photos.iter().map(|photo| photo.id).filter(|id| Some(*id) != current).collect();
+                    let seed = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(1, |time| time.as_nanos() as u64);
+                    shuffle(&mut show.queue, seed);
+                }
             }
-            let next = (self.viewer_index + 1) % self.photos.len();
-            self.set_index(next, true);
         }
     }
 
@@ -1088,7 +1181,9 @@ impl PicassoApp {
                 return;
             }
             if !matches!(self.modal, Modal::None) {
-                self.modal = Modal::None;
+                if !self.renaming() {
+                    self.modal = Modal::None;
+                }
                 return;
             }
             if self.slideshow.is_some() {
@@ -1115,6 +1210,12 @@ impl PicassoApp {
             return;
         }
         let command = |key| ctx.input_mut(|input| input.consume_key(Modifiers::COMMAND, key));
+        if !self.editing && command(Key::F) {
+            if self.mode == Mode::View {
+                self.close_viewer();
+            }
+            self.focus_search = true;
+        }
         let plain = |key| ctx.input_mut(|input| input.consume_key(Modifiers::NONE, key));
         let shift = |key| ctx.input_mut(|input| input.consume_key(Modifiers::SHIFT, key));
         // Statistics and the Travel Map show no photos to select, open, or trash.
@@ -1142,6 +1243,15 @@ impl PicassoApp {
         }
         if !photo_keys {
             return;
+        }
+        if Self::take_copy_command(ctx) {
+            let index = match self.mode {
+                Mode::Browse => self.primary_index(),
+                Mode::View => Some(self.viewer_index),
+            };
+            if let Some(id) = index.and_then(|index| self.photos.get(index)).map(|photo| photo.id) {
+                self.copy_picture(ctx, id);
+            }
         }
         let command_shift = |key| ctx.input_mut(|input| input.consume_key(Modifiers::COMMAND | Modifiers::SHIFT, key));
         if command_shift(Key::C) {
@@ -1276,6 +1386,9 @@ impl PicassoApp {
                 self.pan = Vec2::ZERO;
             }
         }
+        if self.slideshow.is_some() && shift(Key::S) {
+            self.toggle_shuffle();
+        }
         if plain(Key::S) {
             if self.mode == Mode::View {
                 if let Some(id) = self.photos.get(self.viewer_index).map(|photo| photo.id) {
@@ -1312,21 +1425,45 @@ impl PicassoApp {
             }
             ui.add_space(24.0);
             let search_w = (ui.available_width() - 320.0).clamp(160.0, 420.0);
+            let search_id = egui::Id::unique("search");
+            self.search_keys(ui, search_id);
             let response = ui.add(
                 egui::TextEdit::singleline(&mut self.search)
+                    .id(search_id)
                     .hint_text(tr("Search photos"))
                     .margin(egui::Margin::symmetric(12, 6))
                     .desired_width(search_w),
             );
             let response = response.on_hover_text(tr(SEARCH_HINT));
+            if std::mem::take(&mut self.focus_search) {
+                response.request_focus();
+                let all = egui::text::CCursorRange::two(egui::text::CCursor::new(0), egui::text::CCursor::new(self.search.chars().count()));
+                if let Some(mut state) = egui::TextEdit::load_state(ui.ctx(), response.id) {
+                    state.cursor.set_char_range(Some(all));
+                    state.store(ui.ctx(), response.id);
+                }
+            }
+            if response.gained_focus() {
+                self.search_menu.typed = false;
+                self.search_menu.pick = None;
+            }
             if response.changed() {
                 self.search_due = Some(Instant::now() + SEARCH_DELAY);
+                self.search_menu.typed = true;
+                self.search_menu.pick = None;
             }
             let submitted = response.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
+            if let Some(search) = self.recent_searches(ui, &response, submitted) {
+                self.search = search;
+                self.search_due = Some(Instant::now());
+            }
             if let Some(due) = self.search_due {
                 let left = due.saturating_duration_since(Instant::now());
                 if submitted || left.is_zero() {
                     self.search_due = None;
+                    if self.nav == Nav::Places && !self.search.trim().is_empty() {
+                        self.frame_after_load = true;
+                    }
                     self.reload_view();
                 } else {
                     ui.ctx().request_repaint_after(left);
@@ -1582,14 +1719,117 @@ impl PicassoApp {
         response
     }
 
+    /// ↑ and ↓ in the search box move through the recent searches listed
+    /// under it, and Enter searches for the one picked. Taken before the box
+    /// sees them, which would move its cursor.
+    fn search_keys(&mut self, ui: &egui::Ui, id: egui::Id) {
+        let menu = &mut self.search_menu;
+        if !menu.open || menu.shown.is_empty() || !ui.memory(|mem| mem.has_focus(id)) {
+            return;
+        }
+        let steps = ui.input_mut(|i| i.count_and_consume_key(Modifiers::NONE, Key::ArrowDown) as isize - i.count_and_consume_key(Modifiers::NONE, Key::ArrowUp) as isize);
+        if steps != 0 {
+            let at = menu.pick.map_or(-1, |pick| pick as isize) + steps;
+            menu.pick = (at >= 0).then(|| (at as usize).min(menu.shown.len() - 1));
+        }
+        let Some(pick) = menu.pick else { return };
+        if ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Enter)) {
+            self.search = menu.shown[pick].clone();
+            self.search_due = Some(Instant::now());
+            ui.memory_mut(|mem| mem.surrender_focus(id));
+        }
+    }
+
+    /// Lists the recent searches under the search box while it has the
+    /// focus, and returns the one clicked. What was typed is remembered when
+    /// the box loses the focus, unless a search from the list replaces it.
+    fn recent_searches(&mut self, ui: &egui::Ui, search: &egui::Response, submitted: bool) -> Option<String> {
+        let id = egui::Popup::default_response_id(search);
+        let pointer = ui.input(|i| i.pointer.interact_pos());
+        let in_list = ui.ctx().read_response(id).zip(pointer).is_some_and(|(list, pos)| list.rect.contains(pos));
+        let menu = &mut self.search_menu;
+        if search.has_focus() {
+            menu.open = true;
+        } else if search.lost_focus() {
+            // A press on the list takes the focus; the list stays until the
+            // release, which is when a click on a search counts.
+            menu.open = in_list && !submitted;
+            if !menu.open {
+                self.config.remember_search(&self.search);
+            }
+        } else if menu.open && ui.input(|i| i.focused && !i.pointer.any_down() && !i.pointer.any_released()) {
+            menu.open = false;
+            self.config.remember_search(&self.search);
+        }
+        let menu = &mut self.search_menu;
+        menu.shown.clear();
+        if !menu.open {
+            menu.pick = None;
+            return None;
+        }
+        let typed = if menu.typed { self.search.trim().to_lowercase() } else { String::new() };
+        menu.shown = self
+            .config
+            .searches()
+            .into_iter()
+            .filter(|earlier| {
+                let earlier = earlier.to_lowercase();
+                typed.is_empty() || (earlier != typed && earlier.contains(&typed))
+            })
+            .collect();
+        menu.pick = menu.pick.filter(|&pick| pick < menu.shown.len());
+        if menu.shown.is_empty() {
+            return None;
+        }
+        let mut picked = None;
+        let mut forget = false;
+        egui::Popup::from_response(search)
+            .open(true)
+            .align(egui::RectAlign::BOTTOM_START)
+            .align_alternatives(&[])
+            .gap(4.0)
+            .layout(egui::Layout::top_down_justified(egui::Align::Min))
+            .show(|ui| {
+                ui.set_width(search.rect.width() - ui.spacing().menu_margin.sum().x);
+                ui.label(egui::RichText::new(tr("Recent searches")).small().color(theme::muted()));
+                for (index, earlier) in menu.shown.iter().enumerate() {
+                    if ui.selectable_label(menu.pick == Some(index), earlier).clicked() {
+                        picked = Some(earlier.clone());
+                    }
+                }
+                ui.separator();
+                if ui.selectable_label(false, egui::RichText::new(tr("Clear recent searches")).color(theme::muted())).clicked() {
+                    forget = true;
+                }
+            });
+        if forget {
+            self.config.forget_searches();
+            self.search_menu.open = false;
+        }
+        if let Some(earlier) = &picked {
+            self.config.remember_search(earlier);
+            self.search_menu.open = false;
+        }
+        picked
+    }
+
     fn set_nav(&mut self, nav: Nav) {
-        // Places keeps the selection, to show where those photos are.
+        // Places keeps the selection and the search, to show where those
+        // photos are; back in the Library, the same search shows them again.
         let places = matches!(nav, Nav::Places);
+        let keep_search = match (&self.nav, &nav) {
+            (Nav::Places, Nav::Places) => false,
+            (_, Nav::Places) | (Nav::Places, Nav::Library) => true,
+            _ => false,
+        };
         self.nav = nav;
         self.mode = Mode::Browse;
         self.slideshow = None;
-        self.search.clear();
-        self.search_due = None;
+        self.picked_track = None;
+        if !keep_search {
+            self.search.clear();
+            self.search_due = None;
+        }
         if !places {
             self.selection.clear();
         }
@@ -1620,6 +1860,7 @@ impl PicassoApp {
             Modal::Export(_) => self.export_modal(ctx),
             Modal::AdjustDate(_) => self.adjust_date_modal(ctx),
             Modal::Geotag(_) => self.geotag_modal(ctx),
+            Modal::Rename(_) => self.renamer_modal(ctx),
             Modal::Duplicates { .. } => self.duplicates_modal(ctx),
             Modal::Settings => self.settings_modal(ctx),
             Modal::About => {
@@ -1967,10 +2208,10 @@ impl PicassoApp {
             self.sync_caption();
         }
         self.request_neighbors();
-        if self.slideshow.is_some() {
-            if let Some(show) = self.slideshow.as_mut() {
-                show.last = Instant::now();
-            }
+        // Only the slideshow's own step fades; any other move cuts to the photo.
+        if let Some(show) = self.slideshow.as_mut() {
+            show.last = Instant::now();
+            show.fade = None;
         }
     }
 
@@ -2046,10 +2287,15 @@ impl PicassoApp {
             photo.starred = !photo.starred;
             let starred = photo.starred;
             self.db.set_star(id, starred);
-            if self.nav == Nav::Starred && !starred {
+            if self.starred_only() && !starred {
                 self.drop_from_view(&[id]);
             }
         }
+    }
+
+    /// The view shows only starred photos, so unstarring takes one out.
+    fn starred_only(&self) -> bool {
+        self.nav == Nav::Starred || (self.nav == Nav::Places && self.map_starred)
     }
 
     fn toggle_star_selection(&mut self) {
@@ -2069,7 +2315,7 @@ impl PicassoApp {
             .and_then(|index| self.photos.get(index))
             .is_some_and(|photo| photo.starred);
         self.db.set_stars(&ids, make);
-        if self.nav == Nav::Starred && !make {
+        if self.starred_only() && !make {
             self.drop_from_view(&ids);
             return;
         }
@@ -2209,7 +2455,18 @@ impl PicassoApp {
             playing: true,
             interval: self.slideshow_interval,
             last: Instant::now(),
+            fade: None,
+            queue: Vec::new(),
         });
+    }
+
+    /// Turns the slideshow's shuffle on or off; the choice is remembered.
+    fn toggle_shuffle(&mut self) {
+        self.slideshow_shuffle = !self.slideshow_shuffle;
+        self.config.set("slideshow_shuffle", self.slideshow_shuffle);
+        if let Some(show) = self.slideshow.as_mut() {
+            show.queue.clear();
+        }
     }
 
     /// Shows or hides the details, histogram, and EXIF panel. The choice is
@@ -2530,6 +2787,18 @@ fn system_dark(ctx: &egui::Context) -> bool {
     ctx.system_theme() == Some(egui::Theme::Dark)
 }
 
+/// Puts `items` in a random order drawn from `seed` (Fisher–Yates over an
+/// xorshift generator; good enough for a slideshow).
+fn shuffle<T>(items: &mut [T], seed: u64) {
+    let mut state = seed | 1;
+    for last in (1..items.len()).rev() {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        items.swap(last, (state % (last as u64 + 1)) as usize);
+    }
+}
+
 /// "1 photo" or "N photos" in the current language.
 fn photo_count(count: usize) -> String {
     trf(if count == 1 { "{} photo" } else { "{} photos" }, &[&count])
@@ -2631,5 +2900,18 @@ mod tests {
         let after: Vec<bool> = paths.iter().map(|path| path.exists()).collect();
         assert_eq!(trash_outcome(&before, &after), TrashOutcome { trashed: vec![0], failed: vec![], missing: vec![1] });
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_shuffle_keeps_every_item_once_and_changes_the_order() {
+        let mut items: Vec<u32> = (0..50).collect();
+        shuffle(&mut items, 12_345);
+        assert_ne!(items, (0..50).collect::<Vec<_>>());
+        let mut sorted = items.clone();
+        sorted.sort();
+        assert_eq!(sorted, (0..50).collect::<Vec<_>>());
+        let mut again: Vec<u32> = (0..50).collect();
+        shuffle(&mut again, 54_321);
+        assert_ne!(items, again, "another seed gives another order");
     }
 }

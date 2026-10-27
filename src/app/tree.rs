@@ -161,6 +161,10 @@ impl PicassoApp {
                     self.open_geotag(&path);
                     ui.close();
                 }
+                if ui.button(crate::i18n::tr("Rename files…")).clicked() {
+                    self.open_renamer(&path);
+                    ui.close();
+                }
                 if let Nav::Dir(_) = row.nav {
                     if ui.button(crate::i18n::tr("Exclude from scanning")).clicked() {
                         if let Err(err) = self.exclude_dir(std::path::Path::new(&path)) {

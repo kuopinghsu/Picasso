@@ -79,6 +79,34 @@ section of this file as the release notes.
   T=name` runs only matching tests, `make install` and `make uninstall` put Picasso under
   `~/.local` on Linux, and `make debug`, `make check`, `make lint`, `make run-stats`,
   `make corpus`, `make world-map`, and `make version`.
+- Ctrl+C, or **Copy picture** on a thumbnail's right-click menu or the viewer's ··· menu, puts the
+  photo on the clipboard with its edits, at up to 4096 px. **Copy path** copies the paths of the
+  selected photos, and **Open with default app** opens the file in the system's app for it.
+  Ctrl+F jumps to the search box.
+- Search words: `type:video`, `type:photo`, `type:raw`, or a format such as `type:jpg`;
+  `gps:yes` or `gps:no`; `is:edited` or `is:starred`; `camera:` and `lens:`; `focal:35` or
+  `focal:24-70`; and `mp:20-` for the pixel size. A word starting with `-`, such as `-beach` or
+  `-type:video`, leaves out what it would find.
+- The search box lists your ten most recent searches when you click in it, narrowed to the ones
+  that contain what you type; click one, or pick it with ↑ and ↓ and press Enter, to search
+  again. They are kept in `settings.json`, and **Clear recent searches** at the bottom of the list
+  forgets them.
+- Places follows the search, showing and framing only the matching photos, and the search stays
+  when going from the Library to Places and back. **Starred only** in its toolbar leaves only the
+  starred ones. Clicking a track selects the photos taken along
+  it, within 300 m of the path and 14 hours of its times.
+- The slideshow fades from one photo to the next and waits for the next to load. **Shuffle**
+  (Shift+S) plays the photos in a random order, each once before any comes again.
+- **Rename files…** on a folder's right-click menu renames the photos and videos in it from a
+  pattern of exiftool keywords, `${DateTimeOriginal}%-03c.%le` with the date format
+  `%Y.%m.%d-%Hh%Mm%Ss` by default; click a keyword to add it. A time offset such as `+1:30`
+  moves the dates in the names for a camera whose clock was off. Every new name is shown before
+  anything changes, a file already named by the pattern keeps its name, no file is renamed over
+  another, and if one can't be renamed none are. The photos keep their stars, captions, albums,
+  edits, and places, and their `.xmp`, `.aae`, and `.thm` files are renamed with them. Each
+  renaming is listed in `.picasso-renames.json` in the folder, so **Undo** puts back earlier
+  names one renaming at a time, also after Picasso was closed; a file whose earlier name another
+  file has now keeps its name and stays listed.
 
 ### Changed
 

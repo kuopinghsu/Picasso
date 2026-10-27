@@ -219,6 +219,12 @@ impl PicassoApp {
                         let mut interval = self.slideshow_interval;
                         let response = ui.add(egui::Slider::new(&mut interval, 1.0..=15.0).suffix(" s").fixed_decimals(0));
                         self.set_slideshow_interval(interval, &response);
+                        let shuffle = ui
+                            .add(egui::Button::new(tr("Shuffle")).selected(self.slideshow_shuffle))
+                            .on_hover_text(tr("Show the photos in a random order (Shift+S)"));
+                        if shuffle.clicked() {
+                            self.toggle_shuffle();
+                        }
                     }
                     // The title takes what the buttons leave, shortened with "…".
                     ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
@@ -250,7 +256,16 @@ impl PicassoApp {
                     .unwrap_or((self.map_lat, self.map_lon, self.map_zoom.max(2)));
                 super::places::open_osm(lat, lon, zoom);
             }
+            if ui.button(tr("Open with default app")).clicked() {
+                self.open_externally(photo.id);
+            }
             ui.separator();
+            if !photo.is_video() && ui.button(tr("Copy picture")).clicked() {
+                self.copy_picture(ui.ctx(), photo.id);
+            }
+            if ui.button(tr("Copy path")).clicked() {
+                self.copy_paths(ui.ctx(), &[photo.id]);
+            }
             if ui.button(tr("Export…")).clicked() {
                 self.open_export(&[photo.id]);
             }
@@ -336,7 +351,11 @@ impl PicassoApp {
         }
         // A zoomed photo is larger than the stage; keep it off the toolbar,
         // filmstrip, and side panel.
-        let clipped = ui.painter_at(stage);
+        let mut clipped = ui.painter_at(stage);
+        if let Some(t) = self.paint_fade(&clipped, stage, photo.id) {
+            clipped.set_opacity(t);
+            ui.ctx().request_repaint();
+        }
         if let Some(texture) = video_frame {
             theme::paint_image(&clipped, &texture, image_rect, full_uv(), photo.rotation);
         } else if editing && self.paint_edit_stage(ui, stage, image_rect, &photo) {
@@ -420,6 +439,24 @@ impl PicassoApp {
                 self.viewer_step(1);
             }
         }
+    }
+
+    /// While a slideshow fades from the photo before `current`, paints that
+    /// photo fading out and returns how far in the new one should be.
+    fn paint_fade(&mut self, painter: &egui::Painter, stage: Rect, current: i64) -> Option<f32> {
+        let (from, at) = self.slideshow.as_ref()?.fade?;
+        let t = at.elapsed().as_secs_f32() / super::SLIDE_FADE;
+        if from == current || t >= 1.0 {
+            return None;
+        }
+        let photo = self.index_of(from).and_then(|index| self.photos.get(index))?.clone();
+        let (texture, ..) = self.display_texture(from).or_else(|| self.thumb_texture(from))?;
+        let (w, h) = self.shown_size(&photo);
+        let scale = self.scale_for(w, h, stage.size());
+        let mut faded = painter.clone();
+        faded.set_opacity(1.0 - t);
+        theme::paint_image(&faded, &texture, Rect::from_center_size(stage.center(), Vec2::new(w * scale, h * scale)), full_uv(), photo.rotation);
+        Some(t)
     }
 
     fn slideshow_click(&mut self, pos: Pos2, stage: Rect) {

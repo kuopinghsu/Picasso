@@ -36,6 +36,20 @@ pub(super) struct DupeScan {
     groups: Option<Vec<Vec<Photo>>>,
 }
 
+impl DupeScan {
+    /// Follows photos renamed since the search, as (photo, new path, new
+    /// file name).
+    pub(super) fn renamed(&mut self, renames: &[(i64, String, String)]) {
+        let renames: std::collections::HashMap<i64, (&String, &String)> = renames.iter().map(|(id, path, name)| (*id, (path, name))).collect();
+        for photo in self.groups.iter_mut().flatten().flatten() {
+            if let Some((path, name)) = renames.get(&photo.id) {
+                photo.path = (*path).clone();
+                photo.filename = (*name).clone();
+            }
+        }
+    }
+}
+
 enum Row {
     Group(usize),
     Copy(usize, usize),

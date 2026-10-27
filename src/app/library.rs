@@ -577,7 +577,10 @@ impl PicassoApp {
             })
             .filter(|(_, track)| {
                 let text = format!("{} {}", track.name, folder_label(&track.path)).to_lowercase();
-                words.iter().all(|word| text.contains(word.as_str()))
+                words.iter().all(|word| match word.strip_prefix('-').filter(|rest| !rest.is_empty()) {
+                    Some(rest) => !text.contains(rest),
+                    None => text.contains(word.as_str()),
+                })
             })
             .map(|(index, _)| index)
             .collect();
@@ -647,7 +650,7 @@ impl PicassoApp {
     pub(super) fn show_track_on_map(&mut self, bounds: crate::track::Bounds, ctx: &egui::Context) {
         self.show_tracks = true;
         self.config.set("map_tracks", true);
-        self.set_nav(Nav::Places);
+        self.open_places_to_show();
         self.frame_after_load = false;
         if self.map_size.x < 1.0 {
             self.map_size = ctx.content_rect().size() * 0.6;
@@ -948,9 +951,22 @@ impl PicassoApp {
                 self.open_export(&ids);
                 ui.close();
             }
+            if !photo.is_video() && ui.button(tr("Copy picture")).clicked() {
+                self.copy_picture(ui.ctx(), id);
+                ui.close();
+            }
+            if ui.button(tr("Copy path")).clicked() {
+                let ids = if self.selection.contains(&id) { self.selection_in_order() } else { vec![id] };
+                self.copy_paths(ui.ctx(), &ids);
+                ui.close();
+            }
             if ui.button(tr("Adjust date…")).clicked() {
                 let ids = if self.selection.contains(&id) { self.selection_in_order() } else { vec![id] };
                 self.open_adjust_date(ids);
+                ui.close();
+            }
+            if ui.button(tr("Open with default app")).clicked() {
+                self.open_externally(id);
                 ui.close();
             }
             if ui.button(tr("Show in folder")).clicked() {

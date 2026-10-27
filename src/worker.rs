@@ -143,6 +143,8 @@ pub enum UiEvent {
         histogram: Option<Box<Histogram>>,
     },
     Exported(Result<PathBuf, String>),
+    /// A picture went on the clipboard, or why it couldn't.
+    Copied(Result<(), String>),
     /// Progress of a batch export: counts so far, and the first error.
     BatchExported {
         exported: usize,

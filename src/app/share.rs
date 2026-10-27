@@ -35,10 +35,14 @@ impl PicassoApp {
         self.activity = tr("Copying the picture…").into();
         self.copying = true;
         let spawned = std::thread::Builder::new().name("picasso-copy".into()).spawn(move || {
-            let result = crate::edit::render_edited(&path, &settings, rotation, Some(CLIPBOARD_EDGE)).map(|rgba| {
-                let size = [rgba.width() as usize, rgba.height() as usize];
-                ctx.copy_image(egui::ColorImage::from_rgba_unmultiplied(size, rgba.as_raw()));
-            });
+            // Copied must always arrive, or no picture could be copied again.
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                crate::edit::render_edited(&path, &settings, rotation, Some(CLIPBOARD_EDGE)).map(|rgba| {
+                    let size = [rgba.width() as usize, rgba.height() as usize];
+                    ctx.copy_image(egui::ColorImage::from_rgba_unmultiplied(size, rgba.as_raw()));
+                })
+            }))
+            .unwrap_or_else(|_| Err(tr("The edit couldn't be rendered").into()));
             let _ = events.send(UiEvent::Copied(result));
             ctx.request_repaint();
         });

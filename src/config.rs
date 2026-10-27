@@ -9,6 +9,8 @@ use serde_json::{Map, Value};
 use crate::db::Database;
 use crate::types::FileType;
 
+const RECENT_SEARCHES: usize = 10;
+
 pub struct Config {
     path: PathBuf,
     values: Map<String, Value>,
@@ -83,6 +85,34 @@ impl Config {
     pub fn set_file_types(&mut self, types: &[FileType]) {
         let codes = types.iter().map(|kind| Value::from(kind.code())).collect();
         self.set("file_types", Value::Array(codes));
+    }
+
+    /// Recent searches, newest first.
+    pub fn searches(&self) -> Vec<String> {
+        let Some(searches) = self.values.get("recent_searches").and_then(Value::as_array) else { return Vec::new() };
+        searches.iter().filter_map(Value::as_str).map(str::to_string).collect()
+    }
+
+    /// Puts `search` first in the recent searches, once, dropping the oldest
+    /// past [`RECENT_SEARCHES`].
+    pub fn remember_search(&mut self, search: &str) {
+        let search = search.trim();
+        if search.is_empty() {
+            return;
+        }
+        if let Some(stored) = read(&self.path) {
+            self.values = stored;
+        }
+        let mut searches = self.searches();
+        let lower = search.to_lowercase();
+        searches.retain(|earlier| earlier.to_lowercase() != lower);
+        searches.insert(0, search.to_string());
+        searches.truncate(RECENT_SEARCHES);
+        self.set("recent_searches", Value::Array(searches.into_iter().map(Value::from).collect()));
+    }
+
+    pub fn forget_searches(&mut self) {
+        self.set("recent_searches", Value::Array(Vec::new()));
     }
 
     /// Stores `value` and writes the file. Other settings are taken from the
@@ -173,6 +203,33 @@ mod tests {
         let config = Config::load(&dir, &db);
         assert_eq!(config.text("carto_key"), Some("abc123"));
         assert_eq!(config.number("thumb_size"), Some(150.0));
+        drop(db);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn recent_searches_are_kept_newest_first_once_each() {
+        let dir = std::env::temp_dir().join(format!("picasso-config-searches-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let db = Database::open(&dir.join("library.db")).unwrap();
+        let mut config = Config::load(&dir, &db);
+        assert!(config.searches().is_empty());
+
+        config.remember_search("  beach ");
+        config.remember_search("");
+        config.remember_search("type:raw");
+        config.remember_search("Beach");
+        assert_eq!(config.searches(), ["Beach", "type:raw"]);
+        for n in 0..20 {
+            config.remember_search(&format!("search {n}"));
+        }
+        let mut config = Config::load(&dir, &db);
+        assert_eq!(config.searches().len(), RECENT_SEARCHES);
+        assert_eq!(config.searches()[0], "search 19");
+
+        config.forget_searches();
+        assert!(Config::load(&dir, &db).searches().is_empty());
         drop(db);
         let _ = std::fs::remove_dir_all(&dir);
     }

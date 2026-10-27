@@ -71,6 +71,11 @@ impl PicassoApp {
                 let text = if count == 1 { "{} track" } else { "{} tracks" };
                 ui.label(egui::RichText::new(trf(text, &[&count])).color(theme::muted()));
             }
+            ui.separator();
+            if ui.checkbox(&mut self.map_starred, tr("Starred only")).on_hover_text(tr("Show only the starred photos on the map")).changed() {
+                self.config.set("map_starred", self.map_starred);
+                self.reload_view();
+            }
         });
         ui.add_space(4.0);
 
@@ -114,7 +119,11 @@ impl PicassoApp {
             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
         }
         if let Some(track) = on_track.and_then(|index| self.tracks.get(index)) {
-            response.clone().on_hover_ui_at_pointer(|ui| track_tooltip(ui, track));
+            response.clone().on_hover_ui_at_pointer(|ui| {
+                track_tooltip(ui, track);
+                let hint = tr("Click to select the photos taken along it. Double-click to zoom to it.");
+                ui.label(egui::RichText::new(hint).small().color(theme::muted()));
+            });
         }
         let hit = hovered.map(|index| clusters[index].members.as_slice());
         if response.double_clicked() {
@@ -129,6 +138,7 @@ impl PicassoApp {
                 self.selection.clear();
                 self.selection.insert(id);
                 self.anchor = Some(id);
+                self.picked_track = None;
             } else if let Some(members) = hit {
                 if self.map_zoom < MAX_ZOOM && self.split_closer(members) {
                     self.zoom_to_photos(&members.to_vec());
@@ -147,6 +157,10 @@ impl PicassoApp {
                     self.map_lon = lon;
                     self.reload_view();
                 }
+            } else if let Some(index) = on_track {
+                self.select_along_track(index);
+            } else {
+                self.picked_track = None;
             }
         }
         self.update_map_card(ui, rect, &clusters, hovered);
@@ -160,11 +174,16 @@ impl PicassoApp {
         self.map_view_clusters = clusters.into_iter().filter(|cluster| rect.contains(cluster.pos)).collect();
 
         let tracks_shown = self.show_tracks && !self.tracks.is_empty();
-        if self.photos.is_empty() && self.selection.is_empty() && !self.loading && !tracks_shown {
+        let narrowed = self.map_starred || !self.search.trim().is_empty();
+        if self.photos.is_empty() && self.selection.is_empty() && !self.loading && (narrowed || !tracks_shown) {
             ui.painter().text(
                 rect.center(),
                 Align2::CENTER_CENTER,
-                tr("No geotagged photos yet. Select photos, press Geotag, then click the map."),
+                tr(if narrowed {
+                    "No photos on the map match the search or the starred filter"
+                } else {
+                    "No geotagged photos yet. Select photos, press Geotag, then click the map."
+                }),
                 FontId::proportional(14.0),
                 theme::text(),
             );
@@ -172,12 +191,17 @@ impl PicassoApp {
     }
 
     pub(super) fn frame_map(&mut self) {
-        let chosen = self
-            .selection
-            .iter()
-            .find_map(|id| self.db.photo(*id).and_then(|photo| photo.place()));
+        let chosen = self.photos.iter().filter(|photo| self.selection.contains(&photo.id)).find_map(Photo::place);
         let places: Vec<(f64, f64)> = self.photos.iter().filter_map(Photo::place).collect();
-        if let Some((lat, lon)) = chosen.or_else(|| places.first().copied()) {
+        if chosen.is_none() && !self.search.trim().is_empty() && !places.is_empty() {
+            let mut bounds = Bounds::EMPTY;
+            for (lat, lon) in &places {
+                let (x, y) = geo::latlon_to_world(*lat, *lon, 0);
+                bounds.add([x, y]);
+            }
+            self.frame_bounds(bounds);
+            self.map_zoom = self.map_zoom.min(14);
+        } else if let Some((lat, lon)) = chosen.or_else(|| places.first().copied()) {
             self.map_lat = lat;
             self.map_lon = lon;
             self.map_zoom = if places.len() <= 1 { 12 } else { 4 };
@@ -241,7 +265,8 @@ impl PicassoApp {
             }
             drawn.push((index, runs));
         }
-        let lit = hovered.or(self.track_hot);
+        let picked = self.picked_track.and_then(|id| self.tracks.iter().position(|track| track.id == id));
+        let lit = hovered.or(self.track_hot).or(picked);
         drawn.sort_by_key(|(index, _)| Some(*index) == lit);
         for (index, runs) in &drawn {
             let color = track_color(self.tracks[*index].id);
@@ -262,11 +287,24 @@ impl PicassoApp {
         hovered
     }
 
+    /// Opens Places to show something chosen elsewhere: a photo, an area, or
+    /// a track. The search and **Starred only** go off, or they could hide
+    /// what was asked for.
+    pub(super) fn open_places_to_show(&mut self) {
+        self.search.clear();
+        self.search_due = None;
+        if self.map_starred {
+            self.map_starred = false;
+            self.config.set("map_starred", false);
+        }
+        self.set_nav(crate::types::Nav::Places);
+    }
+
     pub(super) fn show_on_map(&mut self, id: i64) {
         let place = self.db.photo(id).and_then(|photo| photo.place());
         self.selection.clear();
         self.selection.insert(id);
-        self.set_nav(crate::types::Nav::Places);
+        self.open_places_to_show();
         if let Some((lat, lon)) = place {
             self.frame_after_load = false;
             self.map_lat = lat;
@@ -482,7 +520,29 @@ impl PicassoApp {
         }
     }
 
+    /// Selects the photos on the map taken along track `index`, and lights
+    /// the track.
+    fn select_along_track(&mut self, index: usize) {
+        let Some(track) = self.tracks.get(index) else { return };
+        let ids: Vec<i64> = self
+            .photos
+            .iter()
+            .filter(|photo| photo.place().is_some_and(|(lat, lon)| track.passes(lat, lon, photo.taken_at)))
+            .map(|photo| photo.id)
+            .collect();
+        self.activity = match ids.len() {
+            0 => trf("No photos on the map were taken along {}", &[&track.name]),
+            1 => trf("{} photo taken along {}", &[&1, &track.name]),
+            count => trf("{} photos taken along {}", &[&count, &track.name]),
+        };
+        self.picked_track = Some(track.id);
+        self.anchor = ids.first().copied();
+        self.selection = ids.into_iter().collect();
+        self.map_card = None;
+    }
+
     fn select_photos(&mut self, indices: &[usize]) {
+        self.picked_track = None;
         self.selection = indices.iter().map(|index| self.photos[*index].id).collect();
         self.anchor = indices.first().map(|index| self.photos[*index].id);
     }
@@ -890,6 +950,10 @@ impl PicassoApp {
             *action = Some(AreaAction::Track(index));
         }
         response.context_menu(|ui| {
+            if ui.button(tr("Select the photos taken along it")).clicked() {
+                self.select_along_track(index);
+                ui.close();
+            }
             if ui.button(tr("Edit track")).clicked() {
                 let path = self.tracks[index].path.clone();
                 self.open_track(&path, ui.ctx());

@@ -21,6 +21,7 @@ mod mvt;
 mod photo_info;
 mod picasa_ini;
 mod raw_tiff;
+mod rename;
 mod secret;
 mod shell;
 mod thumbs;

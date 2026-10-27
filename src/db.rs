@@ -709,6 +709,22 @@ impl Database {
         let _ = tx.commit();
     }
 
+    /// Gives photos the new paths and file names of renamed files, keeping
+    /// their rows, and with them everything else Picasso knows about them.
+    /// Names can pass from one photo to another.
+    pub fn rename_photos(&self, renames: &[(i64, String, String)]) -> Result<(), String> {
+        let tx = self.conn.unchecked_transaction().map_err(|err| err.to_string())?;
+        for (id, ..) in renames {
+            tx.execute("UPDATE photos SET path = ?2 WHERE id = ?1", params![id, format!("\u{1}renaming {id}")])
+                .map_err(|err| err.to_string())?;
+        }
+        for (id, path, filename) in renames {
+            tx.execute("UPDATE photos SET path = ?2, filename = ?3 WHERE id = ?1", params![id, path, filename])
+                .map_err(|err| err.to_string())?;
+        }
+        tx.commit().map_err(|err| err.to_string())
+    }
+
     pub fn photo(&self, id: i64) -> Option<Photo> {
         let sql = format!("SELECT {PHOTO_COLS} FROM photos p WHERE p.id=?1");
         self.conn
@@ -960,7 +976,7 @@ impl Database {
     pub fn photos(&self, nav: &Nav, search: &str, sort: Sort) -> Vec<Photo> {
         let search = search.trim();
         if !search.is_empty() {
-            return self.search(search, sort);
+            return self.search(search, sort, matches!(nav, Nav::Places | Nav::TravelMap));
         }
         let order = order_sql(sort);
         match nav {
@@ -1006,32 +1022,18 @@ impl Database {
         self.map_rows("SELECT id, path FROM photos ORDER BY taken_at DESC", [], |row| Ok((row.get(0)?, row.get(1)?)))
     }
 
-    /// Photos matching every word of `query`. See [`search_terms`].
-    fn search(&self, query: &str, sort: Sort) -> Vec<Photo> {
-        let mut clauses = Vec::new();
+    /// Photos matching every word of `query`, only those with a place on
+    /// the map when `located`. See [`search_terms`].
+    fn search(&self, query: &str, sort: Sort, located: bool) -> Vec<Photo> {
         let mut values: Vec<rusqlite::types::Value> = Vec::new();
-        for term in search_terms(query) {
-            let at = values.len() + 1;
-            match term {
-                Term::Dates(start, end) => {
-                    clauses.push(format!("(p.taken_at >= ?{at} AND p.taken_at < ?{})", at + 1));
-                    values.extend([start.into(), end.into()]);
-                }
-                Term::Text(word) => {
-                    clauses.push(format!(
-                        "(substr(p.path, length(f.path) + 1) LIKE ?{at} ESCAPE '\\'
-                          OR p.caption LIKE ?{at} ESCAPE '\\'
-                          OR p.camera LIKE ?{at} ESCAPE '\\'
-                          OR p.lens LIKE ?{at} ESCAPE '\\'
-                          OR EXISTS (SELECT 1 FROM album_photos ap JOIN albums a ON a.id = ap.album_id
-                                     WHERE ap.photo_id = p.id AND a.name LIKE ?{at} ESCAPE '\\'))"
-                    ));
-                    values.push(like_pattern(&word).into());
-                }
-            }
-        }
+        let mut clauses: Vec<String> = search_terms(query).into_iter().map(|term| term_sql(term, &mut values)).collect();
         if clauses.is_empty() {
             return Vec::new();
+        }
+        if located {
+            clauses.push(
+                "((p.pin_lat IS NOT NULL AND p.pin_lon IS NOT NULL) OR (p.gps_lat IS NOT NULL AND p.gps_lon IS NOT NULL))".into(),
+            );
         }
         let sql = format!(
             "SELECT {PHOTO_COLS}
@@ -1300,20 +1302,187 @@ enum Term {
     /// Photos taken from the first time up to, not including, the second.
     Dates(i64, i64),
     Text(String),
+    /// Files with one of these extensions, or with none of them when `false`.
+    Types(Vec<&'static str>, bool),
+    /// Photos with a place on the map, or without one when `false`.
+    Located(bool),
+    Edited(bool),
+    Starred(bool),
+    Camera(String),
+    Lens(String),
+    /// Focal lengths from the first to the second, in millimeters.
+    Focal(f32, f32),
+    /// Pixel sizes from the first to the second, in megapixels.
+    Pixels(f32, f32),
+    /// The photos the term doesn't match.
+    Not(Box<Term>),
 }
 
 /// The words of a search. A year, month, or day such as `2019`, `2019-05`,
-/// or `2019/5/17` stands for the photos taken then, in local time; any
-/// other word is looked for in the file and subfolder names, the caption,
-/// the camera, the lens, and the names of the photo's albums.
+/// or `2019/5/17` stands for the photos taken then, in local time.
+/// `type:`, `gps:`, `is:`, `camera:`, `lens:`, `focal:`, and `mp:` narrow by
+/// what they name (see [`search_word`]); any other word is looked for in the
+/// file and subfolder names, the caption, the camera, the lens, and the names
+/// of the photo's albums. A word starting with `-`, such as `-beach` or
+/// `-type:video`, leaves out the photos it would find.
 fn search_terms(query: &str) -> Vec<Term> {
     query
         .split_whitespace()
-        .map(|word| match date_range(word) {
-            Some((start, end)) => Term::Dates(start, end),
-            None => Term::Text(word.to_string()),
+        .map(|word| match word.strip_prefix('-').filter(|rest| !rest.is_empty()) {
+            Some(rest) => negated(search_term(rest)),
+            None => search_term(word),
         })
         .collect()
+}
+
+fn search_term(word: &str) -> Term {
+    match date_range(word) {
+        Some((start, end)) => Term::Dates(start, end),
+        None => search_word(word).unwrap_or_else(|| Term::Text(word.to_string())),
+    }
+}
+
+/// `term` the other way round. Terms that already have an opposite use it,
+/// so `-is:edited` is `is:unedited` and [`edited_filter`] sees it.
+fn negated(term: Term) -> Term {
+    match term {
+        Term::Types(extensions, matching) => Term::Types(extensions, !matching),
+        Term::Located(located) => Term::Located(!located),
+        Term::Edited(edited) => Term::Edited(!edited),
+        Term::Starred(starred) => Term::Starred(!starred),
+        term => Term::Not(Box::new(term)),
+    }
+}
+
+/// The SQL condition for `term`, adding its parameters to `values`.
+fn term_sql(term: Term, values: &mut Vec<rusqlite::types::Value>) -> String {
+    let at = values.len() + 1;
+    match term {
+        Term::Dates(start, end) => {
+            values.extend([start.into(), end.into()]);
+            format!("(p.taken_at >= ?{at} AND p.taken_at < ?{})", at + 1)
+        }
+        Term::Text(word) => {
+            values.push(like_pattern(&word).into());
+            format!(
+                "(substr(p.path, length(f.path) + 1) LIKE ?{at} ESCAPE '\\'
+                  OR p.caption LIKE ?{at} ESCAPE '\\'
+                  OR p.camera LIKE ?{at} ESCAPE '\\'
+                  OR p.lens LIKE ?{at} ESCAPE '\\'
+                  OR EXISTS (SELECT 1 FROM album_photos ap JOIN albums a ON a.id = ap.album_id
+                             WHERE ap.photo_id = p.id AND a.name LIKE ?{at} ESCAPE '\\'))"
+            )
+        }
+        Term::Types(extensions, matching) => {
+            let any: Vec<String> = (0..extensions.len()).map(|n| format!("p.filename LIKE ?{}", at + n)).collect();
+            let any = any.join(" OR ");
+            values.extend(extensions.iter().map(|ext| format!("%.{ext}").into()));
+            if matching { format!("({any})") } else { format!("NOT ({any})") }
+        }
+        Term::Located(located) => {
+            let place = "((p.pin_lat IS NOT NULL AND p.pin_lon IS NOT NULL) OR (p.gps_lat IS NOT NULL AND p.gps_lon IS NOT NULL))";
+            if located { place.into() } else { format!("NOT {place}") }
+        }
+        // Steps can add up to no change, so these are only a first cut; the
+        // window keeps the photos [`edited_filter`] asks for.
+        Term::Edited(true) => "EXISTS (SELECT 1 FROM edits e WHERE e.photo_id = p.id AND e.applied > 0)".into(),
+        Term::Edited(false) => "1".into(),
+        Term::Starred(starred) => format!("p.starred = {}", i32::from(starred)),
+        Term::Camera(text) => {
+            values.push(like_pattern(&text).into());
+            format!("p.camera LIKE ?{at} ESCAPE '\\'")
+        }
+        Term::Lens(text) => {
+            values.push(like_pattern(&text).into());
+            format!("p.lens LIKE ?{at} ESCAPE '\\'")
+        }
+        Term::Focal(low, high) => {
+            values.extend([f64::from(low).into(), f64::from(high).into()]);
+            format!("(p.focal_mm > 0 AND p.focal_mm >= ?{at} AND p.focal_mm <= ?{})", at + 1)
+        }
+        Term::Pixels(low, high) => {
+            values.extend([(f64::from(low) * 1e6).into(), (f64::from(high) * 1e6).into()]);
+            format!(
+                "(p.width > 0 AND p.height > 0 AND p.width * p.height >= ?{at} AND p.width * p.height <= ?{})",
+                at + 1
+            )
+        }
+        // A column that is NULL would otherwise leave the photo out both ways.
+        Term::Not(term) => format!("NOT IFNULL({}, 0)", term_sql(*term, values)),
+    }
+}
+
+/// Whether `query` asks for edited photos (`is:edited`) or unedited ones
+/// (`is:unedited`). The search only narrows them roughly, since whether an
+/// edit changes anything is known from its settings, not from the library.
+pub fn edited_filter(query: &str) -> Option<bool> {
+    search_terms(query).into_iter().rev().find_map(|term| match term {
+        Term::Edited(edited) => Some(edited),
+        _ => None,
+    })
+}
+
+/// A word such as `type:video`, `type:raw`, `type:jpg`, `gps:no`,
+/// `is:edited`, `is:starred`, `camera:sony`, `lens:50mm`, `focal:35`,
+/// `focal:24-70`, or `mp:20-`. None for a plain word, or one whose value
+/// means nothing.
+fn search_word(word: &str) -> Option<Term> {
+    use crate::types::{FileType, VIDEO_EXTS};
+
+    let (key, value) = word.split_once(':')?;
+    let value = value.to_lowercase();
+    let yes_no = |value: &str| match value {
+        "yes" | "y" | "true" | "1" => Some(true),
+        "no" | "n" | "false" | "0" => Some(false),
+        _ => None,
+    };
+    match key.to_lowercase().as_str() {
+        "type" => match value.as_str() {
+            "photo" | "photos" | "image" | "images" => Some(Term::Types(VIDEO_EXTS.to_vec(), false)),
+            "video" | "videos" | "movie" | "movies" => Some(Term::Types(VIDEO_EXTS.to_vec(), true)),
+            _ => {
+                if let Some(kind) = FileType::from_code(&value) {
+                    return Some(Term::Types(kind.extensions().to_vec(), true));
+                }
+                let kind = FileType::ALL.into_iter().find(|kind| kind.extensions().contains(&value.as_str()))?;
+                // One RAW or video format, such as nef or mp4; jpg and jpeg are one.
+                let extensions = match kind {
+                    FileType::Raw | FileType::Video => kind.extensions().iter().filter(|ext| **ext == value).copied().collect(),
+                    _ => kind.extensions().to_vec(),
+                };
+                Some(Term::Types(extensions, true))
+            }
+        },
+        "gps" => yes_no(&value).map(Term::Located),
+        "is" => match value.as_str() {
+            "edited" => Some(Term::Edited(true)),
+            "unedited" => Some(Term::Edited(false)),
+            "starred" => Some(Term::Starred(true)),
+            "unstarred" => Some(Term::Starred(false)),
+            "geotagged" | "located" => Some(Term::Located(true)),
+            _ => None,
+        },
+        "camera" if !value.is_empty() => Some(Term::Camera(value)),
+        "lens" if !value.is_empty() => Some(Term::Lens(value)),
+        "focal" => number_range(&value, "mm").map(|(low, high)| Term::Focal(low, high)),
+        "mp" => number_range(&value, "mp").map(|(low, high)| Term::Pixels(low, high)),
+        _ => None,
+    }
+}
+
+/// A number such as `35`, within half a unit either way, or a range such as
+/// `24-70`, `100-`, or `-8`. Each number may end with `unit`.
+fn number_range(value: &str, unit: &str) -> Option<(f32, f32)> {
+    let number = |text: &str| text.trim_end_matches(unit).parse::<f32>().ok().filter(|n| n.is_finite() && *n >= 0.0);
+    match value.trim_end_matches(unit).split_once('-') {
+        Some((low, high)) if !(low.is_empty() && high.is_empty()) => {
+            let low = if low.is_empty() { 0.0 } else { number(low)? };
+            let high = if high.is_empty() { f32::MAX } else { number(high)? };
+            Some((low.min(high), low.max(high)))
+        }
+        Some(_) => None,
+        None => number(value).map(|n| ((n - 0.5).max(0.0), n + 0.5)),
+    }
 }
 
 fn date_range(word: &str) -> Option<(i64, i64)> {
@@ -1559,6 +1728,26 @@ mod tests {
         std::fs::create_dir_all(&folder).unwrap();
         let id = db.add_folder(&folder).unwrap();
         (db, id, folder.canonicalize().unwrap())
+    }
+
+    #[test]
+    fn renamed_photos_keep_their_rows_and_can_swap_names() {
+        let (db, folder_id, folder) = library("rename");
+        let ids = db.write_batch(&[record(folder_id, &folder, "a.jpg", 1), record(folder_id, &folder, "b.jpg", 1)]).unwrap().ids;
+        db.set_star(ids[0], true);
+        let path = |name: &str| folder_path(&folder, name);
+        db.rename_photos(&[(ids[0], path("b.jpg"), "b.jpg".into()), (ids[1], path("a.jpg"), "a.jpg".into())]).unwrap();
+        let a = db.photo(ids[0]).unwrap();
+        assert_eq!((a.path.as_str(), a.filename.as_str(), a.starred), (path("b.jpg").as_str(), "b.jpg", true));
+        assert_eq!(db.photo(ids[1]).unwrap().filename, "a.jpg");
+
+        // A rescan finds the files where the library says they are.
+        let mut known = record(folder_id, &folder, "b.jpg", 1);
+        known.existing = Some(ids[0]);
+        db.write_batch(&[known]).unwrap();
+        assert!(db.photo(ids[0]).unwrap().starred);
+        assert!(db.rename_photos(&[(ids[0], path("a.jpg"), "a.jpg".into())]).is_err(), "two photos can't share a path");
+        assert_eq!(db.photo(ids[0]).unwrap().filename, "b.jpg", "a failed rename changes nothing");
     }
 
     #[test]
@@ -1997,7 +2186,7 @@ mod tests {
         db.set_caption(ids[1], "Snow day");
 
         let found = |query: &str| -> Vec<i64> {
-            let mut ids: Vec<i64> = db.search(query, Sort::Name).iter().map(|photo| photo.id).collect();
+            let mut ids: Vec<i64> = db.search(query, Sort::Name, false).iter().map(|photo| photo.id).collect();
             ids.sort();
             ids
         };
@@ -2010,6 +2199,84 @@ mod tests {
         assert_eq!(found("snow"), [ids[1]]);
         assert!(found("search").is_empty(), "the library folder's own name doesn't match every photo");
         assert_eq!(found("testcam").len(), 3);
+    }
+
+    #[test]
+    fn search_words_narrow_by_type_place_edit_star_lens_and_focal_length() {
+        let (db, folder_id, folder) = library("search-words");
+        let mut wide = record(folder_id, &folder, "wide.JPEG", 1);
+        wide.photo.lens = "FE 16-35mm F4".into();
+        wide.photo.focal_mm = 16.0;
+        let mut tele = record(folder_id, &folder, "tele.nef", 1);
+        tele.photo.lens = "70-200mm".into();
+        tele.photo.focal_mm = 200.0;
+        tele.photo.gps_lat = None;
+        tele.photo.gps_lon = None;
+        let mut clip = record(folder_id, &folder, "clip.mp4", 1);
+        clip.photo.camera = "Phone".into();
+        let ids = db.write_batch(&[wide, tele, clip]).unwrap().ids;
+        db.set_star(ids[1], true);
+        db.save_edit_history(ids[0], "[]", 1, 1);
+
+        let found = |query: &str, located: bool| -> Vec<i64> {
+            let mut ids: Vec<i64> = db.search(query, Sort::Name, located).iter().map(|photo| photo.id).collect();
+            ids.sort();
+            ids
+        };
+        assert_eq!(found("type:video", false), [ids[2]]);
+        assert_eq!(found("type:photo", false), [ids[0], ids[1]]);
+        assert_eq!(found("type:jpg", false), [ids[0]], "jpg also finds .jpeg");
+        assert_eq!(found("type:raw", false), [ids[1]]);
+        assert!(found("type:cr2", false).is_empty(), "one RAW format is only that format");
+        assert_eq!(found("gps:no", false), [ids[1]]);
+        assert_eq!(found("gps:yes", false), [ids[0], ids[2]]);
+        assert_eq!(found("is:edited", false), [ids[0]]);
+        assert_eq!(found("is:unedited", false).len(), 3, "the window narrows unedited photos with edited_filter");
+        assert_eq!(edited_filter("beach is:unedited"), Some(false));
+        assert_eq!(edited_filter("beach"), None);
+        assert_eq!(found("is:starred", false), [ids[1]]);
+        assert_eq!(found("camera:phone", false), [ids[2]]);
+        assert_eq!(found("lens:16-35", false), [ids[0]]);
+        assert_eq!(found("focal:16mm", false), [ids[0]]);
+        assert_eq!(found("focal:100-", false), [ids[1]]);
+        assert_eq!(found("focal:10-50", false), [ids[0]]);
+        assert_eq!(found("type:photo", true), [ids[0]], "the map leaves out photos without a place");
+        assert_eq!(search_terms("type:nothing"), [Term::Text("type:nothing".into())]);
+    }
+
+    #[test]
+    fn search_words_leave_out_words_and_narrow_by_pixel_size() {
+        let (db, folder_id, folder) = library("search-not");
+        let mut big = record(folder_id, &folder, "beach.jpg", 1);
+        (big.photo.width, big.photo.height) = (6000, 4000);
+        let mut small = record(folder_id, &folder, "beach.mp4", 1);
+        (small.photo.width, small.photo.height) = (1920, 1080);
+        let mut city = record(folder_id, &folder, "city.jpg", 1);
+        (city.photo.width, city.photo.height) = (4032, 3024);
+        let mut unknown = record(folder_id, &folder, "unknown.jpg", 1);
+        (unknown.photo.width, unknown.photo.height) = (0, 0);
+        let ids = db.write_batch(&[big, small, city, unknown]).unwrap().ids;
+        db.save_edit_history(ids[0], "[]", 1, 1);
+
+        let found = |query: &str| -> Vec<i64> {
+            let mut ids: Vec<i64> = db.search(query, Sort::Name, false).iter().map(|photo| photo.id).collect();
+            ids.sort();
+            ids
+        };
+        assert_eq!(found("-beach"), [ids[2], ids[3]]);
+        assert_eq!(found("beach -type:video"), [ids[0]]);
+        assert_eq!(found("beach -mp4"), [ids[0]]);
+        assert_eq!(found("mp:24"), [ids[0]]);
+        assert_eq!(found("mp:12"), [ids[2]]);
+        assert_eq!(found("mp:10-"), [ids[0], ids[2]]);
+        assert_eq!(found("mp:-3mp"), [ids[1]]);
+        assert!(!found("mp:0-").contains(&ids[3]), "an unknown size matches no size");
+        assert_eq!(found("-mp:10-"), [ids[1], ids[3]]);
+        assert_eq!(found("-is:edited").len(), 4, "the window narrows unedited photos with edited_filter");
+        assert_eq!(edited_filter("-is:edited"), Some(false));
+        assert_eq!(search_terms("-"), [Term::Text("-".into())]);
+        assert_eq!(search_terms("-is:starred"), [Term::Starred(false)]);
+        assert_eq!(search_terms("mp:big"), [Term::Text("mp:big".into())]);
     }
 
     #[test]

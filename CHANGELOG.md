@@ -3,7 +3,7 @@
 All notable changes to Picasso are listed here, newest first. Each release on GitHub uses its
 section of this file as the release notes.
 
-## [0.9.5] - Unreleased
+## [0.9.5] - 2026-10-27
 
 ### Added
 

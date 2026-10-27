@@ -7,7 +7,7 @@ use std::time::Instant;
 use eframe::egui::{self, Align2, Color32, FontId, Pos2, Rect, Sense, Vec2};
 
 use crate::i18n::{tr, trf};
-use crate::types::{day_key, format_day, format_month, Nav, Photo, Sort};
+use crate::types::{day_key, folder_label, format_day, format_month, Nav, Photo, Sort};
 
 use super::theme::{self, ACCENT, STAR, THUMB_RADIUS, WHITE};
 use super::PicassoApp;
@@ -43,6 +43,7 @@ pub(super) struct CachedLayout {
     pub width: i32,
     pub sort: Sort,
     pub thumb: i32,
+    pub tracks: usize,
     pub layout: Rc<GridLayout>,
 }
 
@@ -79,19 +80,26 @@ enum GridRow {
         y: f32,
         h: f32,
     },
+    /// GPS tracks of the folder, above its photos. `indices` are positions
+    /// in the list of the folder's tracks.
+    Tracks {
+        indices: Range<usize>,
+        y: f32,
+        h: f32,
+    },
 }
 
 impl GridLayout {
     fn row_height(row: &GridRow) -> f32 {
         match row {
             GridRow::Header { .. } => HEADER_H,
-            GridRow::Photos { h, .. } => *h,
+            GridRow::Photos { h, .. } | GridRow::Tracks { h, .. } => *h,
         }
     }
 
     fn row_y(row: &GridRow) -> f32 {
         match row {
-            GridRow::Header { y, .. } | GridRow::Photos { y, .. } => *y,
+            GridRow::Header { y, .. } | GridRow::Photos { y, .. } | GridRow::Tracks { y, .. } => *y,
         }
     }
 
@@ -103,13 +111,13 @@ impl GridLayout {
         if sort.by_name() {
             self.rows.get(first..)?.iter().find_map(|row| match row {
                 GridRow::Photos { indices, .. } => photos.get(indices.start).map(|photo| photo.filename.clone()),
-                GridRow::Header { .. } => None,
+                GridRow::Header { .. } | GridRow::Tracks { .. } => None,
             })
         } else {
             let first = first.min(self.rows.len().checked_sub(1)?);
             self.rows[..=first].iter().rev().find_map(|row| match row {
                 GridRow::Header { title, .. } => Some(title.clone()),
-                GridRow::Photos { .. } => None,
+                GridRow::Photos { .. } | GridRow::Tracks { .. } => None,
             })
         }
     }
@@ -121,7 +129,7 @@ impl GridLayout {
         let first = self.rows.partition_point(|row| Self::row_y(row) + Self::row_height(row) / 2.0 <= top);
         self.rows.get(first..)?.iter().find_map(|row| match row {
             GridRow::Photos { indices, .. } => Some(indices.start),
-            GridRow::Header { .. } => None,
+            GridRow::Header { .. } | GridRow::Tracks { .. } => None,
         })
     }
 
@@ -145,14 +153,14 @@ impl GridLayout {
         let at = self.rows.partition_point(|row| Self::row_y(row) <= top);
         let (index, title, y) = self.rows[..at].iter().enumerate().rev().find_map(|(index, row)| match row {
             GridRow::Header { title, y, .. } => Some((index, title.as_str(), *y)),
-            GridRow::Photos { .. } => None,
+            GridRow::Photos { .. } | GridRow::Tracks { .. } => None,
         })?;
         if y >= top {
             return None;
         }
         let next = self.rows[index + 1..].iter().find_map(|row| match row {
             GridRow::Header { y, .. } => Some(*y),
-            GridRow::Photos { .. } => None,
+            GridRow::Photos { .. } | GridRow::Tracks { .. } => None,
         });
         let push = next.map_or(0.0, |next| (next - (top + HEADER_H)).min(0.0));
         Some((title, top + push))
@@ -162,6 +170,7 @@ impl GridLayout {
         let at = self.rows.partition_point(|row| match row {
             GridRow::Header { first, .. } => *first <= index,
             GridRow::Photos { indices, .. } => indices.end <= index,
+            GridRow::Tracks { .. } => true,
         });
         match self.rows.get(at)? {
             GridRow::Photos { indices, y, .. } if indices.contains(&index) => Some(*y),
@@ -182,7 +191,8 @@ impl PicassoApp {
             self.travel_ui(ui);
             return;
         }
-        if self.photos.is_empty() {
+        let tracks = self.view_tracks();
+        if self.photos.is_empty() && tracks.is_empty() {
             if self.loading {
                 ui.vertical_centered(|ui| {
                     ui.add_space(120.0);
@@ -200,7 +210,7 @@ impl PicassoApp {
         let full = ui.available_rect_before_wrap();
         let strip_w = if self.sort.by_name() { 0.0 } else { STRIP_W };
         let grid_rect = Rect::from_min_max(full.min, Pos2::new(full.max.x - strip_w, full.max.y));
-        self.ensure_layout(grid_rect.width());
+        self.ensure_layout(grid_rect.width(), tracks.len());
         let layout = Rc::clone(&self.layout.as_ref().unwrap().layout);
         self.grid_cols = layout.cols;
         let pending = self
@@ -254,6 +264,17 @@ impl PicassoApp {
                                 Vec2::new(thumb, thumb + label_h),
                             );
                             self.photo_cell(ui, index, rect, layout.labels);
+                        }
+                    }
+                    GridRow::Tracks { indices, y, h: _ } => {
+                        let thumb = layout.tile;
+                        let label_h = if layout.labels { LABEL_H } else { 0.0 };
+                        for (col, index) in indices.clone().enumerate() {
+                            let rect = Rect::from_min_size(
+                                origin + Vec2::new(PAD + col as f32 * (thumb + layout.gap), *y),
+                                Vec2::new(thumb, thumb + label_h),
+                            );
+                            self.track_cell(ui, tracks[index], rect, layout.labels);
                         }
                     }
                 }
@@ -515,7 +536,7 @@ impl PicassoApp {
         paint_date_bubble(ctx, text, None, Pos2::new(bar_left - 4.0, handle_y), view, alpha);
     }
 
-    fn ensure_layout(&mut self, width: f32) {
+    fn ensure_layout(&mut self, width: f32, tracks: usize) {
         let width_key = width.round() as i32;
         let thumb_key = self.thumb_size.round() as i32;
         let stale = self.layout.as_ref().map_or(true, |cache| {
@@ -523,6 +544,7 @@ impl PicassoApp {
                 || cache.width != width_key
                 || cache.sort != self.sort
                 || cache.thumb != thumb_key
+                || cache.tracks != tracks
         });
         if stale {
             self.layout = Some(CachedLayout {
@@ -530,15 +552,119 @@ impl PicassoApp {
                 width: width_key,
                 sort: self.sort,
                 thumb: thumb_key,
-                layout: Rc::new(build_layout(&self.photos, self.sort, width, self.thumb_size)),
+                tracks,
+                layout: Rc::new(build_layout(&self.photos, tracks, self.sort, width, self.thumb_size)),
             });
         }
+    }
+
+    /// The GPS tracks of the folder in view, as positions in `self.tracks`,
+    /// in the order of the sort. Other views show none, and neither does
+    /// the sort of edited photos.
+    pub(super) fn view_tracks(&self) -> Vec<usize> {
+        if self.sort.edited_only() {
+            return Vec::new();
+        }
+        let words: Vec<String> = self.search.split_whitespace().map(str::to_lowercase).collect();
+        let mut found: Vec<usize> = self
+            .tracks
+            .iter()
+            .enumerate()
+            .filter(|(_, track)| match &self.nav {
+                Nav::Folder(id) => track.folder_id == *id,
+                Nav::Dir(dir) => std::path::Path::new(&track.path).starts_with(dir),
+                _ => false,
+            })
+            .filter(|(_, track)| {
+                let text = format!("{} {}", track.name, folder_label(&track.path)).to_lowercase();
+                words.iter().all(|word| text.contains(word.as_str()))
+            })
+            .map(|(index, _)| index)
+            .collect();
+        let start = |index: &usize| self.tracks[*index].time_span.map(|(start, _)| start);
+        match self.sort {
+            Sort::Name | Sort::NameEdited => found.sort_by_key(|index| folder_label(&self.tracks[*index].path).to_lowercase()),
+            Sort::DateNewest => found.sort_by_key(|index| std::cmp::Reverse(start(index))),
+            Sort::DateOldest => found.sort_by_key(start),
+        }
+        found
+    }
+
+    fn track_cell(&mut self, ui: &mut egui::Ui, index: usize, rect: Rect, labeled: bool) {
+        let Some(track) = self.tracks.get(index) else { return };
+        let thumb = rect.width();
+        let image_rect = Rect::from_min_size(rect.min, Vec2::splat(thumb));
+        let response = ui
+            .interact(rect, egui::Id::unique(("track", track.id)), Sense::click())
+            .on_hover_cursor(egui::CursorIcon::PointingHand);
+        let painter = ui.painter();
+        if response.hovered() {
+            painter.add(theme::card_shadow().as_shape(image_rect, THUMB_RADIUS));
+        }
+        let backdrop = if theme::is_dark() { Color32::from_rgb(0x2A, 0x33, 0x3D) } else { super::places::MAP_BACKDROP };
+        painter.rect_filled(image_rect, THUMB_RADIUS, backdrop);
+        super::track_editor::paint_track_shape(painter, image_rect, &track.segments, track.bounds);
+        painter.rect_stroke(image_rect, THUMB_RADIUS, egui::Stroke::new(1.0, Color32::from_black_alpha(18)), egui::StrokeKind::Inside);
+        let pill = |text: String, left_top: Pos2| {
+            let galley = painter.layout_no_wrap(text, FontId::proportional(10.5), WHITE);
+            let back = Rect::from_min_size(left_top, galley.size() + Vec2::new(10.0, 4.0));
+            painter.rect_filled(back, 5, Color32::from_black_alpha(150));
+            painter.galley(back.min + Vec2::new(5.0, 2.0), galley, WHITE);
+        };
+        pill(super::track_editor::format_badge(&track.path), image_rect.left_top() + Vec2::new(6.0, 6.0));
+        pill(crate::track::format_distance(track.meters), image_rect.left_bottom() + Vec2::new(6.0, -22.0));
+        let file = folder_label(&track.path);
+        if labeled {
+            painter.text(
+                Pos2::new(image_rect.center().x, image_rect.bottom() + 5.0),
+                Align2::CENTER_TOP,
+                elide(&file, ((thumb / 7.0) as usize).max(8)),
+                FontId::proportional(11.5),
+                theme::muted(),
+            );
+        }
+        let (path, bounds) = (track.path.clone(), track.bounds);
+        let response = response.on_hover_ui(|ui| super::places::track_tooltip(ui, &self.tracks[index]));
+        if response.clicked() {
+            self.open_track(&path, ui.ctx());
+        }
+        response.context_menu(|ui| {
+            if ui.button(tr("Edit track")).clicked() {
+                self.open_track(&path, ui.ctx());
+                ui.close();
+            }
+            if ui.button(tr("Show on map")).clicked() {
+                self.show_track_on_map(bounds, ui.ctx());
+                ui.close();
+            }
+            if ui.button(tr("Show in folder")).clicked() {
+                crate::shell::reveal(&path);
+                ui.close();
+            }
+        });
+    }
+
+    /// Opens Places with the tracks shown, framed on `bounds`.
+    pub(super) fn show_track_on_map(&mut self, bounds: crate::track::Bounds, ctx: &egui::Context) {
+        self.show_tracks = true;
+        self.config.set("map_tracks", true);
+        self.set_nav(Nav::Places);
+        self.frame_after_load = false;
+        if self.map_size.x < 1.0 {
+            self.map_size = ctx.content_rect().size() * 0.6;
+        }
+        self.frame_bounds(bounds);
     }
 
     fn library_toolbar(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new(self.view_title()).size(22.0).strong().color(theme::text()));
-            ui.label(egui::RichText::new(super::photo_count(self.photos.len())).size(13.0).color(theme::muted()));
+            let mut count = super::photo_count(self.photos.len());
+            let tracks = self.view_tracks().len();
+            if tracks > 0 {
+                count = format!("{count} · {}", trf(if tracks == 1 { "{} track" } else { "{} tracks" }, &[&tracks]));
+            }
+            ui.label(egui::RichText::new(count).size(13.0).color(theme::muted()));
             if self.loading {
                 ui.add(egui::Spinner::new().size(13.0));
             }
@@ -883,7 +1009,10 @@ fn grid_columns(width: f32, thumb: f32, gap: f32) -> (usize, f32) {
     (cols, tile.min(thumb * 1.3))
 }
 
-fn build_layout(photos: &[Photo], sort: Sort, width: f32, thumb: f32) -> GridLayout {
+/// Rows of `tracks` GPS tracks under their own heading, then rows of the
+/// photos: under a heading per day, or when sorted by name under one
+/// heading, which is left out when there are no tracks.
+fn build_layout(photos: &[Photo], tracks: usize, sort: Sort, width: f32, thumb: f32) -> GridLayout {
     let labels = sort.by_name();
     let gap = if labels { GAP } else { TIGHT_GAP };
     let (cols, tile) = grid_columns(width, thumb, gap);
@@ -892,6 +1021,18 @@ fn build_layout(photos: &[Photo], sort: Sort, width: f32, thumb: f32) -> GridLay
     let mut months: Vec<MonthMark> = Vec::new();
     let mut undated = None;
     let mut y = 8.0;
+    if tracks > 0 {
+        rows.push(GridRow::Header { title: tr("GPS tracks").to_string(), y, first: 0 });
+        y += HEADER_H;
+        for start in (0..tracks).step_by(cols) {
+            rows.push(GridRow::Tracks { indices: start..(start + cols).min(tracks), y, h: row_h });
+            y += row_h;
+        }
+        if sort.by_name() && !photos.is_empty() {
+            rows.push(GridRow::Header { title: tr("Photos").to_string(), y, first: 0 });
+            y += HEADER_H;
+        }
+    }
     if sort.by_name() {
         let mut offset = 0;
         for chunk in photos.chunks(cols) {
@@ -1035,7 +1176,7 @@ mod tests {
             .collect();
         // Two columns of 100 px thumbnails. By date, rows are 106 px with no
         // names under them and headers 40 px; by name, rows are 136 px.
-        let dated = build_layout(&photos, Sort::DateNewest, 210.0, 100.0);
+        let dated = build_layout(&photos, 0, Sort::DateNewest, 210.0, 100.0);
         assert_eq!((dated.cols, dated.tile, dated.labels), (2, 100.0, false));
         let (title_a, title_b) = (format_day(day_a), format_day(day_b));
         assert_eq!(dated.position_label(&photos, Sort::DateNewest, 0.0), Some(title_a.clone()));
@@ -1043,7 +1184,7 @@ mod tests {
         assert_eq!(dated.position_label(&photos, Sort::DateNewest, 330.0), Some(title_b.clone()));
         assert_eq!(dated.position_label(&photos, Sort::DateNewest, 10_000.0), Some(title_b));
 
-        let named = build_layout(&photos, Sort::Name, 218.0, 100.0);
+        let named = build_layout(&photos, 0, Sort::Name, 218.0, 100.0);
         assert_eq!((named.cols, named.tile, named.labels), (2, 100.0, true));
         assert_eq!(named.position_label(&photos, Sort::Name, 0.0).as_deref(), Some("a"));
         assert_eq!(named.position_label(&photos, Sort::Name, 150.0).as_deref(), Some("c"));
@@ -1066,7 +1207,7 @@ mod tests {
         let march = chrono::NaiveDate::from_ymd_opt(2026, 3, 15).unwrap().and_hms_opt(12, 0, 0).unwrap().and_utc().timestamp();
         let january = chrono::NaiveDate::from_ymd_opt(2026, 1, 15).unwrap().and_hms_opt(12, 0, 0).unwrap().and_utc().timestamp();
         let photos: Vec<Photo> = [march, march, january, i64::MAX].iter().map(|&at| photo("p", at)).collect();
-        let layout = build_layout(&photos, Sort::DateNewest, 210.0, 100.0);
+        let layout = build_layout(&photos, 0, Sort::DateNewest, 210.0, 100.0);
         assert_eq!(layout.months.len(), 2);
         let (first, second, (undated, _)) = (layout.months[0].y, layout.months[1].y, layout.undated.unwrap());
         assert!(first < second && second < undated);
@@ -1074,7 +1215,7 @@ mod tests {
         assert_eq!(layout.section_at(second - 1.0), Some((format_month(2026, 3), 2)));
         assert_eq!(layout.section_at(second + 1.0), Some((format_month(2026, 1), 1)));
         assert_eq!(layout.section_at(undated + 1.0), Some((tr("Unknown date").to_string(), 1)));
-        assert!(build_layout(&photos, Sort::Name, 218.0, 100.0).months.is_empty());
+        assert!(build_layout(&photos, 0, Sort::Name, 218.0, 100.0).months.is_empty());
     }
 
     #[test]
@@ -1082,13 +1223,13 @@ mod tests {
         let noon = 1_780_000_000 / 86_400 * 86_400 + 43_200;
         let photos: Vec<Photo> = [noon, noon, noon, noon - 2 * 86_400].iter().map(|&at| photo("p", at)).collect();
         // Two columns: heading at 8, rows at 48 and 154, next heading at 260.
-        let layout = build_layout(&photos, Sort::DateNewest, 210.0, 100.0);
+        let layout = build_layout(&photos, 0, Sort::DateNewest, 210.0, 100.0);
         let (first, second) = (format_day(noon), format_day(noon - 2 * 86_400));
         assert_eq!(layout.pinned_heading(0.0), None, "the heading is in full view");
         assert_eq!(layout.pinned_heading(100.0), Some((first.as_str(), 100.0)));
         assert_eq!(layout.pinned_heading(240.0), Some((first.as_str(), 220.0)), "pushed up by the next heading");
         assert_eq!(layout.pinned_heading(270.0), Some((second.as_str(), 270.0)));
-        assert_eq!(build_layout(&photos, Sort::Name, 218.0, 100.0).pinned_heading(100.0), None);
+        assert_eq!(build_layout(&photos, 0, Sort::Name, 218.0, 100.0).pinned_heading(100.0), None);
     }
 
     #[test]
@@ -1096,7 +1237,7 @@ mod tests {
         let noon = 1_780_000_000 / 86_400 * 86_400 + 43_200;
         let times = [noon + 3_600, noon, noon - 60, noon - 86_400, noon - 86_400 - 7_200, noon - 5 * 86_400, i64::MAX, i64::MAX];
         let photos: Vec<Photo> = times.iter().map(|&at| photo("p", at)).collect();
-        let layout = build_layout(&photos, Sort::DateNewest, 210.0, 100.0);
+        let layout = build_layout(&photos, 0, Sort::DateNewest, 210.0, 100.0);
 
         let mut expected: Vec<(String, usize)> = Vec::new();
         for (index, photo) in photos.iter().enumerate() {
@@ -1110,7 +1251,7 @@ mod tests {
             .iter()
             .filter_map(|row| match row {
                 GridRow::Header { title, first, .. } => Some((title.clone(), *first)),
-                GridRow::Photos { .. } => None,
+                GridRow::Photos { .. } | GridRow::Tracks { .. } => None,
             })
             .collect();
         assert_eq!(headings, expected);
@@ -1120,5 +1261,35 @@ mod tests {
             assert_eq!(layout.photo_y(index), row.map(GridLayout::row_y), "photo {index}");
         }
         assert_eq!(layout.photo_y(photos.len()), None);
+    }
+
+    #[test]
+    fn tracks_come_first_under_their_own_heading() {
+        let noon = 1_780_000_000 / 86_400 * 86_400 + 43_200;
+        let photos: Vec<Photo> = [noon, noon, noon].iter().map(|&at| photo("p", at)).collect();
+        // Two columns: tracks heading at 8, three tracks in rows at 48 and
+        // 154, the day heading at 260 and its photos from 300.
+        let layout = build_layout(&photos, 3, Sort::DateNewest, 210.0, 100.0);
+        let tracks: Vec<Range<usize>> = layout
+            .rows
+            .iter()
+            .filter_map(|row| match row {
+                GridRow::Tracks { indices, .. } => Some(indices.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(tracks, [0..2, 2..3]);
+        assert_eq!(layout.photo_y(0), Some(300.0));
+        assert_eq!(layout.photo_y(2), Some(406.0));
+        assert_eq!(layout.first_visible(0.0), Some(0));
+        assert_eq!(layout.pinned_heading(100.0), Some((tr("GPS tracks"), 100.0)));
+        assert_eq!(layout.months[0].y, 260.0);
+        // Sorted by name, the photos get a heading of their own so the
+        // tracks heading doesn't stay pinned over them.
+        let named = build_layout(&photos, 1, Sort::Name, 218.0, 100.0);
+        assert_eq!(named.pinned_heading(400.0).map(|(title, _)| title), Some(tr("Photos")));
+        assert_eq!(named.position_label(&photos, Sort::Name, 0.0).as_deref(), Some("p"));
+        // Without tracks, nothing changes.
+        assert_eq!(build_layout(&photos, 0, Sort::Name, 218.0, 100.0).pinned_heading(100.0), None);
     }
 }

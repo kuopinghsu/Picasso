@@ -4,8 +4,10 @@
 //! vector data, which `liberty` draws; the other sources send pictures. The
 //! User-Agent identifies this local viewer, as the tile policies ask.
 
+use std::collections::BTreeMap;
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -178,12 +180,16 @@ pub fn world_to_latlon(x: f64, y: f64, zoom: u8) -> (f64, f64) {
     (lat.clamp(-85.05112878, 85.05112878), lon.clamp(-180.0, 180.0))
 }
 
-pub fn tile_loop(jobs: Receiver<TileJob>, done: Sender<TileDone>, cache: PathBuf) {
+fn agent() -> ureq::Agent {
     let config = ureq::Agent::config_builder()
         .timeout_global(Some(Duration::from_secs(12)))
         .user_agent(concat!("Picasso/", env!("CARGO_PKG_VERSION"), " (local photo library; geotag map)"))
         .build();
-    let agent = ureq::Agent::new_with_config(config);
+    ureq::Agent::new_with_config(config)
+}
+
+pub fn tile_loop(jobs: Receiver<TileJob>, done: Sender<TileDone>, cache: PathBuf) {
+    let agent = agent();
     let tiles = cache.join("tiles");
     while let Ok(job) = jobs.recv() {
         let image = match job.source {
@@ -290,6 +296,133 @@ fn store(path: &Path, bytes: &[u8]) {
     let _ = std::fs::write(path, bytes);
 }
 
+/// The Terrain Tiles on AWS, first made by Mapzen: free and without a key,
+/// with the height of each pixel coded in its color.
+const TERRAIN_URL: &str = "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png";
+/// Zoom of the terrain tiles heights are read from, about 30 m a pixel in
+/// Europe.
+const TERRAIN_ZOOM: u8 = 12;
+/// Zoom a long track's heights may be read from, about 500 m a pixel.
+const TERRAIN_MIN_ZOOM: u8 = 8;
+/// Most terrain tiles one lookup downloads, about 35 MB of land. A longer
+/// track is read from coarser tiles, each level a quarter as many.
+const TERRAIN_TILES: usize = 300;
+/// Terrain tiles downloaded at once.
+const TERRAIN_FETCHES: usize = 6;
+
+/// Tiles done and tiles needed while [`terrain_heights`] runs.
+#[derive(Default)]
+pub struct TerrainProgress {
+    pub done: AtomicUsize,
+    pub total: AtomicUsize,
+}
+
+/// The terrain tiles at `zoom` that `places` fall in, each with the places
+/// in it, as their index and their pixel in the tile.
+type TerrainTiles = BTreeMap<(u32, u32), Vec<(usize, f64, f64)>>;
+
+fn terrain_tiles(places: &[(f64, f64)], zoom: u8) -> TerrainTiles {
+    let last = (1u32 << zoom) - 1;
+    let mut tiles = TerrainTiles::new();
+    for (index, &(lat, lon)) in places.iter().enumerate() {
+        let (x, y) = latlon_to_world(lat, lon, zoom);
+        let tile = (((x / TILE_PX) as u32).min(last), ((y / TILE_PX) as u32).min(last));
+        tiles.entry(tile).or_default().push((index, x - f64::from(tile.0) * TILE_PX, y - f64::from(tile.1) * TILE_PX));
+    }
+    tiles
+}
+
+/// The finest zoom at which `places` need no more than [`TERRAIN_TILES`]
+/// tiles, with those tiles.
+fn terrain_zoom(places: &[(f64, f64)]) -> (u8, TerrainTiles) {
+    let mut zoom = TERRAIN_ZOOM;
+    let mut tiles = terrain_tiles(places, zoom);
+    while tiles.len() > TERRAIN_TILES && zoom > TERRAIN_MIN_ZOOM {
+        zoom -= 1;
+        tiles = terrain_tiles(places, zoom);
+    }
+    (zoom, tiles)
+}
+
+/// The ground height in meters at each of `places`, as (latitude,
+/// longitude), from terrain tiles kept in the tile cache. Only the numbers
+/// of the tiles are sent, as when showing the map. A tile that fails is
+/// tried once more; a place whose tile still can't be had gets `None`.
+pub fn terrain_heights(places: &[(f64, f64)], cache: &Path, progress: &TerrainProgress) -> Vec<Option<f64>> {
+    let (zoom, tiles) = terrain_zoom(places);
+    let tiles: Vec<_> = tiles.into_iter().collect();
+    progress.total.store(tiles.len(), Ordering::Relaxed);
+    let folder = cache.join("tiles").join("terrarium").join(zoom.to_string());
+    let agent = agent();
+    let heights = Mutex::new(vec![None; places.len()]);
+    let mut left: Vec<usize> = (0..tiles.len()).collect();
+    for last_try in [false, true] {
+        let next = AtomicUsize::new(0);
+        let failed = Mutex::new(Vec::new());
+        std::thread::scope(|scope| {
+            for _ in 0..TERRAIN_FETCHES.min(left.len()) {
+                scope.spawn(|| {
+                    while let Some(&job) = left.get(next.fetch_add(1, Ordering::Relaxed)) {
+                        let ((x, y), inside) = &tiles[job];
+                        // Each tile is read as it comes, so only the heights are kept.
+                        let got = terrain_tile(&agent, &folder, zoom, *x, *y);
+                        if let Some(tile) = &got {
+                            let mut heights = heights.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+                            for &(index, px, py) in inside {
+                                heights[index] = Some(terrain_height(tile, px, py));
+                            }
+                        } else {
+                            failed.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push(job);
+                        }
+                        if got.is_some() || last_try {
+                            progress.done.fetch_add(1, Ordering::Relaxed);
+                        }
+                    }
+                });
+            }
+        });
+        left = failed.into_inner().unwrap_or_else(|poisoned| poisoned.into_inner());
+        if left.is_empty() {
+            break;
+        }
+    }
+    heights.into_inner().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// A terrain tile from the cache, or downloaded when it isn't there or
+/// doesn't decode, as a tile cut short by a crash wouldn't.
+fn terrain_tile(agent: &ureq::Agent, folder: &Path, zoom: u8, x: u32, y: u32) -> Option<image::RgbaImage> {
+    let path = folder.join(x.to_string()).join(format!("{y}.png"));
+    let decode = |bytes: &[u8]| image::load_from_memory(bytes).ok().map(|tile| tile.to_rgba8());
+    if let Some(tile) = std::fs::read(&path).ok().and_then(|bytes| decode(&bytes)) {
+        return Some(tile);
+    }
+    let url = TERRAIN_URL.replace("{z}", &zoom.to_string()).replace("{x}", &x.to_string()).replace("{y}", &y.to_string());
+    let bytes = fetch(agent, &url)?;
+    let tile = decode(&bytes)?;
+    let _ = crate::image_io::write_whole(&path, &bytes);
+    Some(tile)
+}
+
+/// The height at (`x`, `y`) in a terrain tile, between its four nearest
+/// pixels. A place on the water reads as the sea floor there, so heights
+/// under sea level count as 0 m: a ferry or flight goes over the sea.
+fn terrain_height(tile: &image::RgbaImage, x: f64, y: f64) -> f64 {
+    let (w, h) = (tile.width() as f64, tile.height() as f64);
+    // Pixel centers are half a pixel in.
+    let (x, y) = ((x * w / TILE_PX - 0.5).clamp(0.0, w - 1.0), (y * h / TILE_PX - 0.5).clamp(0.0, h - 1.0));
+    let (x0, y0) = (x.floor(), y.floor());
+    let (x1, y1) = ((x0 + 1.0).min(w - 1.0), (y0 + 1.0).min(h - 1.0));
+    let at = |px: f64, py: f64| {
+        let [r, g, b, _] = tile.get_pixel(px as u32, py as u32).0;
+        f64::from(r) * 256.0 + f64::from(g) + f64::from(b) / 256.0 - 32768.0
+    };
+    let (fx, fy) = (x - x0, y - y0);
+    let top = at(x0, y0) * (1.0 - fx) + at(x1, y0) * fx;
+    let bottom = at(x0, y1) * (1.0 - fx) + at(x1, y1) * fx;
+    (top * (1.0 - fy) + bottom * fy).max(0.0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -321,6 +454,49 @@ mod tests {
         assert!(MapSource::ALL.iter().all(|source| MapSource::from_code(source.code()) == Some(*source)));
         assert!(MapSource::CARTO_STYLES.iter().all(|style| style.needs_key()));
         assert_eq!(MapSource::CartoDarkMatter.style_name(), "Dark Matter");
+    }
+
+    #[test]
+    fn terrain_colors_are_heights() {
+        // 1000 m is 33768 = 131 * 256 + 232; 1100 m is 33868 = 132 * 256 + 76.
+        let mut tile = image::RgbaImage::from_pixel(256, 256, image::Rgba([131, 232, 0, 255]));
+        for y in 0..256 {
+            tile.put_pixel(129, y, image::Rgba([132, 76, 0, 255]));
+        }
+        assert_eq!(terrain_height(&tile, 10.5, 10.5), 1000.0);
+        // Halfway between the centers of pixels 128 and 129.
+        assert!((terrain_height(&tile, 129.0, 50.0) - 1050.0).abs() < 1e-9);
+        assert_eq!(terrain_height(&tile, 129.5, 255.9), 1100.0);
+        // The sea floor counts as sea level.
+        let sea = image::RgbaImage::from_pixel(256, 256, image::Rgba([120, 0, 0, 255]));
+        assert_eq!(terrain_height(&sea, 100.0, 100.0), 0.0);
+    }
+
+    #[test]
+    fn terrain_comes_from_the_cache_without_a_network() {
+        let cache = std::env::temp_dir().join(format!("picasso-terrain-{}", std::process::id()));
+        let (x, y) = latlon_to_world(25.0336, 121.5645, TERRAIN_ZOOM);
+        let (tx, ty) = ((x / TILE_PX) as u32, (y / TILE_PX) as u32);
+        let path = cache.join("tiles/terrarium/12").join(tx.to_string()).join(format!("{ty}.png"));
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        image::RgbaImage::from_pixel(256, 256, image::Rgba([128, 10, 0, 255])).save(&path).unwrap();
+        let progress = TerrainProgress::default();
+        assert_eq!(terrain_heights(&[(25.0336, 121.5645)], &cache, &progress), vec![Some(10.0)]);
+        assert_eq!((progress.done.load(Ordering::Relaxed), progress.total.load(Ordering::Relaxed)), (1, 1));
+        let _ = std::fs::remove_dir_all(&cache);
+    }
+
+    #[test]
+    fn long_tracks_read_coarser_terrain() {
+        // A walk round a city stays at the finest tiles.
+        let city: Vec<(f64, f64)> = (0..1000).map(|step| (41.38 + step as f64 * 1e-5, 2.17)).collect();
+        assert_eq!(terrain_zoom(&city).0, TERRAIN_ZOOM);
+        // A drive from Lisbon to Moscow needs too many of them.
+        let drive: Vec<(f64, f64)> =
+            (0..=4000).map(|step| (38.7 + (55.75 - 38.7) * step as f64 / 4000.0, -9.14 + (37.62 + 9.14) * step as f64 / 4000.0)).collect();
+        let (zoom, tiles) = terrain_zoom(&drive);
+        assert!(zoom < TERRAIN_ZOOM && tiles.len() <= TERRAIN_TILES, "{zoom} {}", tiles.len());
+        assert_eq!(tiles.values().map(Vec::len).sum::<usize>(), drive.len());
     }
 
     #[test]

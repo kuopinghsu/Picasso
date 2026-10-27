@@ -19,6 +19,7 @@ mod side;
 mod stats;
 mod travel;
 mod theme;
+mod track_editor;
 mod tree;
 mod unreadable;
 mod updates;
@@ -370,6 +371,13 @@ pub struct PicassoApp {
     /// Added folder whose removal waits for confirmation. It is asked over
     /// whatever window is open, as Settings and the folder tree both offer it.
     remove_asked: Option<i64>,
+    /// The GPS track open in the track editor, which fills the window.
+    track_editor: Option<track_editor::TrackEditor>,
+    /// Track edits kept when Picasso last quit, waiting for the user to
+    /// restore or discard them.
+    track_recovery: Option<track_editor::Recovery>,
+    /// Keeps the open track's unsaved edits on disk.
+    track_keeper: track_editor::Keeper,
 }
 
 /// The library window, or the recovery window when the library can't be
@@ -385,6 +393,8 @@ impl PicassoApp {
     fn new(ctx: &egui::Context, args: Vec<PathBuf>) -> Result<Self, String> {
         let (data_dir, cache) = db::app_dirs();
         let _ = std::fs::create_dir_all(&data_dir);
+        let track_recovery = track_editor::read_recovery(&data_dir);
+        let track_keeper = track_editor::Keeper::new(&data_dir);
         let _ = std::fs::create_dir_all(cache.join("tiles"));
         // Face crops from older builds are no longer used.
         let _ = std::fs::remove_dir_all(cache.join("faces"));
@@ -559,6 +569,9 @@ impl PicassoApp {
             slideshow: None,
             frame_stats: frame_stats::FrameStats::from_env(),
             remove_asked: None,
+            track_editor: None,
+            track_recovery,
+            track_keeper,
             activity: String::new(),
             last_trashed: None,
             unreadable: HashMap::new(),
@@ -2376,6 +2389,7 @@ impl PicassoApp {
 
 impl eframe::App for PicassoApp {
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        self.keep_track_edits();
         let _ = self.cmd_tx.send(Command::Stop);
         if let Some(id) = self.library_top {
             self.config.set("library_top", id.to_string());
@@ -2405,7 +2419,28 @@ impl eframe::App for PicassoApp {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        self.handle_keys(ui.ctx());
+        if self.track_editor.is_some() {
+            self.video = None;
+            self.end_edit_session();
+            let ctx = ui.ctx().clone();
+            let helping = matches!(self.modal, Modal::Help);
+            if !helping && ctx.input_mut(|input| input.consume_key(Modifiers::NONE, Key::F1) || input.consume_key(Modifiers::NONE, Key::Questionmark)) {
+                self.modal = Modal::Help;
+            }
+            egui::CentralPanel::default()
+                .frame(egui::Frame::new().fill(theme::bg()))
+                .show(ui, |ui| self.track_editor_ui(ui));
+            if matches!(self.modal, Modal::Help) && help::show(&ctx, &self.data_dir) {
+                self.modal = Modal::None;
+            }
+            self.publish_wanted_thumbs();
+            return;
+        }
+        if self.track_recovery.is_some() {
+            self.track_recovery_ui(ui.ctx());
+        } else {
+            self.handle_keys(ui.ctx());
+        }
         self.handle_drops(ui.ctx());
         let viewing = self.mode == Mode::View || self.slideshow.is_some();
         if !viewing {

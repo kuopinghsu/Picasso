@@ -255,7 +255,7 @@ pub fn save_lossless(path: &Path, rgba: &ImageBuffer<Rgba<u8>, Vec<u8>>, format:
 /// Writes `bytes` under a temporary name, then renames it to `path`. A full
 /// disk or a crash leaves the temporary file, never half of `path`; the bytes
 /// reach the disk before the rename, so a power cut can't leave `path` empty.
-fn write_whole(path: &Path, bytes: &[u8]) -> Result<(), String> {
+pub fn write_whole(path: &Path, bytes: &[u8]) -> Result<(), String> {
     static NEXT: AtomicU64 = AtomicU64::new(0);
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|err| err.to_string())?;

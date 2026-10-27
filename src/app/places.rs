@@ -879,9 +879,17 @@ impl PicassoApp {
         let room = rect.right() - 8.0 - text_left;
         painter.galley(Pos2::new(text_left, rect.top() + 6.0), truncated(painter, name, 13.0, theme::text(), room), theme::text());
         painter.galley(Pos2::new(text_left, rect.top() + 24.0), truncated(painter, detail, 11.5, theme::muted(), room), theme::muted());
-        if response.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+        let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
+        if response.clicked() {
             *action = Some(AreaAction::Track(index));
         }
+        response.context_menu(|ui| {
+            if ui.button(tr("Edit track")).clicked() {
+                let path = self.tracks[index].path.clone();
+                self.open_track(&path, ui.ctx());
+                ui.close();
+            }
+        });
     }
 
     /// The part of the world the Places map shows, in world pixels at zoom 0.
@@ -994,7 +1002,7 @@ pub(super) const MAX_ZOOM: u8 = 19;
 pub(super) const MIN_ZOOM: u8 = 2;
 
 /// Side of the zoom buttons.
-const ZOOM_BUTTON: f32 = 28.0;
+pub(super) const ZOOM_BUTTON: f32 = 28.0;
 /// Space above and below the ends of the zoom bar.
 const ZOOM_BAR_PAD: f32 = 7.0;
 /// Seconds the zoom control stays at full strength after the zoom changes.
@@ -1378,7 +1386,7 @@ fn distance_to_run(pointer: Pos2, run: &[Pos2]) -> f32 {
         .fold(f32::INFINITY, f32::min)
 }
 
-fn track_tooltip(ui: &mut egui::Ui, track: &MapTrack) {
+pub(super) fn track_tooltip(ui: &mut egui::Ui, track: &MapTrack) {
     ui.label(egui::RichText::new(&track.name).strong());
     match track.time_span {
         Some((start, end)) => {

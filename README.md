@@ -12,9 +12,13 @@ A fast local photo library, viewer, and editor in the spirit of Picasa. It watch
 | --- | --- |
 | ![image editor](images/editor.png) | ![places](images/places.png) |
 
-| statistics | travel map |
+| GPS track editor | travel map |
 | --- | --- |
-| ![statistics](images/statistics.png) | ![travel map](images/travelmap.png) |
+| ![GPS track editor: the track on a full-window map with floating tools, and statistics, the selected point, and the cleanup settings on the right](images/trackedit.png) | ![travel map](images/travelmap.png) |
+
+| statistics |
+| --- |
+| ![statistics](images/statistics.png) |
 
 ## Quick start
 
@@ -153,7 +157,8 @@ The first time a new version starts, it copies the settings an older version kep
 - Folder library with a date-grouped thumbnail grid, search, star filter, and sorting by date (newest or oldest first) or by name. **Sort by Name, edited** shows only the photos you have edited. Dragging the scroll bar shows the date in view, or the first file name when sorted by name. When sorted by date, a strip beside the grid lists the years, with the months of the year in view; click one to jump there. The library is read on a background thread, so the window stays responsive while a large library loads or a scan adds photos.
 - Search finds photos that match every word you type, in the file name, the folder path below the library folder, the caption, the camera, the lens, or an album name. A date such as `2019`, `2019-05`, or `2019-05-17` (also with `/` or `.`) finds photos taken in that year, month, or day, so `2019-05 beach` finds the May 2019 beach photos.
 - Folder tree with photo counts, albums, starred photos, and Places, a map of every photo with GPS. The map comes from OpenFreeMap, OpenStreetMap, CARTO, or Esri; pick one in **Settings → Map**. Places and the Map panel zoom in to street level, about 30 m across a hundred points, with a scale bar in the corner.
-- GPS tracks: `.gpx` and `.kml` files in your folders are read by the scan and drawn as colored paths under the photo pins, in Places and on the Map panel. GPX tracks and routes are read, as are KML lines and `gx:Track` recordings; KMZ files and the outlines of areas are not. Hover over a track for its name, start time, distance, and duration, and double-click it to zoom to it. **Tracks** in the Places toolbar turns them off. Like photos, a track file is read again only when it changes, and one that can't be read is listed with the other unreadable files.
+- GPS tracks: `.gpx` and `.kml` files in your folders, and Polarsteps location exports in `.json` files (such as `locations.json`), are read by the scan and drawn as colored paths under the photo pins, in Places and on the Map panel. GPX tracks and routes are read, as are KML lines and `gx:Track` recordings; KMZ files and the outlines of areas are not. Hover over a track for its name, start time, distance, and duration, and double-click it to zoom to it. **Tracks** in the Places toolbar turns them off. Like photos, a track file is read again only when it changes, and one that can't be read is listed with the other unreadable files. A folder's tracks are also listed at the top of the library grid, each with the shape of its path.
+- Track editor: click a track in the grid, or choose **Edit track** on its right-click menu, to clean it up the way GPXViewer does. It drops points reached impossibly fast, removes points the line doesn't need, merges the points of a stay, and can fill long gaps with a curve, with GPXViewer's settings and defaults in **Settings → GPS tracks**. The map fills the window with the tools, views, and zoom floating over it, beside a panel of statistics, an elevation profile linked to the map, and the selected point. Drag points to move them, click the line to add one, and remove points one at a time or with a box selection, with undo and redo. Flights are drawn dashed and stays get a circle. A track without heights, such as one from Polarsteps, can get them with **Look up heights**, from the free [Terrain Tiles on AWS](https://github.com/tilezen/joerd/blob/master/docs/attribution.md); only the numbers of the tiles along the track are sent, as when showing the map. **Save as GPX…** and **Save as KML…** save a copy beside the track, named `-optimized`, with the settings inside; the original file is never changed.
 - **Travel Map** in the sidebar colors the countries, and the states and provinces of the largest countries, where your geotagged photos were taken, on a globe or a flat map. Places with more photos are a deeper color. It counts your countries and continents, shows the next goal and the coverage of each continent, and clicking a colored place opens a card whose **Show photos** shows them in Places. The map follows the photos' GPS tags only; nothing is marked by hand. It works offline: the borders are public-domain [Natural Earth](https://www.naturalearthdata.com) data built into the app by `scripts/world-map.py`.
 - Info and Map panel beside the grid with the photo's EXIF and location, and a details panel in the viewer with a histogram
 - Viewer with zoom, pan, filmstrip, rotate, slideshow, and video playback. Zoom with the wheel, Ctrl+wheel, a trackpad pinch, or + and −. The viewer first shows a 2560 px version of the photo; zoom past it, or press 1 for actual size, and it decodes the photo at full resolution so 100% shows every pixel. **Show in folder** opens the file manager with the file selected.
@@ -239,7 +244,7 @@ Every page uses the same theme: the library, the viewer, the editor, the side pa
 
 ## Shortcuts
 
-Press **F1** or **?**, or click the **?** button at the top right of the library or the viewer, to open **Help & Shortcuts**. It lists every keyboard shortcut (General, Library, Viewer, Video, and Editor) next to the mouse and trackpad gestures (Library, Viewer, Map, and Editor), and follows the app language and theme. Press F1 or ? again to close it.
+Press **F1** or **?**, or click the **?** button at the top right of the library or the viewer, to open **Help & Shortcuts**; it opens over the track editor too. It lists every keyboard shortcut (General, Library, Viewer, Video, Editor, and GPS track editor) next to the mouse and trackpad gestures (Library, Viewer, Map, Editor, and GPS track editor), and follows the app language and theme. Press F1 or ? again to close it.
 
 | Key | Action |
 | --- | --- |

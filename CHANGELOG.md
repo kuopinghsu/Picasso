@@ -7,6 +7,32 @@ section of this file as the release notes.
 
 ### Added
 
+- A track editor for GPX, KML, and Polarsteps tracks. A folder's tracks are listed at the top of
+  the library grid under **GPS tracks**, each with the shape of its path, its format, and its
+  distance; clicking one, or **Edit track** on the right-click menu there or in Places, opens it.
+  The editor cleans the track up the way GPXViewer does: it drops points reached faster than the
+  speed limit, removes redundant points, merges the points of a stay, and can fill long gaps with
+  a curve. The settings and their defaults match GPXViewer's and are in **Settings → GPS tracks**.
+  The map fills the window, with the tools, the views (whole track, start, end, highest point),
+  and the zoom floating over it, a bar of actions for the selected points, and messages that fade
+  away. The panel beside it shows the statistics as tiles, an elevation profile linked to the map,
+  and the selected point, with ← and → to step from point to point.
+  Points can be moved, added, and removed, singly or with a box selection, with undo and redo;
+  flights are drawn dashed and stays get a circle. **Help & Shortcuts** lists the editor's keys
+  and opens over it. **Save as GPX…** and **Save as KML…** save a
+  copy beside the track, named `-optimized`, with the settings and how long each stay lasted
+  inside, so it opens as saved; tracks saved by GPXViewer do too. The original file is never
+  changed, and Save won't write over it. Undo going back over a cleanup puts its settings back.
+  Unsaved edits are kept a few seconds after each change, so if Picasso quits or stops
+  unexpectedly, they are offered back at the next start.
+- **Look up heights** in the track editor fills in the heights of a track that has none, such as
+  one from Polarsteps, from the free Terrain Tiles on AWS. Only the numbers of the tiles along the
+  track are sent, as when showing the map, and a long track is read from coarser tiles so a lookup
+  downloads at most about 35 MB. The tiles are kept with the map tiles; points whose tile failed
+  can be looked up again, and undo takes the heights off.
+- Polarsteps location exports, such as `locations.json`, are read as GPS tracks whatever the
+  `.json` file is named. Other JSON files are skipped, and the ones Google Takeout writes beside
+  each photo aren't opened at all.
 - Places and the Map panel zoom three levels closer, to about 30 m across a hundred points, and
   show a scale bar in the bottom-left corner. Where a map source has no tiles that close, such as
   Esri imagery in some places, the closest tiles it has are enlarged instead of showing a "Map data

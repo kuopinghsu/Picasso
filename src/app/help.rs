@@ -71,6 +71,20 @@ const KEYBOARD: &[Section] = &[
             (&["Esc"], "Leave the tool or close the editor"),
         ],
     ),
+    (
+        "GPS track editor",
+        &[
+            (&["V"], "Move and add points"),
+            (&["R"], "Select points with a box"),
+            (&["Delete"], "Remove the selected points"),
+            (&["←", "→"], "Previous / next point"),
+            (&["1", "2", "3", "4"], "Whole track, start, end, highest point"),
+            (&["Ctrl+Z"], "Undo"),
+            (&["Ctrl+Y", "Ctrl+Shift+Z"], "Redo"),
+            (&["Ctrl+S"], "Save a copy"),
+            (&["Esc"], "Leave the tool or close the editor"),
+        ],
+    ),
 ];
 
 /// Mouse inputs are translated; a `Ctrl+` or `Shift+` prefix is kept as is.
@@ -113,6 +127,16 @@ const MOUSE: &[Section] = &[
             (&["Click", "Drag"], "Add or move a curve point"),
             (&["Double-click"], "Remove a curve point"),
             (&["Drag"], "Move or reshape a mask"),
+        ],
+    ),
+    (
+        "GPS track editor",
+        &[
+            (&["Drag"], "Move a point, or the map"),
+            (&["Click"], "Add a point on the line"),
+            (&["Ctrl+Click", "Shift+Click"], "Add or remove from the selection"),
+            (&["Right-click"], "Remove a point"),
+            (&["Wheel", "Pinch"], "Zoom at the pointer"),
         ],
     ),
 ];

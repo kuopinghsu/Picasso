@@ -4,8 +4,10 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
 
-use crossbeam_channel::{Receiver, TryRecvError};
+use crossbeam_channel::{Receiver, Sender, TryRecvError};
 use eframe::egui::{self, Align2, Color32, FontId, Key, Margin, Modifiers, Pos2, Rect, RichText, Sense, Stroke, Vec2};
 
 use crate::geo;
@@ -41,9 +43,14 @@ const HISTORY: usize = 200;
 /// Points kept for Undo and Redo together, about 60 MB, though the last
 /// edit can always be undone.
 const HISTORY_POINTS: usize = 1_000_000;
-/// File in the library folder that keeps the edits of a track Picasso quit
-/// with before they were saved.
+/// File in the library folder that keeps the unsaved edits of the open
+/// track, for the next start after a quit or a crash.
 const RECOVERY_FILE: &str = "track-recovery.json";
+/// Seconds the edits rest before they are kept in [`RECOVERY_FILE`].
+const KEEP_AFTER: f64 = 3.0;
+
+/// Looked-up heights, one for each point and then each point as read.
+type Heights = Vec<Option<f64>>;
 /// Zoom level of the Start, End, and Highest views.
 const CLOSE_ZOOM: u8 = 15;
 const LINE: Color32 = Color32::from_rgb(0x1E, 0x6F, 0xD9);
@@ -63,6 +70,8 @@ struct Measures {
     along: Vec<f64>,
     /// Lowest and highest heights, when the track has heights.
     heights: Option<(f64, f64)>,
+    /// Points without a height.
+    unknown: usize,
 }
 
 impl Measures {
@@ -85,6 +94,7 @@ impl Measures {
             flights: track_edit::flights(points, &settings),
             along,
             heights,
+            unknown: points.iter().filter(|point| point.ele.is_none()).count(),
         }
     }
 }
@@ -127,14 +137,22 @@ pub(super) struct TrackEditor {
     /// The points as read, before the cleanup.
     raw: Vec<EditPoint>,
     points: Vec<EditPoint>,
+    /// The settings in the panel, for the next cleanup.
     settings: Settings,
+    /// The settings `points` were cleaned up with, which a save keeps.
+    points_settings: Settings,
     /// The settings were saved in the file.
     settings_from_file: bool,
     /// The settings were changed and become the defaults once the pointer
     /// lets go.
     settings_unsaved: bool,
-    undo: Vec<Vec<EditPoint>>,
-    redo: Vec<Vec<EditPoint>>,
+    /// Earlier points, each with the settings they were cleaned up with.
+    undo: Vec<(Vec<EditPoint>, Settings)>,
+    redo: Vec<(Vec<EditPoint>, Settings)>,
+    /// Revision of the points last kept in [`RECOVERY_FILE`], and the
+    /// revision and time of the last change not kept yet.
+    kept_revision: Option<u64>,
+    changed: Option<(u64, f64)>,
     /// Counts the changes to `points`, so `measures` knows when to update.
     revision: u64,
     measures: Option<Rc<Measures>>,
@@ -159,6 +177,12 @@ pub(super) struct TrackEditor {
     framed: bool,
     opening: Option<Receiver<Result<Opened, String>>>,
     cleaning: Option<Receiver<Vec<EditPoint>>>,
+    /// Heights being looked up from terrain tiles, for `points` and then
+    /// `raw`, with how far the download is.
+    looking_up: Option<(Receiver<Heights>, Arc<geo::TerrainProgress>)>,
+    /// The heights came from terrain data, whose sources are named under
+    /// the profile.
+    terrain_heights: bool,
     error: Option<String>,
     /// Message shown over the map for a few seconds.
     note: String,
@@ -199,10 +223,13 @@ impl TrackEditor {
             raw: Vec::new(),
             points: Vec::new(),
             settings: base,
+            points_settings: base,
             settings_from_file: false,
             settings_unsaved: false,
             undo: Vec::new(),
             redo: Vec::new(),
+            kept_revision: None,
+            changed: None,
             revision: 0,
             measures: None,
             dirty: false,
@@ -219,6 +246,8 @@ impl TrackEditor {
             framed: false,
             opening: Some(receiver),
             cleaning: None,
+            looking_up: None,
+            terrain_heights: false,
             error: None,
             note: String::new(),
             note_at: f64::NAN,
@@ -257,7 +286,73 @@ impl TrackEditor {
     }
 
     fn busy(&self) -> bool {
-        self.opening.is_some() || self.cleaning.is_some()
+        self.opening.is_some() || self.cleaning.is_some() || self.looking_up.is_some()
+    }
+
+    /// Looks the heights of the points, and of the points as read, up from
+    /// terrain tiles on a thread, so a later cleanup keeps them. Undo takes
+    /// them off the points again.
+    fn look_up_heights(&mut self, cache: &Path, ctx: &egui::Context) {
+        let places: Vec<(f64, f64)> = self.points.iter().chain(&self.raw).map(|point| (point.lat, point.lon)).collect();
+        let progress = Arc::new(geo::TerrainProgress::default());
+        let (sender, receiver) = crossbeam_channel::bounded(1);
+        let (cache, ctx, shared) = (cache.to_path_buf(), ctx.clone(), Arc::clone(&progress));
+        let spawned = std::thread::Builder::new().name("picasso-terrain".into()).spawn(move || {
+            let _ = sender.send(geo::terrain_heights(&places, &cache, &shared));
+            ctx.request_repaint();
+        });
+        if spawned.is_ok() {
+            self.looking_up = Some((receiver, progress));
+        }
+    }
+
+    /// Puts the looked-up `heights`, for `points` and then `raw`, in place:
+    /// on every point when the track had no heights, else on the points
+    /// without one, so heights the track came with are kept.
+    fn take_heights(&mut self, heights: &[Option<f64>]) {
+        let tidy = |height: f64| (height * 10.0).round() / 10.0;
+        let (ours, raw) = heights.split_at(self.points.len().min(heights.len()));
+        let all = !has_heights(&self.points);
+        let found: Vec<(usize, f64)> = self
+            .points
+            .iter()
+            .zip(ours)
+            .enumerate()
+            .filter(|(_, (point, _))| all || point.ele.is_none())
+            .filter_map(|(index, (_, height))| height.map(|height| (index, tidy(height))))
+            .collect();
+        if found.is_empty() {
+            self.tell(tr("Couldn't download the terrain data. Check the internet connection."));
+            return;
+        }
+        if all && found.iter().all(|&(_, height)| height == 0.0) {
+            self.tell(tr("The terrain data puts the whole track at sea level."));
+            return;
+        }
+        self.push_undo();
+        if all {
+            for point in &mut self.points {
+                point.ele = None;
+            }
+        }
+        for &(index, height) in &found {
+            self.points[index].ele = Some(height);
+        }
+        let all_raw = !has_heights(&self.raw);
+        for (point, height) in self.raw.iter_mut().zip(raw) {
+            if all_raw || point.ele.is_none() {
+                point.ele = height.map(tidy);
+            }
+        }
+        self.terrain_heights = true;
+        let added = if found.len() == 1 { "Added a height to {} point." } else { "Added heights to {} points." };
+        let mut text = trf(added, &[&grouped(found.len())]);
+        let missing = self.points.iter().filter(|point| point.ele.is_none()).count();
+        if missing > 0 {
+            let still = if missing == 1 { "{} point still has no height." } else { "{} points still have no height." };
+            text = format!("{text} {}", trf(still, &[&grouped(missing)]));
+        }
+        self.tell(text);
     }
 
     fn pump(&mut self) {
@@ -288,13 +383,15 @@ impl TrackEditor {
                     self.format = loaded.format;
                     self.settings_from_file = loaded.settings.is_some();
                     self.settings = settings;
+                    self.points_settings = settings;
                     self.raw = loaded.points;
                     self.points = points;
                     if let Some(restored) = restored {
                         self.take_restored(restored);
                     }
                     self.revision += 1;
-                    self.framed = false;                }
+                    self.framed = false;
+                }
                 Err(err) => match restored {
                     // The edits are kept even when the track itself is gone.
                     Some(restored) => {
@@ -319,6 +416,8 @@ impl TrackEditor {
                 self.tell(trf("Cleaned up from {} points to {}.", &[&self.raw.len(), &points.len()]));
                 self.push_undo();
                 self.points = points;
+                // The panel can't change while the cleanup runs.
+                self.points_settings = self.settings;
                 self.forget_picks();
             }
             Some(Some(_)) => {
@@ -331,12 +430,22 @@ impl TrackEditor {
             }
             None => {}
         }
+        let heights = match self.looking_up.as_ref().map(|(receiver, _)| receiver.try_recv()) {
+            Some(Ok(heights)) => Some(heights),
+            Some(Err(TryRecvError::Disconnected)) => Some(Vec::new()),
+            _ => None,
+        };
+        if let Some(heights) = heights {
+            self.looking_up = None;
+            self.take_heights(&heights);
+        }
     }
 
     /// Puts the edits kept when Picasso quit in place of the points read.
     fn take_restored(&mut self, restored: Loaded) {
         self.name = restored.name;
         self.settings = restored.settings.unwrap_or(self.settings);
+        self.points_settings = self.settings;
         self.settings_from_file = false;
         self.points = restored.points;
         self.dirty = true;
@@ -345,34 +454,45 @@ impl TrackEditor {
     /// Keeps the points before an edit for Undo. Every change to `points`
     /// comes after this, or after Undo, Redo, or opening the file.
     fn push_undo(&mut self) {
-        self.undo.push(self.points.clone());
+        self.undo.push((self.points.clone(), self.points_settings));
         self.redo.clear();
-        let mut kept: usize = self.undo.iter().map(Vec::len).sum();
+        let mut kept: usize = self.undo.iter().map(|(points, _)| points.len()).sum();
         while self.undo.len() > 1 && (self.undo.len() > HISTORY || kept > HISTORY_POINTS) {
-            kept -= self.undo.remove(0).len();
+            kept -= self.undo.remove(0).0.len();
         }
         self.dirty = true;
         self.revision += 1;
     }
 
     fn undo(&mut self) {
-        if let Some(points) = self.undo.pop() {
-            self.redo.push(std::mem::replace(&mut self.points, points));
-            self.dirty = true;
-            self.revision += 1;
-            self.forget_picks();
+        if let Some(earlier) = self.undo.pop() {
+            let now = self.swap_points(earlier);
+            self.redo.push(now);
             self.tell(tr("Undo"));
         }
     }
 
     fn redo(&mut self) {
-        if let Some(points) = self.redo.pop() {
-            self.undo.push(std::mem::replace(&mut self.points, points));
-            self.dirty = true;
-            self.revision += 1;
-            self.forget_picks();
+        if let Some(later) = self.redo.pop() {
+            let now = self.swap_points(later);
+            self.undo.push(now);
             self.tell(tr("Redo"));
         }
+    }
+
+    /// Puts `(points, settings)` from Undo or Redo in place, and returns the
+    /// ones they replace. Going back over a cleanup puts its settings back
+    /// in the panel; other steps leave changes there not applied yet.
+    fn swap_points(&mut self, (points, settings): (Vec<EditPoint>, Settings)) -> (Vec<EditPoint>, Settings) {
+        let now = (std::mem::replace(&mut self.points, points), self.points_settings);
+        if settings != self.points_settings {
+            self.settings = settings;
+        }
+        self.points_settings = settings;
+        self.dirty = true;
+        self.revision += 1;
+        self.forget_picks();
+        now
     }
 
     /// Forgets the picked points after the points were replaced as a whole,
@@ -518,7 +638,8 @@ impl TrackEditor {
     }
 
     /// Writes the points as `format`, picked in a save dialog that starts
-    /// beside the track.
+    /// beside the track. The track itself is never written over, so the
+    /// points as read stay for the next cleanup.
     fn save(&mut self, format: Format) -> Option<PathBuf> {
         let (label, extension) = if format == Format::Kml { ("KML", "kml") } else { ("GPX", "gpx") };
         let mut dialog = rfd::FileDialog::new()
@@ -529,10 +650,14 @@ impl TrackEditor {
             dialog = dialog.set_directory(dir);
         }
         let target = dialog.save_file()?;
+        if same_file(&target, &self.path) {
+            self.tell(tr("Save under another name; the original stays as it is."));
+            return None;
+        }
         let text = if format == Format::Kml {
-            track_edit::to_kml(&self.points, &self.name, &self.settings)
+            track_edit::to_kml(&self.points, &self.name, &self.points_settings)
         } else {
-            track_edit::to_gpx(&self.points, &self.name, &self.settings)
+            track_edit::to_gpx(&self.points, &self.name, &self.points_settings)
         };
         match crate::image_io::write_whole(&target, text.as_bytes()) {
             Ok(()) => {
@@ -554,16 +679,110 @@ impl TrackEditor {
     }
 }
 
+/// Whether `a` and `b` name one file, through links and, on a disk that
+/// ignores case, names that differ only in case.
+fn same_file(a: &Path, b: &Path) -> bool {
+    if a == b {
+        return true;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        matches!((std::fs::metadata(a), std::fs::metadata(b)), (Ok(a), Ok(b)) if a.dev() == b.dev() && a.ino() == b.ino())
+    }
+    #[cfg(not(unix))]
+    {
+        matches!((a.canonicalize(), b.canonicalize()), (Ok(a), Ok(b)) if a == b)
+    }
+}
+
 /// Unsaved edits of a track, kept in [`RECOVERY_FILE`] when Picasso quit.
 pub(super) struct Recovery {
     path: PathBuf,
     loaded: Loaded,
 }
 
+/// The unsaved edits of a track, as [`RECOVERY_FILE`] keeps them.
+struct Kept {
+    path: PathBuf,
+    name: String,
+    points: Vec<EditPoint>,
+    settings: Settings,
+}
+
+impl Kept {
+    fn of(editor: &TrackEditor) -> Kept {
+        Kept { path: editor.path.clone(), name: editor.name.clone(), points: editor.points.clone(), settings: editor.points_settings }
+    }
+}
+
 /// What [`RECOVERY_FILE`] holds: the track's path, and its points as GPX.
-fn recovery_text(editor: &TrackEditor) -> String {
-    let gpx = track_edit::to_gpx(&editor.points, &editor.name, &editor.settings);
-    serde_json::json!({ "path": editor.path.to_string_lossy(), "gpx": gpx }).to_string()
+fn recovery_text(kept: &Kept) -> String {
+    let gpx = track_edit::to_gpx(&kept.points, &kept.name, &kept.settings);
+    serde_json::json!({ "path": kept.path.to_string_lossy(), "gpx": gpx }).to_string()
+}
+
+enum KeepJob {
+    Keep(Kept),
+    Forget,
+    Flush(Sender<()>),
+}
+
+/// Writes and removes [`RECOVERY_FILE`] on a thread of its own, so a long
+/// track doesn't hold the window up. The changes go one after another, so
+/// a removal after a save can't be undone by a write still on its way.
+pub(super) struct Keeper {
+    jobs: Sender<KeepJob>,
+}
+
+impl Keeper {
+    pub(super) fn new(data_dir: &Path) -> Keeper {
+        let (jobs, inbox) = crossbeam_channel::unbounded::<KeepJob>();
+        let file = data_dir.join(RECOVERY_FILE);
+        let _ = std::thread::Builder::new().name("picasso-track-keeper".into()).spawn(move || {
+            while let Ok(job) = inbox.recv() {
+                // Of the changes waiting, only the last one counts.
+                let (mut change, mut flushed) = (None, Vec::new());
+                for job in std::iter::once(job).chain(inbox.try_iter()) {
+                    match job {
+                        KeepJob::Flush(done) => flushed.push(done),
+                        other => change = Some(other),
+                    }
+                }
+                match change {
+                    Some(KeepJob::Keep(kept)) => {
+                        if let Err(err) = crate::image_io::write_whole(&file, recovery_text(&kept).as_bytes()) {
+                            eprintln!("picasso track: {err}");
+                        }
+                    }
+                    Some(KeepJob::Forget) => {
+                        let _ = std::fs::remove_file(&file);
+                    }
+                    _ => {}
+                }
+                for done in flushed {
+                    let _ = done.send(());
+                }
+            }
+        });
+        Keeper { jobs }
+    }
+
+    fn keep(&self, editor: &TrackEditor) {
+        let _ = self.jobs.send(KeepJob::Keep(Kept::of(editor)));
+    }
+
+    fn forget(&self) {
+        let _ = self.jobs.send(KeepJob::Forget);
+    }
+
+    /// Waits, up to a few seconds, for the changes sent to reach the disk.
+    fn flush(&self) {
+        let (done, wait) = crossbeam_channel::bounded(1);
+        if self.jobs.send(KeepJob::Flush(done)).is_ok() {
+            let _ = wait.recv_timeout(std::time::Duration::from_secs(10));
+        }
+    }
 }
 
 /// The edits kept when Picasso last quit, if any.
@@ -582,12 +801,49 @@ impl PicassoApp {
         self.track_editor = Some(TrackEditor::new(PathBuf::from(path), base, ctx));
     }
 
-    /// Keeps the open track's unsaved edits for the next start. Closing the
-    /// window asks first, but Cmd+Q on a Mac quits without asking.
+    /// Keeps the open track's unsaved edits for the next start, and waits
+    /// for the changes on their way to reach the disk. Closing the window
+    /// asks first, but Cmd+Q on a Mac quits without asking.
     pub(super) fn keep_track_edits(&self) {
-        let Some(editor) = self.track_editor.as_ref().filter(|editor| editor.dirty && editor.points.len() >= 2) else { return };
-        if let Err(err) = crate::image_io::write_whole(&self.data_dir.join(RECOVERY_FILE), recovery_text(editor).as_bytes()) {
-            eprintln!("picasso track: {err}");
+        if let Some(editor) = self.track_editor.as_ref().filter(|editor| editor.dirty && editor.points.len() >= 2) {
+            self.track_keeper.keep(editor);
+        }
+        self.track_keeper.flush();
+    }
+
+    /// Keeps the unsaved edits once they have rested [`KEEP_AFTER`]
+    /// seconds, so a crash doesn't lose them either, and forgets them once
+    /// they are saved.
+    fn keep_track_edits_soon(&self, editor: &mut TrackEditor, ctx: &egui::Context) {
+        if !editor.dirty {
+            self.forget_track_edits(editor);
+            return;
+        }
+        if editor.kept_revision == Some(editor.revision) || editor.points.len() < 2 {
+            return;
+        }
+        let now = ctx.input(|input| input.time);
+        match editor.changed {
+            Some((revision, at)) if revision == editor.revision && now - at >= KEEP_AFTER => {
+                self.track_keeper.keep(editor);
+                editor.kept_revision = Some(editor.revision);
+                editor.changed = None;
+            }
+            Some((revision, at)) if revision == editor.revision => {
+                ctx.request_repaint_after(std::time::Duration::from_secs_f64(KEEP_AFTER - (now - at)));
+            }
+            _ => {
+                editor.changed = Some((editor.revision, now));
+                ctx.request_repaint_after(std::time::Duration::from_secs_f64(KEEP_AFTER));
+            }
+        }
+    }
+
+    /// Removes the edits this editor kept, once saved or let go.
+    fn forget_track_edits(&self, editor: &mut TrackEditor) {
+        editor.changed = None;
+        if editor.kept_revision.take().is_some() {
+            self.track_keeper.forget();
         }
     }
 
@@ -596,7 +852,9 @@ impl PicassoApp {
         let Some(recovery) = &self.track_recovery else { return };
         let name = folder_label(&recovery.path.to_string_lossy());
         let mut choice = None;
-        let response = egui::Modal::new(egui::Id::unique("track-recovery")).show(ctx, |ui| {
+        // Esc and clicks beside it don't close it: until it is answered,
+        // another track's edits would be kept in place of these.
+        egui::Modal::new(egui::Id::unique("track-recovery")).show(ctx, |ui| {
             ui.set_width(360.0);
             ui.label(RichText::new(tr("Restore the unsaved track edits?")).size(16.0).strong());
             ui.add_space(6.0);
@@ -613,16 +871,14 @@ impl PicassoApp {
         });
         match (choice, self.track_recovery.take()) {
             (Some(restore), Some(recovery)) => {
-                let _ = std::fs::remove_file(self.data_dir.join(RECOVERY_FILE));
+                self.track_keeper.forget();
                 if restore {
                     let mut editor = TrackEditor::new(recovery.path, Settings::load(&self.config), ctx);
                     editor.restored = Some(recovery.loaded);
                     self.track_editor = Some(editor);
                 }
             }
-            // Dismissed, the edits are kept and asked about at the next start.
-            (None, recovery) if !response.should_close() => self.track_recovery = recovery,
-            _ => {}
+            (_, recovery) => self.track_recovery = recovery,
         }
     }
 
@@ -649,7 +905,7 @@ impl PicassoApp {
             self.track_map(ui, &mut editor, map_rect);
             self.track_overlays(ui, &mut editor, map_rect);
             let panel_rect = Rect::from_min_max(Pos2::new(map_rect.max.x, full.min.y), full.max);
-            track_panel(ui, panel_rect, &mut editor, &mut self.config);
+            track_panel(ui, panel_rect, &mut editor, &mut self.config, &self.cache_dir);
         }
         ui.advance_cursor_after_rect(full);
         if ready {
@@ -666,15 +922,18 @@ impl PicassoApp {
             if editor.dirty {
                 editor.asking_close = true;
             } else {
+                self.forget_track_edits(&mut editor);
                 return;
             }
         }
         if editor.asking_close && ask_discard(ui.ctx(), &mut editor) {
+            self.forget_track_edits(&mut editor);
             if editor.quit_after_discard {
                 ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
             }
             return;
         }
+        self.keep_track_edits_soon(&mut editor, ui.ctx());
         self.track_editor = Some(editor);
     }
 
@@ -1161,7 +1420,7 @@ fn ask_discard(ctx: &egui::Context, editor: &mut TrackEditor) -> bool {
 
 /// The inspector beside the map: statistics, the elevation profile, the
 /// focused point, and the cleanup settings.
-fn track_panel(ui: &mut egui::Ui, rect: Rect, editor: &mut TrackEditor, config: &mut crate::config::Config) {
+fn track_panel(ui: &mut egui::Ui, rect: Rect, editor: &mut TrackEditor, config: &mut crate::config::Config, cache: &Path) {
     ui.painter().rect_filled(rect, 0, theme::sidebar());
     ui.painter().vline(rect.left(), rect.y_range(), Stroke::new(1.0, theme::hairline()));
     let mut ui = ui.new_child(egui::UiBuilder::new().max_rect(rect));
@@ -1193,12 +1452,22 @@ fn track_panel(ui: &mut egui::Ui, rect: Rect, editor: &mut TrackEditor, config: 
                 if let Some(index) = picked {
                     editor.show_point(index);
                 }
+                if editor.terrain_heights {
+                    note(ui, tr("Heights from Terrain Tiles on AWS: USGS, NASA SRTM, Copernicus EU-DEM, and others."));
+                }
+                if (editor.terrain_heights && measures.unknown > 0) || editor.looking_up.is_some() {
+                    height_lookup(ui, editor, cache, false);
+                }
             } else {
                 editor.profile_hover = None;
                 section(ui, tr("Elevation"), |_| {});
                 panel_card().show(ui, |ui| {
                     ui.set_width(ui.available_width());
-                    note(ui, tr("The track has no heights."));
+                    if editor.looking_up.is_none() {
+                        note(ui, tr("The track has no heights."));
+                        ui.add_space(4.0);
+                    }
+                    height_lookup(ui, editor, cache, true);
                 });
             }
 
@@ -1298,6 +1567,25 @@ fn cleanup_section(ui: &mut egui::Ui, editor: &mut TrackEditor, config: &mut cra
     if editor.settings_unsaved && !ui.input(|input| input.pointer.any_down()) {
         editor.settings.save(config);
         editor.settings_unsaved = false;
+    }
+}
+
+/// The button that looks the missing heights up, or how far the lookup is.
+fn height_lookup(ui: &mut egui::Ui, editor: &mut TrackEditor, cache: &Path, primary: bool) {
+    if let Some((_, progress)) = &editor.looking_up {
+        let (done, total) = (progress.done.load(Ordering::Relaxed), progress.total.load(Ordering::Relaxed));
+        ui.horizontal(|ui| {
+            ui.add(egui::Spinner::new().size(13.0));
+            note(ui, &trf("Looking up heights… {} of {} tiles", &[&grouped(done), &grouped(total)]));
+        });
+        ui.ctx().request_repaint_after(std::time::Duration::from_millis(150));
+        return;
+    }
+    let label = tr("Look up heights");
+    let button = if primary { theme::primary_button(label) } else { egui::Button::new(label) };
+    let hint = tr("Fills in each point's height from free terrain data. Only the numbers of the map tiles along the track are sent, as when showing the map; the points stay on this computer.");
+    if ui.add_enabled(!editor.busy(), button).on_hover_text(hint).clicked() {
+        editor.look_up_heights(cache, ui.ctx());
     }
 }
 
@@ -1710,7 +1998,9 @@ mod tests {
         let mut quitting = editor(&ctx);
         quitting.name = "Ride".into();
         quitting.points = vec![EditPoint::new(25.0, 121.0, Some(3.0), Some(1_000)), EditPoint::new(25.1, 121.1, None, Some(61_000))];
-        std::fs::write(dir.join(RECOVERY_FILE), recovery_text(&quitting)).unwrap();
+        let keeper = Keeper::new(&dir);
+        keeper.keep(&quitting);
+        keeper.flush();
         let recovery = read_recovery(&dir).unwrap();
         assert_eq!(recovery.path, PathBuf::from("/nowhere/ride.kml"));
 
@@ -1722,6 +2012,12 @@ mod tests {
         assert_eq!(restored.points, quitting.points);
         assert_eq!(restored.raw, quitting.points);
 
+        // A removal after a save wins over the writes sent before it.
+        keeper.keep(&quitting);
+        keeper.keep(&restored);
+        keeper.forget();
+        keeper.flush();
+        assert!(!dir.join(RECOVERY_FILE).exists());
         std::fs::write(dir.join(RECOVERY_FILE), "not json").unwrap();
         assert!(read_recovery(&dir).is_none());
         let _ = std::fs::remove_dir_all(&dir);
@@ -1748,5 +2044,74 @@ mod tests {
         assert!(!has_heights(&[at(Some(0.0)), at(Some(0.0))]));
         assert!(has_heights(&[at(Some(0.0)), at(Some(12.5))]));
         assert!(has_heights(&[at(None), at(Some(-3.0))]));
+    }
+
+    #[test]
+    fn undo_over_a_cleanup_brings_its_settings_back() {
+        let ctx = egui::Context::default();
+        let mut editor = editor(&ctx);
+        opened(&mut editor);
+        editor.points = vec![at(None); 3];
+        let old = editor.settings;
+        editor.settings.fill_gaps = !old.fill_gaps;
+        let new = editor.settings;
+        let (sender, receiver) = crossbeam_channel::bounded(1);
+        sender.send(vec![at(None); 2]).unwrap();
+        editor.cleaning = Some(receiver);
+        editor.pump();
+        assert_eq!((editor.points.len(), editor.points_settings), (2, new));
+        // Undoing an edit leaves a change in the panel not applied yet.
+        editor.push_undo();
+        editor.points[0].lat = 1.0;
+        editor.settings.max_speed_kmh = 7.0;
+        editor.undo();
+        assert_eq!((editor.points[0].lat, editor.settings.max_speed_kmh), (0.0, 7.0));
+        // Undoing the cleanup puts its settings back.
+        editor.undo();
+        assert_eq!((editor.points.len(), editor.settings, editor.points_settings), (3, old, old));
+        editor.redo();
+        assert_eq!((editor.points.len(), editor.settings, editor.points_settings), (2, new, new));
+    }
+
+    #[test]
+    fn the_track_itself_is_the_same_file_by_any_name() {
+        let dir = std::env::temp_dir().join(format!("picasso-same-file-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let track = dir.join("ride.gpx");
+        std::fs::write(&track, "x").unwrap();
+        assert!(same_file(&dir.join(".").join("ride.gpx"), &track));
+        assert!(!same_file(&dir.join("ride-optimized.gpx"), &track));
+        std::fs::write(dir.join("ride-optimized.gpx"), "x").unwrap();
+        assert!(!same_file(&dir.join("ride-optimized.gpx"), &track));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn looked_up_heights_fill_the_points_and_undo_takes_them_off() {
+        let ctx = egui::Context::default();
+        let mut editor = editor(&ctx);
+        editor.points = vec![at(Some(0.0)); 2];
+        editor.raw = vec![at(None); 3];
+        // Offline: nothing changes and nothing is left to undo.
+        editor.take_heights(&[None; 5]);
+        assert!(editor.undo.is_empty() && !editor.terrain_heights);
+        assert!(!has_heights(&editor.points));
+        editor.take_heights(&[Some(512.04), None, Some(1.0), Some(2.0), Some(3.0)]);
+        assert_eq!(editor.points.iter().map(|point| point.ele).collect::<Vec<_>>(), [Some(512.0), None]);
+        assert_eq!(editor.raw.iter().map(|point| point.ele).collect::<Vec<_>>(), [Some(1.0), Some(2.0), Some(3.0)]);
+        assert!(editor.terrain_heights && editor.dirty);
+        assert!(editor.note.contains("1 point still has no height"), "{}", editor.note);
+        // Looking up again fills only the point still without a height.
+        editor.take_heights(&[Some(9.0), Some(640.0), Some(9.0), Some(9.0), Some(9.0)]);
+        assert_eq!(editor.points.iter().map(|point| point.ele).collect::<Vec<_>>(), [Some(512.0), Some(640.0)]);
+        assert_eq!(editor.raw.iter().map(|point| point.ele).collect::<Vec<_>>(), [Some(1.0), Some(2.0), Some(3.0)]);
+        editor.undo();
+        editor.undo();
+        assert!(!has_heights(&editor.points));
+        // A track on the sea stays as it is, with nothing to undo.
+        let undone = editor.undo.len();
+        editor.take_heights(&[Some(0.0), Some(0.02), None, None, None]);
+        assert_eq!(editor.undo.len(), undone);
+        assert!(!has_heights(&editor.points));
     }
 }

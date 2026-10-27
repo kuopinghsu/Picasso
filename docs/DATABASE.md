@@ -11,10 +11,11 @@ The photos themselves are never in the database. It holds what Picasso learned f
 | `picasso.db` (with `-wal` and `-shm` while open) | data directory | The library | No: stars, captions, albums, edits, and folders are only here |
 | `backups/picasso-YYYYMMDD-HHMMSS.db` | data directory | Weekly and manual backups of `picasso.db`, the five newest | Yes, but they are your way back |
 | `picasso-damaged-YYYYMMDD-HHMMSS.db` | data directory | A library that couldn't be opened, kept aside by the recovery window | Once you no longer need it |
+| `track-recovery.json` | data directory | Unsaved edits of the open GPS track, kept a few seconds after each change and removed once saved or discarded; offered back at the next start after a quit or a crash | Yes: the edits are lost |
 | `settings.json` | settings folder | Choices in **Settings** (language, theme, map, export, updates) | Yes: everything goes back to defaults |
 | `thumbs.db` | cache directory | Thumbnails, and the thumbnails of edited photos | Yes: made again |
 | `hashes.db` | cache directory | File hashes of the last duplicate search | Yes: computed again |
-| `tiles/` | cache directory | Downloaded map tiles | Yes: downloaded again |
+| `tiles/` | cache directory | Downloaded map and terrain tiles | Yes: downloaded again |
 | `.picasso-geotags.json` | each photo folder you geotagged | Places set by **Geotag from GPS track**, beside the photos | Then the places stay only in the library |
 
 Picasso also reads the `.picasa.ini` files Picasa left in photo folders, for stars, captions, and rotations, and never writes them.

@@ -19,6 +19,7 @@
 //! so the two don't compete for the disk; the window asks for the thumbnails
 //! it shows straight away, and one thread serves only those.
 
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -232,6 +233,9 @@ struct Indexer {
     deferred: Vec<ThumbJob>,
     /// Set once missing disk thumbnails have been queued this session.
     backfilled: bool,
+    /// Size and modification time of the `.json` files found to be no
+    /// track this session, so the scans don't open them again unchanged.
+    not_tracks: RefCell<HashMap<String, (u64, i64)>>,
 }
 
 pub fn index_loop(
@@ -263,6 +267,7 @@ pub fn index_loop(
         pending,
         deferred: Vec::new(),
         backfilled: false,
+        not_tracks: RefCell::new(HashMap::new()),
     };
     indexer.send_tracks();
     indexer.run();
@@ -341,7 +346,13 @@ impl Indexer {
     fn read_tracks(&self, folder_id: i64, files: &[TrackFile], unreadable: &mut Vec<Unreadable>) -> bool {
         let mut changed = false;
         for file in files {
-            match Track::read(Path::new(&file.path)) {
+            let Some(read) = Track::read_scanned(Path::new(&file.path)) else {
+                changed |= self.db.forget_track(&file.path);
+                self.not_tracks.borrow_mut().insert(file.path.clone(), (file.bytes, file.modified_at));
+                continue;
+            };
+            self.not_tracks.borrow_mut().remove(&file.path);
+            match read {
                 Ok(track) => match self.db.store_track(folder_id, &file.path, file.bytes, file.modified_at, &track) {
                     Ok(()) => changed = true,
                     Err(err) => eprintln!("picasso track: {err}"),
@@ -375,7 +386,8 @@ impl Indexer {
         self.notify(UiEvent::ScanStarted(label.clone()));
 
         let snapshot = self.db.folder_snapshot(folder_id, &path);
-        let known_tracks = self.db.track_snapshot(folder_id, &path);
+        let mut known_tracks = self.db.track_snapshot(folder_id, &path);
+        known_tracks.extend(self.not_tracks.borrow().iter().map(|(path, stamp)| (path.clone(), *stamp)));
         let remembered = self.db.unreadable_snapshot(folder_id);
         let remembered_paths: HashSet<String> = remembered.keys().cloned().collect();
         let excluded: HashSet<PathBuf> = self.db.excluded_dirs().into_iter().map(|(dir, _)| PathBuf::from(dir)).collect();

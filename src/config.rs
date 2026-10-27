@@ -63,6 +63,11 @@ impl Config {
         self.values.get(key)?.as_f64().map(|value| value as f32)
     }
 
+    /// [`Config::number`] at full precision.
+    pub fn float(&self, key: &str) -> Option<f64> {
+        self.values.get(key)?.as_f64()
+    }
+
     pub fn flag(&self, key: &str) -> Option<bool> {
         self.values.get(key)?.as_bool()
     }

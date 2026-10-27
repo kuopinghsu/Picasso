@@ -67,9 +67,14 @@ def linked_paths(doc, text):
 def anchors(text):
     """The IDs an AsciiDoc document defines: [#id], [[id]], and the ones
     Asciidoctor makes from section titles, such as _getting_help."""
+    text = re.sub(ASCIIDOC_BLOCK, "", text, flags=re.S | re.M)
     found = set(re.findall(r"^\[#([\w-]+)", text, flags=re.M))
     found |= set(re.findall(r"\[\[([\w-]+)(?:,[^\]]*)?\]\]", text))
-    for title in re.findall(r"^=+ (.+)$", text, flags=re.M):
+    # The document title, a single =, gets no ID, and neither does a
+    # section whose [#id] line replaces it.
+    for explicit, title in re.findall(r"^(\[#.*\n)?={2,6} (.+)$", text, flags=re.M):
+        if explicit:
+            continue
         title = re.sub(r"[^ \w.-]", "", title.lower())
         found.add("_" + re.sub(r"[ .-]+", "_", title).strip("_"))
     return found

@@ -122,7 +122,7 @@ release-notes: ## Print the release notes for this version, from CHANGELOG.md
 # that opens offline. Needs Asciidoctor: brew install asciidoctor, or
 # sudo apt install asciidoctor.
 guide: ## Build the User Guide as HTML in target/guide (needs asciidoctor)
-	asciidoctor -a data-uri -a webfonts! -a relfilesuffix=.html -D target/guide \
+	asciidoctor --failure-level=WARN -a data-uri -a webfonts! -a relfilesuffix=.html -D target/guide \
 		docs/USER_GUIDE.adoc docs/USER_GUIDE_zh-TW.adoc
 	@echo "Open target/guide/USER_GUIDE.html or target/guide/USER_GUIDE_zh-TW.html"
 

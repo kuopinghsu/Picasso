@@ -236,9 +236,9 @@ mod tests {
     }
 
     /// Words with more than one Traditional Chinese form, and the one Picasso
-    /// uses in the window, README_zh-TW.md, and the user guide. The others are mostly the
-    /// words of mainland China, and appear when text is copied from the
-    /// Simplified Chinese table.
+    /// uses in the window, README_zh-TW.md, and the user guide. The others are
+    /// mostly the words of mainland China, and appear when text is copied from
+    /// the Simplified Chinese table.
     const ZH_HANT_TERMS: &[(&str, &str)] = &[
         ("相片庫", "圖庫"),
         ("照片庫", "圖庫"),
@@ -332,7 +332,7 @@ mod tests {
     }
 
     /// The same for an AsciiDoc file, with its anchors, description list
-    /// terms, images, and notes as well.
+    /// terms, images, and notes as well, and its keys among the spans.
     fn asciidoc_outline(name: &str) -> (Vec<String>, Vec<String>) {
         let text = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(name)).unwrap();
         let mut outline = Vec::new();
@@ -365,6 +365,7 @@ mod tests {
                 outline.push("note".into());
             }
             spans.extend(line.split('`').skip(1).step_by(2).map(str::to_string));
+            spans.extend(line.split("kbd:[").skip(1).filter_map(|rest| rest.split(']').next()).map(|key| format!("kbd:[{key}]")));
         }
         spans.sort();
         (outline, spans)

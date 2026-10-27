@@ -95,7 +95,7 @@ Dragging the scroll bar shows the date in view.
 The status bar::
 Scanning progress, the *Photo Tray* with the selected photos, and a link to files that couldn't be read, when there are any.
 
-At the top right are *Slideshow*, *Refresh*, *+ Import*, the gear for *Settings*, and *?* for *Help & Shortcuts*.
+At the top right are *+ Import*, *Refresh*, *Slideshow*, *?* for *Help & Shortcuts*, and the gear for *Settings*.
 Click the logo at the top left for *About Picasso*, which shows the version.
 
 Press kbd:[I] to show or hide the Info and Map panel beside the grid.
@@ -312,7 +312,7 @@ image::places.png[Places]
 Drag to move the map, and zoom with the wheel or a pinch.
 Nearby photos join into one pin with a count.
 Point at a pin for a card with its photos: click one to open it, or use *Select these photos* or *Zoom in*.
-Clicking a pin of several photos zooms in on them, and double-clicking a single photo's pin opens it.
+Clicking a pin of several photos zooms in on them, or selects them when they were taken at one spot, and double-clicking a single photo's pin opens it.
 *Open in OpenStreetMap* opens the same view in your web browser.
 
 From a photo, *Show on map* opens Places at that photo.
@@ -330,9 +330,45 @@ A location from the camera's GPS is never changed.
 
 === GPS tracks
 
-Picasso reads the `.gpx` and `.kml` files in your folders and draws them as colored paths under the photo pins.
+Picasso reads the `.gpx` and `.kml` files in your folders, and Polarsteps location exports in `.json` files (such as `locations.json`), and draws them as colored paths under the photo pins.
 Point at a track for its name, start time, distance, and duration, and double-click it to zoom to it.
 *Tracks* in the Places toolbar turns the paths off.
+
+A folder's tracks are also listed at the top of the library grid, under *GPS tracks*, each with the shape of its path, its format, and its distance.
+
+=== Editing a track
+
+image::trackedit.png[The track editor]
+
+Click a track in the library grid, or right-click it there or in Places and choose *Edit track*, to open the track editor.
+It cleans the track up the way GPXViewer does: it drops points reached impossibly fast, removes points the line doesn't need, merges the points of a stay into one, and can fill long gaps with a curve; flights are left as they are.
+
+The map fills the window.
+The tools float at its top left, buttons for the *Whole track*, *Start*, *End*, and *Highest point* at the top, and the zoom at the top right.
+The panel on the right shows the *Statistics*, the *Elevation* profile, the selected *Point*, and the *Cleanup* settings.
+A track without heights, such as one from Polarsteps, gets a note in place of the profile; heights of 0 m at every point count as none.
+Click *Look up heights* there to fill them in from the free https://github.com/tilezen/joerd/blob/master/docs/attribution.md[Terrain Tiles on AWS]: only the numbers of the map tiles along the track are sent, as when showing the map, and the points stay on this computer.
+If some points still get no height, the button stays to try those again, and kbd:[Ctrl+Z] takes the heights off.
+Point at the profile to find that place on the map, and click or drag along it to go there; pointing at a point on the map marks it on the profile.
+
+* Drag a point to move it, and click the line to add one.
+* Right-click a point and choose *Remove point*, or select points and click *Remove* in the bar at the bottom of the map.
+* Press kbd:[R] and drag a box round points to select several, or kbd:[Ctrl]-click them; kbd:[V] goes back to moving points.
+* kbd:[←] and kbd:[→] step from point to point.
+* kbd:[Ctrl+Z] undoes and kbd:[Ctrl+Y] redoes.
+* kbd:[1] to kbd:[4] show the whole track, its start, its end, and its highest point.
+* *Show original* draws the track as read, before the cleanup.
+
+Steps longer than the *Flight distance* or faster than the *Flight speed* are drawn as a dashed flight, and places where you stayed longer than the *Stay* time get a circle.
+Change the settings and click *Clean up again* to clean the track up once more; *Defaults* restores GPXViewer's values.
+Settings you change become the defaults for the next track.
+
+The file itself is never changed, and the editor won't save over it.
+*Save as GPX…* and *Save as KML…* save a copy beside the track, named `-optimized` by default, and kbd:[Ctrl+S] saves it in the track's own format.
+The copy keeps the cleanup settings and how long each stay lasted, so it opens as saved, without a new cleanup; tracks saved by GPXViewer open as saved too.
+Undo going back over a cleanup puts its settings back too.
+kbd:[Esc] or *Back* closes the editor, and asks first when there are edits you haven't saved.
+Edits you haven't saved are kept a few seconds after each change, so if Picasso quits or stops unexpectedly, it offers to restore them the next time it starts.
 
 === Placing photos from a GPS track
 
@@ -353,6 +389,8 @@ The same works from a terminal, and `--dry-run` shows what would happen without 
 ----
 picasso geotag track.gpx ~/Pictures/Trip --offset +01:00 --dry-run
 ----
+
+Here `picasso` stands for the Picasso program: the `.exe` you downloaded on Windows, `/Applications/Picasso.app/Contents/MacOS/picasso` on a Mac, the `.AppImage` file, or `picasso` once the `.deb` is installed.
 
 == Statistics
 
@@ -415,6 +453,9 @@ The map in Places and the Map panel.
 *OpenFreeMap Liberty*, the default, and *OpenStreetMap* need nothing more.
 *CARTO* has three styles and needs a free key: *Get a free key* opens CARTO's sign-up page, and you paste the key into the field.
 *Esri World Imagery* shows satellite photos.
+
+GPS tracks::
+The *Track cleanup* settings the track editor uses when it opens a track, with *Defaults* to restore GPXViewer's values.
 
 Storage::
 Where the library, the cache, and the settings are kept, how much space each takes, *Clear cache*, and the backups.

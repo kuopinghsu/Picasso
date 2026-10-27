@@ -28,11 +28,12 @@ enum Page {
     Folders,
     FileTypes,
     Map,
+    Tracks,
     Storage,
 }
 
 impl Page {
-    const ALL: [Page; 5] = [Page::General, Page::Folders, Page::FileTypes, Page::Map, Page::Storage];
+    const ALL: [Page; 6] = [Page::General, Page::Folders, Page::FileTypes, Page::Map, Page::Tracks, Page::Storage];
 
     fn label(self) -> &'static str {
         match self {
@@ -40,6 +41,7 @@ impl Page {
             Page::Folders => "Folders",
             Page::FileTypes => "File types",
             Page::Map => "Map",
+            Page::Tracks => "GPS tracks",
             Page::Storage => "Storage",
         }
     }
@@ -117,6 +119,9 @@ pub(super) struct SettingsState {
     backup_note: String,
     /// A backup picked for Restore, waiting for the user to confirm.
     restore: Option<RestoreAsk>,
+    /// Track cleanup settings on the GPS tracks page, read again each time
+    /// the dialog opens.
+    tracks: Option<crate::track_edit::Settings>,
 }
 
 struct RestoreAsk {
@@ -138,6 +143,9 @@ impl PicassoApp {
     pub(super) fn settings_closed(&mut self) {
         self.save_carto_key();
         self.settings.carto_key = None;
+        if let Some(tracks) = self.settings.tracks.take() {
+            tracks.save(&mut self.config);
+        }
         let Some(picked) = self.settings.file_types.take() else { return };
         let picked: Vec<FileType> = FileType::ALL.into_iter().filter(|kind| picked.contains(kind)).collect();
         if picked.is_empty() || picked == self.config.file_types() {
@@ -269,6 +277,7 @@ impl PicassoApp {
                             Page::Folders => self.folders_page(ui),
                             Page::FileTypes => self.file_types_page(ui),
                             Page::Map => self.map_page(ui),
+                            Page::Tracks => self.tracks_page(ui),
                             Page::Storage => self.storage_page(ui),
                         }
                     });
@@ -448,6 +457,22 @@ impl PicassoApp {
             ui.add_space(4.0);
         }
         note(ui, self.map_source.attribution());
+    }
+
+    fn tracks_page(&mut self, ui: &mut egui::Ui) {
+        heading(ui, tr("Track cleanup"));
+        note(ui, tr("The track editor cleans each GPX, KML, and Polarsteps track up with these settings when it opens one. Tracks saved by Picasso or GPXViewer open as saved."));
+        ui.add_space(2.0);
+        let settings = self.settings.tracks.get_or_insert_with(|| crate::track_edit::Settings::load(&self.config));
+        super::track_editor::settings_form(ui, "settings-tracks", settings);
+        ui.add_space(4.0);
+        if ui.button(tr("Defaults")).clicked() {
+            *settings = crate::track_edit::Settings::default();
+        }
+        // Saved once a drag on a number ends rather than on every step.
+        if !ui.input(|input| input.pointer.any_down()) && *settings != crate::track_edit::Settings::load(&self.config) {
+            settings.save(&mut self.config);
+        }
     }
 
     fn folders_page(&mut self, ui: &mut egui::Ui) {

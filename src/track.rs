@@ -1,16 +1,23 @@
-//! GPS tracks: the paths a phone or GPS logger recorded, read from GPX and
-//! KML files in the photo folders and drawn on the map under the photos.
+//! GPS tracks: the paths a phone or GPS logger recorded, read from GPX, KML,
+//! and Polarsteps files in the photo folders and drawn on the map under the
+//! photos.
 
+use std::io::Read;
 use std::path::Path;
 
 use crate::geo;
 use crate::i18n::tr;
 
-/// Extensions of the track files the scanner reads, lower case.
-pub const EXTENSIONS: [&str; 2] = ["gpx", "kml"];
+/// Extensions of the track files the scanner reads, lower case. Of the
+/// `.json` files, only those Polarsteps exported are tracks.
+pub const EXTENSIONS: [&str; 3] = ["gpx", "kml", "json"];
 
 /// Larger files are left alone rather than read into memory whole.
-const MAX_BYTES: u64 = 256 * 1024 * 1024;
+pub(crate) const MAX_BYTES: u64 = 256 * 1024 * 1024;
+
+/// How far into a `.json` file the scanner looks for the `locations` list
+/// that Polarsteps writes first.
+const SNIFF_BYTES: u64 = 4096;
 
 /// Bytes per point in [`Track::encode`]: latitude and longitude in
 /// ten-millionths of a degree, then the time.
@@ -20,9 +27,18 @@ const POINT_BYTES: usize = 16;
 const NO_TIME: i64 = i64::MIN;
 
 pub fn is_track_path(path: &Path) -> bool {
-    path.extension()
-        .and_then(|ext| ext.to_str())
-        .is_some_and(|ext| EXTENSIONS.iter().any(|known| ext.eq_ignore_ascii_case(known)))
+    let ext = extension(path);
+    EXTENSIONS.contains(&ext.as_str()) && !(ext == "json" && is_photo_sidecar(path))
+}
+
+/// Whether a `.json` file is the one Google Takeout writes beside a photo,
+/// named after it, such as `IMG_1234.jpg.json` or
+/// `IMG_1234.jpg.supplemental-metadata.json`. A library moved from Google
+/// Photos has one for every photo, so they are left out by name rather
+/// than opened.
+fn is_photo_sidecar(path: &Path) -> bool {
+    let Some(stem) = path.file_stem().and_then(|stem| stem.to_str()) else { return false };
+    stem.split('.').skip(1).any(|part| crate::types::FileType::of(Path::new(&format!("x.{part}"))).is_some())
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -41,24 +57,41 @@ pub struct Track {
 }
 
 impl Track {
-    /// Reads a GPX, KML, or KMZ (zipped KML) file. A file without a name of
-    /// its own is named after the file.
+    /// Reads a GPX, KML, KMZ (zipped KML), or Polarsteps JSON file. A file
+    /// without a name of its own is named after the file.
     pub fn read(path: &Path) -> Result<Track, String> {
-        let bytes = std::fs::metadata(path).map_err(|err| err.to_string())?.len();
-        if bytes > MAX_BYTES {
-            return Err(tr("The track file is too large").to_string());
-        }
-        let mut data = std::fs::read(path).map_err(|err| err.to_string())?;
-        let ext = path.extension().and_then(|ext| ext.to_str()).unwrap_or_default().to_ascii_lowercase();
-        if ext == "kmz" {
-            data = kmz_document(&data)?;
-        }
-        let text = String::from_utf8_lossy(&data);
-        let mut track = if ext == "gpx" { Track::parse_gpx(&text) } else { Track::parse_kml(&text) }?;
+        let text = read_text(path)?;
+        let ext = extension(path);
+        let mut track = match ext.as_str() {
+            "gpx" => Track::parse_gpx(&text)?,
+            "json" => Track::from_polarsteps(&text)?,
+            _ => Track::parse_kml(&text)?,
+        };
         if track.name.is_empty() {
             track.name = path.file_stem().map(|stem| stem.to_string_lossy().into_owned()).unwrap_or_default();
         }
         Ok(track)
+    }
+
+    /// [`Track::read`] for the scanner: `None` for a `.json` file that isn't
+    /// a Polarsteps export after all, which is no track rather than a track
+    /// that can't be read.
+    pub fn read_scanned(path: &Path) -> Option<Result<Track, String>> {
+        if extension(path) == "json" && !names_locations(path) {
+            return None;
+        }
+        Some(Track::read(path))
+    }
+
+    /// The locations of a Polarsteps export as one segment in time order.
+    fn from_polarsteps(text: &str) -> Result<Track, String> {
+        let points = crate::track_edit::parse_polarsteps(text)?
+            .into_iter()
+            .map(|point| Point { lat: point.lat, lon: point.lon, time: point.time.map(|ms| ms.div_euclid(1000)) })
+            .collect();
+        let mut track = Track::default();
+        track.add(points);
+        track.finish()
     }
 
     /// Tracks (`trk`) and routes (`rte`) of a GPX file. Waypoints alone
@@ -299,10 +332,37 @@ pub fn format_distance(meters: f64) -> String {
     }
 }
 
+fn extension(path: &Path) -> String {
+    path.extension().and_then(|ext| ext.to_str()).unwrap_or_default().to_ascii_lowercase()
+}
+
+/// The text of a track file, unpacked from a KMZ archive. Files over
+/// [`MAX_BYTES`] are refused.
+pub(crate) fn read_text(path: &Path) -> Result<String, String> {
+    let bytes = std::fs::metadata(path).map_err(|err| err.to_string())?.len();
+    if bytes > MAX_BYTES {
+        return Err(tr("The track file is too large").to_string());
+    }
+    let mut data = std::fs::read(path).map_err(|err| err.to_string())?;
+    if extension(path) == "kmz" {
+        data = kmz_document(&data)?;
+    }
+    Ok(String::from_utf8_lossy(&data).into_owned())
+}
+
+/// Whether the start of a JSON file names the `locations` list of a
+/// Polarsteps export and its `lat` or `latitude`. Google Takeout's
+/// `Records.json` starts with `locations` too, but names `latitudeE7`.
+fn names_locations(path: &Path) -> bool {
+    let mut head = Vec::new();
+    let read = std::fs::File::open(path).and_then(|file| file.take(SNIFF_BYTES).read_to_end(&mut head));
+    let names = |key: &[u8]| head.windows(key.len()).any(|window| window == key);
+    read.is_ok() && names(b"\"locations\"") && (names(b"\"lat\"") || names(b"\"latitude\""))
+}
+
 /// The KML document inside a KMZ archive: `doc.kml` when there is one,
 /// otherwise the first `.kml` entry. Stored and deflated entries are read.
 fn kmz_document(zip: &[u8]) -> Result<Vec<u8>, String> {
-    use std::io::Read;
     let broken = || tr("The KMZ file is damaged").to_string();
     let u16_at = |at: usize| zip.get(at..at + 2).map(|b| u16::from_le_bytes([b[0], b[1]]) as usize);
     let u32_at = |at: usize| zip.get(at..at + 4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]) as usize);
@@ -354,11 +414,11 @@ fn kmz_document(zip: &[u8]) -> Result<Vec<u8>, String> {
     }
 }
 
-fn parse_xml(text: &str) -> Result<roxmltree::Document<'_>, String> {
+pub(crate) fn parse_xml(text: &str) -> Result<roxmltree::Document<'_>, String> {
     roxmltree::Document::parse(text.trim_start_matches('\u{feff}')).map_err(|err| err.to_string())
 }
 
-trait LocalName {
+pub(crate) trait LocalName {
     fn has_tag_name_local(&self, name: &str) -> bool;
 }
 
@@ -370,7 +430,7 @@ impl LocalName for roxmltree::Node<'_, '_> {
     }
 }
 
-fn child_text(node: roxmltree::Node<'_, '_>, name: &str) -> String {
+pub(crate) fn child_text(node: roxmltree::Node<'_, '_>, name: &str) -> String {
     node.children()
         .find(|child| child.has_tag_name_local(name))
         .and_then(|child| child.text())
@@ -425,16 +485,22 @@ fn valid(point: Point) -> Option<Point> {
     fine.then_some(point)
 }
 
-/// An ISO 8601 time. One without a zone is taken as UTC, as GPX asks.
+/// An ISO 8601 time, in Unix seconds.
 fn parse_time(text: &str) -> Option<i64> {
+    parse_time_ms(text).map(|ms| ms.div_euclid(1000))
+}
+
+/// An ISO 8601 time, in Unix milliseconds. One without a zone is taken as
+/// UTC, as GPX asks.
+pub(crate) fn parse_time_ms(text: &str) -> Option<i64> {
     let text = text.trim();
     if let Ok(time) = chrono::DateTime::parse_from_rfc3339(text) {
-        return Some(time.timestamp());
+        return Some(time.timestamp_millis());
     }
     ["%Y-%m-%dT%H:%M:%S%.f", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S"]
         .iter()
         .find_map(|format| chrono::NaiveDateTime::parse_from_str(text, format).ok())
-        .map(|time| time.and_utc().timestamp())
+        .map(|time| time.and_utc().timestamp_millis())
 }
 
 #[cfg(test)]
@@ -611,5 +677,29 @@ mod tests {
         assert_eq!(map.bounds.min, [128.0, 128.0]);
         assert!((map.bounds.max[0] - 128.0 - 256.0 / 360.0).abs() < 1e-9);
         assert!(is_track_path(Path::new("ride.GPX")) && is_track_path(Path::new("a.kml")) && !is_track_path(Path::new("a.kmz")));
+        assert!(is_track_path(Path::new("/trip/locations.json")) && is_track_path(Path::new("/2025.07.Spain/spain.JSON")));
+        assert!(!is_track_path(Path::new("IMG_0001.jpg.json")) && !is_track_path(Path::new("IMG_0001.HEIC.supplemental-metadata.json")));
+    }
+
+    #[test]
+    fn only_polarsteps_json_is_a_track() {
+        let dir = std::env::temp_dir().join(format!("picasso-polarsteps-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let steps = dir.join("trip.json");
+        std::fs::write(&steps, r#"{"locations": [{"lat": 40.4, "lon": -3.5, "time": 1751110826}, {"lat": 40.5, "lon": -3.6, "time": 1751115143}]}"#).unwrap();
+        let track = Track::read_scanned(&steps).unwrap().unwrap();
+        assert_eq!(track.name, "trip");
+        assert_eq!(track.segments[0][1], Point { lat: 40.5, lon: -3.6, time: Some(1_751_115_143) });
+        let other = dir.join("package.json");
+        std::fs::write(&other, r#"{"name": "app", "version": "1.0.0"}"#).unwrap();
+        assert!(Track::read_scanned(&other).is_none());
+        let takeout = dir.join("Records.json");
+        std::fs::write(&takeout, r#"{"locations": [{"latitudeE7": 404000000, "longitudeE7": -35000000, "timestamp": "2025-06-28T12:00:00Z"}]}"#).unwrap();
+        assert!(Track::read_scanned(&takeout).is_none());
+        // One location is a Polarsteps export, but no track.
+        let single = dir.join("single.json");
+        std::fs::write(&single, r#"{"locations": [{"lat": 40.4, "lon": -3.5, "time": 1751110826}]}"#).unwrap();
+        assert!(Track::read_scanned(&single).unwrap().is_err());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

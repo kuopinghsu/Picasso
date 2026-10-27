@@ -25,6 +25,7 @@ mod secret;
 mod shell;
 mod thumbs;
 mod track;
+mod track_edit;
 mod types;
 mod update;
 mod video;

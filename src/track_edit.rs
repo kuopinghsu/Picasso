@@ -2,7 +2,7 @@
 //! with its height and time, the cleanup GPXViewer runs on them, the edits
 //! made by hand, and the GPX and KML files they are saved as.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use base64::Engine;
@@ -26,6 +26,10 @@ const BOUNDS_MARGIN: f64 = 0.999;
 /// The element GPXViewer keeps its settings in, which Picasso writes too so
 /// either reads the other's files the same way.
 const SETTINGS_TAG: &str = "gpxviewer-settings";
+/// The element Picasso keeps the stays in, as `time:duration` pairs in
+/// milliseconds. A merged stay is one point, so how long it lasted can't be
+/// worked out again from the points.
+const STAYS_TAG: &str = "picasso-stays";
 /// `creator` of the GPX files Picasso saves.
 pub const CREATOR: &str = "Picasso";
 
@@ -236,7 +240,10 @@ pub fn parse_gpx(text: &str, base: Settings) -> Result<Loaded, String> {
         .find(|node| node.has_tag_name_local(SETTINGS_TAG))
         .and_then(|node| node.text())
         .and_then(|text| Settings::decode(text, base));
-    let (points, untimed) = in_time_order(points);
+    let (mut points, untimed) = in_time_order(points);
+    if let Some(stays) = doc.descendants().find(|node| node.has_tag_name_local(STAYS_TAG)).and_then(|node| node.text()) {
+        put_stays(&mut points, stays);
+    }
     Ok(Loaded {
         name,
         format: Format::Gpx,
@@ -278,13 +285,17 @@ pub fn parse_kml(text: &str, base: Settings) -> Result<Loaded, String> {
             name = track::child_text(document, "name");
         }
     }
-    let settings = doc
-        .descendants()
-        .find(|node| node.has_tag_name_local("Data") && node.attribute("name") == Some(SETTINGS_TAG))
-        .and_then(|node| node.children().find(|child| child.has_tag_name_local("value")))
-        .and_then(|node| node.text())
-        .and_then(|text| Settings::decode(text, base));
-    let (points, untimed) = in_time_order(points);
+    let data = |key: &str| {
+        doc.descendants()
+            .find(|node| node.has_tag_name_local("Data") && node.attribute("name") == Some(key))
+            .and_then(|node| node.children().find(|child| child.has_tag_name_local("value")))
+            .and_then(|node| node.text())
+    };
+    let settings = data(SETTINGS_TAG).and_then(|text| Settings::decode(text, base));
+    let (mut points, untimed) = in_time_order(points);
+    if let Some(stays) = data(STAYS_TAG) {
+        put_stays(&mut points, stays);
+    }
     Ok(Loaded {
         name,
         format: Format::Kml,
@@ -333,6 +344,33 @@ pub fn parse_polarsteps(text: &str) -> Result<Vec<EditPoint>, String> {
     }
     points.sort_by_key(|point| point.time);
     enough(dedupe(points))
+}
+
+/// The stays of `points` as [`STAYS_TAG`] holds them.
+fn stays_text(points: &[EditPoint]) -> String {
+    let stays: Vec<String> = points
+        .iter()
+        .filter(|point| point.dwell_ms > 0)
+        .filter_map(|point| Some(format!("{}:{}", point.time?, point.dwell_ms)))
+        .collect();
+    stays.join(",")
+}
+
+/// Gives the points the stays in `text` from [`stays_text`], matched by
+/// time, so a file edited elsewhere since can't put a stay on another point.
+fn put_stays(points: &mut [EditPoint], text: &str) {
+    let stays: HashMap<i64, i64> = text
+        .split(',')
+        .filter_map(|pair| {
+            let (time, dwell) = pair.trim().split_once(':')?;
+            Some((time.parse().ok()?, dwell.parse().ok().filter(|dwell: &i64| *dwell > 0)?))
+        })
+        .collect();
+    for point in points {
+        if let Some(dwell) = point.time.and_then(|time| stays.get(&time)) {
+            point.dwell_ms = *dwell;
+        }
+    }
 }
 
 fn enough(points: Vec<EditPoint>) -> Result<Vec<EditPoint>, String> {
@@ -584,6 +622,8 @@ fn cluster_center(cluster: &[EditPoint]) -> EditPoint {
 
 /// Adds a point on a curve in the middle of each gap longer than the long
 /// gap, where the track turns less than [`MAX_TURN_DEG`] into and out of it.
+/// A flight is no gap on the ground, so it isn't bridged, and the point
+/// across one doesn't bend the curve of the gap beside it.
 fn fill_gaps(points: &[EditPoint], settings: &Settings) -> Vec<EditPoint> {
     if points.len() < 2 {
         return points.to_vec();
@@ -591,9 +631,9 @@ fn fill_gaps(points: &[EditPoint], settings: &Settings) -> Vec<EditPoint> {
     let mut out = vec![points[0]];
     for index in 1..points.len() {
         let (start, end) = (points[index - 1], points[index]);
-        if distance_m(&start, &end) > settings.long_gap_m {
-            let prev = index.checked_sub(2).map(|at| points[at]);
-            let next = points.get(index + 1).copied();
+        if distance_m(&start, &end) > settings.long_gap_m && !is_flight(&start, &end, settings) {
+            let prev = index.checked_sub(2).map(|at| points[at]).filter(|prev| !is_flight(prev, &start, settings));
+            let next = points.get(index + 1).copied().filter(|next| !is_flight(&end, next, settings));
             let heading = bearing_deg(&start, &end);
             let straight_in = prev.is_none_or(|prev| distance_m(&prev, &start) <= 1.0 || turn_deg(bearing_deg(&prev, &start), heading) <= MAX_TURN_DEG);
             let straight_out = next.is_none_or(|next| distance_m(&end, &next) <= 1.0 || turn_deg(heading, bearing_deg(&end, &next)) <= MAX_TURN_DEG);
@@ -606,11 +646,40 @@ fn fill_gaps(points: &[EditPoint], settings: &Settings) -> Vec<EditPoint> {
     dedupe(out)
 }
 
+/// The middle of the curve from `start` to `end` that runs on from `prev`
+/// and into `next`, the curve [`remove_redundant`] measures against. Each
+/// end leans at most a third of the gap, so a far neighbor can't throw the
+/// point off the way.
 fn bezier_middle(prev: EditPoint, start: EditPoint, end: EditPoint, next: EditPoint) -> EditPoint {
-    let control = (start.lat + 0.25 * (next.lat - prev.lat), start.lon + 0.25 * (next.lon - prev.lon));
-    let lat = 0.25 * start.lat + 0.5 * control.0 + 0.25 * end.lat;
-    let lon = 0.25 * start.lon + 0.5 * control.1 + 0.25 * end.lon;
-    EditPoint::new(lat, lon, middle_ele(&start, &end), middle_time(&start, &end))
+    let most = (end.lat - start.lat).hypot(end.lon - start.lon) / 3.0;
+    let lean = |from: &EditPoint, to: &EditPoint| {
+        let (lat, lon) = ((to.lat - from.lat) / 6.0, (to.lon - from.lon) / 6.0);
+        let reach = lat.hypot(lon);
+        if reach > most { (lat * most / reach, lon * most / reach) } else { (lat, lon) }
+    };
+    let (out_of_start, into_end) = (lean(&prev, &end), lean(&start, &next));
+    let control1 = (start.lat + out_of_start.0, start.lon + out_of_start.1);
+    let control2 = (end.lat - into_end.0, end.lon - into_end.1);
+    let (lat, lon) = cubic_bezier((start.lat, start.lon), control1, control2, (end.lat, end.lon), 0.5);
+    between(start, end, lat, lon)
+}
+
+/// A point at (`lat`, `lon`) between `start` and `end`, with the height and
+/// time shared out by how far along it is, so the steps on either side keep
+/// the speed of the one it splits.
+fn between(start: EditPoint, end: EditPoint, lat: f64, lon: f64) -> EditPoint {
+    let place = EditPoint::new(lat, lon, None, None);
+    let (before, after) = (distance_m(&start, &place), distance_m(&place, &end));
+    let share = if before + after > 0.0 { before / (before + after) } else { 0.5 };
+    let ele = match (start.ele, end.ele) {
+        (Some(from), Some(to)) => Some(from + (to - from) * share),
+        (one, other) => one.or(other),
+    };
+    let time = match (start.time, end.time) {
+        (Some(from), Some(to)) => Some(from + ((to - from) as f64 * share).round() as i64),
+        _ => None,
+    };
+    EditPoint::new(lat, lon, ele, time)
 }
 
 /// Heading on the flat map from `from` to `to`, in degrees.
@@ -620,17 +689,6 @@ fn bearing_deg(from: &EditPoint, to: &EditPoint) -> f64 {
 
 fn turn_deg(a: f64, b: f64) -> f64 {
     ((b - a + 540.0).rem_euclid(360.0) - 180.0).abs()
-}
-
-fn middle_ele(a: &EditPoint, b: &EditPoint) -> Option<f64> {
-    match (a.ele, b.ele) {
-        (Some(x), Some(y)) => Some((x + y) / 2.0),
-        (one, other) => one.or(other),
-    }
-}
-
-fn middle_time(a: &EditPoint, b: &EditPoint) -> Option<i64> {
-    Some(a.time? + (b.time? - a.time?) / 2)
 }
 
 /// Drops each point at the same time and place as the one before.
@@ -661,13 +719,15 @@ pub fn speed_kmh(from: &EditPoint, to: &EditPoint) -> f64 {
     }
 }
 
-/// For each step from one point to the next, whether it is a flight: longer
-/// or faster than the flight thresholds.
+/// For each step from one point to the next, whether it is a flight.
 pub fn flights(points: &[EditPoint], settings: &Settings) -> Vec<bool> {
-    points
-        .windows(2)
-        .map(|pair| distance_m(&pair[0], &pair[1]) / 1000.0 >= settings.flight_km || speed_kmh(&pair[0], &pair[1]) >= settings.flight_kmh)
-        .collect()
+    points.windows(2).map(|pair| is_flight(&pair[0], &pair[1], settings)).collect()
+}
+
+/// Whether the step from `from` to `to` is longer or faster than the
+/// flight thresholds.
+fn is_flight(from: &EditPoint, to: &EditPoint, settings: &Settings) -> bool {
+    distance_m(from, to) / 1000.0 >= settings.flight_km || speed_kmh(from, to) >= settings.flight_kmh
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -696,10 +756,10 @@ pub fn stats(points: &[EditPoint]) -> Stats {
 }
 
 /// Puts a point at `lat`, `lon` between `points[segment]` and the next one,
-/// at their middle height and time. Returns where it went.
+/// with the height and time of that far along. Returns where it went.
 pub fn insert_point(points: &mut Vec<EditPoint>, segment: usize, lat: f64, lon: f64) -> usize {
     let (start, end) = (points[segment], points[segment + 1]);
-    points.insert(segment + 1, EditPoint::new(lat, lon, middle_ele(&start, &end), middle_time(&start, &end)));
+    points.insert(segment + 1, between(start, end, lat, lon));
     segment + 1
 }
 
@@ -731,7 +791,12 @@ pub fn to_gpx(points: &[EditPoint], name: &str, settings: &Settings) -> String {
     let mut out = String::new();
     out.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
     out.push_str(&format!("<gpx version=\"1.1\" creator=\"{CREATOR}\" xmlns=\"http://www.topografix.com/GPX/1/1\">\n"));
-    out.push_str(&format!("  <metadata>\n    <extensions>\n      <{SETTINGS_TAG}>{}</{SETTINGS_TAG}>\n    </extensions>\n  </metadata>\n", settings.encode()));
+    out.push_str(&format!("  <metadata>\n    <extensions>\n      <{SETTINGS_TAG}>{}</{SETTINGS_TAG}>\n", settings.encode()));
+    let stays = stays_text(points);
+    if !stays.is_empty() {
+        out.push_str(&format!("      <{STAYS_TAG}>{stays}</{STAYS_TAG}>\n"));
+    }
+    out.push_str("    </extensions>\n  </metadata>\n");
     out.push_str(&format!("  <trk>\n    <name>{}</name>\n    <trkseg>\n", escape_xml(name)));
     for point in points {
         out.push_str(&format!("      <trkpt lat=\"{}\" lon=\"{}\">", point.lat, point.lon));
@@ -756,10 +821,12 @@ pub fn to_kml(points: &[EditPoint], name: &str, settings: &Settings) -> String {
     out.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
     out.push_str("<kml xmlns=\"http://www.opengis.net/kml/2.2\" xmlns:gx=\"http://www.google.com/kml/ext/2.2\">\n  <Document>\n");
     out.push_str(&format!("    <name>{name}</name>\n"));
-    out.push_str(&format!(
-        "    <ExtendedData>\n      <Data name=\"{SETTINGS_TAG}\">\n        <value>{}</value>\n      </Data>\n    </ExtendedData>\n",
-        settings.encode()
-    ));
+    out.push_str(&format!("    <ExtendedData>\n      <Data name=\"{SETTINGS_TAG}\">\n        <value>{}</value>\n      </Data>\n", settings.encode()));
+    let stays = stays_text(points);
+    if !stays.is_empty() {
+        out.push_str(&format!("      <Data name=\"{STAYS_TAG}\">\n        <value>{stays}</value>\n      </Data>\n"));
+    }
+    out.push_str("    </ExtendedData>\n");
     out.push_str(&format!("    <Placemark>\n      <name>{name}</name>\n"));
     let times: Option<Vec<String>> = points.iter().map(|point| point.time.and_then(iso_time)).collect();
     match times {
@@ -991,13 +1058,38 @@ mod tests {
         let points = [at(0.0, 0.0, 0.0), at(50.0, 0.0, 1.0), at(550.0, 0.0, 6.0), at(600.0, 0.0, 7.0)];
         let filled = fill_gaps(&points, &settings);
         assert_eq!(filled.len(), 5);
-        // The curve's control point is a quarter of the way along the
-        // neighbors, which puts the middle at 250 m rather than 300 m.
-        assert!((distance_m(&filled[2], &at(250.0, 0.0, 0.0))) < 1.0);
+        assert!((distance_m(&filled[2], &at(300.0, 0.0, 0.0))) < 1.0);
         assert_eq!(filled[2].time, Some(210_000));
         // A sharp turn into the gap leaves it as it is.
         let turned = [at(0.0, -50.0, 0.0), at(0.0, 0.0, 1.0), at(500.0, 0.0, 6.0)];
         assert_eq!(fill_gaps(&turned, &settings).len(), 3);
+    }
+
+    #[test]
+    fn flights_are_not_filled_and_dont_bend_the_gaps_beside_them() {
+        let settings = Settings { fill_gaps: true, ..Settings::default() };
+        // A 5,000 km flight north, then a 1 km drive on north from the airport.
+        let points = [at(0.0, 0.0, 0.0), at(5_000_000.0, 0.0, 400.0), at(5_001_000.0, 0.0, 410.0)];
+        let filled = fill_gaps(&points, &settings);
+        assert_eq!(filled.len(), 4);
+        assert_eq!(flights(&filled, &settings), vec![true, false, false]);
+        // The drive's middle point lies on the drive, not hundreds of km off.
+        let middle = filled[2];
+        assert!(distance_m(&points[1], &middle) < 1000.0 && distance_m(&middle, &points[2]) < 1000.0);
+    }
+
+    #[test]
+    fn a_filled_gap_keeps_its_speed_on_both_sides() {
+        let settings = Settings { fill_gaps: true, ..Settings::default() };
+        // A bend into the gap and out of it, at 210 km/h: just under a flight.
+        let points = [at(0.0, 0.0, 0.0), at(3500.0, 1400.0, 1.0), at(38_500.0, 0.0, 11.0), at(42_000.0, -1400.0, 12.0)];
+        let filled = fill_gaps(&points, &settings);
+        assert_eq!(filled.len(), 7);
+        for gap in filled.windows(3).step_by(2) {
+            let (first, second) = (speed_kmh(&gap[0], &gap[1]), speed_kmh(&gap[1], &gap[2]));
+            assert!((first - second).abs() < 1.0, "{first} {second}");
+        }
+        assert_eq!(flights(&filled, &settings), vec![false; 6]);
     }
 
     #[test]
@@ -1017,6 +1109,10 @@ mod tests {
         let mut points = vec![EditPoint::new(0.0, 0.0, Some(10.0), Some(0)), EditPoint::new(0.0, 1.0, Some(20.0), Some(60_000))];
         assert_eq!(insert_point(&mut points, 0, 0.1, 0.5), 1);
         assert_eq!(points[1], EditPoint::new(0.1, 0.5, Some(15.0), Some(30_000)));
+        // A point a quarter of the way along gets the time of that far.
+        let mut off_center = vec![points[0], points[2]];
+        insert_point(&mut off_center, 0, 0.0, 0.25);
+        assert_eq!((off_center[1].ele, off_center[1].time), (Some(12.5), Some(15_000)));
         assert!(!remove_points(&mut points, &HashSet::from([0, 1])));
         assert!(remove_points(&mut points, &HashSet::from([1, 7])));
         assert_eq!(points.len(), 2);
@@ -1030,6 +1126,8 @@ mod tests {
             EditPoint::new(25.5, 121.25, Some(3.5), Some(1_714_550_400_123)),
             EditPoint::new(25.6, 121.35, None, Some(1_714_550_460_000)),
         ];
+        // A stay of two and a half hours comes back with the point.
+        points[0].dwell_ms = 9_000_000;
         let gpx = parse_gpx(&to_gpx(&points, "Tom & Jerry", &settings), Settings::default()).unwrap();
         assert_eq!(gpx.name, "Tom & Jerry");
         assert!(gpx.cleaned);
@@ -1045,6 +1143,10 @@ mod tests {
         let text = to_kml(&points, "Ride", &settings);
         assert!(text.contains("<LineString>") && !text.contains("<when>"));
         assert_eq!(parse_kml(&text, Settings::default()).unwrap().points[1].ele, None);
+        // Stays are matched by time, so one whose point is gone is left out.
+        let mut edited = [EditPoint::new(25.5, 121.25, None, Some(1_000)), EditPoint::new(25.6, 121.35, None, Some(2_000))];
+        put_stays(&mut edited, "999:5000, 1000:7000,junk");
+        assert_eq!((edited[0].dwell_ms, edited[1].dwell_ms), (7_000, 0));
         assert_eq!(saved_name(Path::new("/a/ride.gpx"), "kml"), "ride-optimized.kml");
         assert_eq!(saved_name(Path::new("/a/ride-optimized.gpx"), "gpx"), "ride-optimized.gpx");
     }

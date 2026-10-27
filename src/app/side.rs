@@ -69,7 +69,7 @@ impl PicassoApp {
         ui.horizontal(|ui| {
             for (panel, label) in [(SidePanel::Info, "Info"), (SidePanel::Map, "Map")] {
                 let on = self.side == panel;
-                let text = egui::RichText::new(tr(label)).color(if on { ACCENT } else { theme::text() });
+                let text = egui::RichText::new(tr(label)).color(if on { theme::accent() } else { theme::text() });
                 let button = egui::Button::new(text)
                     .fill(if on { theme::select() } else { Color32::TRANSPARENT })
                     .stroke(Stroke::NONE);
@@ -249,7 +249,7 @@ impl PicassoApp {
         }
 
         let painter = ui.painter_at(rect);
-        painter.rect_filled(rect, 0, super::places::MAP_BACKDROP);
+        painter.rect_filled(rect, 0, super::places::map_backdrop());
         let view = MapView {
             lat,
             lon,
@@ -335,13 +335,12 @@ fn property_grid(ui: &mut egui::Ui, id: (&str, i64), rows: &[(&'static str, Stri
 
 fn paint_pin(painter: &egui::Painter, tip: Pos2) {
     let head = tip + Vec2::new(0.0, -18.0);
-    let red = Color32::from_rgb(0xE0, 0x45, 0x3A);
     painter.add(egui::Shape::convex_polygon(
         vec![head + Vec2::new(-6.5, 3.0), head + Vec2::new(6.5, 3.0), tip],
-        red,
+        theme::PIN,
         Stroke::NONE,
     ));
-    painter.circle_filled(head, 8.0, red);
+    painter.circle_filled(head, 8.0, theme::PIN);
     painter.circle_stroke(head, 8.0, Stroke::new(1.5, WHITE));
     painter.circle_filled(head, 3.0, WHITE);
 }
@@ -359,7 +358,7 @@ pub(super) fn tray_icon(ui: &mut egui::Ui, icon: TrayIcon, on: bool) -> egui::Re
         theme::tray()
     };
     painter.rect_filled(rect, theme::RADIUS, background);
-    let color = if on { ACCENT } else { theme::text() };
+    let color = if on { theme::accent() } else { theme::text() };
     let c = rect.center();
     match icon {
         TrayIcon::Info => {

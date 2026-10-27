@@ -764,7 +764,7 @@ fn nav_item(ui: &mut egui::Ui, label: &str, selected: bool) -> egui::Response {
         egui::Align2::LEFT_CENTER,
         label,
         egui::FontId::proportional(13.5),
-        if selected { theme::ACCENT } else { theme::text() },
+        if selected { theme::accent() } else { theme::text() },
     );
     response
 }

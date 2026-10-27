@@ -1577,7 +1577,7 @@ impl PicassoApp {
             egui::Align2::LEFT_CENTER,
             label,
             egui::FontId::proportional(13.5),
-            if selected { theme::ACCENT } else { theme::text() },
+            if selected { theme::accent() } else { theme::text() },
         );
         response
     }
@@ -2574,11 +2574,11 @@ fn paint_glyph(painter: &egui::Painter, center_left: egui::Pos2, glyph: Glyph) {
         Glyph::Library => {
             let tile = Vec2::splat(6.0);
             for (dx, dy) in [(0.0, 0.0), (8.0, 0.0), (0.0, 8.0), (8.0, 8.0)] {
-                painter.rect_filled(Rect::from_min_size(origin + Vec2::new(dx, dy), tile), 2, theme::ACCENT);
+                painter.rect_filled(Rect::from_min_size(origin + Vec2::new(dx, dy), tile), 2, theme::accent());
             }
         }
         Glyph::Pin => {
-            painter.circle_filled(origin + Vec2::new(7.0, 6.0), 4.5, Color32::from_rgb(0xE0, 0x45, 0x3A));
+            painter.circle_filled(origin + Vec2::new(7.0, 6.0), 4.5, theme::PIN);
             painter.circle_filled(origin + Vec2::new(7.0, 6.0), 1.6, Color32::WHITE);
         }
         Glyph::Copies => {
@@ -2598,7 +2598,7 @@ fn paint_glyph(painter: &egui::Painter, center_left: egui::Pos2, glyph: Glyph) {
         Glyph::Globe => {
             let center = origin + Vec2::new(7.0, 7.0);
             let line = egui::Stroke::new(1.2, Color32::WHITE);
-            painter.circle_filled(center, 6.5, Color32::from_rgb(0xC3, 0x76, 0xA6));
+            painter.circle_filled(center, 6.5, theme::GOLD);
             painter.line_segment([center - Vec2::new(6.0, 0.0), center + Vec2::new(6.0, 0.0)], line);
             painter.add(egui::Shape::ellipse_stroke(center, Vec2::new(2.6, 6.0), line));
         }

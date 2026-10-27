@@ -94,7 +94,7 @@ impl PicassoApp {
     /// A link to the release page in the header, while there is a newer one.
     pub(super) fn update_link(&self, ui: &mut egui::Ui) {
         let Some(release) = &self.updates.available else { return };
-        let text = RichText::new(trf("Picasso {} is available", &[&release.version])).color(theme::ACCENT);
+        let text = RichText::new(trf("Picasso {} is available", &[&release.version])).color(theme::accent());
         if ui.add(egui::Button::new(text).frame(false)).on_hover_text(tr("Open the download page")).clicked() {
             let _ = open::that(&release.url);
         }

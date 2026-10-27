@@ -16,7 +16,13 @@ use super::theme::{self, ACCENT, STAR, WHITE};
 use super::PicassoApp;
 
 /// Map background while tiles load.
-pub(super) const MAP_BACKDROP: Color32 = Color32::from_rgb(0xD6, 0xE4, 0xF0);
+pub(super) fn map_backdrop() -> Color32 {
+    if theme::is_dark() {
+        Color32::from_rgb(0x26, 0x33, 0x37)
+    } else {
+        Color32::from_rgb(0xD3, 0xE7, 0xE9)
+    }
+}
 
 /// A loaded map tile and the names to write over it.
 pub(super) struct MapTile {
@@ -86,7 +92,7 @@ impl PicassoApp {
             }
         }
 
-        ui.painter().rect_filled(rect, 0, MAP_BACKDROP);
+        ui.painter().rect_filled(rect, 0, map_backdrop());
         let view = MapView {
             lat: self.map_lat,
             lon: self.map_lon,
@@ -516,8 +522,7 @@ impl PicassoApp {
 
     /// Opens the card of the cluster under the pointer, and closes it a
     /// moment after the pointer leaves both, so it can reach the card.
-    fn update_map_card(&mut self, ui: &egui::Ui, rect: Rect, clusters: &[Cluster], hovered: Option<usize>) {
-        if self.map_card.as_ref().is_some_and(|card| card.zoom != self.map_zoom) {
+    fn update_map_card(&mut self, ui: &egui::Ui, rect: Rect, clusters: &[Cluster], hovered: Option<usize>) {        if self.map_card.as_ref().is_some_and(|card| card.zoom != self.map_zoom) {
             self.map_card = None;
         }
         let now = ui.input(|input| input.time);
@@ -686,7 +691,7 @@ impl PicassoApp {
         let photo = if self.selection.is_empty() { None } else { self.side_photo() };
         ui.horizontal(|ui| {
             if photo.is_some() {
-                let text = egui::RichText::new(format!("‹  {}", tr("In this area"))).color(ACCENT);
+                let text = egui::RichText::new(format!("‹  {}", tr("In this area"))).color(theme::accent());
                 if ui.add(egui::Button::new(text).frame(false)).clicked() {
                     self.selection.clear();
                     self.anchor = None;
@@ -1072,9 +1077,9 @@ pub(super) fn zoom_control(ui: &mut egui::Ui, top_left: Pos2, zoom: u8, step: f3
         }
     }
     painter.line_segment([Pos2::new(x, bar.top() + ZOOM_BAR_PAD), Pos2::new(x, bottom)], egui::Stroke::new(3.0, theme::hairline()));
-    painter.line_segment([knob, Pos2::new(x, bottom)], egui::Stroke::new(3.0, ACCENT));
+    painter.line_segment([knob, Pos2::new(x, bottom)], egui::Stroke::new(3.0, theme::accent()));
     let lit = response.hovered() || response.dragged();
-    painter.circle(knob, if lit { 6.5 } else { 5.5 }, ACCENT, egui::Stroke::new(2.0, Color32::WHITE));
+    painter.circle(knob, if lit { 6.5 } else { 5.5 }, theme::accent(), egui::Stroke::new(2.0, Color32::WHITE));
     next.map(|level| level.clamp(MIN_ZOOM, MAX_ZOOM)).filter(|level| *level != zoom)
 }
 
@@ -1469,7 +1474,7 @@ fn label_style(kind: LabelKind) -> (f32, Color32) {
         LabelKind::Town => (12.5, Color32::from_rgb(0x33, 0x33, 0x33)),
         LabelKind::Village => (11.5, Color32::from_rgb(0x33, 0x33, 0x33)),
         LabelKind::Suburb => (10.5, Color32::from_rgb(0x55, 0x55, 0x55)),
-        LabelKind::Water => (11.5, Color32::from_rgb(0x49, 0x5E, 0x91)),
+        LabelKind::Water => (11.5, Color32::from_rgb(0x2F, 0x66, 0x70)),
         LabelKind::Road => (10.5, Color32::from_rgb(0x76, 0x65, 0x55)),
     }
 }

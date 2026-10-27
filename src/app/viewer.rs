@@ -596,7 +596,7 @@ impl PicassoApp {
                         theme::paint_edit_mark(ui.painter(), rect.right_top() + Vec2::new(-10.0, 10.0), 7.5);
                     }
                     if index == current {
-                        ui.painter().rect_stroke(rect, 6, egui::Stroke::new(2.0, ACCENT), egui::StrokeKind::Outside);
+                        ui.painter().rect_stroke(rect, 6, egui::Stroke::new(2.0, theme::accent()), egui::StrokeKind::Outside);
                     }
                     if response.clicked() {
                         self.set_index(index, true);

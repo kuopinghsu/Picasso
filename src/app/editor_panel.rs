@@ -15,7 +15,7 @@ use crate::photo_info::Histogram;
 use crate::types::Photo;
 
 use super::editor::{Compare, EditSession, Live, Tool, ASPECTS, EXPORT_EDGES, EXPORT_FORMATS, GUIDES};
-use super::theme::{self, Icon, ACCENT, WHITE};
+use super::theme::{self, Icon, WHITE};
 use super::PicassoApp;
 
 const PANEL_W: f32 = 276.0;
@@ -312,7 +312,7 @@ fn segmented(ui: &mut egui::Ui, items: &[Item], width: f32) -> Option<usize> {
     let painter = ui.painter().clone();
     painter.rect_filled(rect, theme::RADIUS + 1, theme::well());
     let part_w = (width - 4.0) / items.len() as f32;
-    let raised = if theme::is_dark() { Color32::from_rgb(0x38, 0x3B, 0x41) } else { theme::bg() };
+    let raised = if theme::is_dark() { Color32::from_rgb(0x35, 0x3F, 0x42) } else { theme::bg() };
     let mut clicked = None;
     for (index, item) in items.iter().enumerate() {
         let part = egui::Rect::from_min_size(rect.min + Vec2::new(2.0 + part_w * index as f32, 2.0), Vec2::new(part_w, height - 4.0));
@@ -476,7 +476,7 @@ fn develop_slider(ui: &mut egui::Ui, value: &mut f32, range: RangeInclusive<f32>
     };
     if (knob - start).abs() > 0.5 {
         let fill = egui::Rect::from_x_y_ranges(start.min(knob)..=start.max(knob), rail.y_range());
-        painter.rect_filled(fill, RAIL_HEIGHT / 2.0, ACCENT);
+        painter.rect_filled(fill, RAIL_HEIGHT / 2.0, theme::accent());
     }
     let grow = if response.dragged() || response.hovered() { 1.0 } else { 0.0 };
     let center = egui::pos2(knob, y);
@@ -487,17 +487,17 @@ fn develop_slider(ui: &mut egui::Ui, value: &mut f32, range: RangeInclusive<f32>
 
 fn badge_fill() -> Color32 {
     if theme::is_dark() {
-        Color32::from_gray(64)
+        Color32::from_rgb(0x3C, 0x45, 0x48)
     } else {
-        Color32::from_gray(226)
+        Color32::from_rgb(0xE3, 0xE1, 0xDB)
     }
 }
 
 fn rail_fill() -> Color32 {
     if theme::is_dark() {
-        Color32::from_gray(72)
+        Color32::from_rgb(0x44, 0x4E, 0x52)
     } else {
-        Color32::from_gray(212)
+        Color32::from_rgb(0xD5, 0xD3, 0xCC)
     }
 }
 
@@ -698,7 +698,7 @@ fn presets_section(ui: &mut egui::Ui, session: &mut EditSession, draft: &mut Dra
     let last = context.last_preset.as_ref().map(|(name, _)| name.as_str());
     if let Some((name, patch)) = &context.last_preset {
         ui.horizontal(|ui| {
-            ui.label(RichText::new(presets::display_name(name)).size(12.0).color(ACCENT));
+            ui.label(RichText::new(presets::display_name(name)).size(12.0).color(theme::accent()));
         });
         let mut percent = session.preset_amount * 100.0;
         slider_header(ui, tr("Amount"), None, false, &format!("{percent:.0}%"), true);

@@ -53,12 +53,11 @@ const PAD: f32 = 18.0;
 /// Seconds the charts take to grow in.
 const GROW: f64 = 0.6;
 const GREEN: Color32 = Color32::from_rgb(0x10, 0xB9, 0x81);
-const ORANGE: Color32 = Color32::from_rgb(0xF5, 0x9E, 0x0B);
-const PINK: Color32 = Color32::from_rgb(0xEC, 0x48, 0x99);
-const TEAL: Color32 = Color32::from_rgb(0x14, 0xB8, 0xA6);
-const RED: Color32 = Color32::from_rgb(0xEF, 0x44, 0x44);
+const ROSE: Color32 = Color32::from_rgb(0xE0, 0x60, 0x7E);
+const SKY: Color32 = Color32::from_rgb(0x3B, 0x8F, 0xD9);
+const RED: Color32 = theme::DANGER;
 /// Colors of a donut's slices, in order.
-const SLICE_COLORS: [Color32; SLICES] = [ACCENT, TEAL, ORANGE, PINK, theme::ALBUM];
+const SLICE_COLORS: [Color32; SLICES] = [ACCENT, SKY, theme::GOLD, ROSE, theme::ALBUM];
 
 /// A photo shown on a card.
 #[derive(Clone)]
@@ -446,7 +445,7 @@ impl PicassoApp {
             if index == 0 {
                 self.places_card(ui, scope, go);
             } else {
-                card_title(ui, Mark::Globe, PINK, tr("Travel"), None);
+                card_title(ui, Mark::Globe, theme::GOLD, tr("Travel"), None);
                 if self.travel_card(ui, scope.travel, scope.year) {
                     *go = Some(Go::TravelMap);
                 }
@@ -497,7 +496,7 @@ impl PicassoApp {
                 title: super::photo_count(day.count),
                 sub: format_day(day.at),
                 cover: &day.cover,
-                tint: ACCENT,
+                tint: theme::accent(),
                 query: day_query(day.at),
             });
         }
@@ -517,7 +516,7 @@ impl PicassoApp {
                 title: format_month(time.year(), time.month()),
                 sub: super::photo_count(month.count),
                 cover: &month.cover,
-                tint: ORANGE,
+                tint: theme::GOLD,
                 query: Some(time.format("%Y-%m").to_string()),
             });
         }
@@ -604,7 +603,7 @@ impl PicassoApp {
         let stats = scope.stats;
         let total = stats.photos + stats.videos;
         let count = (!stats.places.is_empty()).then(|| trf(if stats.places.len() == 1 { "{} place" } else { "{} places" }, &[&grouped(stats.places.len())]));
-        card_title(ui, Mark::Pin, RED, tr("Places"), count.as_deref());
+        card_title(ui, Mark::Pin, theme::PIN, tr("Places"), count.as_deref());
         ui.horizontal(|ui| {
             ui.label(RichText::new(trf("{}% of photos have a location", &[&percent(stats.geotagged, total)])).size(13.0).color(theme::text()));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -612,7 +611,7 @@ impl PicassoApp {
             });
         });
         let (bar, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 6.0), Sense::hover());
-        meter(ui.painter(), bar, stats.geotagged as f32 / total.max(1) as f32 * scope.grow, RED);
+        meter(ui.painter(), bar, stats.geotagged as f32 / total.max(1) as f32 * scope.grow, theme::PIN);
         if !self.tracks.is_empty() {
             let meters: f64 = self.tracks.iter().map(|track| track.meters).sum();
             let count = trf(if self.tracks.len() == 1 { "{} track" } else { "{} tracks" }, &[&self.tracks.len()]);
@@ -657,7 +656,7 @@ impl PicassoApp {
             return false;
         }
         let painter = ui.painter().clone();
-        self.photo_tile(ui, &painter, rect, &place.cover, RADIUS, RED);
+        self.photo_tile(ui, &painter, rect, &place.cover, RADIUS, theme::PIN);
         let inner = rect.shrink(10.0);
         let line = format!("{} · {}", grouped(place.count), date_span([place.first, place.last].into_iter()));
         let sub = truncated(&painter, line, 11.0, Color32::from_white_alpha(225), inner.width());
@@ -768,7 +767,7 @@ fn sparkline(ui: &mut egui::Ui, rect: Rect, years: &[(i32, usize)], chosen: Opti
     let painter = ui.painter();
     let mut area = Mesh::default();
     for (index, point) in points.iter().enumerate() {
-        area.colored_vertex(*point, ACCENT.gamma_multiply(0.22));
+        area.colored_vertex(*point, theme::accent().gamma_multiply(0.22));
         area.colored_vertex(Pos2::new(point.x, plot.bottom()), Color32::TRANSPARENT);
         if index > 0 {
             let at = 2 * index as u32 - 2;
@@ -777,14 +776,14 @@ fn sparkline(ui: &mut egui::Ui, rect: Rect, years: &[(i32, usize)], chosen: Opti
         }
     }
     painter.add(Shape::mesh(area));
-    painter.add(Shape::line(points.clone(), Stroke::new(2.0, ACCENT)));
+    painter.add(Shape::line(points.clone(), Stroke::new(2.0, theme::accent())));
     let hovered = response.hover_pos().map(|pos| (((pos.x - plot.left()) / step).round().max(0.0) as usize).min(years.len() - 1));
     if let Some(index) = hovered {
         painter.vline(points[index].x, plot.y_range(), Stroke::new(1.0, theme::hairline()));
     }
     for (index, (year, _)) in years.iter().enumerate() {
         if chosen == Some(*year) || hovered == Some(index) {
-            painter.circle(points[index], 4.5, card_fill(), Stroke::new(2.0, ACCENT));
+            painter.circle(points[index], 4.5, card_fill(), Stroke::new(2.0, theme::accent()));
         }
     }
     let index = hovered?;
@@ -868,7 +867,7 @@ fn tiles(ui: &mut egui::Ui, scope: &Scope) {
     let first_year = scope.all.years.first().map(|(year, _)| *year);
     let mut list = vec![Tile {
         mark: Mark::Photo,
-        tint: ACCENT,
+        tint: theme::accent(),
         value: grouped(stats.photos),
         label: tr("Photos").into(),
         note: match (scope.year, first_year) {
@@ -878,28 +877,28 @@ fn tiles(ui: &mut egui::Ui, scope: &Scope) {
         },
     }];
     if stats.videos > 0 {
-        list.push(Tile { mark: Mark::Video, tint: PINK, value: grouped(stats.videos), label: tr("Videos").into(), note: change(stats.videos as f64, |totals| totals.videos as f64) });
+        list.push(Tile { mark: Mark::Video, tint: ROSE, value: grouped(stats.videos), label: tr("Videos").into(), note: change(stats.videos as f64, |totals| totals.videos as f64) });
     }
     list.extend([
         Tile { mark: Mark::Calendar, tint: GREEN, value: grouped(stats.days.len()), label: tr("Days with photos").into(), note: change(stats.days.len() as f64, |totals| totals.days as f64) },
         Tile { mark: Mark::Storage, tint: theme::ALBUM, value: format_bytes(stats.bytes), label: tr("Total size").into(), note: change(stats.bytes as f64, |totals| totals.bytes as f64) },
         Tile {
             mark: Mark::Pin,
-            tint: RED,
+            tint: theme::PIN,
             value: format!("{}%", percent(stats.geotagged, total)),
             label: tr("With a location").into(),
             note: Note::Text(trf("{} of {} photos", &[&grouped(stats.geotagged), &grouped(total)])),
         },
         Tile {
             mark: Mark::Camera,
-            tint: ORANGE,
+            tint: theme::GOLD,
             value: grouped(stats.cameras.rows.len()),
             label: tr("Cameras").into(),
             note: stats.cameras.rows.first().map_or(Note::None, |(name, _)| Note::Text(name.clone())),
         },
         Tile {
             mark: Mark::Lens,
-            tint: TEAL,
+            tint: SKY,
             value: grouped(stats.lenses.rows.len()),
             label: tr("Lenses").into(),
             note: stats.lenses.rows.first().map_or(Note::None, |(name, _)| Note::Text(name.clone())),
@@ -1020,7 +1019,7 @@ fn calendar(ui: &mut egui::Ui, days: &HashMap<i32, usize>, year: i32, grow: f32)
     x -= 6.0;
     for level in (0..5).rev() {
         x -= swatch;
-        let color = if level == 0 { theme::well() } else { ACCENT.gamma_multiply(heat_alpha((level - 1) as f32 / 3.0)) };
+        let color = if level == 0 { theme::well() } else { theme::accent().gamma_multiply(heat_alpha((level - 1) as f32 / 3.0)) };
         painter.rect_filled(Rect::from_min_size(Pos2::new(x, foot), Vec2::splat(swatch)), 2, color);
         x -= 3.0;
     }
@@ -1046,7 +1045,7 @@ fn timeline_card(ui: &mut egui::Ui, scope: &Scope, go: &mut Option<Go>) {
     let stats = scope.stats;
     match scope.year {
         None => {
-            card_title(ui, Mark::Chart, ACCENT, tr("Photos per year"), None);
+            card_title(ui, Mark::Chart, theme::accent(), tr("Photos per year"), None);
             if stats.years.is_empty() {
                 muted(ui, tr("Unknown date"));
                 return;
@@ -1060,7 +1059,7 @@ fn timeline_card(ui: &mut egui::Ui, scope: &Scope, go: &mut Option<Go>) {
             columns(ui, &month_bars(&stats.months), 90.0, scope.grow, None);
         }
         Some(year) => {
-            card_title(ui, Mark::Chart, ACCENT, tr("Photos per month"), Some(&year.to_string()));
+            card_title(ui, Mark::Chart, theme::accent(), tr("Photos per month"), Some(&year.to_string()));
             if let Some(index) = columns(ui, &month_bars(&stats.months), 220.0, scope.grow, Some(tr("Show these photos"))) {
                 *go = Some(Go::Search(format!("{year}-{:02}", index + 1)));
             }
@@ -1074,7 +1073,7 @@ fn month_bars(months: &[usize; 12]) -> Vec<(String, usize)> {
 
 /// When in the week photos are taken, by weekday and hour.
 fn rhythm_card(ui: &mut egui::Ui, scope: &Scope) {
-    card_title(ui, Mark::Clock, PINK, tr("When you shoot"), None);
+    card_title(ui, Mark::Clock, ROSE, tr("When you shoot"), None);
     let grid = &scope.stats.week_hours;
     let busiest = (0..7).flat_map(|day| (0..24).map(move |hour| (day, hour, grid[day][hour]))).max_by_key(|(_, _, count)| *count);
     let Some((day, hour, count)) = busiest.filter(|(_, _, count)| *count > 0) else {
@@ -1141,7 +1140,7 @@ const CAMERAS: RankedText = RankedText {
     key: "cameras",
     title: "Cameras",
     mark: Mark::Camera,
-    tint: ORANGE,
+    tint: theme::GOLD,
     unknown: "{} without camera info",
     empty: "Photos taken with a camera that records it show up here.",
 };
@@ -1150,7 +1149,7 @@ const LENSES: RankedText = RankedText {
     key: "lenses",
     title: "Lenses",
     mark: Mark::Lens,
-    tint: TEAL,
+    tint: SKY,
     unknown: "{} without lens info",
     empty: "Photos with a recorded lens show up here.",
 };
@@ -1252,14 +1251,14 @@ fn mix_card(ui: &mut egui::Ui, scope: &Scope) {
     let size = ((ui.available_width() - 28.0) / 2.0).clamp(90.0, 136.0);
     ui.horizontal_top(|ui| {
         ui.spacing_mut().item_spacing.x = 28.0;
-        mix_chart(ui, size, scope.grow, &grouped(total), [(ACCENT, tr("Photos"), stats.photos), (PINK, tr("Videos"), stats.videos)].map(|(color, name, count)| (share(count), color, name, count)));
+        mix_chart(ui, size, scope.grow, &grouped(total), [(theme::accent(), tr("Photos"), stats.photos), (ROSE, tr("Videos"), stats.videos)].map(|(color, name, count)| (share(count), color, name, count)));
         let without = total - stats.geotagged;
         mix_chart(
             ui,
             size,
             scope.grow,
             &format!("{}%", percent(stats.geotagged, total)),
-            [(RED, tr("With a location"), stats.geotagged), (other_color(), tr("Without a location"), without)].map(|(color, name, count)| (share(count), color, name, count)),
+            [(theme::PIN, tr("With a location"), stats.geotagged), (other_color(), tr("Without a location"), without)].map(|(color, name, count)| (share(count), color, name, count)),
         );
     });
 }
@@ -1286,7 +1285,7 @@ fn mix_chart(ui: &mut egui::Ui, size: f32, grow: f32, value: &str, parts: [(f32,
 
 fn focal_card(ui: &mut egui::Ui, scope: &Scope) {
     let stats = scope.stats;
-    card_title(ui, Mark::Focal, TEAL, tr("Focal length"), None);
+    card_title(ui, Mark::Focal, SKY, tr("Focal length"), None);
     let known: usize = stats.focal.iter().sum();
     if known == 0 {
         muted(ui, tr("Photos with a recorded focal length show up here."));
@@ -1507,9 +1506,9 @@ fn columns(ui: &mut egui::Ui, bars: &[(String, usize)], height: f32, grow: f32, 
         let bar = Rect::from_min_max(Pos2::new(left, plot.bottom() - h), Pos2::new(left + slot - gap, plot.bottom()));
         let lit = hovered == Some(index);
         let color = match hovered {
-            None => ACCENT.gamma_multiply(0.85),
-            Some(_) if lit => ACCENT,
-            Some(_) => ACCENT.gamma_multiply(0.35),
+            None => theme::accent().gamma_multiply(0.85),
+            Some(_) if lit => theme::accent(),
+            Some(_) => theme::accent().gamma_multiply(0.35),
         };
         let radius = ((slot - gap) / 2.0).min(5.0) as u8;
         painter.rect_filled(bar, CornerRadius { nw: radius, ne: radius, sw: 0, se: 0 }, color);
@@ -1627,7 +1626,7 @@ fn hover_card(ui: &egui::Ui, anchor: Pos2, title: &str, body: &str, foot: Option
     let painter = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::unique("stats-hover")));
     let title = painter.layout_no_wrap(title.to_string(), FontId::proportional(12.5), theme::text());
     let body = painter.layout_no_wrap(body.to_string(), FontId::proportional(11.5), theme::muted());
-    let foot = foot.map(|text| painter.layout_no_wrap(text.to_string(), FontId::proportional(11.0), ACCENT));
+    let foot = foot.map(|text| painter.layout_no_wrap(text.to_string(), FontId::proportional(11.0), theme::accent()));
     let inner_w = title.size().x.max(body.size().x).max(foot.as_ref().map_or(0.0, |foot| foot.size().x));
     let inner_h = title.size().y + 2.0 + body.size().y + foot.as_ref().map_or(0.0, |foot| foot.size().y + 2.0);
     let size = Vec2::new(inner_w + 20.0, inner_h + 14.0);
@@ -1641,7 +1640,7 @@ fn hover_card(ui: &egui::Ui, anchor: Pos2, title: &str, body: &str, foot: Option
     painter.add(theme::card_shadow().as_shape(rect, 8));
     painter.rect(rect, 8, popup_fill(), Stroke::new(1.0, theme::hairline()), StrokeKind::Inside);
     let mut y = rect.top() + 7.0;
-    for (galley, color) in [Some((title, theme::text())), Some((body, theme::muted())), foot.map(|foot| (foot, ACCENT))].into_iter().flatten() {
+    for (galley, color) in [Some((title, theme::text())), Some((body, theme::muted())), foot.map(|foot| (foot, theme::accent()))].into_iter().flatten() {
         let height = galley.size().y;
         painter.galley(Pos2::new(rect.left() + 10.0, y), galley, color);
         y += height + 2.0;
@@ -1663,7 +1662,7 @@ fn heat(count: usize, most: usize) -> Color32 {
         return theme::well();
     }
     let t = if most <= 1 { 1.0 } else { ((count as f32).ln() / (most as f32).ln()).clamp(0.0, 1.0) };
-    ACCENT.gamma_multiply(heat_alpha((t * 3.0).round() / 3.0))
+    theme::accent().gamma_multiply(heat_alpha((t * 3.0).round() / 3.0))
 }
 
 fn heat_alpha(level: f32) -> f32 {
@@ -1719,7 +1718,7 @@ fn card_fill() -> Color32 {
 
 fn popup_fill() -> Color32 {
     if theme::is_dark() {
-        Color32::from_rgb(0x26, 0x28, 0x2D)
+        Color32::from_rgb(0x24, 0x2C, 0x2F)
     } else {
         WHITE
     }
@@ -1728,9 +1727,9 @@ fn popup_fill() -> Color32 {
 /// The slice of everything else in a donut.
 fn other_color() -> Color32 {
     if theme::is_dark() {
-        Color32::from_rgb(0x4B, 0x50, 0x58)
+        Color32::from_rgb(0x4A, 0x54, 0x58)
     } else {
-        Color32::from_rgb(0xC7, 0xCC, 0xD4)
+        Color32::from_rgb(0xCB, 0xC8, 0xC0)
     }
 }
 
@@ -1772,7 +1771,7 @@ fn bar_row(ui: &mut egui::Ui, name: &str, count: usize, most: usize, total: usiz
     painter.galley(Pos2::new(inner.right() - figure.size().x, inner.top() + 1.0), figure, theme::muted());
     painter.galley(inner.min, title, theme::text());
     let track = Rect::from_min_max(Pos2::new(inner.left(), inner.bottom() - 6.0), inner.max);
-    meter(painter, track, count as f32 / most.max(1) as f32, ACCENT);
+    meter(painter, track, count as f32 / most.max(1) as f32, theme::accent());
     response.clicked()
 }
 
@@ -1796,7 +1795,7 @@ fn more_line(ui: &mut egui::Ui, more: usize, photos: usize) {
 /// The line under a ranked list that shows all of it or cuts it short
 /// again. Returns whether it was clicked.
 fn more_link(ui: &mut egui::Ui, text: String, hint: &str) -> bool {
-    ui.add(egui::Label::new(RichText::new(text).size(11.5).color(ACCENT)).sense(Sense::click()))
+    ui.add(egui::Label::new(RichText::new(text).size(11.5).color(theme::accent())).sense(Sense::click()))
         .on_hover_cursor(egui::CursorIcon::PointingHand)
         .on_hover_text(hint)
         .clicked()

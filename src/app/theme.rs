@@ -7,7 +7,15 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use eframe::egui::{self, Color32, CornerRadius, FontId, Pos2, Rect, Shadow, Stroke, TextStyle, Vec2};
 
-pub const ACCENT: Color32 = Color32::from_rgb(0x2F, 0x6F, 0xEB);
+/// Lagoon teal, dark enough for white text on it: filled buttons and marks
+/// over photos or map tiles, which look the same in either theme. For text
+/// and marks on the page itself, use [`accent`].
+pub const ACCENT: Color32 = Color32::from_rgb(0x09, 0x72, 0x7B);
+/// Golden-hour amber: places with photos on the travel map, and the marks
+/// that lead there.
+pub const GOLD: Color32 = Color32::from_rgb(0xE9, 0xA3, 0x20);
+/// Coral red of map pins and of everything about where photos were taken.
+pub const PIN: Color32 = Color32::from_rgb(0xE5, 0x53, 0x3D);
 pub const STAR: Color32 = Color32::from_rgb(0xF5, 0xB4, 0x00);
 pub const FOLDER: Color32 = Color32::from_rgb(0xF2, 0xB5, 0x3B);
 pub const ALBUM: Color32 = Color32::from_rgb(0x8B, 0x5C, 0xF6);
@@ -86,35 +94,39 @@ struct Palette {
     hairline: Color32,
 }
 
+/// Paper and sand: near-neutral so photos keep their color, a touch warm.
 const LIGHT: Palette = Palette {
-    bg: Color32::from_rgb(0xFF, 0xFF, 0xFF),
-    toolbar: Color32::from_rgb(0xFF, 0xFF, 0xFF),
-    tray: Color32::from_rgb(0xFA, 0xFA, 0xFB),
-    sidebar: Color32::from_rgb(0xF6, 0xF7, 0xF9),
-    stage: Color32::from_rgb(0xE9, 0xEB, 0xEE),
-    well: Color32::from_rgb(0xEC, 0xEE, 0xF2),
-    select: Color32::from_rgb(0xE4, 0xED, 0xFD),
-    hover: Color32::from_rgb(0xEC, 0xEE, 0xF2),
-    placeholder: Color32::from_rgb(0xEE, 0xF0, 0xF3),
-    text: Color32::from_rgb(0x1F, 0x23, 0x28),
-    muted: Color32::from_rgb(0x6B, 0x72, 0x80),
-    hairline: Color32::from_rgb(0xE4, 0xE6, 0xEB),
+    bg: Color32::from_rgb(0xFD, 0xFD, 0xFB),
+    toolbar: Color32::from_rgb(0xFD, 0xFD, 0xFB),
+    tray: Color32::from_rgb(0xF8, 0xF7, 0xF4),
+    sidebar: Color32::from_rgb(0xF5, 0xF4, 0xF0),
+    stage: Color32::from_rgb(0xE8, 0xE7, 0xE3),
+    well: Color32::from_rgb(0xEC, 0xEB, 0xE6),
+    select: Color32::from_rgb(0xDC, 0xEF, 0xF0),
+    hover: Color32::from_rgb(0xED, 0xEC, 0xE7),
+    placeholder: Color32::from_rgb(0xEE, 0xED, 0xE9),
+    text: Color32::from_rgb(0x1C, 0x21, 0x24),
+    muted: Color32::from_rgb(0x68, 0x6D, 0x71),
+    hairline: Color32::from_rgb(0xE3, 0xE1, 0xDB),
 };
 
+/// Night sea: charcoal with a little blue-green, the same steps as light.
 const DARK: Palette = Palette {
-    bg: Color32::from_rgb(0x13, 0x14, 0x17),
-    toolbar: Color32::from_rgb(0x17, 0x18, 0x1B),
-    tray: Color32::from_rgb(0x17, 0x18, 0x1B),
-    sidebar: Color32::from_rgb(0x1B, 0x1C, 0x20),
-    stage: Color32::from_rgb(0x0E, 0x0F, 0x11),
-    well: Color32::from_rgb(0x24, 0x26, 0x2A),
-    select: Color32::from_rgb(0x22, 0x36, 0x5E),
-    hover: Color32::from_rgb(0x2A, 0x2C, 0x31),
-    placeholder: Color32::from_rgb(0x26, 0x28, 0x2C),
-    text: Color32::from_rgb(0xE8, 0xEA, 0xED),
-    muted: Color32::from_rgb(0x9A, 0xA0, 0xA8),
-    hairline: Color32::from_rgb(0x2C, 0x2E, 0x33),
+    bg: Color32::from_rgb(0x11, 0x15, 0x17),
+    toolbar: Color32::from_rgb(0x15, 0x1A, 0x1C),
+    tray: Color32::from_rgb(0x15, 0x1A, 0x1C),
+    sidebar: Color32::from_rgb(0x19, 0x1F, 0x22),
+    stage: Color32::from_rgb(0x0C, 0x0F, 0x10),
+    well: Color32::from_rgb(0x22, 0x29, 0x2C),
+    select: Color32::from_rgb(0x10, 0x39, 0x3D),
+    hover: Color32::from_rgb(0x28, 0x30, 0x33),
+    placeholder: Color32::from_rgb(0x24, 0x2B, 0x2E),
+    text: Color32::from_rgb(0xE6, 0xEA, 0xEB),
+    muted: Color32::from_rgb(0x98, 0xA3, 0xA7),
+    hairline: Color32::from_rgb(0x2A, 0x32, 0x35),
 };
+
+const ACCENT_DARK: Color32 = Color32::from_rgb(0x3F, 0xB5, 0xBF);
 
 static DARK_ACTIVE: AtomicBool = AtomicBool::new(false);
 
@@ -165,6 +177,15 @@ pub fn muted() -> Color32 {
 }
 pub fn hairline() -> Color32 {
     palette().hairline
+}
+/// The accent for text, outlines, and charts on the page: [`ACCENT`] on
+/// light, a brighter teal on dark so small text and thin lines still read.
+pub fn accent() -> Color32 {
+    if is_dark() {
+        ACCENT_DARK
+    } else {
+        ACCENT
+    }
 }
 
 /// Translucent tint that stands out from the current background: white on
@@ -220,18 +241,18 @@ fn visuals(dark: bool) -> egui::Visuals {
         color: Color32::from_black_alpha(if dark { 90 } else { 28 }),
     };
     visuals.menu_corner_radius = CornerRadius::same(8);
-    visuals.extreme_bg_color = if dark { Color32::from_rgb(0x22, 0x24, 0x28) } else { WHITE };
-    visuals.faint_bg_color = if dark { Color32::from_rgb(0x22, 0x24, 0x28) } else { p.sidebar };
-    visuals.selection.bg_fill = if dark { Color32::from_rgb(0x2B, 0x4C, 0x8F) } else { p.select };
-    visuals.selection.stroke = Stroke::new(1.0, ACCENT);
-    visuals.hyperlink_color = if dark { Color32::from_rgb(0x6C, 0xA6, 0xFF) } else { ACCENT };
+    visuals.extreme_bg_color = if dark { Color32::from_rgb(0x20, 0x27, 0x2A) } else { WHITE };
+    visuals.faint_bg_color = if dark { Color32::from_rgb(0x20, 0x27, 0x2A) } else { p.sidebar };
+    visuals.selection.bg_fill = if dark { Color32::from_rgb(0x17, 0x55, 0x5B) } else { p.select };
+    visuals.selection.stroke = Stroke::new(1.0, if dark { ACCENT_DARK } else { ACCENT });
+    visuals.hyperlink_color = if dark { ACCENT_DARK } else { ACCENT };
     visuals.slider_trailing_fill = true;
 
     // Fill and outline of buttons and fields: resting, hovered, pressed.
     let [rest, rest_fill, rest_line, over, over_line, press, press_line] = if dark {
-        [(0x26, 0x28, 0x2C), (0x30, 0x32, 0x37), (0x30, 0x32, 0x37), (0x32, 0x35, 0x3A), (0x41, 0x45, 0x4C), (0x3B, 0x3F, 0x45), (0x4A, 0x4F, 0x57)]
+        [(0x24, 0x2B, 0x2E), (0x2E, 0x36, 0x39), (0x2E, 0x36, 0x39), (0x31, 0x39, 0x3C), (0x41, 0x4B, 0x4F), (0x3A, 0x44, 0x47), (0x4A, 0x55, 0x59)]
     } else {
-        [(0xF3, 0xF4, 0xF6), (0xE4, 0xE6, 0xEB), (0xDA, 0xDD, 0xE2), (0xEC, 0xEE, 0xF2), (0xC9, 0xCE, 0xD6), (0xDF, 0xE3, 0xE9), (0xB9, 0xC0, 0xCA)]
+        [(0xF1, 0xF0, 0xEC), (0xE3, 0xE1, 0xDB), (0xD8, 0xD6, 0xCF), (0xEB, 0xEA, 0xE5), (0xC8, 0xC6, 0xBE), (0xDE, 0xDC, 0xD5), (0xB8, 0xB5, 0xAC)]
     }
     .map(|(r, g, b)| Color32::from_rgb(r, g, b));
     let widgets = &mut visuals.widgets;
@@ -594,4 +615,37 @@ pub fn toolbar_frame(fill: Color32) -> egui::Frame {
     egui::Frame::new()
         .fill(fill)
         .inner_margin(egui::Margin::symmetric(14, 9))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// WCAG contrast ratio between two opaque colors, from 1 to 21.
+    fn contrast(a: Color32, b: Color32) -> f32 {
+        let luminance = |color: Color32| {
+            let linear = |channel: u8| {
+                let c = f32::from(channel) / 255.0;
+                if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
+            };
+            0.2126 * linear(color.r()) + 0.7152 * linear(color.g()) + 0.0722 * linear(color.b())
+        };
+        let (a, b) = (luminance(a), luminance(b));
+        (a.max(b) + 0.05) / (a.min(b) + 0.05)
+    }
+
+    #[test]
+    fn both_themes_keep_text_readable() {
+        for (name, p, accent) in [("light", &LIGHT, ACCENT), ("dark", &DARK, ACCENT_DARK)] {
+            for (place, fill) in [("bg", p.bg), ("sidebar", p.sidebar), ("toolbar", p.toolbar), ("select", p.select)] {
+                assert!(contrast(p.text, fill) >= 7.0, "{name} text on {place}");
+                assert!(contrast(accent, fill) >= 4.5, "{name} accent text on {place}");
+            }
+            for (place, fill) in [("bg", p.bg), ("sidebar", p.sidebar), ("toolbar", p.toolbar)] {
+                assert!(contrast(p.muted, fill) >= 4.5, "{name} muted on {place}");
+            }
+        }
+        assert!(contrast(WHITE, ACCENT) >= 4.5, "button text");
+        assert!(contrast(WHITE, DANGER) >= 4.0, "danger button text");
+    }
 }

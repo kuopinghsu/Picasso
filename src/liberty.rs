@@ -1,4 +1,5 @@
-//! OpenFreeMap vector tiles drawn in the colors of its Liberty style.
+//! OpenFreeMap vector tiles drawn in the colors of its Liberty style, with
+//! the water in the aqua of the app's travel colors.
 //!
 //! Shapes are painted into the tile image. Names come back as labels, which
 //! the window draws on top with its own fonts, so they stay sharp, read in
@@ -147,7 +148,7 @@ pub fn draw(data: &[u8], zoom: u8, part: Part, names: &[&str]) -> Option<Drawn> 
     if let Some(park) = layer("park") {
         canvas.fill(park, |_| true, rgba(0xD8, 0xE8, 0xC8, 0.7));
     }
-    let water = rgb(0x9E, 0xBD, 0xFF);
+    let water = rgb(0xAA, 0xD4, 0xDB);
     if let Some(waters) = layer("water") {
         canvas.fill(waters, |_| true, water);
     }
@@ -567,7 +568,7 @@ mod tests {
             let at = ((y * TILE_SIZE + x) * 4) as usize;
             [drawn.rgba[at], drawn.rgba[at + 1], drawn.rgba[at + 2], drawn.rgba[at + 3]]
         };
-        assert_eq!(pixel(100, 100), [0x9E, 0xBD, 0xFF, 255], "water");
+        assert_eq!(pixel(100, 100), [0xAA, 0xD4, 0xDB, 255], "water");
         assert_eq!(pixel(400, 400), [0xF8, 0xF4, 0xF0, 255], "land");
         assert_eq!(drawn.labels.len(), 1);
         assert_eq!(drawn.labels[0].text, "Taipei");

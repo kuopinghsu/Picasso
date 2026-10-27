@@ -464,7 +464,7 @@ impl PicassoApp {
         }
         for &(year, at, _) in &labels {
             let (size, color) = if year == year_now {
-                (12.5, ACCENT)
+                (12.5, theme::accent())
             } else {
                 (11.5, theme::muted().gamma_multiply(0.8 + 0.2 * awake))
             };
@@ -483,9 +483,9 @@ impl PicassoApp {
                 Pos2::new(line_x + half_w, (handle_bottom + grow).min(track.bottom())),
             );
             if self.strip_grab.is_some() {
-                painter.rect_filled(handle.expand(3.0), 6, ACCENT.gamma_multiply(0.2));
+                painter.rect_filled(handle.expand(3.0), 6, theme::accent().gamma_multiply(0.2));
             }
-            painter.rect_filled(handle, half_w, ACCENT.gamma_multiply(0.75 + 0.25 * awake));
+            painter.rect_filled(handle, half_w, theme::accent().gamma_multiply(0.75 + 0.25 * awake));
         }
 
         let tip_x = rect.left() + 2.0;
@@ -601,8 +601,7 @@ impl PicassoApp {
         if response.hovered() {
             painter.add(theme::card_shadow().as_shape(image_rect, THUMB_RADIUS));
         }
-        let backdrop = if theme::is_dark() { Color32::from_rgb(0x2A, 0x33, 0x3D) } else { super::places::MAP_BACKDROP };
-        painter.rect_filled(image_rect, THUMB_RADIUS, backdrop);
+        painter.rect_filled(image_rect, THUMB_RADIUS, super::places::map_backdrop());
         super::track_editor::paint_track_shape(painter, image_rect, &track.segments, track.bounds);
         painter.rect_stroke(image_rect, THUMB_RADIUS, egui::Stroke::new(1.0, Color32::from_black_alpha(18)), egui::StrokeKind::Inside);
         let pill = |text: String, left_top: Pos2| {

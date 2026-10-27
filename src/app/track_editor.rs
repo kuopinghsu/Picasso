@@ -17,7 +17,7 @@ use crate::track_edit::{self, EditPoint, Format, Loaded, Settings};
 use crate::types::{folder_label, format_duration, format_timestamp};
 
 use super::places::{
-    grouped, pinch_steps, truncated, wheel_steps, zoom_control, zoom_step, MapView, MAP_BACKDROP, MAX_ZOOM, MIN_ZOOM, ZOOM_BUTTON,
+    grouped, pinch_steps, truncated, wheel_steps, zoom_control, zoom_step, map_backdrop, MapView, MAX_ZOOM, MIN_ZOOM, ZOOM_BUTTON,
 };
 use super::theme::{self, ACCENT, DANGER, WHITE};
 use super::PicassoApp;
@@ -390,8 +390,7 @@ impl TrackEditor {
                         self.take_restored(restored);
                     }
                     self.revision += 1;
-                    self.framed = false;
-                }
+                    self.framed = false;                }
                 Err(err) => match restored {
                     // The edits are kept even when the track itself is gone.
                     Some(restored) => {
@@ -1048,7 +1047,7 @@ impl PicassoApp {
         }
 
         let painter = ui.painter_at(rect);
-        painter.rect_filled(rect, 0, MAP_BACKDROP);
+        painter.rect_filled(rect, 0, map_backdrop());
         self.paint_tiles(&painter, rect, editor.view);
         if editor.show_raw {
             let raw: Vec<Pos2> = editor.raw.iter().map(|point| editor.to_screen(rect, point.lat, point.lon)).collect();
@@ -1267,7 +1266,7 @@ fn track_header(ui: &mut egui::Ui, editor: &mut TrackEditor, close: &mut bool) {
                     badge(ui, &format_badge(&editor.path.to_string_lossy()));
                     if editor.dirty {
                         let (dot, _) = ui.allocate_exact_size(Vec2::splat(8.0), Sense::hover());
-                        ui.painter().circle_filled(dot.center(), 3.5, ACCENT);
+                        ui.painter().circle_filled(dot.center(), 3.5, theme::accent());
                     }
                 });
                 let folder = editor.path.parent().map(|dir| folder_label(&dir.to_string_lossy())).unwrap_or_default();
@@ -1552,7 +1551,7 @@ fn cleanup_section(ui: &mut egui::Ui, editor: &mut TrackEditor, config: &mut cra
         editor.settings_unsaved = true;
     }
     if editor.settings_from_file {
-        ui.label(RichText::new(tr("These settings were saved in the file.")).size(12.0).color(ACCENT));
+        ui.label(RichText::new(tr("These settings were saved in the file.")).size(12.0).color(theme::accent()));
     }
     panel_card().show(ui, |ui| {
         ui.set_width(ui.available_width());
@@ -1647,7 +1646,7 @@ fn elevation_profile(
     let hovered = response.hover_pos().and_then(pick);
     let picked = if response.clicked() || response.dragged() { response.interact_pointer_pos().and_then(pick) } else { None };
     if let Some(ele) = focus.and_then(|index| points.get(index).and_then(|point| point.ele.map(|ele| (index, ele)))) {
-        painter.circle(Pos2::new(x_of(ele.0), y_of(ele.1)), 4.5, ACCENT, Stroke::new(2.0, WHITE));
+        painter.circle(Pos2::new(x_of(ele.0), y_of(ele.1)), 4.5, theme::accent(), Stroke::new(2.0, WHITE));
     }
     if let Some((index, ele)) = hovered.or(map_hover).and_then(|index| points.get(index).and_then(|point| point.ele.map(|ele| (index, ele)))) {
         let pos = Pos2::new(x_of(index), y_of(ele));
@@ -1745,7 +1744,7 @@ enum Glyph {
 
 fn tool_button(ui: &mut egui::Ui, glyph: Glyph, selected: bool, hint: &str) -> egui::Response {
     let response = ui.add(egui::Button::selectable(selected, "").min_size(Vec2::splat(TOOL))).on_hover_text(hint);
-    theme_glyph(ui.painter(), glyph, response.rect.center(), if selected { ACCENT } else { theme::text() });
+    theme_glyph(ui.painter(), glyph, response.rect.center(), if selected { theme::accent() } else { theme::text() });
     response
 }
 

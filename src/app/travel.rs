@@ -40,8 +40,10 @@ const INSET: f32 = 12.0;
 /// skipped; a world view would otherwise draw a hundred thousand.
 const MIN_STEP: f32 = 0.8;
 /// Fill of a place with a single photo, and of the place with the most.
-const FEW: Color32 = Color32::from_rgb(0xE6, 0xB3, 0xCF);
-const MANY: Color32 = Color32::from_rgb(0x9C, 0x2F, 0x6A);
+/// Places with photos run from pale gold through [`theme::GOLD`] amber to
+/// bronze, warm against the sea and the stone of places without.
+const FEW: Color32 = Color32::from_rgb(0xFB, 0xDD, 0x8A);
+const MANY: Color32 = Color32::from_rgb(0xC2, 0x65, 0x0A);
 /// Where the globe faces before there are photos to face.
 const DEFAULT_FACING: [f32; 2] = [115.0, 20.0];
 /// Degrees a second the globe turns on its own after the map opens.
@@ -325,7 +327,16 @@ impl Summary {
 /// more, on a log scale so a few photos still show.
 fn shade(photos: usize, most: usize) -> Color32 {
     let t = if most <= 1 { 1.0 } else { ((photos as f32).ln() / (most as f32).ln()).clamp(0.0, 1.0) };
-    FEW.lerp_to_gamma(MANY, t)
+    ramp(t)
+}
+
+/// The shade `t` of the way from [`FEW`] to [`MANY`].
+fn ramp(t: f32) -> Color32 {
+    if t < 0.5 {
+        FEW.lerp_to_gamma(theme::GOLD, t * 2.0)
+    } else {
+        theme::GOLD.lerp_to_gamma(MANY, t * 2.0 - 1.0)
+    }
 }
 
 fn country_count(count: usize) -> String {
@@ -917,7 +928,7 @@ impl PicassoApp {
             let name = truncated(painter, tr(continent).to_string(), 12.0, color, name_w - 8.0);
             painter.galley(Pos2::new(row.left(), row.center().y - name.size().y / 2.0), name, color);
             let bar = Rect::from_min_max(Pos2::new(row.left() + name_w, row.center().y - 3.0), Pos2::new(row.right() - count_w, row.center().y + 3.0));
-            meter(painter, bar, visited as f32 / total.max(1) as f32, ACCENT);
+            meter(painter, bar, visited as f32 / total.max(1) as f32, theme::accent());
             painter.text(
                 Pos2::new(row.right(), row.center().y),
                 egui::Align2::RIGHT_CENTER,
@@ -1063,13 +1074,20 @@ fn legend(ui: &mut egui::Ui, at: Pos2, most: usize) {
     let title = painter.layout_no_wrap(tr("Photos").to_string(), FontId::proportional(11.5), theme::muted());
     painter.galley(inner.min, title, theme::muted());
     let bar = Rect::from_min_size(Pos2::new(inner.left(), inner.top() + 18.0), Vec2::new(inner.width(), 7.0));
+    const STOPS: u32 = 8;
     let mut mesh = Mesh::default();
-    mesh.colored_vertex(bar.left_top(), shade(1, most));
-    mesh.colored_vertex(bar.right_top(), shade(most, most));
-    mesh.colored_vertex(bar.right_bottom(), shade(most, most));
-    mesh.colored_vertex(bar.left_bottom(), shade(1, most));
-    mesh.add_triangle(0, 1, 2);
-    mesh.add_triangle(0, 2, 3);
+    for stop in 0..=STOPS {
+        let t = stop as f32 / STOPS as f32;
+        let color = if most <= 1 { MANY } else { ramp(t) };
+        let x = bar.left() + bar.width() * t;
+        mesh.colored_vertex(Pos2::new(x, bar.top()), color);
+        mesh.colored_vertex(Pos2::new(x, bar.bottom()), color);
+        if stop > 0 {
+            let i = 2 * stop;
+            mesh.add_triangle(i - 2, i - 1, i);
+            mesh.add_triangle(i - 1, i, i + 1);
+        }
+    }
     painter.add(mesh);
     let low = painter.layout_no_wrap("1".into(), FontId::proportional(11.0), theme::muted());
     let high = painter.layout_no_wrap(grouped(most), FontId::proportional(11.0), theme::muted());
@@ -1107,7 +1125,7 @@ fn hero(ui: &mut egui::Ui, summary: &Summary, width: f32) {
                 });
             });
             let (bar, _) = ui.allocate_exact_size(Vec2::new(width, 6.0), Sense::hover());
-            meter(ui.painter(), bar, summary.visited() as f32 / next as f32, ACCENT);
+            meter(ui.painter(), bar, summary.visited() as f32 / next as f32, theme::accent());
         }
         None => {
             ui.label(RichText::new(format!("✓ {}", tr("Every country"))).size(12.5).color(theme::text()));
@@ -1148,7 +1166,7 @@ fn ring(painter: &egui::Painter, center: Pos2, radius: f32, share: f32) {
             center + Vec2::angled(angle) * radius
         })
         .collect();
-    painter.add(Shape::line(points, Stroke::new(width, ACCENT)));
+    painter.add(Shape::line(points, Stroke::new(width, theme::accent())));
 }
 
 /// A continent with how many of its countries have photos, and a thin bar
@@ -1162,7 +1180,7 @@ fn continent_chip(ui: &mut egui::Ui, name: &str, visited: usize, total: usize, a
     let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
     let painter = ui.painter();
     let (fill, stroke) = if active {
-        (ACCENT.gamma_multiply(0.14), Stroke::new(1.2, ACCENT))
+        (theme::accent().gamma_multiply(0.14), Stroke::new(1.2, theme::accent()))
     } else if response.hovered() {
         (theme::hover(), Stroke::new(1.0, theme::hairline()))
     } else {
@@ -1173,7 +1191,7 @@ fn continent_chip(ui: &mut egui::Ui, name: &str, visited: usize, total: usize, a
     painter.galley(Pos2::new(rect.left() + 11.0, y), title.clone(), theme::text());
     painter.galley(Pos2::new(rect.right() - 11.0 - count.size().x, y + (title.size().y - count.size().y) / 2.0), count, theme::muted());
     let bar = Rect::from_min_size(Pos2::new(rect.left() + 11.0, rect.bottom() - 9.0), Vec2::new(rect.width() - 22.0, 3.0));
-    meter(painter, bar, visited as f32 / total.max(1) as f32, ACCENT);
+    meter(painter, bar, visited as f32 / total.max(1) as f32, theme::accent());
     response
 }
 
@@ -1220,23 +1238,23 @@ fn country_row(ui: &mut egui::Ui, name: &str, years: &str, color: Color32, photo
 fn paint_map(travel: &Travel, view: View, hover: Option<usize>, selected: Option<usize>) -> Vec<Shape> {
     let world = world();
     let dark = theme::is_dark();
-    let sea = if dark { Color32::from_rgb(0x17, 0x2B, 0x3D) } else { Color32::from_rgb(0xEC, 0xF5, 0xFB) };
-    let rim = if dark { Color32::from_rgb(0x2A, 0x40, 0x55) } else { Color32::from_rgb(0xC9, 0xDB, 0xE8) };
-    let grid = Stroke::new(0.6, if dark { Color32::from_white_alpha(18) } else { Color32::from_rgba_unmultiplied(0x5A, 0x7A, 0x96, 40) });
-    let border = if dark { Color32::from_rgb(0x10, 0x1C, 0x27) } else { Color32::WHITE };
+    let sea = if dark { Color32::from_rgb(0x0F, 0x2D, 0x35) } else { Color32::from_rgb(0xCF, 0xEA, 0xEC) };
+    let rim = if dark { Color32::from_rgb(0x1E, 0x4A, 0x53) } else { Color32::from_rgb(0xA9, 0xD3, 0xD8) };
+    let grid = Stroke::new(0.6, if dark { Color32::from_white_alpha(16) } else { Color32::from_rgba_unmultiplied(0x1F, 0x6F, 0x78, 34) });
+    let border = if dark { Color32::from_rgb(0x0B, 0x1B, 0x20) } else { Color32::from_rgb(0xFF, 0xFC, 0xF6) };
     let most = travel.tally().map_or(0, |tally| tally.most);
     let mut shapes = Vec::new();
 
     let (top, bottom) = if dark {
-        (Color32::from_rgb(0x0F, 0x1A, 0x25), Color32::from_rgb(0x08, 0x10, 0x18))
+        (Color32::from_rgb(0x0C, 0x17, 0x1B), Color32::from_rgb(0x06, 0x0C, 0x0F))
     } else {
-        (Color32::from_rgb(0xF6, 0xF9, 0xFC), Color32::from_rgb(0xE4, 0xEC, 0xF3))
+        (Color32::from_rgb(0xF7, 0xF8, 0xF4), Color32::from_rgb(0xE2, 0xEC, 0xEB))
     };
     shapes.push(Shape::Mesh(Arc::new(vertical_gradient(view.rect, top, bottom))));
     match view.globe {
         Some(_) => {
-            let glow = if dark { Color32::from_rgb(0x3E, 0x86, 0xD6) } else { Color32::from_rgb(0x8E, 0xC1, 0xEC) };
-            shapes.push(Shape::Mesh(Arc::new(halo(view.origin, view.scale, glow.gamma_multiply(if dark { 0.45 } else { 0.6 })))));
+            let glow = if dark { Color32::from_rgb(0x1F, 0xA3, 0xB0) } else { Color32::from_rgb(0x8C, 0xD3, 0xDA) };
+            shapes.push(Shape::Mesh(Arc::new(halo(view.origin, view.scale, glow.gamma_multiply(if dark { 0.32 } else { 0.6 })))));
             shapes.push(Shape::circle_filled(view.origin, view.scale, sea));
         }
         None => {
@@ -1264,7 +1282,7 @@ fn paint_map(travel: &Travel, view: View, hover: Option<usize>, selected: Option
         let photos = if world.children[index].is_empty() { travel.photos(index) } else { 0 };
         let mut color = if photos > 0 { shade(photos, most) } else { land_color(&world.areas[world.country_of(index)].id, dark) };
         if hover == Some(index) {
-            color = if photos > 0 { color.lerp_to_gamma(Color32::WHITE, 0.3) } else { color.lerp_to_gamma(ACCENT, 0.25) };
+            color = if photos > 0 { color.lerp_to_gamma(Color32::WHITE, 0.3) } else { color.lerp_to_gamma(theme::accent(), 0.25) };
         }
         fill_area(&view, area, color, &mut mesh, &mut projected);
     }
@@ -1290,14 +1308,14 @@ fn paint_map(travel: &Travel, view: View, hover: Option<usize>, selected: Option
     if let Some(area) = hover.filter(|area| Some(*area) != selected) {
         let mut lines = Vec::new();
         outline(&view, &world.areas[area], &mut lines);
-        shapes.extend(lines.into_iter().map(|line| Shape::line(line, Stroke::new(1.5, ACCENT.gamma_multiply(0.7)))));
+        shapes.extend(lines.into_iter().map(|line| Shape::line(line, Stroke::new(1.5, theme::accent().gamma_multiply(0.7)))));
     }
     if let Some(area) = selected {
         let mut lines = Vec::new();
         outline(&view, &world.areas[area], &mut lines);
         let under = Stroke::new(4.5, border.gamma_multiply(0.85));
         shapes.extend(lines.iter().map(|line| Shape::line(line.clone(), under)));
-        shapes.extend(lines.into_iter().map(|line| Shape::line(line, Stroke::new(2.2, ACCENT))));
+        shapes.extend(lines.into_iter().map(|line| Shape::line(line, Stroke::new(2.2, theme::accent()))));
     }
     if view.globe.is_some() {
         shapes.push(Shape::circle_stroke(view.origin, view.scale, Stroke::new(1.0, rim)));
@@ -1489,11 +1507,11 @@ fn finish(run: &mut Vec<Pos2>, out: &mut Vec<Vec<Pos2>>) {
     }
 }
 
-/// A pale land color for a country without photos, the same for its
+/// A stone or sage color for a country without photos, the same for its
 /// states, so neighbors differ a little.
 fn land_color(id: &str, dark: bool) -> Color32 {
-    const LIGHT: [(u8, u8, u8); 5] = [(0xE6, 0xE1, 0xD6), (0xDE, 0xE5, 0xD5), (0xE5, 0xDD, 0xE2), (0xDA, 0xE2, 0xE6), (0xEA, 0xE3, 0xD0)];
-    const DARK: [(u8, u8, u8); 5] = [(0x3B, 0x42, 0x4D), (0x38, 0x46, 0x41), (0x45, 0x3F, 0x4A), (0x36, 0x43, 0x50), (0x46, 0x43, 0x3A)];
+    const LIGHT: [(u8, u8, u8); 5] = [(0xEA, 0xE8, 0xE1), (0xE2, 0xE7, 0xDD), (0xE8, 0xE4, 0xE0), (0xDF, 0xE5, 0xE2), (0xE6, 0xE7, 0xDE)];
+    const DARK: [(u8, u8, u8); 5] = [(0x33, 0x3A, 0x3C), (0x31, 0x3C, 0x37), (0x3A, 0x37, 0x39), (0x2F, 0x3A, 0x3F), (0x3C, 0x39, 0x31)];
     let hash = id.bytes().fold(0x811C_9DC5u32, |hash, byte| (hash ^ u32::from(byte)).wrapping_mul(0x0100_0193));
     let (r, g, b) = if dark { DARK } else { LIGHT }[hash as usize % LIGHT.len()];
     Color32::from_rgb(r, g, b)
@@ -1599,7 +1617,9 @@ mod tests {
         assert_eq!(shade(1, 1), MANY);
         assert_eq!(shade(1, 100), FEW);
         assert_eq!(shade(100, 100), MANY);
-        let middle = shade(10, 100);
-        assert!(middle != FEW && middle != MANY);
+        assert_eq!(shade(10, 100), theme::GOLD);
+        let brightness = |color: Color32| u32::from(color.r()) + u32::from(color.g()) + u32::from(color.b());
+        let steps: Vec<u32> = [1, 3, 10, 30, 100].iter().map(|&photos| brightness(shade(photos, 100))).collect();
+        assert!(steps.windows(2).all(|pair| pair[0] > pair[1]), "{steps:?}");
     }
 }

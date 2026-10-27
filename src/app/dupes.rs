@@ -279,7 +279,7 @@ impl PicassoApp {
                     ui.add_space(9.0);
                     ui.horizontal(|ui| {
                         if kept {
-                            ui.label(RichText::new(tr("Kept")).size(12.0).strong().color(theme::ACCENT));
+                            ui.label(RichText::new(tr("Kept")).size(12.0).strong().color(theme::accent()));
                         }
                         let name = RichText::new(&photo.filename).size(13.5).color(theme::text());
                         ui.add(egui::Label::new(name).truncate()).on_hover_text(&plain);

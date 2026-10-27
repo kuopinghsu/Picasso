@@ -224,7 +224,7 @@ fn tree_line(ui: &mut egui::Ui, row: &Row, selected: bool) -> (egui::Response, b
         egui::Align2::LEFT_CENTER,
         &row.label,
         egui::FontId::proportional(13.5),
-        if selected { theme::ACCENT } else { theme::text() },
+        if selected { theme::accent() } else { theme::text() },
     );
 
     let toggled = row.open.is_some()

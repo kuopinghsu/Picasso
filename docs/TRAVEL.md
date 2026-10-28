@@ -75,7 +75,7 @@ GPS tracks already in the library are linked to the Trip from its header, to the
 
 ## Story editor
 
-A Story opens in place of its Trip's photos. A new Story is blank, or made once from the Trip's Days: a heading for each Day and its photos in the Day's order, without invented text and without videos, which are counted and reported. Later changes to the Days don't change the Story.
+A Story opens in place of its Trip's photos. A new Story is blank, made from the selected photos, or made once from the Trip's Days or from one of them: a heading for each Day and its photos in the Day's order, without invented text and without videos, which are counted and reported. Later changes to the Days don't change the Story.
 
 Blocks can be edited, moved, duplicated, inserted, and removed, with undo and redo for the session. Photos are added from the Trip's grid with **Add to Story**, each as its own block or together as a gallery; each photo keeps its own caption and alt text in that Story. The cover is picked from the Story's photos.
 

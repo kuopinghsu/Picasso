@@ -482,7 +482,9 @@ impl PicassoApp {
         let mut archive: Option<(i64, bool)> = None;
         let mut delete: Option<(i64, String)> = None;
         let mut blank = false;
-        let mut from_days = false;
+        let mut from_days: Option<Vec<i64>> = None;
+        let mut from_selection = false;
+        let selected = !self.selection.is_empty();
         ui.horizontal_wrapped(|ui| {
             ui.label(RichText::new(tr("Stories")).size(13.0).color(theme::muted()));
             for story in &stories {
@@ -524,7 +526,20 @@ impl PicassoApp {
                     .on_disabled_hover_text(tr("Put photos in days first"))
                     .clicked()
                 {
-                    from_days = true;
+                    from_days = Some(days.iter().filter(|day| day.members > 0).map(|day| day.id).collect());
+                }
+                ui.add_enabled_ui(filled, |ui| {
+                    ui.menu_button(tr("From one day"), |ui| {
+                        for day in days.iter().filter(|day| day.members > 0) {
+                            if ui.button(day_name(day)).clicked() {
+                                from_days = Some(vec![day.id]);
+                            }
+                        }
+                    });
+                });
+                let picked = ui.add_enabled(selected, egui::Button::new(tr("From the selected photos")));
+                if picked.on_disabled_hover_text(tr("Select photos first")).clicked() {
+                    from_selection = true;
                 }
             });
             if popup.is_none() {
@@ -537,8 +552,16 @@ impl PicassoApp {
                 Err(err) => self.activity = err,
             }
         }
-        if from_days {
-            let ids: Vec<i64> = days.iter().filter(|day| day.members > 0).map(|day| day.id).collect();
+        if from_selection {
+            match self.db.create_story(trip_id, &self.trip_title(trip_id)) {
+                Ok(id) => {
+                    self.add_selection_to_story(id, false);
+                    open = Some(id);
+                }
+                Err(err) => self.activity = err,
+            }
+        }
+        if let Some(ids) = from_days {
             let title = self.trip_title(trip_id);
             match self.db.create_story_from_days(trip_id, &title, &ids, day_label) {
                 Ok((id, videos)) => {

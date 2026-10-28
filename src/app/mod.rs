@@ -1075,8 +1075,8 @@ impl PicassoApp {
                 groups,
             } => self.on_duplicates(run, checked, total, groups),
             UiEvent::DaysSuggested { trip_id, outcome } => self.on_days_suggested(trip_id, outcome),
-            UiEvent::StoryPreviewed(outcome) => self.on_story_previewed(outcome),
-            UiEvent::StoryExported(outcome) => self.on_story_exported(outcome),
+            UiEvent::StoryPreviewed(story_id, outcome) => self.on_story_previewed(story_id, outcome),
+            UiEvent::StoryExported(story_id, outcome) => self.on_story_exported(story_id, outcome),
         }
     }
 

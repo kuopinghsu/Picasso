@@ -165,9 +165,9 @@ pub enum UiEvent {
         outcome: Result<crate::trip::DaySuggestion, String>,
     },
     /// A Story's preview was written and opened, or why not.
-    StoryPreviewed(Result<crate::story_html::Outcome, String>),
+    StoryPreviewed(i64, Result<crate::story_html::Outcome, String>),
     /// A Story was exported to a new folder, or why not.
-    StoryExported(Result<(std::path::PathBuf, crate::story_html::Outcome), String>),
+    StoryExported(i64, Result<(std::path::PathBuf, crate::story_html::Outcome), String>),
 }
 
 /// Number of threads that probe files during a scan. A probe mostly waits

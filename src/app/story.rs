@@ -357,6 +357,7 @@ impl PicassoApp {
         }
         let Some(job) = self.story_job() else { return };
         let progress = self.start_story_job();
+        let story_id = job.story.id;
         let folder = self.cache_dir.join("story-preview").join(job.story.id.to_string());
         let events = self.events_tx.clone();
         let ctx = ctx.clone();
@@ -367,7 +368,7 @@ impl PicassoApp {
                 open::that(&index).map_err(|err| err.to_string())?;
                 Ok(outcome)
             });
-            let _ = events.send(UiEvent::StoryPreviewed(outcome));
+            let _ = events.send(UiEvent::StoryPreviewed(story_id, outcome));
             ctx.request_repaint();
         });
     }
@@ -379,6 +380,13 @@ impl PicassoApp {
             editor.job = Some(Arc::clone(&progress));
         }
         progress
+    }
+
+    /// Marks the job of Story `story_id` as over, if that Story is still open.
+    fn end_story_job(&mut self, story_id: i64) {
+        if let Some(editor) = self.story.as_mut().filter(|editor| editor.story.id == story_id) {
+            editor.job = None;
+        }
     }
 
     /// What a page of the open Story is made from, read on this thread.
@@ -536,6 +544,7 @@ impl PicassoApp {
         }
         let Some(job) = self.story_job() else { return };
         let progress = self.start_story_job();
+        let story_id = job.story.id;
         let name = story_name(&job.story);
         let events = self.events_tx.clone();
         let ctx = ctx.clone();
@@ -544,15 +553,13 @@ impl PicassoApp {
                 .inspect(|(folder, _)| {
                     let _ = open::that(folder);
                 });
-            let _ = events.send(UiEvent::StoryExported(outcome));
+            let _ = events.send(UiEvent::StoryExported(story_id, outcome));
             ctx.request_repaint();
         });
     }
 
-    pub(super) fn on_story_exported(&mut self, outcome: Result<(std::path::PathBuf, story_html::Outcome), String>) {
-        if let Some(editor) = &mut self.story {
-            editor.job = None;
-        }
+    pub(super) fn on_story_exported(&mut self, story_id: i64, outcome: Result<(std::path::PathBuf, story_html::Outcome), String>) {
+        self.end_story_job(story_id);
         self.activity = match outcome {
             Err(err) if err == story_html::CANCELLED => tr("Export cancelled. Nothing was written.").into(),
             Ok((folder, outcome)) if outcome.missing > 0 || outcome.unknown > 0 => trf(
@@ -564,10 +571,8 @@ impl PicassoApp {
         };
     }
 
-    pub(super) fn on_story_previewed(&mut self, outcome: Result<story_html::Outcome, String>) {
-        if let Some(editor) = &mut self.story {
-            editor.job = None;
-        }
+    pub(super) fn on_story_previewed(&mut self, story_id: i64, outcome: Result<story_html::Outcome, String>) {
+        self.end_story_job(story_id);
         self.activity = match outcome {
             Err(err) if err == story_html::CANCELLED => tr("Preview cancelled").into(),
             Ok(outcome) if outcome.missing > 0 || outcome.unknown > 0 => trf(

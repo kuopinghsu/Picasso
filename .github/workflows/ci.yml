@@ -36,6 +36,8 @@ env:
   SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
 
 jobs:
+  # Only the inexpensive docs/version check gates build jobs. Dependency
+  # auditing remains parallel, and release still requires every check below.
   # Fails in seconds, not after the builds, when a tag doesn't match
   # Cargo.toml, CHANGELOG.md has no dated section for it, or the documents
   # name links, make targets, scripts, or settings that don't exist.
@@ -90,6 +92,7 @@ jobs:
   # tests run on the processor the package is for.
   windows:
     name: Windows ${{ matrix.arch }}
+    needs: changelog
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -125,6 +128,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
 
       - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: "true"
 
       - name: Test
         run: cargo test --release --locked
@@ -167,6 +172,7 @@ jobs:
 
   linux:
     name: Linux ${{ matrix.arch }}
+    needs: changelog
     # The oldest supported runners, so the binary runs on older glibc too.
     runs-on: ${{ matrix.runner }}
     strategy:
@@ -194,6 +200,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
 
       - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: "true"
 
       - name: Test
         run: cargo test --release --locked
@@ -300,9 +308,11 @@ jobs:
           name: ${{ steps.package.outputs.name }}
           path: dist/*
           if-no-files-found: error
+          compression-level: 0
 
   appimage:
     name: Linux AppImage ${{ matrix.arch }}
+    needs: changelog
     # AlmaLinux 8 has glibc 2.28, so the AppImage runs on RHEL 8, Ubuntu 20.04,
     # Debian 10, and newer.
     runs-on: ${{ matrix.runner }}
@@ -344,6 +354,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
 
       - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: "true"
 
       - name: Build
         run: cargo build --release --locked
@@ -373,6 +385,7 @@ jobs:
           name: ${{ steps.package.outputs.artifact }}
           path: dist/*
           if-no-files-found: error
+          compression-level: 0
 
   appimage-test:
     name: AppImage ${{ matrix.arch }} on ${{ matrix.system }}
@@ -467,6 +480,7 @@ jobs:
   #   APPLE_APP_PASSWORD          an app-specific password of that account
   macos:
     name: macOS universal
+    needs: changelog
     runs-on: macos-14
     outputs:
       notarized: ${{ steps.package.outputs.notarized }}
@@ -482,9 +496,14 @@ jobs:
           targets: aarch64-apple-darwin,x86_64-apple-darwin
 
       - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: "true"
 
+      # Match the explicit target used by the universal build so native
+      # dependencies are compiled into the same target directory only once.
       - name: Test
-        run: cargo test --release --locked
+        run: |
+          cargo test --release --locked --target "$(rustc -vV | sed -n 's/^host: //p')"
 
       - name: Build
         run: |
@@ -624,12 +643,14 @@ jobs:
           name: ${{ steps.package.outputs.name }}
           path: dist/*
           if-no-files-found: error
+          compression-level: 0
 
   # The User Guide as PDF in English and Traditional Chinese (make guide-pdf),
   # kept with every run and published with each release. A character none of
   # the fonts has fails the job rather than printing as a box.
   guide:
     name: User Guide PDF
+    needs: changelog
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
@@ -665,6 +686,7 @@ jobs:
           name: ${{ steps.guide.outputs.name }}
           path: dist/*
           if-no-files-found: error
+          compression-level: 0
 
   release:
     name: GitHub release

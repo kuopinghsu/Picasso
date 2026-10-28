@@ -106,6 +106,20 @@ and PDF guide generation.
 - **Documentation:** English and Traditional Chinese PDF guides. Missing font
   coverage causes the guide build to fail.
 
+Documentation and version checks run before the build and guide jobs, so invalid
+release metadata stops expensive work early. Dependency auditing runs in parallel
+and remains required for publication. Rust jobs retain dependency caches after a
+failure; a cache hit does not skip tests. macOS tests use the explicit native target
+also used by the universal build, allowing Cargo to reuse compiled dependencies.
+Already-compressed Linux/macOS packages and PDF artifacts upload without another
+compression pass; Windows artifacts retain compression for the bare executable.
+
+Linux and AppImage builds intentionally remain separate: the Ubuntu packages target
+glibc 2.35, while AppImage is built on AlmaLinux 8 for glibc 2.28 compatibility.
+All native architecture tests and the AppImage startup matrix remain enabled for
+pull requests, main-branch builds and version tags. These changes reduce avoidable
+work; actual elapsed-time savings depend on cache hits and runner availability.
+
 Before publication, CI checks that a GitHub release for the tag does not already
 exist and that the required application packages and guides are present and
 nonempty. It then downloads the locked rawler source archive, verifies its

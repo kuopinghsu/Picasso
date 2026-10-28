@@ -72,7 +72,22 @@ Members Suggest days couldn't place are kept in **Needs review** with the reason
 
 GPS tracks already in the library are linked to the Trip from its header, to the whole Trip or to one Day. The link keeps the track's path and name, not its points; while the file is gone it shows as unavailable and comes back when the library finds it.
 
+## Story editor
+
+A Story opens in place of its Trip's photos. A new Story is blank, or made once from the Trip's Days: a heading for each Day and its photos in the Day's order, without invented text and without videos, which are counted and reported. Later changes to the Days don't change the Story.
+
+Blocks can be edited, moved, duplicated, inserted, and removed, with undo and redo for the session. Photos are added from the Trip's grid with **Add to Story**, each as its own block or together as a gallery; each photo keeps its own caption and alt text in that Story. The cover is picked from the Story's photos.
+
+Changes are saved after a pause in typing, and at most five seconds after the first unsaved one, when the Story is closed, and when Picasso quits. The editor shows whether the Story is saved. A save that fails keeps the changes open in the editor, with the reason and a way to try again; a Story changed elsewhere is never overwritten. Blocks from a newer version of Picasso are kept as they are, and missing photos are shown as unavailable.
+
 ## Rendering, export, and publishing
+
+`src/story_html.rs` turns a Story into one web page: `index.html` with its styles inline and its photos in `images/`, named after a hash of the rendered bytes so unchanged photos keep their names. The first layout is Photography Journal: one column, large photos, system fonts, and light and dark colors. All text is escaped, and the page loads nothing from the network. Photos that can't be shown appear as unavailable rather than being left out; blocks from a newer Picasso are counted and reported.
+
+**Export** writes the same page, or a Markdown file (`story.md`) with the same `images/` folder, into a new folder named after the Story inside the folder the user picks: `Title`, or `Title 2`, `Title 3` when that name is taken, so an earlier export or anything else there is never replaced. It is written under a hidden name first and renamed only when complete, so a failed export leaves no half-written folder. The user picks the photo size (1200, 1600, or 2400 pixels on the long side) and JPEG quality; the last choices are remembered, with Reset to defaults. Photos never carry camera details or location. The finished folder opens when done.
+
+**Preview** writes this page to a folder of its own in Picasso's cache, replacing the previous preview of that Story, and opens it in the web browser.
+
 
 - A Story follows the catalog's current edits by default, and shows when its output would change because of them.
 - Each export or publish job pins the Story revision, each photo's edit and rotation settings, the output profile, and the identity of each source file. It renders its own images before writing or sending anything, so edits made while it runs affect the next job. If a source file is missing or has changed, the job stops; it never substitutes other content.
@@ -83,6 +98,7 @@ GPS tracks already in the library are linked to the Trip from its header, to the
 ## Module boundaries
 
 - `src/trip.rs`: Trip, Day, member, Story, and block types, and their validation.
+- `src/story_html.rs`: a Story as a web page, shared by preview and export.
 - `src/db/trips.rs`: the tables, and every change to them, each in one transaction. The interface calls these operations with explicit ids and selection order; validation never lives in view code.
 - The Trips page, Timeline, Story editor, and exporter live in their own modules under `src/app/` and reuse the library's selection, thumbnails, viewer, editor, and background workers.
 

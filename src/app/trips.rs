@@ -10,6 +10,7 @@ use crate::i18n::{tr, trf};
 use crate::trip::{read_capture, AddPreview, DayFilter, DaySource, DaySuggestion, MemberQuery, Review, Trip, TripDay, TripDraft, TripImpact};
 use crate::types::{format_day, Nav};
 
+use super::story::story_name;
 use super::{about, theme, tree_section, Glyph, Modal, PicassoApp, UiEvent};
 
 /// Creating a Trip, from the selected photos or empty, or changing one.
@@ -177,12 +178,7 @@ impl PicassoApp {
     pub(super) fn trip_header(&mut self, ui: &mut egui::Ui) {
         let Nav::Trip(trip_id) = self.nav else { return };
         let Some(trip) = self.trips.iter().find(|trip| trip.id == trip_id) else { return };
-        let mut parts = Vec::new();
-        match (trip.first_day, trip.last_day) {
-            (Some(first), Some(last)) if first != last => parts.push(format!("{} – {}", day_label(first), day_label(last))),
-            (Some(day), _) | (None, Some(day)) => parts.push(day_label(day)),
-            (None, None) => {}
-        }
+        let mut parts: Vec<String> = trip_dates(trip).into_iter().collect();
         if !trip.destination.is_empty() {
             parts.push(trip.destination.clone());
         }
@@ -334,10 +330,126 @@ impl PicassoApp {
             self.suggest_days(ui.ctx(), trip_id);
         }
         self.tracks_row(ui, trip_id, &days);
+        self.stories_row(ui, trip_id, &days);
         if filter != self.trip_filter {
             self.trip_filter = filter;
             self.selection.clear();
             self.reload_view();
+        }
+    }
+
+    /// The Trip's Stories: open one, archive or delete it, or start a new one.
+    fn stories_row(&mut self, ui: &mut egui::Ui, trip_id: i64, days: &[TripDay]) {
+        let stories = self.db.stories(trip_id);
+        let mut open: Option<i64> = None;
+        let mut archive: Option<(i64, bool)> = None;
+        let mut delete: Option<(i64, String)> = None;
+        let mut blank = false;
+        let mut from_days = false;
+        ui.horizontal_wrapped(|ui| {
+            ui.label(RichText::new(tr("Stories")).size(13.0).color(theme::muted()));
+            for story in &stories {
+                let name = story_name(story);
+                let label = if story.archived {
+                    RichText::new(trf("{} (archived)", &[&name])).color(theme::muted())
+                } else {
+                    RichText::new(name.clone())
+                };
+                let chip = ui.selectable_label(false, label).on_hover_text(tr("Click to edit. Right-click for more."));
+                if chip.clicked() {
+                    open = Some(story.id);
+                }
+                chip.context_menu(|ui| {
+                    if ui.button(tr("Edit")).clicked() {
+                        open = Some(story.id);
+                        ui.close();
+                    }
+                    let label = if story.archived { tr("Restore story") } else { tr("Archive story") };
+                    if ui.button(label).clicked() {
+                        archive = Some((story.id, !story.archived));
+                        ui.close();
+                    }
+                    if ui.button(tr("Delete story…")).clicked() {
+                        delete = Some((story.id, name.clone()));
+                        ui.close();
+                    }
+                });
+            }
+            let button = ui.button(tr("New story"));
+            let popup = egui::Popup::menu(&button).show(|ui| {
+                if ui.button(tr("Blank story")).clicked() {
+                    blank = true;
+                }
+                let filled = days.iter().any(|day| day.members > 0);
+                let by_day = ui.add_enabled(filled, egui::Button::new(tr("From the trip's days")));
+                if by_day
+                    .on_hover_text(tr("A heading for each day and its photos in order, to write around. Videos are left out."))
+                    .on_disabled_hover_text(tr("Put photos in days first"))
+                    .clicked()
+                {
+                    from_days = true;
+                }
+            });
+            if popup.is_none() {
+                button.on_hover_text(tr("Write about this trip"));
+            }
+        });
+        if blank {
+            match self.db.create_story(trip_id, "") {
+                Ok(id) => open = Some(id),
+                Err(err) => self.activity = err,
+            }
+        }
+        if from_days {
+            let ids: Vec<i64> = days.iter().filter(|day| day.members > 0).map(|day| day.id).collect();
+            let title = self.trip_title(trip_id);
+            match self.db.create_story_from_days(trip_id, &title, &ids, day_label) {
+                Ok((id, videos)) => {
+                    if videos > 0 {
+                        self.activity = trf("{} videos were left out of the story", &[&videos]);
+                    }
+                    open = Some(id);
+                }
+                Err(err) => self.activity = err,
+            }
+        }
+        if let Some((id, archived)) = archive {
+            self.db.set_story_archived(id, archived);
+        }
+        if let Some((id, name)) = delete {
+            self.modal = Modal::DeleteStory(id, name);
+        }
+        if let Some(id) = open {
+            self.open_story(id);
+        }
+    }
+
+    /// The toolbar menu that adds the selected photos to one of the Trip's Stories.
+    pub(super) fn add_to_story_menu(&mut self, ui: &mut egui::Ui) {
+        let Nav::Trip(trip_id) = self.nav else { return };
+        let stories: Vec<_> = self.db.stories(trip_id).into_iter().filter(|story| !story.archived).collect();
+        if stories.is_empty() {
+            return;
+        }
+        let mut pick: Option<(i64, bool)> = None;
+        let button = ui.button(tr("Add to Story"));
+        let popup = egui::Popup::menu(&button).show(|ui| {
+            for story in &stories {
+                ui.menu_button(story_name(story), |ui| {
+                    if ui.button(tr("As separate photos")).clicked() {
+                        pick = Some((story.id, false));
+                    }
+                    if ui.button(tr("As one gallery")).clicked() {
+                        pick = Some((story.id, true));
+                    }
+                });
+            }
+        });
+        if popup.is_none() {
+            button.on_hover_text(tr("Add the selected photos to the end of a story"));
+        }
+        if let Some((story_id, gallery)) = pick {
+            self.add_selection_to_story(story_id, gallery);
         }
     }
 
@@ -987,6 +1099,15 @@ fn arrange(order: &[i64], selected: &[bool], step: Arrange) -> Vec<i64> {
         }
     }
     items.into_iter().map(|(id, _)| id).collect()
+}
+
+/// The Trip's dates as shown, if it has any.
+pub(super) fn trip_dates(trip: &Trip) -> Option<String> {
+    match (trip.first_day, trip.last_day) {
+        (Some(first), Some(last)) if first != last => Some(format!("{} – {}", day_label(first), day_label(last))),
+        (Some(day), _) | (None, Some(day)) => Some(day_label(day)),
+        (None, None) => None,
+    }
 }
 
 fn day_label(day: NaiveDate) -> String {

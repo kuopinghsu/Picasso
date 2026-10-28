@@ -24,6 +24,7 @@ mod raw_tiff;
 mod rename;
 mod secret;
 mod shell;
+mod story_html;
 mod thumbs;
 mod track;
 mod track_edit;

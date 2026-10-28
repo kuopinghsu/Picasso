@@ -19,6 +19,7 @@ mod settings;
 mod share;
 mod side;
 mod stats;
+mod story;
 mod travel;
 mod theme;
 mod track_editor;
@@ -124,6 +125,9 @@ enum Modal {
     DeleteTrip(trips::DeleteDialog),
     Unavailable(trips::UnavailableDialog),
     DayDetails(trips::DayDialog),
+    /// Delete Story (id, name)?
+    DeleteStory(i64, String),
+    ExportStory(story::ExportDialog),
     Help,
     About,
     Settings,
@@ -241,6 +245,8 @@ pub struct PicassoApp {
     albums: Vec<crate::types::Album>,
     /// Active Trips, then archived ones.
     trips: Vec<crate::trip::Trip>,
+    /// The Story being edited, shown in place of its Trip's photos.
+    story: Option<story::StoryEditor>,
     /// The archived Trips are listed in the side bar.
     show_archived_trips: bool,
     /// Which of the Trip's photos the grid shows.
@@ -558,6 +564,7 @@ impl PicassoApp {
             tree_open: HashMap::new(),
             albums: Vec::new(),
             trips: Vec::new(),
+            story: None,
             show_archived_trips: false,
             trip_filter: crate::trip::MemberQuery::default(),
             suggesting: None,
@@ -1068,6 +1075,8 @@ impl PicassoApp {
                 groups,
             } => self.on_duplicates(run, checked, total, groups),
             UiEvent::DaysSuggested { trip_id, outcome } => self.on_days_suggested(trip_id, outcome),
+            UiEvent::StoryPreviewed(outcome) => self.on_story_previewed(outcome),
+            UiEvent::StoryExported(outcome) => self.on_story_exported(outcome),
         }
     }
 
@@ -1258,7 +1267,7 @@ impl PicassoApp {
         let plain = |key| ctx.input_mut(|input| input.consume_key(Modifiers::NONE, key));
         let shift = |key| ctx.input_mut(|input| input.consume_key(Modifiers::SHIFT, key));
         // Statistics and the Travel Map show no photos to select, open, or trash.
-        let photo_keys = self.mode == Mode::View || !matches!(self.nav, Nav::Statistics | Nav::TravelMap);
+        let photo_keys = self.mode == Mode::View || !(matches!(self.nav, Nav::Statistics | Nav::TravelMap) || self.story_shown());
 
         if command(Key::A) && self.mode == Mode::Browse && photo_keys {
             self.selection.clear();
@@ -1897,6 +1906,8 @@ impl PicassoApp {
         }
         if self.nav != nav {
             self.trip_filter = crate::trip::MemberQuery::default();
+            // A Story that can't be saved stays open, to come back to.
+            self.close_story();
         }
         self.nav = nav;
         self.mode = Mode::Browse;
@@ -1943,6 +1954,8 @@ impl PicassoApp {
             Modal::DeleteTrip(_) => self.delete_trip_modal(ctx),
             Modal::Unavailable(_) => self.unavailable_modal(ctx),
             Modal::DayDetails(_) => self.day_modal(ctx),
+            Modal::DeleteStory(..) => self.delete_story_modal(ctx),
+            Modal::ExportStory(_) => self.export_story_modal(ctx),
             Modal::Settings => self.settings_modal(ctx),
             Modal::About => {
                 if about::show(ctx, &self.logo) {
@@ -2730,6 +2743,7 @@ impl PicassoApp {
 impl eframe::App for PicassoApp {
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         self.keep_track_edits();
+        self.save_story();
         let _ = self.cmd_tx.send(Command::Stop);
         if let Some(id) = self.library_top {
             self.config.set("library_top", id.to_string());
@@ -2740,6 +2754,7 @@ impl eframe::App for PicassoApp {
         if let Some(stats) = &mut self.frame_stats {
             stats.record(frame.info().cpu_usage);
         }
+        self.autosave_story(ctx);
         let dark = self.theme_mode.is_dark(system_dark(ctx));
         if dark != theme::is_dark() {
             theme::set_dark(ctx, dark);
@@ -2806,7 +2821,7 @@ impl eframe::App for PicassoApp {
                 .max_size(340.0)
                 .frame(theme::toolbar_frame(theme::sidebar()).inner_margin(egui::Margin::symmetric(10, 6)))
                 .show(ui, |ui| self.sidebar(ui));
-            if self.side != SidePanel::None && !matches!(self.nav, Nav::Statistics | Nav::TravelMap) {
+            if self.side != SidePanel::None && !matches!(self.nav, Nav::Statistics | Nav::TravelMap) && !self.story_shown() {
                 egui::Panel::right("side")
                     .resizable(true)
                     .default_size(300.0)

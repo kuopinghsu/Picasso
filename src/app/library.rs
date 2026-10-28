@@ -181,6 +181,10 @@ impl GridLayout {
 
 impl PicassoApp {
     pub(super) fn library_ui(&mut self, ui: &mut egui::Ui) {
+        if self.story_shown() {
+            self.story_ui(ui);
+            return;
+        }
         self.library_toolbar(ui);
         ui.add_space(4.0);
         if self.nav == Nav::Places {
@@ -725,6 +729,7 @@ impl PicassoApp {
                     if matches!(self.nav, Nav::Trip(_)) {
                         self.day_menu(ui);
                         self.arrange_menu(ui);
+                        self.add_to_story_menu(ui);
                     }
                     self.trip_menu(ui);
                 }

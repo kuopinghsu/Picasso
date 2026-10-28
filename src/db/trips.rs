@@ -808,6 +808,11 @@ impl Database {
         })
     }
 
+    /// The catalog photo a media reference points to now.
+    pub fn media_photo(&self, media_id: i64) -> Option<i64> {
+        self.conn.query_row("SELECT photo_id FROM media_refs WHERE id = ?1", [media_id], |row| row.get(0)).optional().ok().flatten()
+    }
+
     pub fn unlink_trip_track(&self, link_id: i64) {
         let _ = self.conn.execute("DELETE FROM trip_tracks WHERE id = ?1", [link_id]);
     }

@@ -224,7 +224,7 @@ mod tests {
 
     #[test]
     fn asian_languages_leave_only_names_in_english() {
-        let names = ["HDR", "Reinhard", "Drago", "Kodachrome"];
+        let names = ["HDR", "Reinhard", "Drago", "Kodachrome", "Markdown"];
         for lang in [Lang::TraditionalChinese, Lang::SimplifiedChinese, Lang::Japanese, Lang::Korean] {
             for (en, text) in lang.strings() {
                 let words = en.split(|c: char| !c.is_alphabetic()).filter(|word| word.len() > 1);

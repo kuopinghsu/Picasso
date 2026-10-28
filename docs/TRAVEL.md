@@ -71,7 +71,7 @@ A member's instant is decided in this order:
 
 Members Suggest days couldn't place are kept in **Needs review** with the reason, shown among the Days. Putting them in a Day, or in no Day, settles them; Undo brings the review back. Within a Day, photos keep the order the user gives them, whatever the grid's sort.
 
-The Trip's photos can be narrowed to the starred ones, those without a location, those no longer in the library, and those used by one of the Trip's Stories or by any of them, together with a Day. The grid, its count, and actions on it use the same query, and missing GPS never stops anything else.
+The Trip's photos can be narrowed to the starred ones, those without a location, those no longer in the library, and those used by one of the Trip's Stories or by any of them, together with a Day. The grid, its count, and actions on it use the same query, and missing GPS never stops anything else. Each Trip keeps its filters while Picasso is open, so going elsewhere and back finds it as it was; opening a photo and closing the viewer keeps the selection, as long as the photo last shown was part of it, and scrolls the grid to that photo.
 
 GPS tracks already in the library are linked to the Trip from its header, to the whole Trip or to one Day. The link keeps the track's path and name, not its points; while the file is gone it shows as unavailable and comes back when the library finds it.
 
@@ -110,7 +110,7 @@ Changes are saved after a pause in typing, and at most five seconds after the fi
 New pages extend the existing interface rather than adding a visual style of their own:
 
 - Colors, text styles, spacing, corner radii, selection, and hover come from `src/app/theme.rs` (for example `accent()`, `text()`, `muted()`, `select()`, `primary_button`, `danger_button`). Light, dark, and System themes, and the teal accent, work as everywhere else. A missing pattern is added to the theme, not drawn locally.
-- Trips is a sidebar destination like Albums and Places. **All trips** shows every Trip as a card with its cover (or first photo), dates, destination, and counts of photos, Days, Stories, tracks, and unavailable photos; the header's search finds Trips by title, destination, or description, and archived Trips are shown on request. The toolbar, panels, shortcuts, and selection behave as in the Library.
+- Trips is a sidebar destination like Albums and Places. **All trips** shows every Trip as a card with its cover (or first photo), dates, destination, and counts of photos, Days, Stories, tracks, and unavailable photos; the header's search finds Trips by title, destination, or description, and archived Trips are shown on request. Tab moves between the cards and Enter or Space opens one. The toolbar, panels, shortcuts, and selection behave as in the Library.
 - Each task has one primary action. Secondary actions are grouped, advanced settings are revealed progressively, and nothing required is shown only on hover.
 - Every state is visible: default, hover, focus, selected, disabled, loading, error, and success, with keyboard focus and a cue that isn't only color.
 - Panels adapt to the smallest window and to high DPI; long translations wrap rather than hide actions.

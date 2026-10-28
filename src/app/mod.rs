@@ -251,6 +251,10 @@ pub struct PicassoApp {
     show_archived_trips: bool,
     /// Which of the Trip's photos the grid shows.
     trip_filter: crate::trip::MemberQuery,
+    /// The filters each Trip was left with, for coming back to it this session.
+    trip_filters: HashMap<i64, crate::trip::MemberQuery>,
+    /// The grid's selection and anchor when the viewer opened, given back when it closes.
+    browse_selection: Option<(HashSet<i64>, Option<i64>)>,
     /// The Trip whose Days are being suggested in the background.
     suggesting: Option<i64>,
     /// The last Move to Day, to undo: the Trip and where its photos were.
@@ -567,6 +571,8 @@ impl PicassoApp {
             story: None,
             show_archived_trips: false,
             trip_filter: crate::trip::MemberQuery::default(),
+            trip_filters: HashMap::new(),
+            browse_selection: None,
             suggesting: None,
             day_undo: None,
             photos: Vec::new(),
@@ -1905,7 +1911,13 @@ impl PicassoApp {
             self.edited_only = false;
         }
         if self.nav != nav {
-            self.trip_filter = crate::trip::MemberQuery::default();
+            if let Nav::Trip(id) = self.nav {
+                self.trip_filters.insert(id, self.trip_filter);
+            }
+            self.trip_filter = match nav {
+                Nav::Trip(id) => self.trip_filters.get(&id).copied().unwrap_or_default(),
+                _ => crate::trip::MemberQuery::default(),
+            };
             // A Story that can't be saved stays open, to come back to.
             self.close_story();
         }
@@ -2276,6 +2288,7 @@ impl PicassoApp {
         self.mode = Mode::View;
         self.set_index(index, true);
         let id = self.photos[self.viewer_index].id;
+        self.browse_selection = Some((std::mem::take(&mut self.selection), self.anchor));
         self.selection.clear();
         self.selection.insert(id);
         self.anchor = Some(id);
@@ -2283,6 +2296,16 @@ impl PicassoApp {
 
     fn close_viewer(&mut self) {
         self.mode = Mode::Browse;
+        // The grid gets back its selection if the photo last shown was part of
+        // it; otherwise that photo alone. Photos gone meanwhile are dropped.
+        if let (Some((selection, anchor)), Some(shown)) = (self.browse_selection.take(), self.photos.get(self.viewer_index)) {
+            let shown = shown.id;
+            if selection.contains(&shown) {
+                self.selection = selection.into_iter().filter(|id| self.index_of(*id).is_some()).collect();
+                self.anchor = anchor.filter(|id| self.selection.contains(id)).or(Some(shown));
+            }
+            self.scroll_to = Some(shown);
+        }
         self.film_shown = None;
         self.slideshow = None;
         self.editing = false;

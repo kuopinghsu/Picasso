@@ -170,7 +170,10 @@ impl PicassoApp {
                     let (rect, response) = ui.allocate_exact_size(CARD, egui::Sense::click());
                     let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
                     let painter = ui.painter_at(rect);
-                    let hovered = response.hovered();
+                    // Tab reaches each card, Enter or Space opens it.
+                    let name = trip.title.clone();
+                    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &name));
+                    let hovered = response.hovered() || response.has_focus();
                     painter.rect_filled(rect, 8, theme::sidebar());
                     if hovered {
                         painter.rect_stroke(rect, 8, egui::Stroke::new(2.0, theme::ACCENT), egui::StrokeKind::Inside);
@@ -403,6 +406,11 @@ impl PicassoApp {
             }
         });
         let days = self.db.trip_days(trip_id);
+        if let DayFilter::Day(id) = filter.day {
+            if !days.iter().any(|day| day.id == id) {
+                filter.day = DayFilter::Any;
+            }
+        }
         let unassigned = self.db.count_trip_members(trip_id, &MemberQuery { day: DayFilter::Unassigned, ..MemberQuery::default() });
         let mut edit_day: Option<TripDay> = None;
         let mut delete_day: Option<i64> = None;

@@ -10,7 +10,7 @@ use crate::i18n::{tr, trf};
 use crate::trip::{read_capture, TripQuery, AddPreview, DayFilter, DaySource, DaySuggestion, MemberQuery, Review, Story, StoryFilter, Trip, TripDay, TripDraft, TripImpact};
 use crate::types::{format_day, Nav};
 
-use super::story::story_name;
+use super::story::{story_name, Group};
 use super::{about, theme, tree_section, Glyph, Modal, PicassoApp, UiEvent};
 
 /// Creating a Trip, from the selected photos or empty, or changing one.
@@ -632,7 +632,7 @@ impl PicassoApp {
         if from_selection {
             match self.db.create_story(trip_id, &self.trip_title(trip_id)) {
                 Ok(id) => {
-                    self.add_selection_to_story(id, false);
+                    self.add_selection_to_story(id, Group::Separate);
                     open = Some(id);
                 }
                 Err(err) => self.activity = err,
@@ -668,16 +668,19 @@ impl PicassoApp {
         if stories.is_empty() {
             return;
         }
-        let mut pick: Option<(i64, bool)> = None;
+        let mut pick: Option<(i64, Group)> = None;
         let button = ui.button(tr("Add to Story"));
         let popup = egui::Popup::menu(&button).show(|ui| {
             for story in &stories {
                 ui.menu_button(story_name(story), |ui| {
                     if ui.button(tr("As separate photos")).clicked() {
-                        pick = Some((story.id, false));
+                        pick = Some((story.id, Group::Separate));
                     }
                     if ui.button(tr("As one gallery")).clicked() {
-                        pick = Some((story.id, true));
+                        pick = Some((story.id, Group::Gallery));
+                    }
+                    if ui.button(tr("As a photo grid")).on_hover_text(tr("Side by side in rows, with one description")).clicked() {
+                        pick = Some((story.id, Group::Grid));
                     }
                 });
             }
@@ -685,8 +688,8 @@ impl PicassoApp {
         if popup.is_none() {
             button.on_hover_text(tr("Add the selected photos to the end of a story"));
         }
-        if let Some((story_id, gallery)) = pick {
-            self.add_selection_to_story(story_id, gallery);
+        if let Some((story_id, group)) = pick {
+            self.add_selection_to_story(story_id, group);
         }
     }
 
@@ -1334,7 +1337,7 @@ fn parse_day(text: &str) -> Option<Option<NaiveDate>> {
 }
 
 /// A Day's title, else its date, else its number in the Trip.
-fn day_name(day: &TripDay) -> String {
+pub(super) fn day_name(day: &TripDay) -> String {
     if !day.title.is_empty() {
         return day.title.clone();
     }

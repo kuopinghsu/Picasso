@@ -400,6 +400,9 @@ pub enum Block {
     Paragraph(String),
     Photo(MediaUse),
     Gallery(Vec<MediaUse>),
+    /// Photos in a grid of `columns` across and `rows` down, with one
+    /// description for all. More photos than places make more rows.
+    Grid { columns: u8, rows: u8, caption: String, media: Vec<MediaUse> },
     Separator,
     Credits(String),
     /// A kind or version this build doesn't know, kept as it was read.
@@ -414,6 +417,7 @@ impl Block {
             Block::Paragraph(_) => "paragraph",
             Block::Photo(_) => "photo",
             Block::Gallery(_) => "gallery",
+            Block::Grid { .. } => "grid",
             Block::Separator => "separator",
             Block::Credits(_) => "credits",
             Block::Unknown { kind, .. } => kind,
@@ -432,6 +436,7 @@ impl Block {
     pub fn payload(&self) -> String {
         match self {
             Block::Heading(text) | Block::Paragraph(text) | Block::Credits(text) => json!({ "text": text }).to_string(),
+            Block::Grid { columns, rows, caption, .. } => json!({ "columns": columns, "rows": rows, "caption": caption }).to_string(),
             Block::Photo(_) | Block::Gallery(_) | Block::Separator => "{}".into(),
             Block::Unknown { payload, .. } => payload.clone(),
         }
@@ -440,7 +445,7 @@ impl Block {
     pub fn media(&self) -> &[MediaUse] {
         match self {
             Block::Photo(one) => std::slice::from_ref(one),
-            Block::Gallery(media) | Block::Unknown { media, .. } => media,
+            Block::Gallery(media) | Block::Grid { media, .. } | Block::Unknown { media, .. } => media,
             _ => &[],
         }
     }
@@ -456,6 +461,13 @@ impl Block {
             return unknown(media);
         }
         let text = value["text"].as_str().map(str::to_string);
+        if kind == "grid" {
+            let size = |key: &str| value[key].as_u64().filter(|n| (1..=GRID_MAX as u64).contains(n)).map(|n| n as u8);
+            return match (size("columns"), size("rows"), value["caption"].as_str()) {
+                (Some(columns), Some(rows), Some(caption)) => Block::Grid { columns, rows, caption: caption.into(), media },
+                _ => unknown(media),
+            };
+        }
         match (kind, text, media.len()) {
             ("heading", Some(text), 0) => Block::Heading(text),
             ("paragraph", Some(text), 0) => Block::Paragraph(text),
@@ -466,6 +478,21 @@ impl Block {
             _ => unknown(media),
         }
     }
+}
+
+/// Most places across or down a grid.
+pub const GRID_MAX: u8 = 4;
+
+/// The grid layouts offered, as (columns, rows).
+pub const GRID_LAYOUTS: [(u8, u8); 7] = [(2, 1), (1, 2), (3, 1), (2, 2), (3, 2), (2, 3), (3, 3)];
+
+/// The offered layout that fits `count` photos with the fewest empty places.
+pub fn grid_layout_for(count: usize) -> (u8, u8) {
+    GRID_LAYOUTS
+        .into_iter()
+        .filter(|(columns, rows)| usize::from(columns * rows) >= count)
+        .min_by_key(|(columns, rows)| (usize::from(columns * rows) - count, columns.abs_diff(*rows)))
+        .unwrap_or((3, 3))
 }
 
 /// A block and the id it keeps through edits, moves, and saves.
@@ -576,6 +603,7 @@ mod tests {
             Block::Photo(photo.clone()),
             Block::Gallery(vec![photo.clone(), MediaUse::new(4)]),
             Block::Gallery(Vec::new()),
+            Block::Grid { columns: 3, rows: 2, caption: "Market \"day\"".into(), media: vec![photo.clone(), MediaUse::new(5)] },
             Block::Separator,
             Block::Credits("Photos: me".into()),
         ];
@@ -583,6 +611,16 @@ mod tests {
             let read = Block::read(block.kind(), block.version(), &block.payload(), block.media().to_vec());
             assert_eq!(read, block);
         }
+    }
+
+    #[test]
+    fn a_grid_gets_the_layout_with_fewest_empty_places() {
+        let cases = [(1, (2, 1)), (2, (2, 1)), (3, (3, 1)), (4, (2, 2)), (5, (3, 2)), (6, (3, 2)), (9, (3, 3)), (12, (3, 3))];
+        for (count, layout) in cases {
+            assert_eq!(grid_layout_for(count), layout, "{count} photos");
+        }
+        let wide = Block::read("grid", 1, r#"{"columns":9,"rows":1,"caption":""}"#, Vec::new());
+        assert!(matches!(wide, Block::Unknown { .. }), "a layout this build can't show is kept as it is");
     }
 
     #[test]

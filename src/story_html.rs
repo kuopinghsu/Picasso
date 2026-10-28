@@ -360,6 +360,16 @@ pub fn markdown(story: &Story, dates: Option<&str>, blocks: &[StoryBlock], image
                     out.push_str(&md_image(media, images, words, &mut outcome));
                 }
             }
+            // Markdown has no grid: the photos in order, then the description.
+            Block::Grid { caption, media, .. } => {
+                for item in media {
+                    let bare = MediaUse { caption: String::new(), ..item.clone() };
+                    out.push_str(&md_image(&bare, images, words, &mut outcome));
+                }
+                if !caption.trim().is_empty() {
+                    let _ = write!(out, "*{}*\n\n", md(caption.trim()));
+                }
+            }
             Block::Separator => out.push_str("---\n\n"),
             Block::Unknown { .. } => outcome.unknown += 1,
         }
@@ -453,6 +463,33 @@ pub fn page(story: &Story, dates: Option<&str>, blocks: &[StoryBlock], images: &
                 }
                 html.push_str("</div>\n");
             }
+            Block::Grid { columns, caption, media, .. } => {
+                let ratio = if *columns == 1 { "3/2" } else { "4/3" };
+                let _ = writeln!(html, "<figure class=\"grid\" style=\"--cols:{columns};--ratio:{ratio}\"><div class=\"cells\">");
+                for item in media {
+                    match images.get(&item.media_id) {
+                        Some(image) => {
+                            let _ = writeln!(
+                                html,
+                                "<img src=\"{}\" width=\"{}\" height=\"{}\" alt=\"{}\" loading=\"lazy\">",
+                                esc(&image.file),
+                                image.width,
+                                image.height,
+                                esc(item.alt.trim())
+                            );
+                        }
+                        None => {
+                            outcome.missing += 1;
+                            let _ = writeln!(html, "<div class=\"missing\">{}</div>", esc(&words.unavailable));
+                        }
+                    }
+                }
+                html.push_str("</div>");
+                if !caption.trim().is_empty() {
+                    let _ = write!(html, "<figcaption>{}</figcaption>", esc(caption.trim()));
+                }
+                html.push_str("</figure>\n");
+            }
             Block::Separator => html.push_str("<hr>\n"),
             Block::Credits(text) => {
                 let _ = write!(html, "<footer class=\"credits\">\n{}</footer>\n", paragraphs(text));
@@ -533,10 +570,14 @@ figcaption{font:.85rem/1.5 system-ui,-apple-system,'Segoe UI',sans-serif;color:v
 .gallery{display:grid;grid-template-columns:repeat(auto-fill,minmax(14rem,1fr));gap:.75rem;margin:2rem 0}
 .gallery figure{margin:0}
 .gallery figcaption{padding:0}
+figure.grid{margin-left:-1.25rem;margin-right:-1.25rem}
+.grid .cells{display:grid;grid-template-columns:repeat(var(--cols),1fr);gap:.35rem}
+.grid .cells img,.grid .cells .missing{width:100%;height:auto;aspect-ratio:var(--ratio);object-fit:cover}
+.grid .cells img{display:block}
 .missing{aspect-ratio:3/2;display:flex;align-items:center;justify-content:center;background:var(--rule);color:var(--muted);border-radius:4px;font:.9rem system-ui,sans-serif}
 hr{border:0;border-top:1px solid var(--rule);margin:3rem auto;width:40%}
 .credits{margin-top:3rem;padding-top:1.5rem;border-top:1px solid var(--rule);font-size:.9rem;color:var(--muted)}
-@media (min-width:52rem){figure.photo,figure.cover{margin-left:-4rem;margin-right:-4rem}}
+@media (min-width:52rem){figure.photo,figure.cover,figure.grid{margin-left:-4rem;margin-right:-4rem}}
 ";
 
 #[cfg(test)]
@@ -658,6 +699,29 @@ mod tests {
         #[cfg(unix)]
         assert!(free_space(&std::env::temp_dir()).is_some_and(|free| free > 0));
         assert_eq!(free_space(Path::new("/no/such/folder/anywhere")), None);
+    }
+
+    #[test]
+    fn a_grid_keeps_its_columns_and_one_description() {
+        let mut first = MediaUse::new(1);
+        first.alt = "A boat".into();
+        first.caption = "hidden in a grid".into();
+        let grid = Block::Grid { columns: 2, rows: 2, caption: "Morning <market>".into(), media: vec![first, MediaUse::new(2), MediaUse::new(3)] };
+        let blocks = [StoryBlock::new(grid)];
+        let images = HashMap::from([
+            (1, WebImage { file: "images/a.jpg".into(), width: 10, height: 10 }),
+            (2, WebImage { file: "images/b.jpg".into(), width: 10, height: 10 }),
+        ]);
+        let (html, outcome) = page(&story(), None, &blocks, &images, &words());
+        assert_eq!(outcome.missing, 1, "the third photo is shown as unavailable, not left out");
+        assert!(html.contains("<figure class=\"grid\" style=\"--cols:2;--ratio:4/3\">"), "{html}");
+        assert_eq!(html.matches("<img src=\"images/").count(), 2);
+        assert!(html.contains("alt=\"A boat\""));
+        assert!(html.contains("<figcaption>Morning &lt;market&gt;</figcaption>"));
+        assert!(!html.contains("hidden in a grid"));
+        let (text, _) = markdown(&story(), None, &blocks, &images, &words());
+        assert!(text.contains("![A boat](images/a.jpg)\n\n![](images/b.jpg)"), "{text}");
+        assert!(text.contains("*Morning &lt;market&gt;*") && !text.contains("hidden"), "{text}");
     }
 
     #[test]

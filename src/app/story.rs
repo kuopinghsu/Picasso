@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use eframe::egui::{self, Align, Layout, Margin, Modifiers, Pos2, Rect, RichText, Sense, Vec2};
 
 use crate::i18n::{tr, trf};
-use crate::trip::{Block, MediaUse, Story, StoryBlock};
+use crate::trip::{grid_layout_for, Block, DayFilter, MediaUse, MemberQuery, Story, StoryBlock, GRID_LAYOUTS};
 use crate::story_html;
 use crate::types::{Nav, Photo};
 
@@ -21,6 +21,10 @@ const SAVE_PAUSE: Duration = Duration::from_secs(1);
 const SAVE_WITHIN: Duration = Duration::from_secs(5);
 const PHOTO_HEIGHT: f32 = 180.0;
 const GALLERY_TILE: f32 = 96.0;
+/// Photos in the strip to pick from.
+const PICK_TILE: f32 = 72.0;
+/// Most photos the strip shows at once; a Day narrows it.
+const PICK_LIMIT: usize = 2000;
 
 #[derive(Clone, PartialEq)]
 struct Snapshot {
@@ -46,6 +50,17 @@ pub(super) struct StoryEditor {
     job: Option<Arc<story_html::Progress>>,
     /// The block to scroll to on the next frame.
     reveal: Option<usize>,
+    /// The gallery or grid photos are being picked for, from the Trip.
+    picking: Option<Picker>,
+}
+
+/// Picking the Trip's photos into one gallery or grid.
+struct Picker {
+    /// The block's id, which stays while blocks move.
+    uid: String,
+    day: DayFilter,
+    /// The Trip's photos on show, as media references.
+    choices: Vec<i64>,
 }
 
 impl StoryEditor {
@@ -102,6 +117,15 @@ pub(super) struct ExportDialog {
     skip_missing: bool,
 }
 
+/// How photos added to a Story together are placed.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum Group {
+    /// A photo block each.
+    Separate,
+    Gallery,
+    Grid,
+}
+
 /// What a block's controls asked for, applied after the blocks are drawn.
 enum Action {
     Up(usize),
@@ -110,7 +134,57 @@ enum Action {
     Remove(usize),
     Insert(usize, Block),
     Cover(Option<i64>),
+    /// Takes photo `n` out of the gallery or grid at `i`.
     RemoveFromGallery(usize, usize),
+    /// Lays out the photo, gallery, or grid at `i` as `Shape`.
+    Arrange(usize, Shape),
+    /// Adds a photo to the gallery or grid at `i`, or takes it out.
+    Toggle(usize, i64),
+    /// Puts a dragged photo at place `n` of the gallery or grid at `i`.
+    Drop(Drag, usize, usize),
+}
+
+/// How a block's photos are laid out.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Shape {
+    Photo,
+    Gallery,
+    Grid(u8, u8),
+}
+
+/// A photo being dragged: from place `n` of the gallery or grid at `i`,
+/// or from the strip of the Trip's photos.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Drag {
+    Placed(usize, usize),
+    New(i64),
+}
+
+/// Lets a photo be dragged, dimmed where it was while it moves.
+fn drag_source(ui: &egui::Ui, response: &egui::Response, drag: Drag) {
+    if response.drag_started() || response.dragged() {
+        response.dnd_set_drag_payload(drag);
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+        ui.painter().rect_filled(response.rect, 4, theme::sidebar().gamma_multiply(0.7));
+    } else if response.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+    }
+}
+
+/// Takes a photo dropped on place `n` of the gallery or grid at `i`: before
+/// it on its left half, after it on its right. A bar shows where while one
+/// is held over it.
+fn drop_target(ui: &egui::Ui, response: &egui::Response, i: usize, n: usize, actions: &mut Vec<Action>) {
+    let rect = response.rect;
+    let after = response.hover_pos().is_some_and(|pointer| pointer.x > rect.center().x);
+    if response.dnd_hover_payload::<Drag>().is_some() {
+        let x = if after { rect.right() } else { rect.left() - 3.0 };
+        let bar = egui::Rect::from_min_size(egui::pos2(x, rect.top()), Vec2::new(3.0, rect.height()));
+        ui.painter().rect_filled(bar, 1, theme::ACCENT);
+    }
+    if let Some(drag) = response.dnd_release_payload::<Drag>() {
+        actions.push(Action::Drop(*drag, i, n + usize::from(after)));
+    }
 }
 
 impl PicassoApp {
@@ -134,6 +208,7 @@ impl PicassoApp {
             photos: HashMap::new(),
             job: None,
             reveal: None,
+            picking: None,
         });
     }
 
@@ -294,6 +369,7 @@ impl PicassoApp {
                         actions.push(Action::Insert(count, block));
                     }
                 }
+                grid_menu(ui, count, &mut actions);
             });
             ui.add_space(20.0);
         });
@@ -681,8 +757,16 @@ impl PicassoApp {
             let uid = editor.blocks[index].uid.clone();
             let media: Vec<i64> = block.media().iter().map(|media| media.media_id).collect();
             let (photo, gallery) = (matches!(block, Block::Photo(_)), matches!(block, Block::Gallery(_)));
+            let grid = match block {
+                Block::Grid { columns, rows, .. } => Some((*columns, *rows)),
+                _ => None,
+            };
+            let mut pick = false;
             ui.horizontal(|ui| {
                 ui.label(RichText::new(tr(label)).size(12.0).color(theme::muted()));
+                if photo || gallery || grid.is_some() {
+                    layout_menu(ui, index, &uid, media.len(), grid, gallery, actions);
+                }
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     let more = theme::named(ui.button("⋯"), tr("More"));
                     egui::Popup::menu(&more).show(|ui| {
@@ -701,6 +785,7 @@ impl PicassoApp {
                                     actions.push(Action::Insert(index + 1, block));
                                 }
                             }
+                            grid_menu(ui, index + 1, actions);
                         });
                         ui.separator();
                         if ui.button(tr("Remove")).clicked() {
@@ -719,8 +804,10 @@ impl PicassoApp {
                 {
                     let height = PHOTO_HEIGHT;
                     let width = self.media_width(media[0], height).min(ui.available_width());
-                    let (rect, response) = ui.allocate_exact_size(Vec2::new(width, height), Sense::click());
+                    let (rect, response) = ui.allocate_exact_size(Vec2::new(width, height), Sense::click_and_drag());
                     self.paint_media(ui, media[0], rect, false);
+                    drag_source(ui, &response, Drag::Placed(index, 0));
+                    drop_target(ui, &response, index, 0, actions);
                     response.context_menu(|ui| {
                         if ui.button(tr("Use as cover")).clicked() {
                             actions.push(Action::Cover(Some(media[0])));
@@ -728,12 +815,54 @@ impl PicassoApp {
                         }
                     });
                 }
+            } else if let Some((columns, rows)) = grid {
+                // The grid as it will be laid out: places in order, more rows
+                // for photos beyond them, and empty places outlined.
+                let gap = 4.0;
+                let cell = ((ui.available_width().min(560.0) - gap * f32::from(columns - 1)) / f32::from(columns)).min(160.0);
+                let height = if columns == 1 { cell * 2.0 / 3.0 } else { cell * 3.0 / 4.0 };
+                let places = usize::from(columns) * usize::from(rows).max(media.len().div_ceil(usize::from(columns)));
+                for row in 0..places / usize::from(columns) {
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = gap;
+                        for column in 0..usize::from(columns) {
+                            let n = row * usize::from(columns) + column;
+                            let (rect, response) = ui.allocate_exact_size(Vec2::new(cell, height), Sense::click_and_drag());
+                            let Some(&media_id) = media.get(n) else {
+                                let stroke = egui::Stroke::new(1.0, theme::muted().gamma_multiply(0.5));
+                                ui.painter().rect_stroke(rect, 4, stroke, egui::StrokeKind::Inside);
+                                ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, "+", egui::FontId::proportional(20.0), theme::muted());
+                                drop_target(ui, &response, index, media.len(), actions);
+                                if response.on_hover_text(tr("Add photos from the trip, or drop one here")).clicked() {
+                                    pick = true;
+                                }
+                                continue;
+                            };
+                            self.paint_media(ui, media_id, rect, true);
+                            drag_source(ui, &response, Drag::Placed(index, n));
+                            drop_target(ui, &response, index, n, actions);
+                            response.context_menu(|ui| {
+                                if ui.button(tr("Use as cover")).clicked() {
+                                    actions.push(Action::Cover(Some(media_id)));
+                                    ui.close();
+                                }
+                                if ui.button(tr("Remove from grid")).clicked() {
+                                    actions.push(Action::RemoveFromGallery(index, n));
+                                    ui.close();
+                                }
+                            });
+                        }
+                    });
+                    ui.add_space(gap - ui.spacing().item_spacing.y);
+                }
             } else if gallery {
                 {
                     ui.horizontal_wrapped(|ui| {
                         for (n, &media_id) in media.iter().enumerate() {
-                            let (rect, response) = ui.allocate_exact_size(Vec2::splat(GALLERY_TILE), Sense::click());
+                            let (rect, response) = ui.allocate_exact_size(Vec2::splat(GALLERY_TILE), Sense::click_and_drag());
                             self.paint_media(ui, media_id, rect, true);
+                            drag_source(ui, &response, Drag::Placed(index, n));
+                            drop_target(ui, &response, index, n, actions);
                             response.context_menu(|ui| {
                                 if ui.button(tr("Use as cover")).clicked() {
                                     actions.push(Action::Cover(Some(media_id)));
@@ -747,6 +876,9 @@ impl PicassoApp {
                         }
                     });
                 }
+            }
+            if gallery || grid.is_some() {
+                self.photo_picker(ui, index, &uid, &media, pick, actions);
             }
             let Some(editor) = &mut self.story else { return };
             match &mut editor.blocks[index].block {
@@ -766,6 +898,28 @@ impl PicassoApp {
                     }
                 }
                 Block::Photo(media) => media_words(ui, media, &uid, 0, typed),
+                Block::Grid { columns, rows, caption, media } => {
+                    let places = usize::from(*columns) * usize::from(*rows);
+                    if media.len() > places {
+                        ui.label(RichText::new(trf("{} more photos than places: they make more rows", &[&(media.len() - places)])).size(12.0).color(theme::muted()));
+                    }
+                    let edit = egui::TextEdit::multiline(caption).hint_text(tr("Description of these photos")).desired_rows(2).desired_width(f32::INFINITY);
+                    if ui.add(edit).changed() {
+                        *typed = Some((uid.clone(), 0));
+                    }
+                    let missing = media.iter().filter(|item| item.alt.trim().is_empty()).count();
+                    let title = if missing > 0 { trf("Alt text ({} missing)", &[&missing]) } else { tr("Alt text").into() };
+                    egui::CollapsingHeader::new(title).id_salt(("grid-alt", &uid)).show(ui, |ui| {
+                        for (n, item) in media.iter_mut().enumerate() {
+                            let alt = egui::TextEdit::singleline(&mut item.alt)
+                                .hint_text(trf("What photo {} shows, for people who can't see it", &[&(n + 1)]))
+                                .desired_width(f32::INFINITY);
+                            if ui.add(alt).changed() {
+                                *typed = Some((uid.clone(), n as u8 + 1));
+                            }
+                        }
+                    });
+                }
                 Block::Gallery(items) => {
                     // Each photo has its own words, in the order shown above.
                     for (n, item) in items.iter_mut().enumerate() {
@@ -793,6 +947,75 @@ impl PicassoApp {
             ui.scroll_to_rect(shown.response.rect, Some(Align::Center));
         }
         ui.add_space(6.0);
+    }
+
+    /// The Add photos button of a gallery or grid, and while it is on, a
+    /// strip of the Trip's photos, one Day or all: a click puts a photo in
+    /// the block, or takes it out again.
+    fn photo_picker(&mut self, ui: &mut egui::Ui, index: usize, uid: &str, media: &[i64], start: bool, actions: &mut Vec<Action>) {
+        let Some(editor) = &self.story else { return };
+        let trip_id = editor.story.trip_id;
+        let open = editor.picking.as_ref().is_some_and(|picker| picker.uid == uid);
+        let mut day = editor.picking.as_ref().filter(|_| open).map_or(DayFilter::Any, |picker| picker.day);
+        let mut toggle = start && !open;
+        ui.horizontal(|ui| {
+            let label = if open { tr("Done") } else { tr("Add photos…") };
+            if ui.button(label).on_hover_text(tr("Pick photos of the trip for this block")).clicked() {
+                toggle = true;
+            }
+            if open {
+                let days = self.db.trip_days(trip_id);
+                let shown = match day {
+                    DayFilter::Day(id) => days.iter().find(|d| d.id == id).map(super::trips::day_name).unwrap_or_default(),
+                    _ => tr("All days").to_string(),
+                };
+                egui::ComboBox::from_id_salt(("pick-day", uid)).selected_text(shown).height(320.0).show_ui(ui, |ui| {
+                    ui.selectable_value(&mut day, DayFilter::Any, tr("All days"));
+                    for d in &days {
+                        ui.selectable_value(&mut day, DayFilter::Day(d.id), super::trips::day_name(d));
+                    }
+                });
+                ui.label(RichText::new(tr("Click a photo to add it, again to take it out.")).size(12.0).color(theme::muted()));
+            }
+        });
+        let Some(editor) = &mut self.story else { return };
+        if toggle {
+            editor.picking = if open { None } else { Some(Picker { uid: uid.into(), day: DayFilter::Any, choices: Vec::new() }) };
+            if let Some(picker) = &mut editor.picking {
+                picker.choices = trip_photos(&self.db, trip_id, picker.day);
+            }
+            return;
+        }
+        let Some(picker) = editor.picking.as_mut().filter(|picker| picker.uid == uid) else { return };
+        if picker.day != day {
+            picker.day = day;
+            picker.choices = trip_photos(&self.db, trip_id, day);
+        }
+        let choices = picker.choices.clone();
+        if choices.is_empty() {
+            ui.label(RichText::new(tr("No photos here.")).color(theme::muted()));
+            return;
+        }
+        egui::ScrollArea::horizontal().id_salt(("pick-strip", uid)).show(ui, |ui| {
+            ui.horizontal(|ui| {
+                for media_id in choices {
+                    let (rect, response) = ui.allocate_exact_size(Vec2::splat(PICK_TILE), Sense::click_and_drag());
+                    self.paint_media(ui, media_id, rect, true);
+                    drag_source(ui, &response, Drag::New(media_id));
+                    let chosen = media.contains(&media_id);
+                    if chosen {
+                        let painter = ui.painter();
+                        painter.rect_stroke(rect, 4, egui::Stroke::new(3.0, theme::ACCENT), egui::StrokeKind::Inside);
+                        painter.circle_filled(rect.right_top() + Vec2::new(-11.0, 11.0), 8.0, theme::ACCENT);
+                        painter.text(rect.right_top() + Vec2::new(-11.0, 11.0), egui::Align2::CENTER_CENTER, "✓", egui::FontId::proportional(11.0), egui::Color32::WHITE);
+                    }
+                    let hint = if chosen { tr("In this block. Click to take it out.") } else { tr("Click to add") };
+                    if response.on_hover_text(hint).clicked() {
+                        actions.push(Action::Toggle(index, media_id));
+                    }
+                }
+            });
+        });
     }
 
     /// Width of a media reference's photo shown `height` tall.
@@ -865,7 +1088,7 @@ impl PicassoApp {
 
     /// Adds the selected photos to the end of Story `story_id`, each as a
     /// photo block or all as one gallery. Photos not in the Trip yet join it.
-    pub(super) fn add_selection_to_story(&mut self, story_id: i64, gallery: bool) {
+    pub(super) fn add_selection_to_story(&mut self, story_id: i64, group: Group) {
         let Some(story) = self.db.story(story_id) else { return };
         let photos = self.selection_in_order();
         let media = match self.db.add_to_trip(story.trip_id, &photos) {
@@ -877,8 +1100,11 @@ impl PicassoApp {
         };
         let mut blocks = self.db.story_blocks(story_id);
         let added = media.len();
-        if gallery && added > 1 {
+        if group == Group::Gallery && added > 1 {
             blocks.push(StoryBlock::new(Block::Gallery(media.into_iter().map(MediaUse::new).collect())));
+        } else if group == Group::Grid && added > 1 {
+            let (columns, rows) = grid_layout_for(added);
+            blocks.push(StoryBlock::new(Block::Grid { columns, rows, caption: String::new(), media: media.into_iter().map(MediaUse::new).collect() }));
         } else {
             blocks.extend(media.into_iter().map(|id| StoryBlock::new(Block::Photo(MediaUse::new(id)))));
         }
@@ -926,8 +1152,8 @@ fn apply(editor: &mut StoryEditor, action: Action) {
         }
         Action::Insert(i, block) => blocks.insert(i.min(blocks.len()), StoryBlock::new(block)),
         Action::Cover(media) => editor.story.cover = media,
-        Action::RemoveFromGallery(i, n) => {
-            if let Block::Gallery(items) = &mut blocks[i].block {
+        Action::RemoveFromGallery(i, n) => match &mut blocks[i].block {
+            Block::Gallery(items) => {
                 items.remove(n);
                 match items.len() {
                     0 => {
@@ -937,9 +1163,172 @@ fn apply(editor: &mut StoryEditor, action: Action) {
                     _ => {}
                 }
             }
+            Block::Grid { media, .. } => {
+                media.remove(n);
+                if media.is_empty() {
+                    blocks.remove(i);
+                }
+            }
+            _ => {}
+        },
+        Action::Toggle(i, media_id) => {
+            let at = blocks[i].block.media().iter().position(|item| item.media_id == media_id);
+            match (at, &mut blocks[i].block) {
+                // A grid being filled stays, even empty, with its layout.
+                (Some(n), Block::Grid { media, .. }) => {
+                    media.remove(n);
+                }
+                (Some(n), _) => apply(editor, Action::RemoveFromGallery(i, n)),
+                (None, Block::Gallery(items) | Block::Grid { media: items, .. }) => items.push(MediaUse::new(media_id)),
+                _ => {}
+            }
+        }
+        Action::Drop(drag, i, n) => {
+            // A photo block dropped on itself, or a photo on its own place,
+            // changes nothing.
+            match drag {
+                Drag::Placed(from, _) if from == i && matches!(blocks[i].block, Block::Photo(_)) => return,
+                Drag::Placed(from, at) if (from, at) == (i, n) => return,
+                _ => {}
+            }
+            if !matches!(blocks[i].block, Block::Photo(_) | Block::Gallery(_) | Block::Grid { .. }) {
+                return;
+            }
+            let mut emptied = false;
+            let item = match drag {
+                Drag::New(media_id) => {
+                    // Already in this block: the drop moves it instead.
+                    match blocks[i].block.media().iter().position(|item| item.media_id == media_id) {
+                        Some(at) => return apply(editor, Action::Drop(Drag::Placed(i, at), i, n)),
+                        None => MediaUse::new(media_id),
+                    }
+                }
+                Drag::Placed(from, at) => match &mut blocks[from].block {
+                    Block::Gallery(items) | Block::Grid { media: items, .. } if at < items.len() => items.remove(at),
+                    Block::Photo(media) => {
+                        emptied = true;
+                        media.clone()
+                    }
+                    _ => return,
+                },
+            };
+            // Within one block, the places after the one taken move up.
+            let n = match drag {
+                Drag::Placed(from, at) if from == i && at < n => n - 1,
+                _ => n,
+            };
+            match &mut blocks[i].block {
+                Block::Gallery(items) | Block::Grid { media: items, .. } => items.insert(n.min(items.len()), item),
+                // Two single photos make a grid of two side by side.
+                Block::Photo(there) => {
+                    let media = if n == 0 { vec![item, there.clone()] } else { vec![there.clone(), item] };
+                    blocks[i].block = Block::Grid { columns: 2, rows: 1, caption: String::new(), media };
+                }
+                _ => {}
+            }
+            // A photo block whose photo moved goes; a gallery left with one
+            // photo is a photo, and with none goes; a grid keeps its places.
+            if let Drag::Placed(from, _) = drag {
+                match &mut blocks[from].block {
+                    _ if emptied => {
+                        blocks.remove(from);
+                    }
+                    Block::Gallery(items) if items.is_empty() => {
+                        blocks.remove(from);
+                    }
+                    Block::Gallery(items) if items.len() == 1 => blocks[from].block = Block::Photo(items.remove(0)),
+                    _ => {}
+                }
+            }
+        }
+        Action::Arrange(i, shape) => {
+            let count = blocks[i].block.media().len();
+            let fits = match shape {
+                Shape::Photo => count == 1,
+                Shape::Gallery => count >= 2,
+                Shape::Grid(..) => true,
+            };
+            if !fits || !matches!(blocks[i].block, Block::Photo(_) | Block::Gallery(_) | Block::Grid { .. }) {
+                return;
+            }
+            // Each photo keeps its own caption in a grid, unseen, so it is
+            // back when the grid is a gallery or a photo again; the grid's
+            // description becomes a paragraph below it.
+            let (mut media, caption) = match std::mem::replace(&mut blocks[i].block, Block::Separator) {
+                Block::Photo(one) => (vec![one], String::new()),
+                Block::Gallery(items) => (items, String::new()),
+                Block::Grid { caption, media, .. } => (media, caption),
+                _ => unreachable!("checked above"),
+            };
+            blocks[i].block = match shape {
+                Shape::Grid(columns, rows) => Block::Grid { columns, rows, caption, media },
+                Shape::Gallery | Shape::Photo => {
+                    if !caption.trim().is_empty() {
+                        blocks.insert(i + 1, StoryBlock::new(Block::Paragraph(caption)));
+                    }
+                    if shape == Shape::Photo {
+                        Block::Photo(media.remove(0))
+                    } else {
+                        Block::Gallery(media)
+                    }
+                }
+            };
         }
         Action::Up(_) | Action::Down(_) => {}
     }
+}
+
+/// The Trip's photos, without videos, in one Day or all, as media
+/// references in the Trip's order.
+fn trip_photos(db: &crate::db::Database, trip_id: i64, day: DayFilter) -> Vec<i64> {
+    let query = MemberQuery { day, ..MemberQuery::default() };
+    db.trip_members(trip_id, &query, 0, PICK_LIMIT).into_iter().filter(|member| !member.is_video).map(|member| member.media_id).collect()
+}
+
+/// The layout of a photo, gallery, or grid block, shown in its header: one
+/// photo, a gallery, or a grid of a size. A choice the photos don't fit,
+/// such as one photo for three, is shown but can't be picked.
+fn layout_menu(ui: &mut egui::Ui, index: usize, uid: &str, count: usize, grid: Option<(u8, u8)>, gallery: bool, actions: &mut Vec<Action>) {
+    let shown = match grid {
+        Some((columns, rows)) => trf("Grid {} × {}", &[&columns, &rows]),
+        None if gallery => tr("Gallery").to_string(),
+        None => tr("Single photo").to_string(),
+    };
+    let current = match grid {
+        Some((columns, rows)) => Shape::Grid(columns, rows),
+        None if gallery => Shape::Gallery,
+        None => Shape::Photo,
+    };
+    ui.label(RichText::new("·").color(theme::muted()));
+    let combo = egui::ComboBox::from_id_salt(("block-layout", uid)).selected_text(shown).height(360.0).show_ui(ui, |ui| {
+        let mut choice = |ui: &mut egui::Ui, shape: Shape, text: String, fits: bool| {
+            if ui.add_enabled(fits, egui::Button::selectable(current == shape, text)).clicked() {
+                actions.push(Action::Arrange(index, shape));
+            }
+        };
+        choice(ui, Shape::Photo, tr("Single photo").into(), count == 1);
+        choice(ui, Shape::Gallery, tr("Gallery").into(), count >= 2);
+        ui.separator();
+        for (columns, rows) in GRID_LAYOUTS {
+            let text = format!("{}  ·  {}", trf("Grid {} × {}", &[&columns, &rows]), trf("{} photos", &[&(columns * rows)]));
+            choice(ui, Shape::Grid(columns, rows), text, true);
+        }
+    });
+    combo.response.on_hover_text(tr("How this block's photos are laid out. Drag a photo onto another to put them together."));
+}
+
+/// A Photo grid to add at `at`, each layout its own choice; its photos are
+/// picked from the Trip afterwards.
+fn grid_menu(ui: &mut egui::Ui, at: usize, actions: &mut Vec<Action>) {
+    ui.menu_button(tr("Photo grid"), |ui| {
+        for (columns, rows) in GRID_LAYOUTS {
+            let text = format!("{columns} × {rows}  ·  {}", trf("{} photos", &[&(columns * rows)]));
+            if ui.button(text).clicked() {
+                actions.push(Action::Insert(at, Block::Grid { columns, rows, caption: String::new(), media: Vec::new() }));
+                ui.close();
+            }
+        }
+    });
 }
 
 /// The blocks that can be added as text, with their names.
@@ -958,6 +1347,7 @@ fn block_label(block: &Block) -> &'static str {
         Block::Paragraph(_) => "Paragraph",
         Block::Photo(_) => "Photo",
         Block::Gallery(_) => "Gallery",
+        Block::Grid { .. } => "Photo grid",
         Block::Separator => "Separator",
         Block::Credits(_) => "Credits",
         Block::Unknown { .. } => "Unknown block",
@@ -1003,6 +1393,7 @@ mod tests {
             photos: HashMap::new(),
             job: None,
             reveal: None,
+            picking: None,
         }
     }
 
@@ -1032,6 +1423,93 @@ mod tests {
         let mut editor = editor(vec![Block::Gallery(vec![MediaUse::new(7), MediaUse::new(8)])]);
         apply(&mut editor, Action::RemoveFromGallery(0, 0));
         assert_eq!(editor.blocks[0].block, Block::Photo(MediaUse::new(8)));
+    }
+
+    #[test]
+    fn a_gallery_becomes_a_grid_and_back_without_losing_words() {
+        let mut captioned = MediaUse::new(7);
+        captioned.caption = "Harbour".into();
+        let photos = vec![captioned, MediaUse::new(8), MediaUse::new(9)];
+        let mut editor = editor(vec![Block::Gallery(photos.clone())]);
+        apply(&mut editor, Action::Arrange(0, Shape::Grid(3, 1)));
+        assert_eq!(editor.blocks[0].block, Block::Grid { columns: 3, rows: 1, caption: String::new(), media: photos.clone() });
+        if let Block::Grid { caption, .. } = &mut editor.blocks[0].block {
+            *caption = "A morning by the sea".into();
+        }
+        apply(&mut editor, Action::Arrange(0, Shape::Gallery));
+        assert_eq!(editor.blocks[0].block, Block::Gallery(photos), "each photo's caption comes back");
+        assert_eq!(editor.blocks[1].block, Block::Paragraph("A morning by the sea".into()), "the description is kept below");
+        apply(&mut editor, Action::Arrange(0, Shape::Grid(2, 2)));
+        apply(&mut editor, Action::RemoveFromGallery(0, 0));
+        apply(&mut editor, Action::RemoveFromGallery(0, 0));
+        assert!(matches!(&editor.blocks[0].block, Block::Grid { media, .. } if media.len() == 1), "a grid of one stays a grid");
+        apply(&mut editor, Action::RemoveFromGallery(0, 0));
+        assert_eq!(kinds(&editor), ["paragraph"], "an empty grid goes");
+    }
+
+    #[test]
+    fn photos_are_picked_into_a_grid_and_out_again() {
+        let mut editor = editor(vec![Block::Grid { columns: 2, rows: 1, caption: "Two".into(), media: Vec::new() }, Block::Paragraph(String::new())]);
+        apply(&mut editor, Action::Toggle(0, 5));
+        apply(&mut editor, Action::Toggle(0, 6));
+        assert_eq!(editor.blocks[0].block.media(), &[MediaUse::new(5), MediaUse::new(6)][..]);
+        apply(&mut editor, Action::Toggle(0, 5));
+        apply(&mut editor, Action::Toggle(0, 6));
+        assert!(matches!(&editor.blocks[0].block, Block::Grid { columns: 2, rows: 1, media, .. } if media.is_empty()), "an emptied grid keeps its place and layout");
+        apply(&mut editor, Action::Toggle(1, 5));
+        assert_eq!(editor.blocks[1].block, Block::Paragraph(String::new()), "text blocks take no photos");
+    }
+
+    #[test]
+    fn dragged_photos_move_within_and_between_blocks() {
+        let ids = |block: &Block| block.media().iter().map(|item| item.media_id).collect::<Vec<_>>();
+        let grid = |media: &[i64]| Block::Grid { columns: 2, rows: 2, caption: String::new(), media: media.iter().map(|&id| MediaUse::new(id)).collect() };
+        let mut editor = editor(vec![grid(&[1, 2, 3]), Block::Gallery(vec![MediaUse::new(7), MediaUse::new(8)]), grid(&[])]);
+        apply(&mut editor, Action::Drop(Drag::Placed(0, 0), 0, 3));
+        assert_eq!(ids(&editor.blocks[0].block), [2, 3, 1], "to the end of its own grid");
+        apply(&mut editor, Action::Drop(Drag::Placed(0, 2), 0, 0));
+        assert_eq!(ids(&editor.blocks[0].block), [1, 2, 3], "and back to the start");
+        apply(&mut editor, Action::Drop(Drag::Placed(0, 1), 0, 1));
+        assert_eq!(ids(&editor.blocks[0].block), [1, 2, 3], "dropped where it was, nothing moves");
+        apply(&mut editor, Action::Drop(Drag::Placed(1, 0), 0, 1));
+        assert_eq!(ids(&editor.blocks[0].block), [1, 7, 2, 3], "from the gallery into the grid");
+        assert_eq!(editor.blocks[1].block, Block::Photo(MediaUse::new(8)), "a gallery of one is a photo");
+        apply(&mut editor, Action::Drop(Drag::Placed(0, 3), 2, 0));
+        assert_eq!((ids(&editor.blocks[0].block), ids(&editor.blocks[2].block)), (vec![1, 7, 2], vec![3]), "into another grid");
+        apply(&mut editor, Action::Drop(Drag::New(9), 2, 0));
+        apply(&mut editor, Action::Drop(Drag::New(3), 2, 9));
+        assert_eq!(ids(&editor.blocks[2].block), [9, 3], "from the strip; a photo already there only moves");
+        apply(&mut editor, Action::Drop(Drag::Placed(2, 0), 2, 9));
+        apply(&mut editor, Action::Drop(Drag::Placed(2, 0), 2, 9));
+        assert_eq!(ids(&editor.blocks[2].block), [9, 3], "moving to the end twice comes back round");
+    }
+
+    #[test]
+    fn single_photos_dropped_together_make_a_grid() {
+        let photo = |id| Block::Photo(MediaUse::new(id));
+        let mut editor = editor(vec![photo(1), photo(2), Block::Paragraph(String::new()), photo(3)]);
+        apply(&mut editor, Action::Drop(Drag::Placed(1, 0), 0, 1));
+        assert_eq!(kinds(&editor), ["grid", "paragraph", "photo"], "the moved photo's block goes");
+        assert_eq!(editor.blocks[0].block.media(), &[MediaUse::new(1), MediaUse::new(2)][..]);
+        assert!(matches!(editor.blocks[0].block, Block::Grid { columns: 2, rows: 1, .. }));
+        apply(&mut editor, Action::Drop(Drag::Placed(2, 0), 0, 0));
+        assert_eq!(kinds(&editor), ["grid", "paragraph"]);
+        assert_eq!(editor.blocks[0].block.media()[0], MediaUse::new(3), "dropped before the first");
+        apply(&mut editor, Action::Drop(Drag::Placed(0, 0), 1, 0));
+        assert_eq!(editor.blocks[0].block.media().len(), 3, "a paragraph takes no photos");
+    }
+
+    #[test]
+    fn the_layout_menu_turns_a_block_into_another_shape() {
+        let mut editor = editor(vec![Block::Photo(MediaUse::new(1))]);
+        apply(&mut editor, Action::Arrange(0, Shape::Gallery));
+        assert_eq!(editor.blocks[0].block, Block::Photo(MediaUse::new(1)), "one photo is not a gallery");
+        apply(&mut editor, Action::Arrange(0, Shape::Grid(3, 2)));
+        assert!(matches!(&editor.blocks[0].block, Block::Grid { columns: 3, rows: 2, media, .. } if media.len() == 1));
+        apply(&mut editor, Action::Arrange(0, Shape::Grid(2, 2)));
+        assert!(matches!(editor.blocks[0].block, Block::Grid { columns: 2, rows: 2, .. }));
+        apply(&mut editor, Action::Arrange(0, Shape::Photo));
+        assert_eq!(editor.blocks[0].block, Block::Photo(MediaUse::new(1)));
     }
 
     #[test]

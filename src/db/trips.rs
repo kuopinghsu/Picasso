@@ -171,7 +171,9 @@ pub(super) fn upgrade(db: &Database) -> Result<(), String> {
     db.ensure_column("trips", "trip_time", "INTEGER NOT NULL DEFAULT 0")?;
     // Why Suggest days left a member without a Day (`Review::code`), until
     // the user places it; 0 when nothing is to review.
-    db.ensure_column("trip_media", "review", "INTEGER NOT NULL DEFAULT 0")
+    db.ensure_column("trip_media", "review", "INTEGER NOT NULL DEFAULT 0")?;
+    // 1 once the author marks the Story finished; a draft until then.
+    db.ensure_column("stories", "finished", "INTEGER NOT NULL DEFAULT 0")
 }
 
 const CLOCK_FORMAT: &str = "%Y-%m-%d %H:%M:%S";
@@ -200,7 +202,7 @@ t.created_at, t.updated_at, t.trip_time,
 (SELECT COUNT(*) FROM trip_days d WHERE d.trip_id = t.id),
 (SELECT COUNT(*) FROM stories s WHERE s.trip_id = t.id)";
 
-const STORY_COLS: &str = "id, trip_id, title, subtitle, author, show_date, cover_ref, template, archived, revision, updated_at";
+const STORY_COLS: &str = "id, trip_id, title, subtitle, author, show_date, cover_ref, template, archived, revision, updated_at, finished";
 
 fn sql_err(err: rusqlite::Error) -> String {
     err.to_string()
@@ -248,6 +250,7 @@ fn read_story(row: &rusqlite::Row) -> rusqlite::Result<Story> {
         archived: row.get(8)?,
         revision: row.get(9)?,
         updated_at: row.get(10)?,
+        finished: row.get(11)?,
     })
 }
 
@@ -1095,15 +1098,16 @@ impl Database {
             .collect()
     }
 
-    /// Saves the Story's title, subtitle, author, date display, and template.
+    /// Saves the Story's title, subtitle, author, date display, template, and
+    /// whether it is finished.
     /// Fails without a change if the Story was saved since `revision`.
     /// Returns its new revision.
     pub fn save_story_details(&self, story: &Story, revision: i64) -> Result<i64, String> {
         let tx = self.conn.unchecked_transaction().map_err(sql_err)?;
         let next = next_revision(&tx, story.id, revision)?;
         tx.execute(
-            "UPDATE stories SET title = ?2, subtitle = ?3, author = ?4, show_date = ?5, template = ?6 WHERE id = ?1",
-            params![story.id, story.title.trim(), story.subtitle.trim(), story.author.trim(), story.show_date, story.template],
+            "UPDATE stories SET title = ?2, subtitle = ?3, author = ?4, show_date = ?5, template = ?6, finished = ?7 WHERE id = ?1",
+            params![story.id, story.title.trim(), story.subtitle.trim(), story.author.trim(), story.show_date, story.template, story.finished],
         )
         .map_err(sql_err)?;
         tx.commit().map_err(sql_err)?;
@@ -1523,12 +1527,15 @@ mod tests {
         assert_eq!(db.story(story_id).unwrap().revision, revision);
 
         let mut details = db.story(story_id).unwrap();
+        assert!(!details.finished, "a new story is a draft");
         details.subtitle = "A week by the sea".into();
         details.show_date = false;
+        details.finished = true;
         let revision = db.save_story_details(&details, revision).unwrap();
         let revision = db.set_story_cover(story_id, Some(refs[1]), revision).unwrap();
         let saved = db.story(story_id).unwrap();
         assert_eq!((saved.subtitle.as_str(), saved.show_date, saved.cover, saved.revision), ("A week by the sea", false, Some(refs[1]), revision));
+        assert!(saved.finished);
         assert!(!db.photo(ids[1]).unwrap().starred, "the cover is the story's own");
 
         db.set_story_archived(story_id, true);
@@ -1658,6 +1665,26 @@ mod tests {
         assert_eq!(db.trip_tracks(trip_id)[0].track_id, Some(db.tracks()[0].0));
         db.unlink_trip_track(link);
         assert!(db.trip_tracks(trip_id).is_empty());
+    }
+
+    #[test]
+    fn overlapping_tracks_each_keep_their_own_day() {
+        let (db, folder_id, folder, _) = photos("trip-overlap", &[]);
+        let trip_id = trip(&db, "Two devices");
+        let first = db.add_trip_day(trip_id, None, "").unwrap();
+        let second = db.add_trip_day(trip_id, None, "").unwrap();
+        // A watch and a phone recorded the same walk.
+        let walk = |lat: f64| Track { name: String::new(), segments: vec![vec![Point { lat, lon: 2.0, time: Some(10) }, Point { lat, lon: 2.1, time: Some(20) }]] };
+        for (name, lat) in [("watch.gpx", 1.0), ("phone.gpx", 1.0001)] {
+            db.store_track(folder_id, &folder_path(&folder, name), 1, 1, &Track { name: name.into(), ..walk(lat) }).unwrap();
+        }
+        let ids: Vec<i64> = db.tracks().iter().map(|track| track.0).collect();
+        let watch = db.link_trip_track(trip_id, ids[0], Some(first)).unwrap();
+        let phone = db.link_trip_track(trip_id, ids[1], Some(first)).unwrap();
+        assert_ne!(watch, phone);
+        db.link_trip_track(trip_id, ids[1], Some(second)).unwrap();
+        let days: Vec<(i64, Option<i64>)> = db.trip_tracks(trip_id).iter().map(|link| (link.id, link.day_id)).collect();
+        assert!(days.contains(&(watch, Some(first))) && days.contains(&(phone, Some(second))), "{days:?}");
     }
 
     #[test]

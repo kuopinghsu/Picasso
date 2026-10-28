@@ -535,6 +535,8 @@ impl PicassoApp {
                 let name = story_name(story);
                 let label = if story.archived {
                     RichText::new(trf("{} (archived)", &[&name])).color(theme::muted())
+                } else if !story.finished {
+                    RichText::new(trf("{} (draft)", &[&name]))
                 } else {
                     RichText::new(name.clone())
                 };

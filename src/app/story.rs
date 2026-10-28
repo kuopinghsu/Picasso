@@ -44,6 +44,8 @@ pub(super) struct StoryEditor {
     photos: HashMap<i64, Option<Photo>>,
     /// The preview or export being made, to show how far it is and stop it.
     job: Option<Arc<story_html::Progress>>,
+    /// The block to scroll to on the next frame.
+    reveal: Option<usize>,
 }
 
 impl StoryEditor {
@@ -131,6 +133,7 @@ impl PicassoApp {
             typing: None,
             photos: HashMap::new(),
             job: None,
+            reveal: None,
         });
     }
 
@@ -435,6 +438,7 @@ impl PicassoApp {
         let mut close = false;
         let mut start = false;
         let mut browse = false;
+        let mut show: Option<usize> = None;
         let response = egui::Modal::new(egui::Id::unique("export-story")).frame(about::dialog_frame()).show(ctx, |ui| {
             ui.set_width(440.0);
             about::title_bar(ui, &self.logo, tr("Export story"), &mut close);
@@ -482,15 +486,18 @@ impl PicassoApp {
                             .color(theme::DANGER),
                     );
                     ui.checkbox(&mut dialog.skip_missing, tr("Export anyway, with “Photo unavailable” in their place"));
+                    show_link(ui, check.first[0], &mut show);
                 }
                 if check.no_alt > 0 {
                     ui.label(
                         RichText::new(trf("{} photos have no description for people who can't see them. You can add one under each photo.", &[&check.no_alt]))
                             .color(theme::muted()),
                     );
+                    show_link(ui, check.first[1], &mut show);
                 }
                 if check.unknown > 0 {
                     ui.label(RichText::new(trf("{} blocks from a newer Picasso can't be exported.", &[&check.unknown])).color(theme::muted()));
+                    show_link(ui, check.first[2], &mut show);
                 }
                 if !dialog.error.is_empty() {
                     ui.label(RichText::new(&dialog.error).color(theme::DANGER));
@@ -520,6 +527,12 @@ impl PicassoApp {
             if let Some(picked) = picker.pick_folder() {
                 dialog.folder = picked.display().to_string();
             }
+        }
+        if let Some(index) = show {
+            if let Some(editor) = &mut self.story {
+                editor.reveal = Some(index);
+            }
+            close = true;
         }
         if close || response.should_close() {
             self.modal = Modal::None;
@@ -562,6 +575,7 @@ impl PicassoApp {
         self.end_story_job(story_id);
         self.activity = match outcome {
             Err(err) if err == story_html::CANCELLED => tr("Export cancelled. Nothing was written.").into(),
+            Err(err) if err == story_html::SOURCE_CHANGED => tr("A photo changed while the story was being written. Nothing was written; try again.").into(),
             Ok((folder, outcome)) if outcome.missing > 0 || outcome.unknown > 0 => trf(
                 "Exported to {}. {} photos are unavailable and {} blocks from a newer Picasso aren't included.",
                 &[&folder.display(), &outcome.missing, &outcome.unknown],
@@ -575,6 +589,7 @@ impl PicassoApp {
         self.end_story_job(story_id);
         self.activity = match outcome {
             Err(err) if err == story_html::CANCELLED => tr("Preview cancelled").into(),
+            Err(err) if err == story_html::SOURCE_CHANGED => tr("A photo changed while the story was being written. Nothing was written; try again.").into(),
             Ok(outcome) if outcome.missing > 0 || outcome.unknown > 0 => trf(
                 "Preview opened. {} photos are unavailable and {} blocks from a newer Picasso aren't shown.",
                 &[&outcome.missing, &outcome.unknown],
@@ -625,6 +640,7 @@ impl PicassoApp {
                         *typed = Some((String::new(), 2));
                     }
                     ui.checkbox(&mut story.show_date, tr("Show the trip's dates"));
+                    ui.checkbox(&mut story.finished, tr("Finished")).on_hover_text(tr("A story is a draft until you mark it finished."));
                 });
             });
         });
@@ -635,7 +651,7 @@ impl PicassoApp {
             .fill(theme::sidebar())
             .corner_radius(6)
             .inner_margin(Margin::symmetric(12, 8));
-        frame.show(ui, |ui| {
+        let shown = frame.show(ui, |ui| {
             ui.set_width(ui.available_width());
             let Some(editor) = &self.story else { return };
             let block = &editor.blocks[index].block;
@@ -750,6 +766,10 @@ impl PicassoApp {
                 }
             }
         });
+        if let Some(editor) = self.story.as_mut().filter(|editor| editor.reveal == Some(index)) {
+            editor.reveal = None;
+            ui.scroll_to_rect(shown.response.rect, Some(Align::Center));
+        }
         ui.add_space(6.0);
     }
 
@@ -847,6 +867,15 @@ impl PicassoApp {
     }
 }
 
+/// A link to the first block with a problem, which closes the dialog to show it.
+fn show_link(ui: &mut egui::Ui, first: Option<usize>, show: &mut Option<usize>) {
+    if let Some(index) = first {
+        if ui.link(trf("Show block {}", &[&(index + 1)])).clicked() {
+            *show = Some(index);
+        }
+    }
+}
+
 /// The caption and alt text of one photo, as used in this Story.
 fn media_words(ui: &mut egui::Ui, media: &mut MediaUse, uid: &str, field: u8, typed: &mut Option<(String, u8)>) {
     let caption = egui::TextEdit::singleline(&mut media.caption).hint_text(tr("Caption")).desired_width(f32::INFINITY);
@@ -936,6 +965,7 @@ mod tests {
             cover: None,
             template: crate::trip::DEFAULT_TEMPLATE.into(),
             archived: false,
+            finished: false,
             revision: 3,
             updated_at: 0,
         };
@@ -950,6 +980,7 @@ mod tests {
             typing: None,
             photos: HashMap::new(),
             job: None,
+            reveal: None,
         }
     }
 

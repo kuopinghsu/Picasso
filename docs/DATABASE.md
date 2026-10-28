@@ -40,7 +40,7 @@ Picasso also reads the `.picasa.ini` files Picasa left in photo folders, for sta
 | `trip_days` | Day of a Trip | `position` orders them; `day` is an optional date, and several Days may share one. A Day never moves to another Trip. |
 | `trip_media` | Photo or video in a Trip | `position` is the order they joined; `day_id` is a Day of the same Trip, which triggers enforce, with `day_position` its order there and `day_source` who chose it (0 none, 1 suggested, 2 the user). `review` says why Suggest days couldn't place it (0 nothing to review), until the user does. |
 | `trip_tracks` | GPS track linked to a Trip | `track_id` while the track is in the library; the path and name stay when it goes. |
-| `stories`, `story_blocks`, `story_media` | Story, its blocks, and the photos in them | `revision` goes up with each save, so a stale editor can't overwrite. Each block has a `uid` that stays through saves, a `kind`, and a JSON `payload` in the layout of its `version`; a block from a newer Picasso is kept unchanged. Each photo in a block has its own caption and alt text. |
+| `stories`, `story_blocks`, `story_media` | Story, its blocks, and the photos in them | `revision` goes up with each save, so a stale editor can't overwrite; `finished` is 0 while it is a draft. Each block has a `uid` that stays through saves, a `kind`, and a JSON `payload` in the layout of its `version`; a block from a newer Picasso is kept unchanged. Each photo in a block has its own caption and alt text. |
 
 Indexes cover the orders and lookups the window uses: by folder, by date taken and name (the default order), by name, by size (duplicates), by star, and album membership.
 
@@ -74,4 +74,4 @@ A library from a newer Picasso opens too, and keeps its number. Changes to the l
 - Raise `SCHEMA_VERSION`, add a row to the table above, and add a test beside `upgrades_an_older_library` that starts from the previous layout.
 - When the scanner reads something new from files, raise `INDEX_VERSION` instead, so existing rows are read again on the next scan.
 
-The tests in `src/db.rs` and `src/db/trips.rs` cover an upgrade from version 1, an upgrade from an old layout, one that fails halfway (the library is unchanged and its version stays 0), opening a library twice, and opening one from a newer version.
+The tests in `src/db.rs` and `src/db/trips.rs` cover an upgrade from version 1, an upgrade from an old layout, one that fails halfway (the library is unchanged and its version stays 0, or 1 for a failed upgrade to version 2), that every table and column of version 1 keeps its type and default so an older Picasso still reads it, opening a library twice, and opening one from a newer version.

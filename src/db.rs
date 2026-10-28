@@ -2098,6 +2098,79 @@ mod tests {
         assert_eq!(starred, 1);
     }
 
+    /// A library in the layout of version 1, with one starred photo.
+    fn version_1_library(path: &Path) {
+        let db = Database::open(path).unwrap();
+        let pics = path.parent().unwrap().join("pics");
+        std::fs::create_dir_all(&pics).unwrap();
+        let folder_id = db.add_folder(&pics).unwrap();
+        db.conn
+            .execute(
+                "INSERT INTO photos(folder_id, path, filename, starred) VALUES (?1, ?2, 'a.jpg', 1)",
+                params![folder_id, pics.join("a.jpg").to_string_lossy()],
+            )
+            .unwrap();
+        for table in ["story_media", "story_blocks", "stories", "trip_tracks", "trip_media", "trip_days", "trips", "media_refs"] {
+            db.conn.execute_batch(&format!("DROP TABLE {table}")).unwrap();
+        }
+        db.conn.execute_batch("DROP TRIGGER photos_media_hints; DROP TRIGGER photos_media_unlinked; PRAGMA user_version = 1").unwrap();
+    }
+
+    #[test]
+    fn a_failed_upgrade_to_version_2_leaves_version_1_as_it_was() {
+        let dir = temp_dir("migrate-fail-2");
+        let path = dir.join("v1.db");
+        version_1_library(&path);
+        {
+            // Something in the way: a `trip_media` without the columns its
+            // indexes need makes the upgrade fail after it created other tables.
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch("CREATE TABLE trip_media (x INTEGER)").unwrap();
+        }
+        let before = schema(&path);
+        assert!(Database::open(&path).is_err());
+        assert_eq!(schema(&path), before, "nothing of the upgrade is kept");
+        let conn = Connection::open(&path).unwrap();
+        assert_eq!(schema_version(&conn), 1);
+        let starred: i64 = conn.query_row("SELECT starred FROM photos", [], |row| row.get(0)).unwrap();
+        assert_eq!(starred, 1);
+    }
+
+    #[test]
+    fn version_2_keeps_what_version_1_reads() {
+        // An older Picasso reads only its own tables and columns; the upgrade
+        // must leave each of them, with its type and default, as it was.
+        let dir = temp_dir("migrate-older");
+        let path = dir.join("v1.db");
+        version_1_library(&path);
+        let columns = |conn: &Connection| -> Vec<(String, String, String, Option<String>)> {
+            let tables: Vec<String> = conn
+                .prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
+                .unwrap()
+                .query_map([], |row| row.get(0))
+                .unwrap()
+                .map(Result::unwrap)
+                .collect();
+            let mut all = Vec::new();
+            for table in tables {
+                let mut info = conn.prepare(&format!("PRAGMA table_info({table})")).unwrap();
+                let rows = info.query_map([], |row| Ok((table.clone(), row.get(1)?, row.get(2)?, row.get(4)?))).unwrap();
+                all.extend(rows.map(Result::unwrap));
+            }
+            all
+        };
+        let before = columns(&Connection::open(&path).unwrap());
+        drop(Database::open(&path).unwrap());
+        let conn = Connection::open(&path).unwrap();
+        assert_eq!(schema_version(&conn), SCHEMA_VERSION);
+        let after = columns(&conn);
+        for column in &before {
+            assert!(after.contains(column), "{column:?} changed or went");
+        }
+        let starred: i64 = conn.query_row("SELECT starred FROM photos", [], |row| row.get(0)).unwrap();
+        assert_eq!(starred, 1);
+    }
+
     #[test]
     fn a_library_from_a_newer_version_still_opens() {
         let dir = temp_dir("migrate-newer");

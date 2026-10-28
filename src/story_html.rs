@@ -12,12 +12,17 @@ use ring::digest;
 use crate::edit::Settings;
 use crate::trip::{Block, MediaUse, Story, StoryBlock};
 
-/// How the page's photos are made.
+/// How the page's photos are made. Its layout is [`Profile::VERSION`] in
+/// the manifest; a change to what it means raises that number.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Profile {
     /// Longest side, in pixels; smaller photos are not enlarged.
     pub edge: u32,
     pub quality: u8,
+}
+
+impl Profile {
+    pub const VERSION: u32 = 1;
 }
 
 impl Default for Profile {
@@ -86,6 +91,9 @@ pub struct Preflight {
     pub no_alt: usize,
     /// Blocks from a newer Picasso, which can't be exported.
     pub unknown: usize,
+    /// The first block with each of those, to show it: missing, no
+    /// description, newer.
+    pub first: [Option<usize>; 3],
 }
 
 impl Preflight {
@@ -102,16 +110,19 @@ pub fn preflight(page: &Page) -> Preflight {
     if page.story.cover.is_some_and(|cover| !available(cover)) {
         check.missing += 1;
     }
-    for block in page.blocks {
+    for (index, block) in page.blocks.iter().enumerate() {
         if matches!(block.block, Block::Unknown { .. }) {
             check.unknown += 1;
+            check.first[2].get_or_insert(index);
             continue;
         }
         for media in block.block.media() {
             if !available(media.media_id) {
                 check.missing += 1;
+                check.first[0].get_or_insert(index);
             } else if media.alt.trim().is_empty() {
                 check.no_alt += 1;
+                check.first[1].get_or_insert(index);
             }
         }
     }
@@ -137,18 +148,26 @@ pub fn write_story(folder: &Path, format: Format, profile: Profile, input: &Page
     let mut order: Vec<_> = sources.iter().collect();
     order.sort_by_key(|(id, _)| **id);
     progress.total.store(order.len(), Ordering::Relaxed);
+    let mut read = Vec::new();
     for (&media_id, source) in order {
         if progress.cancel.load(Ordering::Relaxed) {
             return Err(CANCELLED.into());
         }
         progress.done.fetch_add(1, Ordering::Relaxed);
         let Some((path, settings, rotation)) = source else { continue };
+        let before = stamp(path);
         // A photo that can't be read is shown as unavailable, never left out.
         let Ok(rgba) = crate::edit::render_edited(path, settings, *rotation, Some(profile.edge)) else { continue };
         let bytes = crate::image_io::encode_jpeg(&rgba, profile.quality.clamp(1, 100))?;
         let file = format!("images/{}.jpg", key(&bytes));
         crate::image_io::write_whole(&folder.join(&file), &bytes)?;
+        read.push((media_id, path, before));
         images.insert(media_id, WebImage { file, width: rgba.width(), height: rgba.height() });
+    }
+    // The page is what the files were when read: one replaced or changed
+    // meanwhile stops it, rather than mixing two versions.
+    if read.iter().any(|(_, path, before)| stamp(path) != *before) {
+        return Err(SOURCE_CHANGED.into());
     }
     let (text, outcome, name) = match format {
         Format::Html => {
@@ -162,11 +181,54 @@ pub fn write_story(folder: &Path, format: Format, profile: Profile, input: &Page
     };
     let index = folder.join(name);
     crate::image_io::write_whole(&index, text.as_bytes())?;
+    let manifest = manifest(story, format, profile, &read, &images);
+    crate::image_io::write_whole(&folder.join("manifest.json"), manifest.as_bytes())?;
     Ok((index, outcome))
+}
+
+/// The size and modification time of a source file, to notice a change.
+type Stamp = Option<(u64, std::time::SystemTime)>;
+
+fn stamp(path: &Path) -> Stamp {
+    let meta = std::fs::metadata(path).ok()?;
+    Some((meta.len(), meta.modified().ok()?))
+}
+
+/// What the page was made from: the Story revision, the profile, and for
+/// each photo its media reference, the file it became, and the size and
+/// modification time of its source. No paths, names, or camera details.
+fn manifest(story: &Story, format: Format, profile: Profile, read: &[(i64, &PathBuf, Stamp)], images: &HashMap<i64, WebImage>) -> String {
+    let photos: Vec<_> = read
+        .iter()
+        .filter_map(|(media_id, _, stamp)| {
+            let image = images.get(media_id)?;
+            let (bytes, modified) = stamp.map(|(bytes, time)| (bytes, time.duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs()))).unzip();
+            Some(serde_json::json!({
+                "media": media_id,
+                "file": image.file,
+                "width": image.width,
+                "height": image.height,
+                "source_bytes": bytes,
+                "source_modified": modified,
+            }))
+        })
+        .collect();
+    let manifest = serde_json::json!({
+        "manifest": 1,
+        "story": story.id,
+        "revision": story.revision,
+        "format": match format { Format::Html => "html", Format::Markdown => "markdown" },
+        "profile": { "version": Profile::VERSION, "edge": profile.edge, "quality": profile.quality, "metadata": "none" },
+        "photos": photos,
+    });
+    serde_json::to_string_pretty(&manifest).unwrap_or_default()
 }
 
 /// The reason [`write_story`] gives when it was cancelled.
 pub const CANCELLED: &str = "cancelled";
+
+/// The reason [`write_story`] gives when a photo's file changed while it ran.
+pub const SOURCE_CHANGED: &str = "source changed";
 
 /// Exports the Story into a new folder named `name` in `parent` (or
 /// `name 2`, `name 3`, … when that is taken), so nothing there is ever
@@ -435,6 +497,7 @@ mod tests {
             cover: None,
             template: crate::trip::DEFAULT_TEMPLATE.into(),
             archived: false,
+            finished: false,
             revision: 1,
             updated_at: 0,
         }
@@ -488,7 +551,7 @@ mod tests {
         let (story, words) = (story(), words());
         let page = Page { story: &story, dates: None, blocks: &blocks, sources: &sources, words: &words };
         let check = preflight(&page);
-        assert_eq!(check, Preflight { missing: 1, no_alt: 1, ..Preflight::default() });
+        assert_eq!(check, Preflight { missing: 1, no_alt: 1, first: [Some(1), Some(0), None], ..Preflight::default() });
         assert!(check.blocked(false) && !check.blocked(true), "missing photos wait for the user");
         let (index, outcome) = write_story(&folder, Format::Html, Profile::default(), &page, &Progress::default()).unwrap();
         assert_eq!(outcome.missing, 1);
@@ -497,6 +560,13 @@ mod tests {
         assert!(file.starts_with("images/") && folder.join(file).is_file(), "{file}");
         let jpeg = std::fs::read(folder.join(file)).unwrap();
         assert!(!jpeg.windows(4).any(|w| w == b"Exif"), "no camera metadata in the page's photos");
+        let text = std::fs::read_to_string(folder.join("manifest.json")).unwrap();
+        let manifest: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!((manifest["story"].as_i64(), manifest["revision"].as_i64()), (Some(1), Some(1)));
+        assert_eq!(manifest["profile"]["version"].as_u64(), Some(u64::from(Profile::VERSION)));
+        assert_eq!(manifest["photos"].as_array().unwrap().len(), 1, "only photos that were rendered");
+        assert_eq!(manifest["photos"][0]["file"].as_str(), Some(file));
+        assert!(!text.contains("banner"), "no source paths or names");
         let _ = std::fs::remove_dir_all(&folder);
     }
 

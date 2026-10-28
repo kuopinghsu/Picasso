@@ -366,6 +366,8 @@ pub struct Story {
     pub cover: Option<i64>,
     pub template: String,
     pub archived: bool,
+    /// The author marked it finished; until then it is a draft.
+    pub finished: bool,
     /// Goes up with every saved change, so a stale editor can't overwrite.
     pub revision: i64,
     pub updated_at: i64,

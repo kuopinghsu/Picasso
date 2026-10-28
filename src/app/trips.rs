@@ -4,7 +4,7 @@
 //! model; the library operations are in `src/db/trips.rs`.
 
 use chrono::{Local, NaiveDate, TimeZone};
-use eframe::egui::{self, Align, Layout, Margin, RichText, Vec2};
+use eframe::egui::{self, Align, Key, Layout, Margin, Modifiers, RichText, Vec2};
 
 use crate::i18n::{tr, trf};
 use crate::trip::{read_capture, TripQuery, AddPreview, DayFilter, DaySource, DaySuggestion, MemberQuery, Review, Story, StoryFilter, Trip, TripDay, TripDraft, TripImpact};
@@ -421,30 +421,61 @@ impl PicassoApp {
             if ui.selectable_label(filter.day == DayFilter::Any, tr("All")).clicked() {
                 filter.day = DayFilter::Any;
             }
-            for (index, day) in days.iter().enumerate() {
-                let label = format!("{} ({})", day_name(day), day.members);
-                let chip = ui.selectable_label(filter.day == DayFilter::Day(day.id), label);
-                if chip.clicked() {
-                    filter.day = DayFilter::Day(day.id);
+            // A few Days fit as chips; more take one line as a selector
+            // with previous and next, so the grid keeps its room.
+            let mut day_actions = |ui: &mut egui::Ui, index: usize| {
+                let day = &days[index];
+                if ui.button(tr("Edit day…")).clicked() {
+                    edit_day = Some(day.clone());
+                    ui.close();
                 }
-                chip.context_menu(|ui| {
-                    if ui.button(tr("Edit day…")).clicked() {
-                        edit_day = Some(day.clone());
-                        ui.close();
+                if ui.add_enabled(index > 0, egui::Button::new(tr("Move earlier"))).clicked() {
+                    move_day = Some((index, index - 1));
+                    ui.close();
+                }
+                if ui.add_enabled(index + 1 < days.len(), egui::Button::new(tr("Move later"))).clicked() {
+                    move_day = Some((index, index + 1));
+                    ui.close();
+                }
+                if ui.button(tr("Delete day")).on_hover_text(tr("Its photos stay in the trip, without a day")).clicked() {
+                    delete_day = Some(day.id);
+                    ui.close();
+                }
+            };
+            let label = |day: &TripDay| format!("{} ({})", day_name(day), day.members);
+            if days.len() <= DAY_CHIPS {
+                for (index, day) in days.iter().enumerate() {
+                    let chip = ui.selectable_label(filter.day == DayFilter::Day(day.id), label(day));
+                    if chip.clicked() {
+                        filter.day = DayFilter::Day(day.id);
                     }
-                    if ui.add_enabled(index > 0, egui::Button::new(tr("Move earlier"))).clicked() {
-                        move_day = Some((index, index - 1));
-                        ui.close();
+                    chip.context_menu(|ui| day_actions(ui, index));
+                }
+            } else if !days.is_empty() {
+                let current = days.iter().position(|day| filter.day == DayFilter::Day(day.id));
+                let previous = ui.add_enabled(current.is_some_and(|index| index > 0), egui::Button::new("◀"));
+                if theme::named(previous, tr("Previous day")).clicked() {
+                    if let Some(index) = current {
+                        filter.day = DayFilter::Day(days[index - 1].id);
                     }
-                    if ui.add_enabled(index + 1 < days.len(), egui::Button::new(tr("Move later"))).clicked() {
-                        move_day = Some((index, index + 1));
-                        ui.close();
-                    }
-                    if ui.button(tr("Delete day")).on_hover_text(tr("Its photos stay in the trip, without a day")).clicked() {
-                        delete_day = Some(day.id);
-                        ui.close();
+                }
+                let shown = current.map_or_else(|| trf("{} days", &[&days.len()]), |index| label(&days[index]));
+                egui::ComboBox::from_id_salt(("trip-day", trip_id)).selected_text(shown).height(360.0).show_ui(ui, |ui| {
+                    for (index, day) in days.iter().enumerate() {
+                        let text = format!("{}  {}", index + 1, label(day));
+                        if ui.selectable_label(current == Some(index), text).clicked() {
+                            filter.day = DayFilter::Day(day.id);
+                        }
                     }
                 });
+                let next = ui.add_enabled(current.is_none_or(|index| index + 1 < days.len()), egui::Button::new("▶"));
+                if theme::named(next, tr("Next day")).clicked() {
+                    filter.day = DayFilter::Day(days[current.map_or(0, |index| index + 1)].id);
+                }
+                if let Some(index) = current {
+                    let more = theme::named(ui.button("⋯"), tr("Edit, move, or delete this day"));
+                    egui::Popup::menu(&more).show(|ui| day_actions(ui, index));
+                }
             }
             let review = self.db.review_counts(trip_id);
             let to_review: usize = review.iter().map(|(_, count)| count).sum();
@@ -862,7 +893,7 @@ impl PicassoApp {
             }
         });
         if popup.is_none() {
-            button.on_hover_text(tr("Put the selected photos in a day of this trip"));
+            button.on_hover_text(tr("Put the selected photos in a day of this trip (Alt+1 … Alt+9, Alt+0 for no day)"));
         }
         if create {
             match self.db.add_trip_day(trip_id, None, "") {
@@ -870,7 +901,17 @@ impl PicassoApp {
                 Err(err) => self.activity = err,
             }
         }
-        let Some(day_id) = target else { return };
+        if let Some(day_id) = target {
+            self.move_selection_to_day(trip_id, day_id);
+        }
+    }
+
+    /// Puts the selected photos in Day `day_id` of the Trip, or in none,
+    /// in one step that Undo takes back. The menu and the shortcuts use it.
+    fn move_selection_to_day(&mut self, trip_id: i64, day_id: Option<i64>) {
+        if self.selection.is_empty() {
+            return;
+        }
         let photos = self.selection_in_order();
         let media = self.db.add_to_trip(trip_id, &photos).unwrap_or_default();
         match self.db.move_to_day(trip_id, day_id, &media, DaySource::User) {
@@ -902,9 +943,19 @@ impl PicassoApp {
             }
         });
         if popup.is_none() {
-            button.on_hover_text(tr("Change where the selected photos are in this day"));
+            button.on_hover_text(tr("Change where the selected photos are in this day (Alt+↑, Alt+↓, Alt+Home, Alt+End)"));
         }
-        let Some(step) = step else { return };
+        if let Some(step) = step {
+            self.arrange_selection(trip_id, day_id, step);
+        }
+    }
+
+    /// Moves the selected photos within Day `day_id`. The menu and the
+    /// shortcuts use it.
+    fn arrange_selection(&mut self, trip_id: i64, day_id: i64, step: Arrange) {
+        if self.selection.is_empty() {
+            return;
+        }
         let query = MemberQuery { day: DayFilter::Day(day_id), ..MemberQuery::default() };
         let members = self.db.trip_members(trip_id, &query, 0, usize::MAX);
         let order: Vec<i64> = members.iter().map(|member| member.media_id).collect();
@@ -913,6 +964,33 @@ impl PicassoApp {
             self.activity = err;
         }
         self.reload();
+    }
+
+    /// Shortcuts of a Trip's grid, while no text field has the keys:
+    /// Alt+1…9 puts the selection in that Day and Alt+0 in none; Alt+Up,
+    /// Down, Home, and End move it within the Day shown; Ctrl+Z takes back
+    /// the last Day move.
+    pub(super) fn trip_keys(&mut self, ctx: &egui::Context) {
+        let Nav::Trip(trip_id) = self.nav else { return };
+        let alt = |key| ctx.input_mut(|input| input.consume_key(Modifiers::ALT, key));
+        const DIGITS: [Key; 10] = [Key::Num0, Key::Num1, Key::Num2, Key::Num3, Key::Num4, Key::Num5, Key::Num6, Key::Num7, Key::Num8, Key::Num9];
+        if let Some(n) = DIGITS.iter().position(|key| alt(*key)) {
+            if n == 0 {
+                self.move_selection_to_day(trip_id, None);
+            } else if let Some(day) = self.db.trip_days(trip_id).get(n - 1) {
+                self.move_selection_to_day(trip_id, Some(day.id));
+            }
+        }
+        if let DayFilter::Day(day_id) = self.trip_filter.day {
+            let steps = [(Key::Home, Arrange::Start), (Key::ArrowUp, Arrange::Earlier), (Key::ArrowDown, Arrange::Later), (Key::End, Arrange::End)];
+            if let Some((_, step)) = steps.into_iter().find(|(key, _)| alt(*key)) {
+                self.arrange_selection(trip_id, day_id, step);
+            }
+        }
+        let undo = self.day_undo.as_ref().is_some_and(|(undo_trip, _)| *undo_trip == trip_id);
+        if undo && ctx.input_mut(|input| input.consume_key(Modifiers::COMMAND, Key::Z)) {
+            self.undo_day_move();
+        }
     }
 
     fn undo_day_move(&mut self) {
@@ -1230,6 +1308,9 @@ impl PicassoApp {
     }
 }
 
+/// Up to this many Days show as chips; more as a selector.
+const DAY_CHIPS: usize = 5;
+
 /// What adding photos to a Trip will do.
 fn preview_lines(ui: &mut egui::Ui, preview: &AddPreview) {
     ui.label(trf("{} photos and {} videos to add", &[&preview.photos, &preview.videos]));
@@ -1328,7 +1409,7 @@ fn date_field_from(ui: &mut egui::Ui, id: &str, text: &mut String, hint: &str, s
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 4.0;
         ui.add(egui::TextEdit::singleline(text).hint_text(hint).desired_width(96.0));
-        let button = ui.add(egui::Button::new("    ")).on_hover_text(tr("Choose a date"));
+        let button = theme::named(ui.add(egui::Button::new("    ")), tr("Choose a date"));
         paint_calendar_icon(ui, button.rect);
         let popup = egui::Popup::menu(&button).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
             let typed = parse_day(text).flatten();
@@ -1364,12 +1445,12 @@ fn calendar(ui: &mut egui::Ui, shown_id: egui::Id, shown: NaiveDate, selected: O
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 0.0;
         let arrow = Vec2::new(CELL, 22.0);
-        if ui.add_sized(arrow, egui::Button::new("‹")).on_hover_text(tr("Previous month")).clicked() {
+        if theme::named(ui.add_sized(arrow, egui::Button::new("‹")), tr("Previous month")).clicked() {
             month = first.checked_sub_months(Months::new(1)).unwrap_or(first);
         }
         let title = RichText::new(crate::types::format_month(first.year(), first.month())).strong();
         ui.add_sized(Vec2::new(width - 2.0 * CELL, 22.0), egui::Label::new(title));
-        if ui.add_sized(arrow, egui::Button::new("›")).on_hover_text(tr("Next month")).clicked() {
+        if theme::named(ui.add_sized(arrow, egui::Button::new("›")), tr("Next month")).clicked() {
             month = first.checked_add_months(Months::new(1)).unwrap_or(first);
         }
     });

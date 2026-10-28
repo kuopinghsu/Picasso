@@ -39,8 +39,8 @@ machine-uid = "0.6.0"
 # Time zone rules for counting the days of a trip, packaged so they work offline.
 chrono-tz = "0.10"
 
-[target.'cfg(unix)'.dev-dependencies]
-# Peak memory in the benchmark (`make bench`).
+[target.'cfg(unix)'.dependencies]
+# Free space before a Story export, and peak memory in the benchmark (`make bench`).
 libc = "0.2"
 
 [profile.dev.package."*"]

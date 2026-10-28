@@ -426,6 +426,14 @@ pub fn icon_button(ui: &mut egui::Ui, icon: Icon, enabled: bool, selected: bool)
     response
 }
 
+/// Names a button that shows only a symbol or a painted icon, for screen
+/// readers, and shows the name on hover.
+pub fn named(response: egui::Response, name: &str) -> egui::Response {
+    let enabled = response.enabled();
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, name));
+    response.on_hover_text(name)
+}
+
 fn icon_label(icon: Icon) -> &'static str {
     tr(match icon {
         Icon::RotateLeft => "Rotate Counterclockwise",

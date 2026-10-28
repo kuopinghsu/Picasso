@@ -45,6 +45,16 @@ const KEYBOARD: &[Section] = &[
         ],
     ),
     (
+        "Trip",
+        &[
+            (&["Alt+1 … Alt+9"], "Put the selected photos in that day"),
+            (&["Alt+0"], "Take the selected photos out of their day"),
+            (&["Alt+↑", "Alt+↓"], "Move the selected photos earlier / later in the day"),
+            (&["Alt+Home", "Alt+End"], "Move the selected photos to the start / end of the day"),
+            (&["Ctrl+Z"], "Undo the last move to a day"),
+        ],
+    ),
+    (
         "Viewer",
         &[
             (&["←", "→"], "Previous / next photo"),
@@ -262,8 +272,8 @@ fn row(ui: &mut egui::Ui, inputs: &str, action: &str) {
     });
 }
 
-/// Inputs joined with " / ". Ctrl reads as ⌘ on macOS, where the same
-/// shortcuts use the Command key.
+/// Inputs joined with " / ". Ctrl reads as ⌘ and Alt as ⌥ on macOS, where
+/// the same shortcuts use the Command and Option keys.
 fn input_text(inputs: &[&'static str], mouse: bool) -> String {
     let text = inputs
         .iter()
@@ -278,7 +288,7 @@ fn input_text(inputs: &[&'static str], mouse: bool) -> String {
         .collect::<Vec<_>>()
         .join(" / ");
     if cfg!(target_os = "macos") {
-        text.replace("Ctrl+", "⌘")
+        text.replace("Ctrl+", "⌘").replace("Alt+", "⌥")
     } else {
         text
     }

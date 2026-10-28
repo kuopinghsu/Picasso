@@ -87,28 +87,49 @@ pub struct Preflight {
     /// Photos not in the library now, or whose file is gone. They are shown
     /// as unavailable only if the user says so.
     pub missing: usize,
+    /// Photos whose file is there but can't be read as a photo. Like
+    /// missing ones, they are shown as unavailable only if the user says so.
+    pub unreadable: usize,
     /// Photos without a description for people who can't see them.
     pub no_alt: usize,
     /// Blocks from a newer Picasso, which can't be exported.
     pub unknown: usize,
     /// The first block with each of those, to show it: missing, no
-    /// description, newer.
-    pub first: [Option<usize>; 3],
+    /// description, newer, unreadable.
+    pub first: [Option<usize>; 4],
+    /// Photos that will be rendered, for the size of the export.
+    pub photos: usize,
 }
 
 impl Preflight {
     /// Whether export must wait for the user to decide.
     pub fn blocked(&self, skip_missing: bool) -> bool {
-        self.empty || (self.missing > 0 && !skip_missing)
+        self.empty || (self.missing + self.unreadable > 0 && !skip_missing)
     }
 }
 
-/// Checks a Story before it is exported. Reads only whether files exist.
+/// Checks a Story before it is exported. Reads whether files exist and
+/// the head of each, not the whole photo.
 pub fn preflight(page: &Page) -> Preflight {
     let mut check = Preflight { empty: page.blocks.is_empty(), ..Preflight::default() };
-    let available = |media_id: i64| matches!(page.sources.get(&media_id), Some(Some((path, _, _))) if path.is_file());
-    if page.story.cover.is_some_and(|cover| !available(cover)) {
-        check.missing += 1;
+    // Some(true) readable, Some(false) there but unreadable, None missing.
+    let state: HashMap<i64, Option<bool>> = page
+        .sources
+        .iter()
+        .map(|(&media_id, source)| {
+            let state = match source {
+                Some((path, _, _)) if path.is_file() => Some(crate::image_io::probe(path, 0).is_ok()),
+                _ => None,
+            };
+            (media_id, state)
+        })
+        .collect();
+    check.photos = state.values().filter(|state| **state == Some(true)).count();
+    let available = |media_id: i64| state.get(&media_id).copied().flatten();
+    match page.story.cover.map(available) {
+        Some(None) => check.missing += 1,
+        Some(Some(false)) => check.unreadable += 1,
+        _ => {}
     }
     for (index, block) in page.blocks.iter().enumerate() {
         if matches!(block.block, Block::Unknown { .. }) {
@@ -117,9 +138,13 @@ pub fn preflight(page: &Page) -> Preflight {
             continue;
         }
         for media in block.block.media() {
-            if !available(media.media_id) {
+            let readable = available(media.media_id);
+            if readable.is_none() {
                 check.missing += 1;
                 check.first[0].get_or_insert(index);
+            } else if readable == Some(false) {
+                check.unreadable += 1;
+                check.first[3].get_or_insert(index);
             } else if media.alt.trim().is_empty() {
                 check.no_alt += 1;
                 check.first[1].get_or_insert(index);
@@ -222,6 +247,38 @@ fn manifest(story: &Story, format: Format, profile: Profile, read: &[(i64, &Path
         "photos": photos,
     });
     serde_json::to_string_pretty(&manifest).unwrap_or_default()
+}
+
+/// About how many bytes an export of `photos` photos takes: JPEGs of the
+/// profile's size at 3:2, plus the page. Meant for a free-space check, so
+/// it errs on the large side.
+pub fn estimated_bytes(photos: usize, profile: Profile) -> u64 {
+    let pixels = u64::from(profile.edge) * u64::from(profile.edge) * 2 / 3;
+    // Bits per pixel grow with quality: about 1.2 at 60, 3.6 at 95.
+    let bits = 12 + (u64::from(profile.quality.clamp(60, 95)) - 60) * 24 / 35;
+    photos as u64 * pixels * bits / 80 + 256 * 1024
+}
+
+/// Free bytes on the volume of `folder`, where the system says.
+pub fn free_space(folder: &Path) -> Option<u64> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        let path = std::ffi::CString::new(folder.as_os_str().as_bytes()).ok()?;
+        // SAFETY: an all-zero `statvfs` is valid, `path` is a valid C string,
+        // and `stat` lives for the call.
+        let mut stat: libc::statvfs = unsafe { std::mem::zeroed() };
+        if unsafe { libc::statvfs(path.as_ptr(), &mut stat) } != 0 {
+            return None;
+        }
+        #[allow(clippy::unnecessary_cast)]
+        Some(stat.f_bavail as u64 * stat.f_frsize as u64)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = folder;
+        None
+    }
 }
 
 /// The reason [`write_story`] gives when it was cancelled.
@@ -551,7 +608,7 @@ mod tests {
         let (story, words) = (story(), words());
         let page = Page { story: &story, dates: None, blocks: &blocks, sources: &sources, words: &words };
         let check = preflight(&page);
-        assert_eq!(check, Preflight { missing: 1, no_alt: 1, first: [Some(1), Some(0), None], ..Preflight::default() });
+        assert_eq!(check, Preflight { missing: 1, no_alt: 1, first: [Some(1), Some(0), None, None], photos: 1, ..Preflight::default() });
         assert!(check.blocked(false) && !check.blocked(true), "missing photos wait for the user");
         let (index, outcome) = write_story(&folder, Format::Html, Profile::default(), &page, &Progress::default()).unwrap();
         assert_eq!(outcome.missing, 1);
@@ -568,6 +625,39 @@ mod tests {
         assert_eq!(manifest["photos"][0]["file"].as_str(), Some(file));
         assert!(!text.contains("banner"), "no source paths or names");
         let _ = std::fs::remove_dir_all(&folder);
+    }
+
+    #[test]
+    fn unreadable_photos_wait_for_the_user_like_missing_ones() {
+        let folder = std::env::temp_dir().join(format!("picasso-story-bad-{}", std::process::id()));
+        std::fs::create_dir_all(&folder).unwrap();
+        let bad = folder.join("bad.jpg");
+        std::fs::write(&bad, b"not a photo").unwrap();
+        let mut described = MediaUse::new(1);
+        described.alt = "Something".into();
+        let sources = HashMap::from([(1, Some((bad, Settings::default(), 0)))]);
+        let blocks = [StoryBlock::new(Block::Heading("Day 1".into())), StoryBlock::new(Block::Photo(described))];
+        let (story, words) = (story(), words());
+        let page = Page { story: &story, dates: None, blocks: &blocks, sources: &sources, words: &words };
+        let check = preflight(&page);
+        assert_eq!((check.unreadable, check.missing, check.photos, check.first[3]), (1, 0, 0, Some(1)));
+        assert!(check.blocked(false) && !check.blocked(true));
+        let _ = std::fs::remove_dir_all(&folder);
+    }
+
+    #[test]
+    fn the_size_estimate_grows_with_photos_size_and_quality() {
+        let small = Profile { edge: 1200, quality: 60 };
+        let large = Profile { edge: 2400, quality: 95 };
+        assert!(estimated_bytes(0, small) > 0, "the page itself");
+        assert!(estimated_bytes(10, small) < estimated_bytes(20, small));
+        assert!(estimated_bytes(10, small) < estimated_bytes(10, large));
+        // A 1600 px JPEG at 85 is typically 300–500 KB; the estimate errs high.
+        let one = estimated_bytes(1, Profile::default()) - estimated_bytes(0, Profile::default());
+        assert!((400_000..1_000_000).contains(&one), "{one}");
+        #[cfg(unix)]
+        assert!(free_space(&std::env::temp_dir()).is_some_and(|free| free > 0));
+        assert_eq!(free_space(Path::new("/no/such/folder/anywhere")), None);
     }
 
     #[test]

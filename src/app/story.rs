@@ -230,7 +230,7 @@ impl PicassoApp {
                 retry = true;
             }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                let more = ui.button("⋯");
+                let more = theme::named(ui.button("⋯"), tr("More"));
                 egui::Popup::menu(&more).show(|ui| {
                     let label = if editor.story.archived { tr("Restore story") } else { tr("Archive story") };
                     if ui.button(label).clicked() {
@@ -488,6 +488,27 @@ impl PicassoApp {
                     ui.checkbox(&mut dialog.skip_missing, tr("Export anyway, with “Photo unavailable” in their place"));
                     show_link(ui, check.first[0], &mut show);
                 }
+                if check.unreadable > 0 {
+                    ui.label(
+                        RichText::new(trf("{} photos can't be read: their files may be damaged or in a format Picasso can't open.", &[&check.unreadable]))
+                            .color(theme::DANGER),
+                    );
+                    if check.missing == 0 {
+                        ui.checkbox(&mut dialog.skip_missing, tr("Export anyway, with “Photo unavailable” in their place"));
+                    }
+                    show_link(ui, check.first[3], &mut show);
+                }
+                let needed = story_html::estimated_bytes(check.photos, dialog.profile);
+                let free = story_html::free_space(std::path::Path::new(&dialog.folder));
+                if let Some(free) = free.filter(|free| *free < needed) {
+                    ui.label(
+                        RichText::new(trf(
+                            "The export needs about {} but only {} is free there. Choose another folder or a smaller photo size.",
+                            &[&crate::types::format_bytes(needed), &crate::types::format_bytes(free)],
+                        ))
+                        .color(theme::DANGER),
+                    );
+                }
                 if check.no_alt > 0 {
                     ui.label(
                         RichText::new(trf("{} photos have no description for people who can't see them. You can add one under each photo.", &[&check.no_alt]))
@@ -508,7 +529,8 @@ impl PicassoApp {
                         dialog.profile = story_html::Profile::default();
                     }
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        let ready = !dialog.check.blocked(dialog.skip_missing);
+                        let roomy = free.is_none_or(|free| free >= needed);
+                        let ready = roomy && !dialog.check.blocked(dialog.skip_missing);
                         if ui.add_enabled(ready, theme::primary_button(tr("Export"))).clicked() {
                             start = true;
                         }
@@ -662,7 +684,7 @@ impl PicassoApp {
             ui.horizontal(|ui| {
                 ui.label(RichText::new(tr(label)).size(12.0).color(theme::muted()));
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    let more = ui.button("⋯").on_hover_text(tr("More"));
+                    let more = theme::named(ui.button("⋯"), tr("More"));
                     egui::Popup::menu(&more).show(|ui| {
                         if ui.add_enabled(index > 0, egui::Button::new(tr("Move up"))).clicked() {
                             actions.push(Action::Up(index));
@@ -685,10 +707,10 @@ impl PicassoApp {
                             actions.push(Action::Remove(index));
                         }
                     });
-                    if ui.add_enabled(index + 1 < count, egui::Button::new("↓")).on_hover_text(tr("Move down")).clicked() {
+                    if theme::named(ui.add_enabled(index + 1 < count, egui::Button::new("↓")), tr("Move down")).clicked() {
                         actions.push(Action::Down(index));
                     }
-                    if ui.add_enabled(index > 0, egui::Button::new("↑")).on_hover_text(tr("Move up")).clicked() {
+                    if theme::named(ui.add_enabled(index > 0, egui::Button::new("↑")), tr("Move up")).clicked() {
                         actions.push(Action::Up(index));
                     }
                 });

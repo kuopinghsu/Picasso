@@ -1298,6 +1298,9 @@ impl PicassoApp {
         if !photo_keys {
             return;
         }
+        if self.mode == Mode::Browse {
+            self.trip_keys(ctx);
+        }
         if Self::take_copy_command(ctx) {
             let index = match self.mode {
                 Mode::Browse => self.primary_index(),

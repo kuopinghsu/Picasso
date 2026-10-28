@@ -698,18 +698,14 @@ impl PicassoApp {
                     self.sort = sort;
                     self.reload_view();
                 }
-                if ui
-                    .button(egui::RichText::new("★").color(STAR))
-                    .on_hover_text(tr("Select starred photos"))
-                    .clicked()
-                {
+                if theme::named(ui.button(egui::RichText::new("★").color(STAR)), tr("Select starred photos")).clicked() {
                     self.select_starred();
                 }
                 if !self.selection.is_empty() {
                     ui.add(egui::Separator::default().vertical().spacing(10.0));
                     let starred = self.primary_starred();
                     let star = egui::RichText::new(if starred { "★" } else { "☆" }).color(if starred { STAR } else { theme::text() });
-                    if ui.button(star).on_hover_text(tr(if starred { "Unstar" } else { "Star" })).clicked() {
+                    if theme::named(ui.button(star), tr(if starred { "Unstar" } else { "Star" })).clicked() {
                         self.toggle_star_selection();
                     }
                     let rotate = theme::icon_button(ui, theme::Icon::RotateRight, true, false);

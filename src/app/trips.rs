@@ -237,13 +237,14 @@ impl PicassoApp {
         let unassigned = self.db.count_trip_members(trip_id, &MemberQuery { day: DayFilter::Unassigned, ..MemberQuery::default() });
         let mut edit_day: Option<TripDay> = None;
         let mut delete_day: Option<i64> = None;
+        let mut move_day: Option<(usize, usize)> = None;
         let mut suggest = false;
         ui.horizontal_wrapped(|ui| {
             ui.label(RichText::new(tr("Days")).size(13.0).color(theme::muted()));
             if ui.selectable_label(filter.day == DayFilter::Any, tr("All")).clicked() {
                 filter.day = DayFilter::Any;
             }
-            for day in &days {
+            for (index, day) in days.iter().enumerate() {
                 let label = format!("{} ({})", day_name(day), day.members);
                 let chip = ui.selectable_label(filter.day == DayFilter::Day(day.id), label);
                 if chip.clicked() {
@@ -254,11 +255,32 @@ impl PicassoApp {
                         edit_day = Some(day.clone());
                         ui.close();
                     }
+                    if ui.add_enabled(index > 0, egui::Button::new(tr("Move earlier"))).clicked() {
+                        move_day = Some((index, index - 1));
+                        ui.close();
+                    }
+                    if ui.add_enabled(index + 1 < days.len(), egui::Button::new(tr("Move later"))).clicked() {
+                        move_day = Some((index, index + 1));
+                        ui.close();
+                    }
                     if ui.button(tr("Delete day")).on_hover_text(tr("Its photos stay in the trip, without a day")).clicked() {
                         delete_day = Some(day.id);
                         ui.close();
                     }
                 });
+            }
+            let review = self.db.review_counts(trip_id);
+            let to_review: usize = review.iter().map(|(_, count)| count).sum();
+            if to_review > 0 || filter.day == DayFilter::Review {
+                let chip = ui.selectable_label(filter.day == DayFilter::Review, trf("Needs review ({})", &[&to_review]));
+                let mut why = tr("Suggest days couldn't tell which day these were taken. Put them in a day to settle them.").to_string();
+                for &(reason, count) in &review {
+                    why.push('\n');
+                    why.push_str(&review_text(reason, count));
+                }
+                if chip.on_hover_text(why).clicked() {
+                    filter.day = DayFilter::Review;
+                }
             }
             if unassigned > 0 || filter.day == DayFilter::Unassigned {
                 let label = trf("Not in a day ({})", &[&unassigned]);
@@ -301,13 +323,100 @@ impl PicassoApp {
             }
             self.reload();
         }
+        if let Some((from, to)) = move_day {
+            let mut order: Vec<i64> = days.iter().map(|day| day.id).collect();
+            order.swap(from, to);
+            if let Err(err) = self.db.reorder_trip_days(trip_id, &order) {
+                self.activity = err;
+            }
+        }
         if suggest {
             self.suggest_days(ui.ctx(), trip_id);
         }
+        self.tracks_row(ui, trip_id, &days);
         if filter != self.trip_filter {
             self.trip_filter = filter;
             self.selection.clear();
             self.reload_view();
+        }
+    }
+
+    /// The library's GPS tracks linked to the Trip, each to the whole Trip
+    /// or to one of its Days. Shown once the library has a track.
+    fn tracks_row(&mut self, ui: &mut egui::Ui, trip_id: i64, days: &[TripDay]) {
+        let linked = self.db.trip_tracks(trip_id);
+        let choices = self.db.track_choices();
+        if linked.is_empty() && choices.is_empty() {
+            return;
+        }
+        let mut link: Option<(i64, Option<i64>)> = None;
+        let mut unlink: Option<i64> = None;
+        ui.horizontal_wrapped(|ui| {
+            ui.label(RichText::new(tr("Tracks")).size(13.0).color(theme::muted()));
+            for track in &linked {
+                let day = track.day_id.and_then(|id| days.iter().find(|day| day.id == id));
+                let mut label = match day {
+                    Some(day) => format!("{} · {}", track.name, day_name(day)),
+                    None => track.name.clone(),
+                };
+                if track.track_id.is_none() {
+                    label = trf("{} (unavailable)", &[&label]);
+                }
+                let chip = ui.selectable_label(false, label);
+                let chip = if track.track_id.is_none() {
+                    chip.on_hover_text(tr("Its file is no longer in the library. The link comes back when the library finds it again."))
+                } else {
+                    chip.on_hover_text(tr("Right-click to choose its day or remove it"))
+                };
+                chip.context_menu(|ui| {
+                    if let Some(track_id) = track.track_id {
+                        if ui.selectable_label(track.day_id.is_none(), tr("Whole trip")).clicked() {
+                            link = Some((track_id, None));
+                            ui.close();
+                        }
+                        for day in days {
+                            if ui.selectable_label(track.day_id == Some(day.id), day_name(day)).clicked() {
+                                link = Some((track_id, Some(day.id)));
+                                ui.close();
+                            }
+                        }
+                        ui.separator();
+                    }
+                    if ui.button(tr("Remove from Trip")).clicked() {
+                        unlink = Some(track.id);
+                        ui.close();
+                    }
+                });
+            }
+            let unlinked: Vec<_> =
+                choices.iter().filter(|(id, _, _)| !linked.iter().any(|track| track.track_id == Some(*id))).collect();
+            if !unlinked.is_empty() {
+                let button = ui.button(tr("Add track"));
+                let popup = egui::Popup::menu(&button).show(|ui| {
+                    egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
+                        for (id, name, started) in &unlinked {
+                            let label = match started {
+                                Some(at) => format!("{name} · {}", format_day(*at)),
+                                None => name.clone(),
+                            };
+                            if ui.selectable_label(false, label).clicked() {
+                                link = Some((*id, None));
+                            }
+                        }
+                    });
+                });
+                if popup.is_none() {
+                    button.on_hover_text(tr("Link a GPS track from the library to this trip. The track itself stays where it is."));
+                }
+            }
+        });
+        if let Some((track_id, day_id)) = link {
+            if let Err(err) = self.db.link_trip_track(trip_id, track_id, day_id) {
+                self.activity = err;
+            }
+        }
+        if let Some(link_id) = unlink {
+            self.db.unlink_trip_track(link_id);
         }
     }
 
@@ -400,17 +509,9 @@ impl PicassoApp {
         self.activity = match outcome {
             Ok(outcome) => {
                 let mut text = trf("Suggested days for {} photos", &[&outcome.assigned]);
-                for (reason, count) in &outcome.review {
+                for &(reason, count) in &outcome.review {
                     text.push_str(" · ");
-                    text.push_str(&trf(
-                        match reason {
-                            Review::NoOffset => "{} without a time zone",
-                            Review::NoTime => "{} without a capture time",
-                            Review::Ambiguous => "{} at a time that is unclear around a clock change",
-                            Review::Unread => "{} not read yet",
-                        },
-                        &[count],
-                    ));
+                    text.push_str(&review_text(reason, count));
                 }
                 text
             }
@@ -460,6 +561,38 @@ impl PicassoApp {
                 self.day_undo = Some((trip_id, before));
             }
             Err(err) => self.activity = err,
+        }
+        self.reload();
+    }
+
+    /// Moves the selected photos within the Day being shown.
+    pub(super) fn arrange_menu(&mut self, ui: &mut egui::Ui) {
+        let (Nav::Trip(trip_id), DayFilter::Day(day_id)) = (&self.nav, self.trip_filter.day) else { return };
+        let trip_id = *trip_id;
+        let mut step = None;
+        let button = ui.button(tr("Arrange"));
+        let popup = egui::Popup::menu(&button).show(|ui| {
+            for (label, choice) in [
+                ("Move to start", Arrange::Start),
+                ("Move earlier", Arrange::Earlier),
+                ("Move later", Arrange::Later),
+                ("Move to end", Arrange::End),
+            ] {
+                if ui.button(tr(label)).clicked() {
+                    step = Some(choice);
+                }
+            }
+        });
+        if popup.is_none() {
+            button.on_hover_text(tr("Change where the selected photos are in this day"));
+        }
+        let Some(step) = step else { return };
+        let query = MemberQuery { day: DayFilter::Day(day_id), ..MemberQuery::default() };
+        let members = self.db.trip_members(trip_id, &query, 0, usize::MAX);
+        let order: Vec<i64> = members.iter().map(|member| member.media_id).collect();
+        let selected: Vec<bool> = members.iter().map(|member| member.photo_id.is_some_and(|id| self.selection.contains(&id))).collect();
+        if let Err(err) = self.db.order_day(day_id, &arrange(&order, &selected, step)) {
+            self.activity = err;
         }
         self.reload();
     }
@@ -811,6 +944,51 @@ fn day_name(day: &TripDay) -> String {
 }
 
 /// A calendar day written the way the interface language writes dates.
+/// How many members are to review for `reason`.
+fn review_text(reason: Review, count: usize) -> String {
+    let text = match reason {
+        Review::NoOffset => "{} without a time zone",
+        Review::NoTime => "{} without a capture time",
+        Review::Ambiguous => "{} at a time that is unclear around a clock change",
+        Review::Unread => "{} not read yet",
+    };
+    trf(text, &[&count])
+}
+
+#[derive(Clone, Copy)]
+enum Arrange {
+    Start,
+    Earlier,
+    Later,
+    End,
+}
+
+/// `order` with its `selected` items moved by `step`, keeping the order
+/// among the selected and among the others.
+fn arrange(order: &[i64], selected: &[bool], step: Arrange) -> Vec<i64> {
+    let pick = |want: bool| order.iter().zip(selected).filter(move |(_, &chosen)| chosen == want).map(|(&id, _)| id);
+    let mut items: Vec<(i64, bool)> = order.iter().copied().zip(selected.iter().copied()).collect();
+    match step {
+        Arrange::Start => return pick(true).chain(pick(false)).collect(),
+        Arrange::End => return pick(false).chain(pick(true)).collect(),
+        Arrange::Earlier => {
+            for i in 1..items.len() {
+                if items[i].1 && !items[i - 1].1 {
+                    items.swap(i, i - 1);
+                }
+            }
+        }
+        Arrange::Later => {
+            for i in (1..items.len()).rev() {
+                if items[i - 1].1 && !items[i].1 {
+                    items.swap(i, i - 1);
+                }
+            }
+        }
+    }
+    items.into_iter().map(|(id, _)| id).collect()
+}
+
 fn day_label(day: NaiveDate) -> String {
     // Noon is on the same day in every time zone the computer may be in.
     let noon = day.and_hms_opt(12, 0, 0).and_then(|time| Local.from_local_datetime(&time).earliest());
@@ -830,5 +1008,17 @@ mod tests {
         assert_eq!(parse_day(""), Some(None), "a day is optional");
         assert_eq!(parse_day("March 1"), None);
         assert_eq!(parse_day("2026-02-30"), None);
+    }
+
+    #[test]
+    fn selected_photos_move_together_and_keep_their_order() {
+        let order = [1, 2, 3, 4, 5];
+        let selected = [false, true, false, true, false];
+        assert_eq!(arrange(&order, &selected, Arrange::Start), [2, 4, 1, 3, 5]);
+        assert_eq!(arrange(&order, &selected, Arrange::End), [1, 3, 5, 2, 4]);
+        assert_eq!(arrange(&order, &selected, Arrange::Earlier), [2, 1, 4, 3, 5]);
+        assert_eq!(arrange(&order, &selected, Arrange::Later), [1, 3, 2, 5, 4]);
+        let first = [true, false, false, false, false];
+        assert_eq!(arrange(&order, &first, Arrange::Earlier), order, "the first stays first");
     }
 }

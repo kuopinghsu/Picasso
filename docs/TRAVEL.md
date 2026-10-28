@@ -68,6 +68,10 @@ A member's instant is decided in this order:
 
 **Suggest days** reads the clock reading and offset only from Trip members that lack them or whose file changed, on a background thread, never by rescanning the library, and never writes the files. It makes a Day for each date that has none, after the existing Days and in date order, and reports how many photos need review and why. The time zone rules come from `chrono-tz`, compiled into Picasso. A clock reading that is ambiguous or doesn't exist in the Trip timezone (around a daylight saving change) goes to **Needs review**. With the same confirmed inputs, the same Days come out whatever timezone the computer is in.
 
+Members Suggest days couldn't place are kept in **Needs review** with the reason, shown among the Days. Putting them in a Day, or in no Day, settles them; Undo brings the review back. Within a Day, photos keep the order the user gives them, whatever the grid's sort.
+
+GPS tracks already in the library are linked to the Trip from its header, to the whole Trip or to one Day. The link keeps the track's path and name, not its points; while the file is gone it shows as unavailable and comes back when the library finds it.
+
 ## Rendering, export, and publishing
 
 - A Story follows the catalog's current edits by default, and shows when its output would change because of them.

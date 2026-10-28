@@ -168,7 +168,10 @@ pub(super) fn upgrade(db: &Database) -> Result<(), String> {
         db.ensure_column("media_refs", column, decl)?;
     }
     // Cameras without a recorded offset were set to Trip time.
-    db.ensure_column("trips", "trip_time", "INTEGER NOT NULL DEFAULT 0")
+    db.ensure_column("trips", "trip_time", "INTEGER NOT NULL DEFAULT 0")?;
+    // Why Suggest days left a member without a Day (`Review::code`), until
+    // the user places it; 0 when nothing is to review.
+    db.ensure_column("trip_media", "review", "INTEGER NOT NULL DEFAULT 0")
 }
 
 const CLOCK_FORMAT: &str = "%Y-%m-%d %H:%M:%S";
@@ -288,6 +291,7 @@ fn member_filter(query: &MemberQuery) -> String {
         DayFilter::Any => filter.push_str(" AND ?2 = ?2"),
         DayFilter::Unassigned => filter.push_str(" AND tm.day_id IS NULL AND ?2 = ?2"),
         DayFilter::Day(_) => filter.push_str(" AND tm.day_id = ?2"),
+        DayFilter::Review => filter.push_str(" AND tm.review != 0 AND ?2 = ?2"),
     }
     if query.starred {
         filter.push_str(" AND p.starred != 0");
@@ -535,14 +539,18 @@ impl Database {
         })
     }
 
-    /// The catalog photos of the members matching `query`, in `sort`
-    /// order, for the photo grid. Unavailable members have none.
+    /// The catalog photos of the members matching `query`, for the photo
+    /// grid: in a Day, in the Day's order; otherwise in `sort` order.
+    /// Unavailable members have none.
     pub fn trip_photos(&self, trip_id: i64, query: &MemberQuery, sort: Sort) -> Vec<Photo> {
+        let order = match query.day {
+            DayFilter::Day(_) => "tm.day_position, tm.position",
+            _ => order_sql(sort),
+        };
         let sql = format!(
             "SELECT {PHOTO_COLS} FROM trip_media tm JOIN media_refs m ON m.id = tm.media_id JOIN photos p ON p.id = m.photo_id
-             WHERE {} ORDER BY {}",
-            member_filter(query),
-            order_sql(sort)
+             WHERE {} ORDER BY {order}",
+            member_filter(query)
         );
         self.map_rows(&sql, params![trip_id, day_param(query)], read_photo)
     }
@@ -659,7 +667,7 @@ impl Database {
     /// Where these members are now, to put them back with [`Database::restore_day_assignments`].
     pub fn day_assignments(&self, trip_id: i64, media_ids: &[i64]) -> Vec<DayAssignment> {
         let Ok(mut stmt) =
-            self.conn.prepare("SELECT day_id, day_source, day_position FROM trip_media WHERE trip_id = ?1 AND media_id = ?2")
+            self.conn.prepare("SELECT day_id, day_source, day_position, review FROM trip_media WHERE trip_id = ?1 AND media_id = ?2")
         else {
             return Vec::new();
         };
@@ -672,6 +680,7 @@ impl Database {
                         day_id: row.get(0)?,
                         source: DaySource::from_code(row.get(1)?),
                         position: row.get(2)?,
+                        review: Review::from_code(row.get(3)?),
                     })
                 })
                 .ok()
@@ -681,7 +690,8 @@ impl Database {
 
     /// Moves members to Day `day_id` (or out of any Day), after the Day's
     /// members and in the order given. A suggestion leaves members the user
-    /// put in a Day where they are. Returns the members moved and where each
+    /// put in a Day where they are; the user placing members ends their
+    /// review. Returns the members moved and where each
     /// was before, for Undo.
     pub fn move_to_day(&self, trip_id: i64, day_id: Option<i64>, media_ids: &[i64], source: DaySource) -> Result<Vec<DayAssignment>, String> {
         let before = self.day_assignments(trip_id, media_ids);
@@ -700,7 +710,7 @@ impl Database {
         {
             let mut update = tx
                 .prepare(
-                    "UPDATE trip_media SET day_id = ?3, day_source = ?4, day_position = ?5
+                    "UPDATE trip_media SET day_id = ?3, day_source = ?4, day_position = ?5, review = CASE WHEN ?6 = 0 THEN 0 ELSE review END
                      WHERE trip_id = ?1 AND media_id = ?2 AND (?6 = 0 OR day_source != 2)",
                 )
                 .map_err(sql_err)?;
@@ -723,12 +733,12 @@ impl Database {
         let tx = self.conn.unchecked_transaction().map_err(sql_err)?;
         {
             let mut update = tx
-                .prepare("UPDATE trip_media SET day_id = ?3, day_source = ?4, day_position = ?5 WHERE trip_id = ?1 AND media_id = ?2")
+                .prepare("UPDATE trip_media SET day_id = ?3, day_source = ?4, day_position = ?5, review = ?6 WHERE trip_id = ?1 AND media_id = ?2")
                 .map_err(sql_err)?;
             for assignment in assignments {
                 let code = assignment.source.map_or(0, DaySource::code);
                 update
-                    .execute(params![trip_id, assignment.media_id, assignment.day_id, code, assignment.position])
+                    .execute(params![trip_id, assignment.media_id, assignment.day_id, code, assignment.position, assignment.review.map_or(0, Review::code)])
                     .map_err(sql_err)?;
             }
         }
@@ -788,6 +798,14 @@ impl Database {
         touch_trip(&tx, trip_id)?;
         tx.commit().map_err(sql_err)?;
         Ok(id)
+    }
+
+    /// The library's tracks to pick from, without their points: (id,
+    /// name, start time), the most recent first.
+    pub fn track_choices(&self) -> Vec<(i64, String, Option<i64>)> {
+        self.map_rows("SELECT id, name, started_at FROM tracks ORDER BY started_at DESC, name", [], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+        })
     }
 
     pub fn unlink_trip_track(&self, link_id: i64) {
@@ -875,6 +893,18 @@ impl Database {
             .and_then(|changed| if changed == 0 { Err(format!("media {media_id} can't be linked to photo {photo_id}")) } else { Ok(()) })
     }
 
+    /// How many members are to review, by reason.
+    pub fn review_counts(&self, trip_id: i64) -> Vec<(Review, usize)> {
+        self.map_rows(
+            "SELECT review, COUNT(*) FROM trip_media WHERE trip_id = ?1 AND review != 0 GROUP BY review ORDER BY review",
+            [trip_id],
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+        )
+        .into_iter()
+        .filter_map(|(code, count)| Some((Review::from_code(code)?, count as usize)))
+        .collect()
+    }
+
     /// Members whose file hasn't been read for its capture time, or has
     /// changed since: (media reference, path, modification time).
     pub fn captures_to_read(&self, trip_id: i64) -> Vec<(i64, String, i64)> {
@@ -922,16 +952,21 @@ impl Database {
         let mut by_date: std::collections::BTreeMap<NaiveDate, Vec<i64>> = Default::default();
         let mut review: std::collections::HashMap<Review, usize> = Default::default();
         let mut unsure = Vec::new();
+        let mut reasons = Vec::new();
         for (media_id, source, capture, shift) in rows {
             if source == DaySource::User.code() {
                 outcome.kept += 1;
                 continue;
             }
             match capture_day(capture, shift, &zone, trip.trip_time) {
-                Ok(date) => by_date.entry(date).or_default().push(media_id),
+                Ok(date) => {
+                    by_date.entry(date).or_default().push(media_id);
+                    reasons.push((media_id, 0));
+                }
                 Err(reason) => {
                     *review.entry(reason).or_default() += 1;
                     unsure.push(media_id);
+                    reasons.push((media_id, reason.code()));
                 }
             }
         }
@@ -947,6 +982,11 @@ impl Database {
             outcome.assigned += self.move_to_day(trip_id, Some(day_id), &members, DaySource::Suggested)?.len();
         }
         self.move_to_day(trip_id, None, &unsure, DaySource::Suggested)?;
+        for (media_id, code) in reasons {
+            self.conn
+                .execute("UPDATE trip_media SET review = ?3 WHERE trip_id = ?1 AND media_id = ?2", params![trip_id, media_id, code])
+                .map_err(sql_err)?;
+        }
         outcome.review = review.into_iter().collect();
         outcome.review.sort_by_key(|(reason, _)| *reason as u8);
         Ok(outcome)
@@ -1273,6 +1313,9 @@ mod tests {
 
         db.order_day(two, &[refs[2]]).unwrap();
         assert_eq!(in_day(&db, trip_id, two), [refs[2], refs[1]]);
+        let in_two = MemberQuery { day: DayFilter::Day(two), ..MemberQuery::default() };
+        let shown: Vec<i64> = db.trip_photos(trip_id, &in_two, Sort::Name).iter().map(|photo| photo.id).collect();
+        assert_eq!(shown, [ids[2], ids[1]], "a Day shows its own order, whatever the sort");
         assert!(db.order_day(two, &[refs[0]]).is_err(), "only members of the day");
         db.move_to_day(trip_id, None, &[refs[1]], DaySource::User).unwrap();
         let unassigned = MemberQuery { day: DayFilter::Unassigned, ..MemberQuery::default() };
@@ -1503,6 +1546,7 @@ mod tests {
         db.store_track(folder_id, &ride, 1, 1, &Track { name: "Ride".into(), segments: Vec::new() }).unwrap();
         let track_id = db.tracks()[0].0;
         db.link_trip_track(gone, track_id, None).unwrap();
+        assert_eq!(db.track_choices(), [(track_id, "Ride".to_string(), None)]);
 
         db.set_trip_archived(gone, true);
         assert_eq!(db.trips(&TripQuery::default()).iter().map(|trip| trip.id).collect::<Vec<_>>(), [kept]);
@@ -1633,6 +1677,13 @@ mod tests {
         assert_eq!(dates, [None, Some("2026-03-01".into()), Some("2026-03-02".into()), Some("2026-03-03".into())]);
         assert_eq!(in_day(&db, trip_id, mine), [refs[5]], "the user's day stays");
         assert_eq!(in_day(&db, trip_id, days[1].id), [refs[0]]);
+        assert_eq!(db.review_counts(trip_id), first.review, "kept to review later");
+        let to_review = MemberQuery { day: DayFilter::Review, ..MemberQuery::default() };
+        assert_eq!(db.count_trip_members(trip_id, &to_review), 2);
+        let undo = db.move_to_day(trip_id, Some(mine), &[refs[3]], DaySource::User).unwrap();
+        assert_eq!(db.review_counts(trip_id), [(Review::NoOffset, 1)], "placing a photo settles it");
+        db.restore_day_assignments(trip_id, &undo).unwrap();
+        assert_eq!(db.review_counts(trip_id), first.review, "and Undo brings its review back");
 
         // Accepting that the camera was on Trip time settles the clock without an offset.
         let mut draft = TripDraft::new("Taipei", "Asia/Taipei");
@@ -1641,6 +1692,7 @@ mod tests {
         let again = db.suggest_days(trip_id).unwrap();
         assert_eq!((again.assigned, again.new_days), (4, 0), "no day twice");
         assert_eq!(again.review, [(Review::NoTime, 1)]);
+        assert_eq!(db.review_counts(trip_id), again.review);
         assert_eq!(in_day(&db, trip_id, days[2].id), [refs[1], refs[2]]);
 
         // A shift made with Adjust date counts once.

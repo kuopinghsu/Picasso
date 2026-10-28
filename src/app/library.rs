@@ -724,6 +724,7 @@ impl PicassoApp {
                     }
                     if matches!(self.nav, Nav::Trip(_)) {
                         self.day_menu(ui);
+                        self.arrange_menu(ui);
                     }
                     self.trip_menu(ui);
                 }

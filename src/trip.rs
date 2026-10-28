@@ -90,6 +90,18 @@ pub enum Review {
     NoTime,
 }
 
+impl Review {
+    pub const ALL: [Review; 4] = [Review::Unread, Review::NoOffset, Review::Ambiguous, Review::NoTime];
+
+    pub fn code(self) -> i64 {
+        self as i64 + 1
+    }
+
+    pub fn from_code(code: i64) -> Option<Review> {
+        Review::ALL.into_iter().find(|reason| reason.code() == code)
+    }
+}
+
 /// What `path` says about when it was taken. Reads the file, so it is
 /// called off the window's thread.
 pub fn read_capture(path: &std::path::Path, modified_at: i64) -> Capture {
@@ -272,6 +284,8 @@ pub struct DayAssignment {
     pub day_id: Option<i64>,
     pub source: Option<DaySource>,
     pub position: i64,
+    /// Why Suggest days left it without a Day, until the user places it.
+    pub review: Option<Review>,
 }
 
 /// Which members of a Trip a list, a count, or a batch action covers. The
@@ -292,6 +306,8 @@ pub enum DayFilter {
     Any,
     Unassigned,
     Day(i64),
+    /// Members Suggest days couldn't place and the user hasn't placed since.
+    Review,
 }
 
 /// What adding photos to a Trip would do, shown before it is done.

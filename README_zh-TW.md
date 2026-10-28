@@ -4,296 +4,269 @@
 
 ![Picasso](images/banner.jpg)
 
-Picasso 是一套承襲 Picasa 精神的本機相片圖庫，集管理、瀏覽與編輯於一身，速度飛快。它會監看你的資料夾，依日期分組排列縮圖，編輯相片時也不會動到原始檔案。所有處理都在這台電腦上完成，不會上傳任何資料。
+Picasso 是適用於 **Windows、macOS 與 Linux** 的免費開源照片管理、檢視與編輯工具。您可以直接管理現有資料夾中的照片，依日期或地點瀏覽，並在不變更原始檔案的情況下編輯照片。
 
-![Picasso 圖庫：左側是資料夾樹狀圖，中間是縮圖，右側是相片詳細資料](images/picasso.png)
+Picasso 以 Picasa 為靈感，使用 Rust 開發。照片資料庫與編輯紀錄儲存在本機，不需要雲端帳號，也不會上傳照片或影片。
 
-| 相片編輯器 | 地點 |
-| --- | --- |
-| ![相片編輯器](images/editor.png) | ![地點](images/places.png) |
+[下載](https://github.com/kuopinghsu/picasso/releases/latest) · [使用手冊](docs/USER_GUIDE_zh-TW.adoc) · [版本紀錄](CHANGELOG.md)
 
-| GPS 軌跡編輯器 | 旅行地圖 |
-| --- | --- |
-| ![GPS 軌跡編輯器：軌跡顯示在填滿視窗的地圖上，工具浮在地圖上方，右側是統計資料、選取的點與整理設定](images/trackedit.png) | ![旅行地圖](images/travelmap.png) |
+![Photo library](images/picasso.png)
 
-| 統計資料 |
-| --- |
-| ![統計資料](images/statistics.png) |
+## 目錄
 
-## 快速上手
+- [功能](#功能)
 
-1. 從[最新發行版本](https://github.com/kuopinghsu/picasso/releases/latest)下載 Picasso：Windows 請下載 `.exe`，Mac 請下載 `.dmg`，Linux 請下載 `.AppImage`。其他套件與各自的安裝方式，請見下方的「發行版本」。在 Mac 上，除非發行說明表示應用程式已經過 Apple 公證，否則第一次啟動會被系統阻擋：請到「系統設定 → 隱私權與安全性」按一下「強制打開」。
-2. 啟動 Picasso。它會加入你的「圖片」資料夾，並在背景讀取：狀態列會顯示進度，找到的相片會依日期陸續出現。按「+  匯入」或把資料夾拖進視窗，即可加入其他資料夾。
-3. 按一下相片，再按 Enter 檢視、按 E 編輯，或按 S 加上星號。編輯絕不會改動檔案本身；「匯出…」會另存一份編輯後的副本。按 F1 可查看所有快速鍵。
-4. 星號、說明、相簿與編輯都存在圖庫中，Picasso 每週會自動備份圖庫（見下方的「資料存放位置」）。播放影片需要 FFmpeg，地圖需要連上網路，其他功能都能離線使用。
+- [安裝](#安裝)
 
-如果想自行建置 Picasso，請繼續閱讀下文。
+- [開始使用](#開始使用)
 
-## 系統需求
+- [設定與資料](#設定與資料)
 
-- [Rust](https://rustup.rs) 1.95 以上版本（`rustup update stable`）
-- C 編譯器，因為 SQLite 需要從原始碼編譯
-- 播放影片需要 [FFmpeg](https://ffmpeg.org)（`ffmpeg` 與 `ffprobe`）。這是選用項目：沒有安裝時，相片照常可用，影片則會先略過，等安裝後再加入。
-- 「地點」和地圖面板的地圖圖磚需要連上網路，其他功能都能離線使用。
+- [隱私與限制](#隱私與限制)
 
-| 作業系統 | C 編譯工具 | FFmpeg |
-| --- | --- | --- |
-| Windows 10/11 | [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/)，並勾選「使用 C++ 的桌面開發」（其中包含 Windows SDK，它的 `rc.exe` 會把應用程式圖示嵌入執行檔） | `winget install Gyan.FFmpeg` |
-| macOS 11 以上 | `xcode-select --install` | `brew install ffmpeg` |
-| Debian／Ubuntu | `sudo apt install build-essential pkg-config libasound2-dev libxkbcommon-dev libgl1-mesa-dev` | `sudo apt install ffmpeg` |
-| Fedora | `sudo dnf install gcc pkgconf-pkg-config alsa-lib-devel libxkbcommon-devel mesa-libGL-devel` | `sudo dnf install ffmpeg`（需啟用 RPM Fusion） |
+- [文件](#文件)
 
-Picasso 會依序在下列位置尋找 FFmpeg：環境變數 `PICASSO_FFMPEG`（可指定資料夾或 `ffmpeg` 執行檔）、應用程式所在的資料夾、`PATH`、WinGet 的安裝資料夾，以及 Homebrew 的資料夾。用 WinGet 安裝 FFmpeg 後，請開啟新的終端機視窗，讓 `PATH` 生效；不過就算不這麼做，Picasso 也找得到它。
+- [開發](#開發)
 
-在 Linux 上，選擇資料夾的對話框是透過 XDG 桌面入口（`xdg-desktop-portal` 加上 GTK 或 KDE 後端）提供，大多數桌面環境都已內建。
+- [版本發佈](#版本發佈)
 
-## 執行
+- [參與貢獻](#參與貢獻)
 
-```bash
-cargo run --release
-cargo run --release -- ~/Pictures ~/Photos
-```
-
-第一次啟動時，如果有「圖片」資料夾，也會一併加入。之後每次啟動，都會重新掃描所有已加入的資料夾。除錯版本也能使用，但加上 `--release` 後，掃描、產生縮圖與編輯都會快上許多。
-
-Makefile 包裝了這些指令與其他工作：`make run`、`make test`、執行 CI 所做檢查的 `make ci`、Linux 上的 `make install` 等。`make help` 會列出全部目標。
-
-Picasso 使用 OpenGL 繪製畫面，在 WSL 上會使用 Windows 的顯示卡。若要改用 Vulkan，請設定 `PICASSO_RENDERER=wgpu`。
-
-## 發行版本
-
-每次推送到 `main` 分支或發出提取要求時，GitHub Actions（`.github/workflows/ci.yml`）都會在 Windows、Linux 與 macOS 上建置並測試 Picasso，並把下列套件保留為建置成品：
-
-| 套件 | 內容 |
-| --- | --- |
-| `picasso-<version>-<commit>-windows-x64.exe` | 應用程式本身，可直接執行 |
-| `picasso-<version>-<commit>-windows-x64.zip` | 執行檔、說明文件、變更紀錄與授權條款 |
-| `picasso-<version>-<commit>-linux-x64.tar.gz` | `picasso` 執行檔、`picasso.desktop`、`picasso.png`、說明文件、變更紀錄與授權條款 |
-| `picasso-<version>-<commit>-linux-x64.deb` | Debian／Ubuntu 安裝套件，會安裝應用程式、選單項目與圖示，說明文件與變更紀錄放在 `/usr/share/doc/picasso` |
-| `picasso-<version>-<commit>-linux-x64.AppImage` | 內含所需程式庫的應用程式，適用於 Ubuntu、RHEL 等發行版，免安裝即可執行 |
-| `picasso-<version>-<commit>-macos-universal.dmg` | 磁碟映像檔，內含 `Picasso.app`、「應用程式」資料夾的替身、說明文件、變更紀錄與授權條款 |
-| `picasso-<version>-<commit>-macos-universal.zip` | 只有 `Picasso.app` |
-
-每個 Windows 與 Linux 套件也都有 64 位元 Arm 處理器的版本，檔名中以 `arm64` 取代 `x64`：`picasso-<version>-<commit>-windows-arm64.exe` 及其 `.zip` 適用於 Arm 版 Windows（例如搭載 Snapdragon 處理器的筆電），`picasso-<version>-<commit>-linux-arm64.AppImage`、`.deb` 與 `.tar.gz` 則適用於 Arm 版 Linux。這些套件是直接在 Arm 機器上建置與測試，而不是交叉編譯；Arm 版的 `.deb` 與 AppImage 也會經過與 x64 版相同的安裝與啟動檢查。
-
-AppImage 不必安裝，也不需要系統管理員權限，適合無法自行安裝系統套件的電腦。它在 AlmaLinux 8 上建置，因此可在 RHEL 8、Ubuntu 20.04、Debian 10 及更新的版本上執行。除了 glibc 和 OpenGL 驅動程式由系統提供之外，Picasso 用到的所有程式庫（ALSA、fontconfig、X11、Wayland、xkbcommon 及其相依套件）都已包含在內。啟動時，系統有的程式庫會優先使用系統版本，沒有的才使用內附的版本。執行方式如下：
-
-```bash
-chmod +x picasso-<version>-linux-x64.AppImage
-./picasso-<version>-linux-x64.AppImage
-```
-
-AppImage 會透過 FUSE 自行掛載。在沒有 FUSE 的環境（例如容器）中，請執行 `./picasso-<version>-linux-x64.AppImage --appimage-extract-and-run`，或先用 `--appimage-extract` 解開一次，再執行 `squashfs-root/AppRun`。AppImage 不含 FFmpeg；如果沒有權限安裝，可以下載靜態編譯版本，把 `ffmpeg` 和 `ffprobe` 放在 AppImage 所在的資料夾，或旁邊名為 `ffmpeg` 的資料夾中，Picasso 就會找到。每個 AppImage 發布前，持續整合流程都會先在 Ubuntu 22.04、Ubuntu 24.04、AlmaLinux 8 與 AlmaLinux 9 上試著啟動。
-
-`.deb` 與 `.tar.gz` 是在 Ubuntu 22.04 上建置，因此可在該版本及更新的版本上執行。請用 `sudo apt install ./picasso-<version>-linux-x64.deb` 安裝 `.deb`，它也會一併安裝 ALSA 與 OpenGL 程式庫。若要改用 `.tar.gz`，請把 `picasso` 放到 `PATH` 中的資料夾，將 `picasso.desktop` 複製到 `~/.local/share/applications/`，再將 `picasso.png` 複製到 `~/.local/share/icons/hicolor/256x256/apps/`。
-
-macOS 版是同時支援 Apple 晶片與 Intel 處理器的通用執行檔，可在 macOS 11 及更新的版本上執行。打開 `.dmg`，把 Picasso 拖到「應用程式」資料夾即可。除非發行說明表示應用程式已經過 Apple 簽署與公證，否則它只有臨時簽章，第一次啟動會被系統阻擋：請到「系統設定 → 隱私權與安全性」按一下「強制打開」，再確認一次。在 macOS 14 及更舊的版本上，也可以按住 Control 鍵並按一下 Picasso，再選擇「打開」。也可以在終端機執行 `xattr -dr com.apple.quarantine /Applications/Picasso.app`，效果相同。
-
-推送 `v0.9.4` 這類標籤時，工作流程會建立新的 GitHub 發行版本，並附上全部十二種套件（檔名如 `picasso-0.9.4-windows-x64.exe`）、英文與繁體中文的 PDF 版使用者指南（`picasso-0.9.4-user-guide.pdf` 與 `picasso-0.9.4-user-guide-zh-TW.pdf`）、依其授權要求附上的 RAW 解碼器 rawler 原始碼（`rawler-<version>-source.tar.gz`），以及 `SHA256SUMS.txt`。標籤必須與 `Cargo.toml` 中的版本一致；標籤含有連字號時（例如 `v1.0.0-beta.1`），會標示為預先發行版本。正式版本啟動時不會開啟主控台視窗。
-
-發行說明取自 [`CHANGELOG.md`](CHANGELOG.md) 中該版本的段落，後面再附上下載說明。推送標籤前，這個段落必須已經寫好，並標上發行日期：工作流程一開始的「Changelog」工作會檢查這點，如果標籤與 `Cargo.toml` 不一致，或段落不存在、仍標示為 `Unreleased`，流程會在幾秒內失敗。執行 `scripts/release-notes.sh 0.9.4`（或 `make release-notes`）可預覽某個版本的發行說明。CI 只會讀取 `CHANGELOG.md`，不會修改它。
-
-除了單獨的 `.exe` 之外，每個套件都附有 `THIRD-PARTY-NOTICES.txt`，列出 Picasso 內建的程式庫及其授權條款（在 `Picasso.app` 中位於 `Contents/Resources`）。「關於」對話框與 `picasso --version` 會顯示建置所用的提交，發行說明中也會註明。
-
-[`docs/RELEASING.md`](docs/RELEASING.md) 說明發布新版本的步驟與檢查清單。已發布的版本絕不更動：發布後才發現的問題，會在下一個修補版本中修正，而不是移動標籤；CI 也不會重複發布同一個版本。
-
-## 資料存放位置
-
-圖庫資料庫（`picasso.db`）存放在應用程式資料資料夾中。縮圖（`thumbs.db`）和地圖圖磚存放在快取資料夾中，可以放心刪除。你在「設定」中的選擇則與圖庫分開，儲存在設定資料夾的 `settings.json` 中。
-
-| 作業系統 | 圖庫 | 快取 | 設定 |
-| --- | --- | --- | --- |
-| Windows | `%APPDATA%\Picasso\picasso\data` | `%LOCALAPPDATA%\Picasso\picasso\cache` | `%APPDATA%\Picasso\picasso\config\settings.json` |
-| macOS | `~/Library/Application Support/app.Picasso.picasso` | `~/Library/Caches/app.Picasso.picasso` | `~/Library/Application Support/app.Picasso.picasso/settings.json` |
-| Linux | `~/.local/share/picasso` | `~/.cache/picasso` | `~/.config/picasso/settings.json` |
-
-「設定 → 儲存空間」會列出這三個位置及各自占用的空間，可以開啟圖庫或快取資料夾、在檔案管理員中顯示 `settings.json`，也可以清除快取。清除後，相片出現在畫面上時，Picasso 會重新產生縮圖，其餘的則在下次啟動時於背景補齊。
-
-`settings.json` 是一般的 JSON 檔，可以備份或複製到其他電腦。不過其中的 CARTO API 金鑰是針對這台電腦加密的，換到其他電腦後必須重新輸入。
-
-Picasso 每週會在啟動時備份一次圖庫資料庫，存放在 `picasso.db` 旁的 `backups` 資料夾中，並保留最新的五份（`picasso-YYYYMMDD-HHMMSS.db`）。在「設定 → 儲存空間」中可以隨時手動備份，也能還原備份：Picasso 會先備份目前的圖庫，再以還原後的圖庫重新啟動。快取資料夾中還有 `hashes.db`，記錄上次搜尋重複檔案時算出的雜湊值，下次搜尋時只需讀取新增或變更過的檔案。
-
-備份包含圖庫中的所有內容：你加入與排除的資料夾，每張相片的星號、說明、旋轉、地點、調整過的日期、所屬相簿，以及編輯與其復原紀錄，還有你的編輯預設集、GPS 軌跡，以及過去 90 天內離開圖庫的相片資料。備份不包含相片與影片本身（請像備份其他檔案一樣自行備份）、`settings.json`（可直接複製），也不包含快取（Picasso 會重新產生）。用「依 GPS 軌跡標記地點」設定的地點，也會存在相片旁的 `.picasso-geotags.json` 檔案中；「重新命名檔案…」之後可用「復原」改回的名稱，則存在 `.picasso-renames.json` 檔案中。圖庫的詳細說明請見 `docs/DATABASE.md`。
-
-如果圖庫無法開啟（例如磁碟發生錯誤），Picasso 不會照常啟動，而是說明發生了什麼問題，而且絕不會覆寫圖庫：
-
-- 「再試一次」會重新啟動 Picasso，適用於圖庫只是暫時被占用的情況，例如備份或同步工具正在使用它。
-- 「還原 … 的備份」會改用最新一份可讀取的備份。該備份之後的變更將會遺失。
-- 「建立新的圖庫」會從你的「圖片」資料夾重新開始，其他資料夾需要再加入一次。
-- 「開啟圖庫資料夾」會顯示這些檔案，「結束」則讓一切維持原狀。
-
-只有在圖庫檔案本身損壞時，才會提供還原與重新開始；圖庫若只是被占用（例如另一個 Picasso 正開著它），或 Picasso 沒有讀取它的權限，絕不會被取代。還原或重新開始時，無法開啟的圖庫會留在同一個資料夾中，改名為 `picasso-damaged-YYYYMMDD-HHMMSS.db`，不會遺失任何資料。若要自行還原，請先結束 Picasso，將 `picasso.db`（以及它的 `-wal` 與 `-shm` 檔案，如果有的話）改名，再把 `backups` 中的一個檔案複製為 `picasso.db`。
-
-Picasso 每次啟動時都會重新掃描所有資料夾，執行期間也會持續監看；按 F5 可立即重新掃描。沒有變更的檔案會直接略過，不會開啟。找不到的資料夾（例如位於已拔除的磁碟機上）會保留其中的相片，直到資料夾回來為止。若要把相片資料夾搬到新位置，請先搬移，再到「設定 → 資料夾」移除舊位置，然後按「+  匯入」加入新位置。Picasso 會依大小、修改時間與拍攝日期認出這些相片，並恢復它們的星號、說明、相簿與編輯。在 Picasso 已監看的資料夾之間搬移相片則不必做任何事：重新掃描就會找到它們。
-
-## 設定
-
-按一下右上角的齒輪，或按 Ctrl+,（macOS 為 ⌘,），即可開啟「設定」：
-
-- **一般：** 介面語言、色彩主題、縮圖大小、投影片間隔、將相片移至垃圾桶前是否先詢問，以及「更新」：是否每天檢查一次有無新版本，並提供「立即檢查」按鈕。檢查時只會向 GitHub 查詢最新的版本號碼；有新版本時，右上角會出現下載頁面的連結。
-- **資料夾：** 列出 Picasso 監看的所有資料夾，每個資料夾都有開啟、重新掃描，以及從圖庫移除的按鈕（移除前會先確認；檔案仍保留在磁碟上，若在 90 天內再次加入該資料夾，相片的星號、說明、相簿與編輯都會回來），另有「匯入」與「重新掃描所有資料夾」。「排除的資料夾」列出 Picasso 會略過的子資料夾，可按「重新納入」恢復；按「排除資料夾…」可新增，在資料夾樹狀圖中對子資料夾按右鍵，選擇「不要掃描」也可以。被排除的資料夾中的相片會離開圖庫，若在 90 天內重新納入，原本的星號、說明與編輯都會回來。
-- **檔案類型：** 決定掃描時要加入哪些檔案：JPEG、PNG、GIF、WebP、BMP、TIFF、HEIC／HEIF、相機 RAW 與影片，並提供「全選」。關閉對話框後，所有資料夾都會重新掃描。取消勾選的類型會連同星號、說明與編輯一起從圖庫移除，但檔案仍保留在磁碟上。
-- **地圖：** 選擇「地點」和地圖面板顯示的地圖：
-  - **OpenFreeMap Liberty**（預設）免費且不需要金鑰。Picasso 會下載 OpenFreeMap 的向量資料，以 Liberty 樣式的配色繪製，地名、水域名稱與道路名稱都會以介面語言顯示。
-  - **OpenStreetMap** 是標準的 OpenStreetMap 地圖。
-  - **CARTO** 有三種風格可在其下方選擇：**Voyager**（色彩豐富、細節清楚）、**Positron**（淺色、簡潔）與 **Dark Matter**（深色，適合深色主題）。三種風格共用一組免費的 CARTO API 金鑰，貼在風格下方的欄位即可；按「取得免費金鑰」會開啟 CARTO 的註冊頁面。金鑰會以這台電腦的機器識別碼衍生出的密鑰加密儲存，因此儲存後只會顯示 `********`，複製到其他電腦的 `settings.json` 也無法使用。按「移除」可清除金鑰。
-  - **Esri World Imagery** 顯示衛星與空拍影像。
-
-  每個地圖來源的圖磚都會分別存放在快取中。
-- **儲存空間：** 顯示圖庫資料庫、快取與 `settings.json` 的位置和占用空間，並提供「清除快取」。設定檔旁的「在資料夾中顯示」會開啟檔案管理員並選取 `settings.json`。「備份」會顯示最近一次的備份，並提供「立即備份」、「還原…」與「開啟資料夾」。
-
-設定會立即生效，並儲存在系統設定資料夾的 `settings.json` 中，因此無論開啟哪個圖庫，設定都相同：
-
-| 作業系統 | 設定檔 |
-| --- | --- |
-| Windows | `%APPDATA%\Picasso\picasso\config\settings.json` |
-| macOS | `~/Library/Application Support/app.Picasso.picasso/settings.json` |
-| Linux | `~/.config/picasso/settings.json` |
-
-新版本第一次啟動時，會把舊版存放在圖庫中的設定複製過來。
+- [授權](#授權)
 
 ## 功能
 
-- 以資料夾為基礎的圖庫，縮圖依日期分組排列，可以搜尋、只顯示加上星號的相片，並依日期（由新到舊或由舊到新）或名稱排序。「依名稱排序，已編輯」只顯示編輯過的相片。拖曳捲軸時會顯示目前位置的日期；依名稱排序時則顯示第一個檔名。依日期排序時，縮圖旁會有一條列出年份的時間軸，並展開目前所在年份的各個月份，按一下即可跳到該處。圖庫在背景執行緒中讀取，因此載入大型圖庫或掃描新增相片時，視窗依然能流暢操作。
-- 搜尋會找出符合你輸入的每個字詞的相片，比對範圍包括檔名、圖庫資料夾底下的路徑、說明、相機型號、鏡頭與相簿名稱。輸入 `2019`、`2019-05` 或 `2019-05-17` 這類日期（也可用 `/` 或 `.` 分隔），就能找出當年、當月或當天拍攝的相片，例如 `2019-05 beach` 會找出 2019 年 5 月拍攝、且與「beach」相符的相片。搜尋字詞可以進一步縮小範圍：`type:video`、`type:photo`、`type:raw`，或 `type:jpg`、`type:nef` 這類格式；`gps:yes` 或 `gps:no`；`is:edited` 或 `is:starred`；`camera:` 與 `lens:` 加上部分名稱；`focal:35` 或 `focal:24-70`，以公釐指定焦距；以及 `mp:20-`，找出 2000 萬像素以上的相片。以 `-` 開頭的字詞會排除它找到的相片，例如 `-beach`。按 Ctrl+F 可跳到搜尋框。在搜尋框中按一下，會列出儲存在 `settings.json` 中的最近十筆搜尋；按一下其中一筆，或用 ↑ 與 ↓ 選擇後按 Enter，即可再次搜尋，按「清除最近的搜尋」則會清空清單。
-- 資料夾樹狀圖會顯示各資料夾的相片數量，另有相簿、已加星號的相片，以及「地點」：一張標出所有含 GPS 資訊相片的地圖。地圖來源可選 OpenFreeMap、OpenStreetMap、CARTO 或 Esri，請在「設定 → 地圖」中選擇。「地點」與地圖面板可放大到街道層級，一百點約等於 30 公尺，角落會顯示比例尺。搜尋也會讓「地點」只顯示符合的相片並將它們納入畫面，往返「地點」與「圖庫」時搜尋都會保留；工具列上的「僅限已加星號」則只留下已加星號的相片。
-- GPS 軌跡：掃描時會讀取資料夾中的 `.gpx` 與 `.kml` 檔案，以及 Polarsteps 匯出位置記錄的 `.json` 檔案（例如 `locations.json`），在「地點」和地圖面板中以彩色路線繪製在相片圖釘下方。可讀取 GPX 的軌跡與路線，以及 KML 的線條與 `gx:Track` 記錄；KMZ 檔案與區域外框則不支援。把指標移到軌跡上，會顯示名稱、開始時間、距離與經過時間；按兩下軌跡即可放大顯示整條軌跡。在「地點」中按一下軌跡，會選取沿途拍攝的相片：距離路線 300 公尺以內，且若軌跡有時間，拍攝時間在其前後 14 小時以內，因此相機時鐘設在其他時區也能對上。按「地點」工具列上的「軌跡」可以隱藏軌跡。和相片一樣，軌跡檔案只有在變更後才會重新讀取，無法讀取的檔案會和其他無法讀取的檔案列在一起。資料夾中的軌跡也會列在圖庫格狀檢視的最上方，並顯示路線形狀。
-- 軌跡編輯器：在格狀檢視中按一下軌跡，或在右鍵選單中選擇「編輯軌跡」，即可像 GPXViewer 一樣整理軌跡。編輯器會捨棄以不可能的速度到達的點、移除線條不需要的點、合併停留期間的點，也可以用曲線補上長距離空缺；整理設定與預設值和 GPXViewer 相同，可在「設定 → GPS 軌跡檔」中調整。地圖填滿整個視窗，工具、檢視按鈕與縮放控制浮在地圖上，旁邊的面板顯示統計資料、與地圖連動的海拔剖面圖，以及選取的點。拖曳點即可移動，按一下線條可新增點，可逐一或用方框選取移除點，並可復原與重做。飛行路線以虛線顯示，停留的地方會標上圓圈。沒有海拔資料的軌跡（例如來自 Polarsteps 的軌跡）可以用「查詢海拔」，從免費的 [AWS Terrain Tiles](https://github.com/tilezen/joerd/blob/master/docs/attribution.md) 取得海拔；只會傳送軌跡沿途圖磚的編號，和顯示地圖時一樣。「另存為 GPX…」與「另存為 KML…」會在軌跡旁儲存一份檔名加上 `-optimized` 、內含設定的副本；原始檔案絕不會被變更。
-- 側邊欄的「旅行地圖」會在地球儀或平面地圖上，為拍過有地理標記相片的國家（以及幅員最大的幾個國家的州與省）上色，相片越多顏色越深。它會統計你去過的國家與大洲、顯示下一個目標與各大洲涵蓋率；按一下上色的地方會開啟一張資訊卡，按卡片上的「顯示相片」即可在「地點」中看到那裡的相片。地圖完全依照相片的 GPS 標記，不能手動標記。旅行地圖可離線使用：國界來自公有領域的 [Natural Earth](https://www.naturalearthdata.com) 資料，由 `scripts/world-map.py` 內建到程式中。
-- 縮圖旁的資訊與地圖面板會顯示相片的 EXIF 與位置，用底部列右側的一個按鈕或 I 鍵即可顯示或隱藏；檢視器中的詳細資料面板還會顯示色階分佈圖。按鈕旁的縮圖大小滑桿只在有縮圖的畫面出現。
-- 檢視器支援縮放、平移、底部縮圖列、旋轉、投影片播放與影片播放。可以用滾輪、Ctrl＋滾輪、觸控板雙指縮放，或按 ＋ 與 − 鍵縮放。檢視器會先顯示 2560 像素的版本；放大超過這個尺寸，或按 1 切換為實際大小時，會以完整解析度解碼，讓 100% 顯示每一個像素。「在資料夾中顯示」會開啟檔案管理員並選取該檔案。投影片播放時相片會淡入淡出切換，「隨機播放」（Shift+S）會以隨機順序顯示相片，每張都播過一次後才會重複。
-- 分享：按 Ctrl+C 或「複製相片」會把套用編輯後的相片（最長 4096 像素）放到剪貼簿，可直接貼到其他應用程式。「複製路徑」會複製每張選取相片的完整路徑，「以預設應用程式開啟」則用系統預設的應用程式開啟檔案。這些指令都在縮圖的右鍵選單與檢視器的 ··· 選單中。
-- 處理選取的相片：格狀檢視上方的工具列可以加上星號、旋轉及加入相簿，狀態列的「相片匣」可以刪除或匯出；右鍵選單中也有這些指令。執行「移至垃圾桶」後，狀態列會在兩分鐘內提供「復原」，把檔案放回原處（限 Windows 與 Linux）。
-- 在「相片匣」或相片的右鍵選單中選擇「匯出…」，可以把選取的相片連同編輯一起存到同一個資料夾，格式可選 JPEG、PNG 或 TIFF，尺寸可選原始大小或長邊 4096、2048、1600、1080 像素，並可設定 JPEG 品質。每個檔案都沿用原本的檔名並換上新的副檔名；檔名已存在時會自動加上編號，絕不覆寫任何檔案。影片不會匯出。匯出在背景進行，每次同時處理三張；狀態列會顯示進度與「停止」按鈕，完成後則顯示「開啟資料夾」。Picasso 會記住上次選擇的資料夾與各項選項。
-- 側邊欄的「重複的檔案」可以找出內容完全相同的檔案。檔案大小、像素尺寸與拍攝日期都相同的檔案，會先比對前 64 KB，仍然相同的再完整讀取並以 SHA-256 比對；讀取順序依資料夾排列，讓硬碟能逐一讀完每個資料夾。雜湊值會連同檔案大小與修改時間一起記住，之後再搜尋時只需讀取新增或變更過的檔案。搜尋在背景進行，關閉視窗後仍會繼續，側邊欄會顯示已找到幾組。每組會保留一個檔案（有加星號或編輯過的檔案時優先保留），其餘的可以逐一、整組或一次全部移至垃圾桶。
-- 相片右鍵選單中的「調整日期…」可以修正所選相片的拍攝日期，適用於相機時間設定錯誤或翻拍的舊相片：可以依天數、小時與分鐘平移；把最早的一張設為指定日期，其他相片隨之移動；或恢復為檔案中的日期。新日期會存在圖庫中，重新掃描後依然有效，檔案本身則不會變更。
-- 資料夾右鍵選單中的「重新命名檔案…」可以依 exiftool 關鍵字組成的樣式，重新命名其中的相片與影片，例如 `${DateTimeOriginal}%-03c.%le` 搭配日期格式 `%Y.%m.%d-%Hh%Mm%Ss`，會得到 `2023.05.17-14h30m05s.jpg`，同一秒拍攝的下一張則是 `2023.05.17-14h30m05s-001.jpg`。按一下關鍵字即可加入名稱。相機時鐘不準時，可用 `+1:30` 這類時間偏移移動名稱中的日期。變更任何檔案之前，清單會先顯示每個新名稱，也絕不會把檔案改成另一個檔案的名稱而覆寫它。相片的星號、說明、相簿、編輯與地點都會保留，搭配的 `.xmp`、`.aae` 與 `.thm` 檔案也會一起重新命名。每次重新命名都會記錄在資料夾中的 `.picasso-renames.json`，所以「復原」可以一次一步改回先前的名稱，即使 Picasso 關閉過也可以。
-- 掃描時無法讀取的檔案，可從狀態列的連結開啟清單，每個檔案都提供「在資料夾中顯示」與「移至垃圾桶」。這份清單存放在圖庫中，下次啟動時會立即顯示；未變更的檔案在一週內的掃描都不會再開啟。
-- 相簿、說明與星號。相片離開圖庫後，它的星號、說明、旋轉、所屬相簿、地點標記與編輯會保留 90 天。只要檔案回到同一個路徑（例如按了「復原」，或你自行從垃圾桶還原），這些資料就會回來；檔案以其他名稱或出現在其他圖庫資料夾中時，只要大小、修改時間與拍攝日期都相同，也會回來。掃描時若有資料夾無法讀取（例如網路磁碟機斷線），其中的相片會保留，不會被移除。
-- 背景掃描會自動加入新相片，並持續監看資料夾。資料夾會平行列出，未變更的檔案直接略過、不會開啟；新檔案只讀取開頭的 256 KB，取得尺寸、日期、相機與 GPS 資訊。畫面上的相片會立即產生縮圖，其餘的則等掃描結束後再產生，避免兩者搶用磁碟。產生縮圖時，JPEG 會以縮小尺寸解碼，HEIC 則直接使用檔案內嵌的縮圖。
-- 可從資料夾中的 `.picasa.ini` 匯入星號、說明與旋轉設定。
-- 仿照 Lightcraft 相片編輯模組打造的非破壞性編輯器：光線、色調曲線、混色器、色彩分級、細節、裁切、遮罩、預設集，以及匯出為新檔案。
-- 淺色、深色或跟隨系統的色彩主題，以及十種介面語言。
-- 「關於」對話框會顯示版本、建置日期與提交：按一下左上角的標誌即可開啟。
+### 整理與尋找照片
 
-應用程式圖示是 `build/picasso.ico`，內含 16 到 256 像素的各種尺寸。建置時，`build.rs` 會取出其中 256 像素的圖片，作為視窗與應用程式內的標誌；在 Windows 上，還會把圖示與版本資訊一起嵌入 `picasso.exe`。沒有 Windows SDK 時，建置仍會成功，只會顯示警告，視窗也照樣會顯示圖示。若要更換圖示，請以 256 像素圖片儲存為 32 位元點陣圖（而非 PNG）的圖示檔取代 `build/picasso.ico`，再重新建置。Linux 套件使用同樣是 256 像素的 `build/picasso.png` 與 `build/picasso.desktop`，macOS 版則會把這個 PNG 轉成 `picasso.icns`；所以更新 `.ico` 時，也請一併更新 PNG。
+- 透過依日期分組的縮圖、資料夾、相簿、說明文字與星號標記管理照片。
 
-## 編輯
+- 依檔名、資料夾路徑、說明文字、相機、鏡頭或相簿名稱搜尋，也能組合日期與關鍵字，例如 `2019-05 beach`。
 
-開啟相片後按 E，或按一下檢視器工具列上的「編輯」，編輯器就會取代詳細資料面板。最上方有四個工具（「調整」、「裁切」、「變形」、「遮罩」），接著是復原與重做、內含全部復原、全部重做、全部重設與複製／貼上的 ··· 選單、即時色階分佈圖，以及比較與剪裁警告按鈕。
+- 使用 `type:raw`、`gps:yes` 與 `is:edited` 等搜尋篩選器，以 `-` 排除字詞，並重用最近的搜尋。
 
-「調整」工具包含以下區塊：
+- 依日期或中繼資料樣式重新命名相片與影片。套用前可預覽名稱，重新啟動 Picasso 後也能復原重新命名。
 
-- **描述檔：** 色彩、中性、鮮豔、風景、人像或單色，作為各滑桿調整前的基礎風格。
-- **預設集：** 25 種內建風格，分為六組（色彩、黑白、底片、風景、人像、風格），可用「總量」滑桿調整套用程度。你也可以把目前的設定儲存為自己的預設集，自訂預設集會存放在圖庫中。
-- **變形：** 用滑桿把相片旋轉 −180° 到 180° 之間的任意角度，或在「角度」中輸入精確數值；用「透視」的垂直與水平滑桿傾斜相片（±45°，正值會加寬上方或右側，適合修正向後傾的建築）；向左或向右旋轉 90°；以及水平或垂直翻轉，全都不必切換到「裁切」工具。超過 ±45° 時，相片會轉為側立，因此在 90° 時會以直式完整顯示。拖曳「拉直」或「透視」滑桿時，相片上會出現方格，方便對齊地平線與垂直線；勾選「顯示格線」可讓方格一直顯示。「限制裁切範圍」（預設開啟）會依選定的「長寬比」，裁掉旋轉、傾斜或移動角落後留下的空白邊緣；關閉後則保留這些邊緣。「角落…」與「裁切…」會分別開啟「變形」與「裁切」工具，「重設變形」則把上述所有調整還原。
-- **光線：** 曝光度、對比、亮部、陰影、白色、黑色。亮部與陰影會辨識邊緣，因此調亮或調暗區域時不會產生光暈。
-- **色調曲線：** 參數曲線（陰影、暗色調、亮色調、亮部，分割點可移動），以及 RGB、紅、綠、藍各色版的點曲線。在曲線圖上按一下可新增控制點，拖曳可移動，按兩下則可移除。
-- **HDR：** 在單張相片中提亮暗部、找回亮部細節的色調對應，可設定「方法」、「強度」與「細節」。每種方法都使用與亮部、陰影調整相同的邊緣辨識基礎層，再把細微的細節疊回去，因此邊緣不會產生光暈。可選的方法有：
-  - **局部色調對應**：參考 Durand 與 Dorsey 的做法，依區域壓縮亮度，呈現經典的 HDR 風格；
-  - **曝光融合**：參考 Mertens、Kautz 與 Van Reeth 的做法，混合五張虛擬曝光，每個區域取曝光最好的一張，效果自然；
-  - **Reinhard**：經典的攝影色調對應方法，能柔和地壓低亮部；
-  - **Drago**：自適應對數曲線，最能提亮深暗的陰影；
-  - **電影感**：ACES 電影曲線，對比豐富、亮部柔和。
+- 在背景掃描資料夾並監控變更，也能匯入 Picasa 中繼資料檔案的星號、說明文字與旋轉設定。
 
-  建議先提高「曝光度」，從陰影中拉出更多細節，HDR 會把因此過曝的亮部找回來。「風格」組中的「HDR 自然」與「HDR 戲劇化」預設集是不錯的起點。
-- **色彩：** 白平衡預設（日光、陰天、陰影、鎢絲燈、螢光燈、閃光燈）、自動，以及 ⊙ 滴管（點選畫面中應為中性灰的位置）；色溫、色調、細節飽和度、飽和度。
-- **混色器：** 分別調整八個色彩範圍的色相、飽和度與明亮度。
-- **色彩分級：** 陰影、中間調、亮部三個色輪加上一個全域色輪，並可調整混合與平衡。
-- **效果：** 紋理、清晰度、去朦朧、暈映、顆粒。
-- **細節：** 銳利化與雜訊減少。
-- **黑白：** 轉換為單色，並可用八個色彩範圍調整各自的灰階明暗。
+- 透過內容檢查與 SHA-256 驗證尋找重複檔案，檢視結果後再將不需要的副本移至系統垃圾桶。
 
-「裁切」工具會在相片上顯示裁切框。拖曳邊緣或角落可調整大小，在框內拖曳可移動位置，並可選擇長寬比（自由、原始比例、1:1、4:5、5:7、2:3、3:4、9:16、10:16；按 ⇄ 可切換直式與橫式）。參考線可選三分法、黃金比例、格線或對角線。「拉直」可把相片旋轉最多 ±180°，並讓裁切框維持在相片範圍內、保持選定的長寬比；拖曳時，參考線會換成方格。水平翻轉、垂直翻轉與 90° 旋轉也在這裡。按 Enter、Esc 或「完成」即可離開裁切。
+- 查看日期、相機、鏡頭、焦距與具有位置資訊的照片比例等統計。
 
-「變形」工具（T）會在相片的四個角落和每一邊的中點各放一個控制點，用同一個工具就能旋轉、透視傾斜、歪斜與拉伸。拖曳角落可把該角移到任意位置；拖曳邊的中點，可沿著該邊平移（歪斜），或往垂直方向拉動（梯形修正與拉伸）；在外框內拖曳可移動整張相片，在外框外拖曳則以中心旋轉。格線會一直顯示以便對齊，細框則標出最後會保留的裁切範圍。「拉直」與「透視」滑桿在這裡同樣可用，「重設角落」只會還原四個角落。
+### 檢視、編輯與匯出
 
-「遮罩」工具可新增線性（漸層）或放射狀遮罩。在相片上拖曳遮罩的控制點來擺放位置，再設定羽化、反轉，以及這個遮罩專屬的曝光度、對比、亮部、陰影、色溫、色調、飽和度、清晰度與去朦朧。勾選核取方塊後，會以紅色顯示所選遮罩的範圍。
+- 使用縮放、平移、底片列、EXIF 詳細資訊、直方圖與幻燈片功能檢視照片；安裝 FFmpeg 後可播放有聲影片。
 
-編輯過的相片，在圖庫與底部縮圖列中的縮圖右上角會有一個小小的滑桿標記。在圖庫中按一下這個標記，就能直接在編輯器中開啟該相片。
+- 調整光線、色調曲線、白平衡、色彩、細節與效果，並使用預設集、裁切、透視校正、角點變形及線性或放射狀遮罩。
 
-編輯是非破壞性的。每次放開滑桿、切換選項、套用預設集或按「全部重設」，都會在相片的步驟記錄中新增一個步驟。這些步驟儲存在圖庫中，原始檔案絕不會被寫入。預覽、全尺寸檢視與縮圖，都是由原始檔案加上已套用的步驟即時產生。拖曳滑桿時，預覽會先以較小的尺寸顯示，放開後再呈現清晰的畫面。
+- 保留編輯歷史，支援復原、重做與前後比較。可將設定複製到其他照片，但不包含裁切與變形設定。
 
-- 「復原」與「重做」可以後退或前進一個步驟（Ctrl+Z，以及 Ctrl+Y 或 Ctrl+Shift+Z）。
-- 「全部復原」會回到原始相片，「全部重做」則重新套用所有步驟。
-- 在「步驟記錄」中按一下任一列，即可跳到該步驟。復原後再做新的修改，會取代已復原的步驟。
-- 「修改前」（\\）顯示原始相片，「並排」（Y）同時顯示修改前後，「分割」（Shift+Y）則在兩者之間放一條可拖曳的分隔線。
-- 「剪裁警告」（J）會以紅色標出過曝的亮部、以藍色標出欠曝的暗部，色階分佈圖也會顯示裁切的比例。
-- 在滑桿名稱或色輪上按兩下，即可歸零。
-- 「複製」（Ctrl+Shift+C）與「貼上」（Ctrl+Shift+V）會複製裁切與「變形」設定（拉直、透視、角落與翻轉）以外的所有設定。在圖庫中也能貼上，會套用到所有選取的相片；縮圖的右鍵選單中也有這兩個指令。
-- 「匯出…」會以完整解析度套用所有步驟，另存為新的 JPEG、PNG 或 TIFF 檔（預設檔名為 `name-edited.jpg`）。可選擇格式、長邊尺寸（原始大小或 4096、2048、1600、1080 像素）與 JPEG 品質。原始檔案不能作為匯出目標。
+- 將編輯結果個別或批次匯出為 JPEG、PNG 或 TIFF 副本，並選擇輸出尺寸與 JPEG 品質。
 
-各項控制仿照 [Lightcraft](https://github.com/storytold/lightcraft) 的相片編輯模組，在處理器上以線性光運算，色彩處理則使用 OkLab 色彩空間。Lightcraft 的人工智慧遮罩、RAW 處理、修復筆刷、多張相片合成 HDR 或全景，以及鏡頭描述檔等功能並未包含在內。影片無法編輯。
+![Photo editor](images/editor.png)
 
-## 語言
+可將編輯後的相片複製到剪貼簿、複製檔案路徑，或以預設應用程式開啟檔案。投影片支援隨機播放與淡入淡出。
 
-Picasso 提供英文、繁體中文、簡體中文、日文、韓文、德文、西班牙文、法文、義大利文與葡萄牙文（巴西）介面。
+### 探索地點與 GPS 軌跡
 
-第一次啟動時，會使用系統語言：
+- 在 **Places（地點）** 中使用 OpenFreeMap、OpenStreetMap、CARTO 或 Esri 地圖顯示具有 GPS 座標的照片。可手動放置照片，或依拍攝時間與 GPS 軌跡比對。「地點」也支援搜尋與星號篩選，點選軌跡可找出沿途拍攝的相片。
 
-- `zh-TW`、`zh-HK`、`zh-MO` 與 `zh-Hant` 會使用繁體中文，其他中文地區設定則使用簡體中文。
-- 所有葡萄牙文地區設定（包括 `pt-PT`）都會使用巴西葡萄牙文。
-- 其他語言只比對語言本身，因此 `fr-CA` 會使用法文，`es-MX` 會使用西班牙文。
-- 其餘情況一律使用英文。
+- 顯示 GPX、KML 軌跡與 Polarsteps JSON 位置匯出資料，編輯軌跡點、移除異常點、簡化路徑，再匯出新的 GPX 或 KML 副本。
 
-若要改用其他語言，請開啟「設定 → 一般」。選擇「系統語言」即可恢復跟隨作業系統。圖庫標題中的日期，會依各語言的習慣格式顯示。
+- 使用 **Travel Map（旅行地圖）** 查看照片拍攝所在的國家與支援的地區。地球與平面地圖採用內建 Natural Earth 邊界資料，可離線使用。
 
-翻譯檔位於 `src/i18n/`，每種語言一個檔案，內容是英文原文與譯文的對照。若要新增語言，請複製其中一個檔案並翻譯第二欄，然後在 `src/i18n.rs` 的 `Lang` 中新增一個項目，並在 `src/types.rs` 的 `long_date` 中加入該語言的日期格式。若某個語言缺少字串或漏掉 `{}` 佔位符號，測試就會失敗。
+![Places](images/places.png)
 
-## 色彩主題
+![GPS track editor](images/trackedit.png)
 
-所有畫面都使用同一個主題，包括圖庫、檢視器、編輯器、側邊面板與各個對話框。請在「設定 → 一般」中選擇「淺色主題」、「深色主題」或「跟隨系統」。「跟隨系統」會隨作業系統的設定自動切換。檢視器的工具列上也有一個按鈕，可在淺色與深色之間切換。
+![Travel Map](images/travelmap.png)
 
-## 快速鍵
+![Library statistics](images/statistics.png)
 
-按 **F1** 或 **?**，或按一下圖庫或檢視器右上角的 **?** 按鈕，即可開啟「說明與快速鍵」；在軌跡編輯器中也能開啟。其中會列出所有鍵盤快速鍵（一般、圖庫、檢視器、影片、編輯器與 GPS 軌跡編輯器），以及滑鼠與觸控板手勢（圖庫、檢視器、地圖、編輯器與 GPS 軌跡編輯器），並跟隨介面語言與色彩主題。再按一次 F1 或 ? 即可關閉。
+### 語言與外觀
 
-| 按鍵 | 功能 |
-| --- | --- |
-| Enter | 開啟選取的相片 |
-| Esc | 關閉編輯器、返回上一層，或結束投影片播放 |
-| 方向鍵 | 移動選取範圍，或切換上一張／下一張相片 |
-| Home／End | 在檢視器中跳到第一張／最後一張相片 |
-| Ctrl+A | 選取所有相片 |
-| 空白鍵 | 播放或暫停影片，或開始／暫停投影片播放 |
-| M | 影片靜音或取消靜音 |
-| S | 加上星號 |
-| Shift+S | 隨機播放投影片 |
-| Ctrl+C | 複製套用編輯後的相片 |
-| Ctrl+F | 搜尋 |
-| ↑ ↓、Enter | 在搜尋框中選擇最近的搜尋 |
-| R／Shift+R（或 Ctrl+]／Ctrl+[） | 順時針／逆時針旋轉 |
-| I | 詳細資料面板 |
-| E | 編輯相片 |
-| Ctrl+Z／Ctrl+Y | 復原／重做編輯步驟 |
-| \\ | 編輯時顯示原始相片 |
-| Y／Shift+Y | 並排／分割比較修改前後 |
-| J | 顯示過曝與欠曝區域 |
-| C | 裁切工具（按 Enter 完成） |
-| T | 以四個角落變形的工具（按 Enter 完成） |
-| Ctrl+Shift+C／Ctrl+Shift+V | 複製／貼上編輯設定 |
-| ＋／−、Ctrl＋滾輪、雙指縮放 | 縮放 |
-| 0／1 | 符合視窗／實際大小 |
-| Delete | 移至系統垃圾桶 |
-| F1／? | 開啟或關閉「說明與快速鍵」 |
-| Ctrl+, | 設定 |
-| F5 | 重新掃描 |
-| F11 | 全螢幕 |
+介面支援英文、繁體中文、簡體中文、日文、韓文、德文、西班牙文、法文、義大利文與巴西葡萄牙文。可在 **Settings → General（設定 → 一般）** 選擇語言，以及淺色、深色或系統主題。
 
-## 支援格式
+## 安裝
 
-支援 JPEG、PNG、GIF、WebP、BMP、TIFF、HEIC／HEIF，以及相機 RAW（DNG、CR2、CR3、NEF、ARW、RAF、ORF、RW2、PEF、SRW、3FR、IIQ、X3F 等）。若相機比 RAW 解碼器還新（例如哈蘇 X2D II），則會顯示相機存放在檔案中的大尺寸 JPEG 預覽圖。可在「設定 → 檔案類型」中取消不需要的類型。旋轉設定儲存在圖庫中，檢視相片時才套用，不會改寫原始檔案。
+從 [GitHub Releases](https://github.com/kuopinghsu/picasso/releases/latest) 下載套件。Intel 或 AMD 系統請選 x64，64 位元 Arm 系統請選 Arm64。發佈檔案也包含英文與繁體中文 PDF 使用手冊，以及 SHA-256 校驗碼檔案。
 
-影片（MP4、MOV、M4V、AVI、MKV、WebM、WMV、MPEG、MTS／M2TS、3GP 等）會在縮圖中顯示播放標記與長度，並可在檢視器中連同聲音一起播放。播放影片需要 FFmpeg，請參閱[系統需求](#系統需求)。在尚未安裝 FFmpeg 時找到的影片，會在安裝後重新建立索引。
+### Windows
+
+支援 x64 與 Arm64 的 Windows 10、11。下載對應的 `.exe` 後執行，或解壓縮 `.zip` 套件，不需要安裝程式。
+
+### macOS
+
+支援 Apple silicon 與 Intel Mac，需 macOS 11 或更新版本。開啟 `.dmg`，將 **Picasso** 拖曳至 **Applications（應用程式）**。也可使用 `.zip` 內的應用程式套件。
+
+請查看版本說明中的簽署與公證狀態。若未經公證的版本遭到阻擋，先嘗試開啟一次，再到 **系統設定 → 隱私權與安全性** 選擇 **強制打開**。
+
+### Linux
+
+- **AppImage：** 提供 x64 與 Arm64 版本，適用於 Ubuntu 20.04、RHEL 8、Debian 10 及更新版本。執行 `chmod +x <filename>.AppImage` 後開啟檔案。若沒有 FUSE，請加入 `--appimage-extract-and-run` 啟動。
+
+- **Debian 套件：** 適用於 Ubuntu 22.04 及更新版本，使用 `sudo apt install ./<filename>.deb` 安裝。
+
+- **TAR 壓縮檔：** 在 Ubuntu 22.04 建置，包含執行檔、桌面項目與圖示，可手動安裝。
+
+檔案對話框使用 XDG desktop portal，通常由桌面環境提供。AppImage 內含應用程式所需的函式庫，但仍需系統提供 glibc 與顯示驅動程式。
+
+### 選用的影片支援
+
+影片播放與縮圖需要 FFmpeg 和 ffprobe，照片功能不受影響。請依系統使用對應指令安裝 FFmpeg：
+
+- Windows：`winget install Gyan.FFmpeg`
+
+- macOS：`brew install ffmpeg`
+
+- Debian 或 Ubuntu：`sudo apt install ffmpeg`
+
+Picasso 會搜尋 `PATH`、應用程式資料夾、常見的 WinGet 與 Homebrew 路徑，以及 `PICASSO_FFMPEG` 指定的資料夾或 FFmpeg 執行檔。可攜式使用時，請將兩個執行檔放在應用程式旁，或其 `ffmpeg` 子資料夾內。
+
+## 開始使用
+
+1. 啟動 Picasso。首次啟動時，若系統有「圖片」資料夾，程式會自動加入並在背景掃描，逐步顯示照片。
+2. 使用 **+ Import（匯入）** 或將資料夾拖曳至視窗以加入其他資料夾。Picasso 直接索引原位置的檔案，不會將檔案搬入專用資料夾。
+3. 選取照片後按 **Enter** 檢視、**E** 編輯，或 **S** 標記星號。可利用相簿與說明文字整理照片。
+4. 選擇 **Export…（匯出）** 儲存編輯後的副本。匯出前，編輯紀錄保留在資料庫內，原始檔案不變。
+5. 按 **F1** 或 **?** 開啟說明與快捷鍵，按 **F5** 重新掃描資料夾。
+
+### 命令列用法
+
+可將照片資料夾路徑傳給執行檔，或使用地理標記指令比對照片與軌跡。下列範例假設 `picasso` 已加入 `PATH`，否則請使用完整路徑。
+
+```sh
+picasso ~/Pictures ~/Photos
+picasso --version
+picasso geotag track.gpx ~/Pictures/Trip --offset +01:00 --dry-run
+picasso geotag --help
+```
+
+地理標記範例只預覽比對結果，不寫入變更。移除預覽選項後，位置會儲存到資料庫及照片旁的 `.picasso-geotags.json` 檔案。時差請設定為相機時鐘相對於 UTC 的偏移量。
+
+## 設定與資料
+
+使用齒輪按鈕開啟 **Settings（設定）**，調整語言、主題、監控與排除的資料夾、檔案類型、地圖來源、GPS 軌跡預設值及儲存空間。**Settings → Storage（設定 → 儲存空間）** 顯示實際資料路徑，並提供快取與備份控制。
+
+### 儲存位置
+
+資料庫儲存在 `picasso.db`，偏好設定另存於 `settings.json`。預設資料夾如下：
+
+- **Windows：** 資料庫 `%APPDATA%\Picasso\picasso\data`；快取 `%LOCALAPPDATA%\Picasso\picasso\cache`；設定 `%APPDATA%\Picasso\picasso\config\settings.json`。
+
+- **macOS：** 資料庫 `~/Library/Application Support/app.Picasso.picasso`；快取 `~/Library/Caches/app.Picasso.picasso`；設定 `~/Library/Application Support/app.Picasso.picasso/settings.json`。
+
+- **Linux：** 資料庫 `~/.local/share/picasso`；快取 `~/.cache/picasso`；設定 `~/.config/picasso/settings.json`。
+
+快取包含縮圖、地圖圖磚與重複檔案搜尋雜湊，可從設定清除並重新產生。設定檔中的 CARTO API 金鑰使用目前電腦的資訊加密；將設定搬至其他電腦後，必須重新輸入金鑰。
+
+### 備份與復原
+
+啟動時，若最新的資料庫備份已超過一週，或尚無備份，Picasso 就會建立備份，並在資料庫旁的資料夾保留最新五份。也可在 **Settings → Storage（設定 → 儲存空間）** 手動建立或還原備份。
+
+**資料庫備份不包含照片、影片與設定檔，請另外備份這些檔案。** 資料庫備份包含相簿、星號、說明文字、編輯與歷史、預設集及 GPS 軌跡。
+
+若資料庫無法開啟，Picasso 會顯示復原選項。損壞的資料庫可先保留，再以可讀取的備份或新資料庫取代。忙碌中或無權存取的資料庫不會被取代。復原步驟請參閱[使用手冊](docs/USER_GUIDE_zh-TW.adoc)。
+
+重新命名歷史儲存在相片旁的 `.picasso-renames.json`，請與媒體檔案一起保留，以便復原先前的重新命名。
+
+## 隱私與限制
+
+- **網路存取：** 照片瀏覽與編輯在本機執行。線上地圖會下載圖磚，高度查詢會下載軌跡區域的地形圖磚，因此服務提供者可得知所請求的區域。旅行地圖使用內建邊界資料，可離線使用。
+
+- **更新：** 預設啟用自動更新檢查，每天最多向 GitHub 查詢一次。可在 **Settings → General（設定 → 一般）** 關閉。更新檔案須從發佈頁面手動下載。
+
+- **原始檔案：** 照片編輯、旋轉與日期修正儲存在資料庫，GPS 比對另會寫入附屬檔案。重新命名檔案或將照片移至垃圾桶等明確的檔案操作，會影響磁碟上的檔案。
+
+- **格式：** 支援 JPEG、PNG、GIF、WebP、BMP、TIFF、HEIC/HEIF 與相機 RAW。部分不支援的 RAW 機型會使用相機內嵌的 JPEG 預覽。影片需要 FFmpeg，且無法編輯。
+
+- **編輯範圍：** 不提供 AI 遮罩、修復、多張照片 HDR 合併、全景接合或鏡頭描述檔。HDR 控制只調整單張照片。
+
+- **軌跡匯入：** 資料庫掃描支援 GPX、KML 與 Polarsteps JSON，不索引 KMZ 壓縮檔或區域輪廓。
 
 ## 文件
 
-- [`docs/USER_GUIDE_zh-TW.adoc`](docs/USER_GUIDE_zh-TW.adoc)：使用者指南，從安裝到復原圖庫，逐步說明如何使用 Picasso；英文版是 [`docs/USER_GUIDE.adoc`](docs/USER_GUIDE.adoc)。執行 `make guide` 可建置 HTML 版本，`make guide-pdf` 則建置 PDF 版本。
-- [`docs/DATABASE.md`](docs/DATABASE.md)：圖庫存放的內容、各個版本，以及舊圖庫如何升級
-- [`docs/TESTING.md`](docs/TESTING.md)：測試涵蓋的範圍，以及發行前要手動試用的項目
-- [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md)：效能測試、基準數值，以及 Picasso 在外接與網路磁碟上的表現
-- [`docs/RELEASING.md`](docs/RELEASING.md)：發布新版本
+- [英文使用手冊](docs/USER_GUIDE.adoc)與[繁體中文使用手冊](docs/USER_GUIDE_zh-TW.adoc)：完整操作流程、快捷鍵與疑難排解。
+
+- [資料庫](docs/DATABASE.md)：資料庫內容、結構版本與升級。
+
+- [測試](docs/TESTING.md)：自動化測試範圍與發佈前的人工檢查。
+
+- [效能](docs/PERFORMANCE.md)：基準測試及外接、網路磁碟的行為。
+
+- [發佈流程](docs/RELEASING.md)與[版本紀錄](CHANGELOG.md)。
+
+## 開發
+
+### 從原始碼建置
+
+安裝 **1.95 或更新版本的 Rust** 與 C 編譯器，SQLite 需要從原始碼建置。Windows 請安裝 Visual Studio Build Tools 的 **使用 C++ 的桌面開發** 與 Windows SDK。macOS 請使用 `xcode-select --install` 安裝命令列工具。
+
+Debian 或 Ubuntu 請先安裝建置相依套件：
+
+```sh
+sudo apt install build-essential pkg-config libasound2-dev libxkbcommon-dev libgl1-mesa-dev
+```
+
+Fedora 請安裝對應套件：
+
+```sh
+sudo dnf install gcc pkgconf-pkg-config alsa-lib-devel libxkbcommon-devel mesa-libGL-devel
+```
+
+在儲存庫根目錄執行：
+
+```sh
+cargo build --release --locked
+cargo run --release --locked -- ~/Pictures
+cargo test --release --locked
+```
+
+macOS 與 Linux 的執行檔為 `target/release/picasso`，Windows 則為 `target/release/picasso.exe`。Release 建置的掃描、縮圖與編輯效能優於除錯建置。
+
+預設使用 OpenGL 繪圖。設定 `PICASSO_RENDERER=wgpu` 可改用 wgpu 繪圖後端。
+
+### 專案結構
+
+- 應用程式介面與操作流程：[src/app/](src/app)。
+
+- 影像處理與編輯設定：[src/edit/](src/edit)。
+
+- 資料庫、掃描與縮圖：[src/db.rs](src/db.rs)、[src/worker.rs](src/worker.rs) 與 [src/thumbs.rs](src/thumbs.rs)。
+
+- GPS 軌跡與地理標記：[src/track.rs](src/track.rs)、[src/track_edit.rs](src/track_edit.rs) 與 [src/geotag.rs](src/geotag.rs)。
+
+- 翻譯：[src/i18n/](src/i18n)；語言選擇邏輯位於 [src/i18n.rs](src/i18n.rs)。
+
+### 檢查與維護
+
+[Makefile](Makefile) 提供建置、測試、基準測試、文件與打包指令。執行 `make help` 查看所有目標，常用指令如下：
+
+- `make check`：檢查應用程式與測試的型別。
+
+- `make lint`：執行 Clippy，顯示警告但不視為錯誤。
+
+- `make test`：執行 Release 模式測試；可用 `make test T=backup` 依名稱篩選。
+
+- `make check-docs`：依原始碼驗證文件連結、指令與設定。
+
+- `make ci`：檢查文件與相依套件、執行測試並檢查基準測試門檻，需要 cargo-deny。
+
+- `make guide` 與 `make guide-pdf`：將兩種語言的使用手冊建置為 HTML 或 PDF，需要 Asciidoctor 或 Asciidoctor PDF，以及 Makefile 說明的字型。
+
+CI 使用原生 x64 與 Arm64 執行環境建置及測試 Windows、Linux 套件，並產生 macOS 通用應用程式。另會檢查 Linux 套件安裝與啟動、AppImage 相容性、文件及相依套件授權。完整檢查請參閱[工作流程](.github/workflows/ci.yml)。
+
+## 版本發佈
+
+例如 `v0.9.5` 的版本標籤會觸發發佈。標籤必須符合 Cargo.toml 的版本，以及 CHANGELOG.md 中已填寫日期的章節。含連字號的標籤會作為預先發佈版本。CI 讀取版本紀錄產生發佈說明，不會修改檔案。
+
+每次發佈包含兩種架構的 Windows 執行檔與 ZIP 套件、Linux TAR、Debian 與 AppImage 套件，以及 macOS 通用 DMG 與 ZIP 套件。另包含兩份 PDF 手冊、RAW 解碼器原始碼與 SHA-256 校驗碼。封裝套件包含第三方授權聲明，單獨的 Windows 執行檔除外。
+
+建立標籤前，請依照[發佈檢查清單](docs/RELEASING.md)操作。已發佈版本保持不變；若發佈失敗或內容有誤，請建立新的修補版本，不要移動標籤或替換已發佈檔案。
+
+## 參與貢獻
+
+歡迎透過 [GitHub Issues](https://github.com/kuopinghsu/picasso/issues) 與 pull request 回報問題、建議功能、改善文件或提供翻譯。回報問題時，請說明重現步驟並附上 **About（關於）** 顯示的版本。提交程式碼變更前，請執行相關測試與文件檢查。
 
 ## 授權
 
-採用 MIT 授權條款，詳見 [LICENSE](LICENSE)。Picasso 使用的程式庫及其授權條款列在 `THIRD-PARTY-NOTICES.txt` 中，這個檔案隨套件提供，由 `make notices` 產生。
+Picasso 採用 [MIT 授權](LICENSE)。第三方相依套件各有其授權。可用 `make notices` 產生授權聲明，發佈套件內含產生的聲明檔案。

@@ -10,11 +10,12 @@ ifndef::backend-pdf[]
 English | xref:USER_GUIDE_zh-TW.adoc[繁體中文]
 endif::[]
 
-Picasso is a photo library, viewer, and editor for your own computer, in the spirit of Picasa.
-It watches the folders you give it, shows their photos and videos by date, and edits photos without changing the files.
-Nothing is uploaded: the only things Picasso fetches from the internet are map tiles and, if you allow it, the number of the latest version.
+Picasso is a free, open-source photo library, viewer and editor for Windows, macOS and Linux.
+It organizes photos in your existing folders and lets you edit them without changing the original files.
+No cloud account is required, and photos and videos are not uploaded.
 
-This guide walks through Picasso as you use it.
+This guide covers installation, everyday tasks, editing, maps and library recovery.
+For a first session, follow <<install>> and <<first-start>>, then try <<editing>> and <<exporting>>.
 To build Picasso from source, see the https://github.com/kuopinghsu/picasso/blob/main/README.md[README].
 
 NOTE: Shortcuts are written with kbd:[Ctrl].
@@ -29,17 +30,20 @@ Download Picasso from the https://github.com/kuopinghsu/picasso/releases/latest[
 Use `x64` packages on Intel and AMD processors, and `arm64` ones on 64-bit Arm processors.
 
 Windows::
-Download the `.exe` and run it; it needs no installing.
+Supports Windows 10 and 11 on x64 and Arm64.
+Download the `.exe` and run it. No installer is required.
 The `.zip` holds the same program with the READMEs and the license.
 
 macOS::
+Supports macOS 11 or later on Apple silicon and Intel Macs; use the universal package.
 Open the `.dmg` and drag Picasso to *Applications*.
 Unless the release notes say the app is notarized, the first launch is blocked.
 Click *Open Anyway* in *System Settings → Privacy & Security*, then confirm.
 On macOS 14 and older, Control-clicking Picasso and choosing *Open* also works.
 
 Linux::
-The `.AppImage` runs on most distributions without installing:
+The `.AppImage` is available for x64 and Arm64 and runs without installation on Ubuntu 20.04, RHEL 8, Debian 10 and newer.
+Replace the version and processor name in this example with those of your download:
 +
 [source,bash]
 ----
@@ -47,11 +51,17 @@ chmod +x picasso-<version>-linux-x64.AppImage
 ./picasso-<version>-linux-x64.AppImage
 ----
 +
-On Debian and Ubuntu, `sudo apt install ./picasso-<version>-linux-x64.deb` installs Picasso with its menu entry.
-The README describes the `.tar.gz` and what to do where FUSE is missing.
+For Ubuntu 22.04 or newer, `sudo apt install ./picasso-<version>-linux-x64.deb` installs Picasso with its menu entry.
+Use the Arm64 filename on an Arm system.
+If FUSE is unavailable, start the AppImage with `--appimage-extract-and-run`.
+The `.tar.gz` contains the executable, desktop entry and icon for manual installation; it is built on Ubuntu 22.04.
+File dialogs use the XDG desktop portal, normally provided by the desktop environment.
+
+Release downloads include PDF guides in English and Traditional Chinese.
+To verify a download, compare its SHA-256 checksum with the entry in `SHA256SUMS.txt`.
 
 [#ffmpeg]
-=== Videos need FFmpeg
+=== Optional video support
 
 Picasso plays videos with https://ffmpeg.org[FFmpeg].
 Without it, photos work and videos are skipped; they are added once FFmpeg is installed.
@@ -60,19 +70,37 @@ Without it, photos work and videos are skipped; they are added once FFmpeg is in
 * macOS: `brew install ffmpeg`
 * Linux: `sudo apt install ffmpeg`, or your distribution's package
 
-On Windows and Linux, if you can't install software, put `ffmpeg` and `ffprobe` in the folder that holds Picasso, or the AppImage.
+Both `ffmpeg` and `ffprobe` must be available.
+Picasso searches `PATH`, common WinGet and Homebrew locations, and the application folder.
+For a portable setup, place both executables beside Picasso or the AppImage, or in an `ffmpeg` subfolder.
+You can also set `PICASSO_FFMPEG` to their folder or the FFmpeg executable.
 
-== The first start
+[#first-start]
+== Getting started
 
-On its first start Picasso adds your Pictures folder and reads it in the background.
-The status bar shows how far it has got, and photos appear by date as they are found.
+On first launch, Picasso adds your Pictures folder if it exists and scans it in the background.
+The status bar shows scan progress. Photos appear by date as they are found.
 You can use Picasso while it scans.
 
 To add another folder, click *+ Import* at the top right, or drag the folder onto the window.
 Picasso adds every subfolder too.
 
-Picasso never moves, renames, or rewrites your photos.
-Stars, captions, albums, places, dates you fix, and edits are kept in Picasso's own library, and only *Move to trash* changes a photo file.
+Importing a folder indexes its files in place; it does not copy or move them.
+Stars, captions, albums, assigned locations, date corrections and edits are stored in the library.
+GPS track matching also creates sidecar files beside the photos.
+Explicit file operations, such as *Rename files…* and *Move to trash*, affect files on disk.
+
+. Select a photo and press kbd:[Enter] to view it.
+. Press kbd:[E] to edit it, or kbd:[S] to add a star.
+. Choose *Export…* to save an edited copy for use outside Picasso.
+. Press kbd:[F1] for help with the current tools.
+
+=== Supported files
+
+Picasso supports JPEG, PNG, GIF, WebP, BMP, TIFF, HEIC/HEIF and camera RAW files.
+For some cameras not supported by the RAW decoder, it uses the embedded JPEG preview.
+Video formats include MP4, MOV, AVI, MKV and WebM; videos require FFmpeg and cannot be edited.
+Choose which categories to scan in *Settings → File types*.
 
 == The library window
 
@@ -96,7 +124,7 @@ The status bar::
 Scanning progress, the *Photo Tray* with the selected photos, and a link to files that couldn't be read, when there are any.
 
 At the top right are *+ Import*, *Refresh*, *Slideshow*, *?* for *Help & Shortcuts*, and the gear for *Settings*.
-Click the logo at the top left for *About Picasso*, which shows the version.
+Click the logo at the top left to open *About Picasso*, which shows the version, build date and source commit.
 
 Press kbd:[I], or click the side panel button at the right of the bottom bar, to show or hide the Info and Map panel beside the grid.
 It shows the selected photo's camera details and where it was taken, on the *Info* and *Map* tabs at its top.
@@ -155,11 +183,11 @@ The selected photos appear in the *Photo Tray* in the status bar.
 == Organizing photos
 
 Most actions are in three places: the toolbar above the grid, the *Photo Tray*, and the menu you get by right-clicking a thumbnail.
-They act on every selected photo.
+Selection actions apply to all selected photos. Caption editing applies to the open photo.
 
 === Stars
 
-Press kbd:[S], or click the star in the toolbar, to star the selected photos; do it again to take the star off.
+Press kbd:[S], or click the star in the toolbar, to add or remove stars from the selected photos.
 *Starred Photos* in the sidebar lists them all.
 
 === Captions
@@ -174,7 +202,7 @@ Albums group photos from any folders without moving the files.
 * To make an album, select photos and choose *New album…* from *Add to Album* in the toolbar.
 * To add photos to an album, select them and pick the album from *Add to Album*.
 * In an album, *Remove from Album* takes the selected photos out.
-The files are not touched.
+The files remain unchanged.
 * To delete an album, right-click it in the sidebar and choose *Delete album*.
 The photos stay in the library.
 
@@ -185,13 +213,13 @@ The rotation is kept in the library; the file is not rewritten.
 
 === Fixing the date taken
 
-For a camera whose clock was wrong, or a scanned print, select the photos, right-click one, and choose *Adjust date…*.
+To correct a camera clock error or set the date of scanned photos, select the photos, right-click one and choose *Adjust date…*.
 
 * *Shift* moves every selected photo by a number of days, hours, and minutes.
 * *Set to* sets the earliest photo to a date and time, and moves the others with it.
 * *Use the date in the file* undoes your changes.
 
-The new date is kept in the library and survives rescans; the files are not changed.
+The corrected date is stored in the library and remains after rescanning. The files are unchanged.
 
 === Moving photos to the trash
 
@@ -199,7 +227,7 @@ Press kbd:[Delete], or click *Delete* in the *Photo Tray*, to move the selected 
 Picasso asks first unless you turned that off in *Settings → General*.
 
 On Windows and Linux, the status bar offers *Undo* for two minutes, which puts the files back where they were.
-On a Mac, restore files from the Trash in the Finder.
+On macOS, restore files from the Trash in Finder.
 Either way, a photo that comes back within 90 days gets its stars, caption, albums, and edits back.
 
 === Renaming files
@@ -232,6 +260,22 @@ Each renaming is listed in a `.picasso-renames.json` file in the folder, with ev
 *Undo* puts back the names from before the newest renaming in the list, also after Picasso was closed, and clicking it again goes back one more.
 A file whose earlier name another file has now, such as a new `DSC0001.JPG` from the camera, keeps its name and stays in the list for later.
 
+== Finding duplicates
+
+*Duplicates* in the sidebar finds files whose content is identical, byte for byte, even under other names or in other folders.
+The search runs in the background and continues when you close the Duplicates dialog, while Picasso remains open.
+The sidebar shows the number of groups found.
+It finds exact copies, not photos that only look similar.
+
+In each group one file is *Kept*: a starred or edited one when there is one.
+Move the other copies to the trash one by one, with *Trash extra copies* for a group, or with *Move all extra copies to trash*.
+*Search again* looks once more.
+
+== Unreadable files
+
+When a scan finds files it can't read, such as a damaged photo, a link appears in the status bar.
+It opens the list, with *Show in folder* and *Move to trash* for each file.
+
 == Viewing photos and videos
 
 Double-click a photo, or select it and press kbd:[Enter], to open the viewer.
@@ -239,12 +283,12 @@ Double-click a photo, or select it and press kbd:[Enter], to open the viewer.
 * kbd:[←] and kbd:[→] go to the previous and next photo; kbd:[Home] and kbd:[End] go to the first and last.
 * Zoom with the mouse wheel, kbd:[Ctrl] and the wheel, a trackpad pinch, or kbd:[+] and kbd:[−].
 Drag to pan.
-* kbd:[0] fits the photo to the window, and kbd:[1] shows it at actual size, every pixel.
+* kbd:[0] fits the photo to the window, and kbd:[1] shows it at actual size, with one image pixel per display pixel.
 * The filmstrip along the bottom shows the photos around this one; click one to go there.
 * kbd:[I] shows the details panel with the camera settings, a histogram, the *Caption*, *Show in folder*, and *Show on map*.
 * kbd:[F11] switches to full screen, and kbd:[Esc] goes back to the library.
 
-The viewer's toolbar also flips between the light and dark themes.
+Use the theme button in the viewer toolbar to switch between light and dark themes.
 
 === Slideshows
 
@@ -266,13 +310,14 @@ They are on a thumbnail's right-click menu and the viewer's *···* menu.
 
 Videos show in the grid with a play badge and their length.
 In the viewer, kbd:[Space] plays and pauses, and kbd:[M] mutes.
-Videos can't be edited.
+Videos cannot be edited.
 
+[#editing]
 == Editing photos
 
 Open a photo and press kbd:[E], or click *Edit*, to open the editor in place of the details panel.
 Editing never changes the file.
-Each change is a step saved in the library, and the photo is drawn from the original plus those steps.
+Each change is saved as a step in the library. Picasso renders the photo from the original file and the saved edits.
 An edited photo has a small sliders badge on its thumbnail; click it to edit the photo again.
 
 image::editor.png[The editor]
@@ -288,23 +333,26 @@ Below them are undo and redo, a ··· menu with *Undo all*, *Redo all*, *Reset 
 |===
 | Section | What it does
 
-| Profile | A starting look under the sliders: Color, Neutral, Vivid, Landscape, Portrait, or Monochrome
+| Profile | A base appearance before other adjustments: Color, Neutral, Vivid, Landscape, Portrait, or Monochrome
 | Presets | 25 built-in looks with an *Amount* slider; save your own settings as a preset to reuse them
 | Transform | Turn, tilt, rotate by 90°, and flip without leaving *Adjust*
 | Light | Exposure, contrast, highlights, shadows, whites, and blacks
 | Tone curve | A curve with four zones, and point curves for RGB, red, green, and blue
-| HDR | Opens shadows and brings back highlights in one photo
-| Color | White balance, with an eyedropper for something neutral; vibrance and saturation
+| HDR | Adjusts shadow and highlight detail in a single photo
+| Color | White balance, with an eyedropper to sample a neutral area; vibrance and saturation
 | Color mixer | Hue, saturation, and luminance for eight colors
 | Color grading | Color wheels for shadows, midtones, highlights, and the whole photo
 | Effects | Texture, clarity, dehaze, vignette, and grain
 | Detail | Sharpening and noise reduction
 | Black & White | Monochrome with an eight-color gray mix
-| History | Every step, from the first
+| History | Saved editing steps
 |===
 
 Double-click a slider's name to set it back to zero.
 For a quick start, *Auto tone* in *Light* balances exposure and contrast, and *Auto* in *Color* sets the white balance.
+
+HDR adjusts a single photo; it does not merge several exposures.
+AI masks, healing, panorama stitching and lens profiles are not available.
 
 === Crop
 
@@ -346,7 +394,8 @@ A checkbox shows the mask's area in red.
 In the library, *Paste settings* on the right-click menu applies them to every selected photo.
 The crop and the *Transform* settings are not copied, because they belong to one photo.
 
-=== Exporting
+[#exporting]
+== Exporting photos
 
 Edits stay inside Picasso until you export.
 
@@ -354,14 +403,18 @@ Edits stay inside Picasso until you export.
 * For many photos, select them and click *Export…* in the *Photo Tray*, or right-click one.
 Choose a *Folder*, a *Format* (JPEG, PNG, or TIFF), a *Size* (*Full size* or a long edge of 4096, 2048, 1600, or 1080 px), and the JPEG *Quality*.
 
-Exported files keep their names with the new extension and are numbered when a name is taken, so nothing is overwritten.
-Videos are left out.
-The status bar shows the progress with *Stop*, then *Open folder*.
+Batch export keeps the original filename with the new extension and adds a number if the name already exists.
+It skips videos. The status bar shows progress with *Stop*, then *Open folder* when complete.
+Stopping leaves files that have already been exported in the destination folder.
+
+Editor export opens a save dialog where you choose the filename.
+It prevents saving over the original photo; choose a new filename if you also want to keep an earlier export.
 
 == Maps and places
 
-Maps need an internet connection.
-Picasso keeps the map tiles it has shown, so places you have looked at work offline later.
+Places and the Map panel download tiles from the selected map provider.
+Cached tiles can be reused offline, but areas or zoom levels not in the cache require a connection.
+Travel Map is separate and works offline with built-in boundaries.
 
 === Places
 
@@ -369,7 +422,7 @@ image::places.png[Places]
 
 *Places* in the sidebar shows every photo with a location on a map.
 Drag to move the map, and zoom with the wheel or a pinch.
-Nearby photos join into one pin with a count.
+Nearby photos are grouped into a pin that shows their count.
 Point at a pin for a card with its photos: click one to open it, or use *Select these photos* or *Zoom in*.
 Clicking a pin of several photos zooms in on them, or selects them when they were taken at one spot, and double-clicking a single photo's pin opens it.
 *Open in OpenStreetMap* opens the same view in your web browser.
@@ -389,30 +442,41 @@ For photos without GPS:
 *Clear geotag* removes the pin you placed.
 A location from the camera's GPS is never changed.
 
-=== GPS tracks
+== GPS tracks
 
 Picasso reads the `.gpx` and `.kml` files in your folders, and Polarsteps location exports in `.json` files (such as `locations.json`), and draws them as colored paths under the photo pins.
-Point at a track for its name, start time, distance, and duration, and double-click it to zoom to it.
+Hover over a track for its name, start time, distance, and duration, and double-click it to zoom to it.
 Click a track to select the photos taken along it: those within 300 m of the path and, for a track with times, taken within 14 hours of them, so a camera clock set to another time zone still matches.
 *Select the photos taken along it* on the right-click menu of a track in the side panel does the same.
 *Tracks* in the Places toolbar turns the paths off.
 
 A folder's tracks are also listed at the top of the library grid, under *GPS tracks*, each with the shape of its path, its format, and its distance.
 
-=== Editing a track
+The library scanner supports GPX tracks and routes, KML lines and timed tracks, and Polarsteps JSON.
+It does not index KMZ archives or area outlines.
+The geotagging tool described below separately accepts GPX, KML and KMZ files.
+
+=== Opening and inspecting a track
 
 image::trackedit.png[The track editor]
 
 Click a track in the library grid, or right-click it there or in Places and choose *Edit track*, to open the track editor.
-It cleans the track up the way GPXViewer does: it drops points reached impossibly fast, removes points the line doesn't need, merges the points of a stay into one, and can fill long gaps with a curve; flights are left as they are.
+When opening an unprocessed track, Picasso applies automatic cleanup using the track settings.
+Cleanup removes implausibly fast points, simplifies the path and combines points recorded during a stay.
+It can also fill long gaps with a curve. Segments classified as flights are preserved.
 
 The map fills the window.
 The tools float at its top left, buttons for the *Whole track*, *Start*, *End*, and *Highest point* at the top, and the zoom at the top right.
 The panel on the right shows the *Statistics*, the *Elevation* profile, the selected *Point*, and the *Cleanup* settings.
-A track without heights, such as one from Polarsteps, gets a note in place of the profile; heights of 0 m at every point count as none.
-Click *Look up heights* there to fill them in from the free https://github.com/tilezen/joerd/blob/master/docs/attribution.md[Terrain Tiles on AWS]: only the numbers of the map tiles along the track are sent, as when showing the map, and the points stay on this computer.
+A track without heights, such as one from Polarsteps, gets a note in place of the profile; a track with 0 m at every point is also treated as having no elevation data.
+Click *Look up heights* to download https://github.com/tilezen/joerd/blob/master/docs/attribution.md[Terrain Tiles on AWS] and calculate elevations locally.
+The provider receives tile requests for the track area, rather than the track file or individual points.
+This reveals the requested terrain area to the provider.
 If some points still get no height, the button stays to try those again, and kbd:[Ctrl+Z] takes the heights off.
-Point at the profile to find that place on the map, and click or drag along it to go there; pointing at a point on the map marks it on the profile.
+Hover over the elevation profile to highlight the corresponding location on the map.
+Click or drag along the profile to select a point. Hovering over a map point also highlights it on the profile.
+
+=== Editing track points
 
 * Drag a point to move it, and click the line to add one.
 * Right-click a point and choose *Remove point*, or select points and click *Remove* in the bar at the bottom of the map.
@@ -422,16 +486,22 @@ Point at the profile to find that place on the map, and click or drag along it t
 * kbd:[1] to kbd:[4] show the whole track, its start, its end, and its highest point.
 * *Show original* draws the track as read, before the cleanup.
 
+=== Cleanup settings
+
 Steps longer than the *Flight distance* or faster than the *Flight speed* are drawn as a dashed flight, and places where you stayed longer than the *Stay* time get a circle.
 Change the settings and click *Clean up again* to clean the track up once more; *Defaults* restores GPXViewer's values.
 Settings you change become the defaults for the next track.
 
-The file itself is never changed, and the editor won't save over it.
+=== Saving and recovering track edits
+
+The editor saves copies and prevents overwriting the source track.
 *Save as GPX…* and *Save as KML…* save a copy beside the track, named `-optimized` by default, and kbd:[Ctrl+S] saves it in the track's own format.
 The copy keeps the cleanup settings and how long each stay lasted, so it opens as saved, without a new cleanup; tracks saved by GPXViewer open as saved too.
-Undo going back over a cleanup puts its settings back too.
+Undoing a cleanup also restores the previous cleanup settings.
 kbd:[Esc] or *Back* closes the editor, and asks first when there are edits you haven't saved.
 Edits you haven't saved are kept a few seconds after each change, so if Picasso quits or stops unexpectedly, it offers to restore them the next time it starts.
+
+[#geotagging]
 
 === Placing photos from a GPS track
 
@@ -446,12 +516,19 @@ Cameras usually keep local time without a time zone.
 Photos that already have GPS from the camera, or a pin you placed, keep their location.
 Picasso writes the places to its library and to a `.picasso-geotags.json` file in the folder, never into the photos.
 
+The track must contain timestamps, and the photo times must overlap the track recording.
+If the camera recorded no time zone and you leave the offset blank, Picasso uses this computer’s time zone.
+For photos taken elsewhere, enter the offset used by the camera at the time of the trip.
+
 The same works from a terminal, and `--dry-run` shows what would happen without saving anything:
 
 [source,bash]
 ----
 picasso geotag track.gpx ~/Pictures/Trip --offset +01:00 --dry-run
 ----
+
+Remove `--dry-run` only after reviewing the matches.
+Use `picasso geotag --help` for the command options.
 
 Here `picasso` stands for the Picasso program: the `.exe` you downloaded on Windows, `/Applications/Picasso.app/Contents/MacOS/picasso` on a Mac, the `.AppImage` file, or `picasso` once the `.deb` is installed.
 
@@ -475,22 +552,8 @@ A deeper color means more photos.
 * Search for a country to find it on the map.
 * Click a colored place for a card; *Show photos* shows them in Places.
 
-The Travel Map follows the photos' GPS only, so place more photos to color more of it.
+Travel Map is based on photo locations. It does not provide manual visited-country markers.
 It works offline.
-
-== Finding duplicates
-
-*Duplicates* in the sidebar finds files whose content is identical, byte for byte, even under other names or in other folders.
-The search runs in the background and goes on when you close the window; the sidebar shows how many groups it has found.
-
-In each group one file is *Kept*: a starred or edited one when there is one.
-Move the other copies to the trash one by one, with *Trash extra copies* for a group, or with *Move all extra copies to trash*.
-*Search again* looks once more.
-
-== Files that couldn't be read
-
-When a scan finds files it can't read, such as a damaged photo, a link appears in the status bar.
-It opens the list, with *Show in folder* and *Move to trash* for each file.
 
 == Settings
 
@@ -499,8 +562,9 @@ Settings apply right away.
 
 General::
 Language, color theme, thumbnail size, slideshow interval, and whether to ask before moving photos to the trash.
-*Updates* can check once a day for a newer version; when there is one, a link to it appears at the top right.
-The check only asks GitHub for the latest version number.
+Automatic *Updates* checks are enabled by default and contact GitHub at most once a day.
+Turn them off here, or use *Check now* for a manual check.
+When a newer version is found, a download link appears at the top right; Picasso does not install it automatically.
 
 Folders::
 The folders Picasso watches, each with buttons to open it, rescan it, or remove it from Picasso.
@@ -512,8 +576,8 @@ Which files Picasso adds: JPEG, PNG, GIF, WebP, BMP, TIFF, HEIC/HEIF, camera RAW
 Files of a type you turn off leave the library but stay on disk.
 
 Map::
-The map in Places and the Map panel.
-*OpenFreeMap Liberty*, the default, and *OpenStreetMap* need nothing more.
+Choose the provider used in Places and the Map panel.
+*OpenFreeMap Liberty* is the default. It and *OpenStreetMap* require no API key.
 *CARTO* has three styles and needs a free key: *Get a free key* opens CARTO's sign-up page, and you paste the key into the field.
 *Esri World Imagery* shows satellite photos.
 
@@ -533,28 +597,44 @@ Right-click a folder in the sidebar for:
 * *Exclude from scanning*, on a subfolder you don't want in the library
 * *Rescan this folder* and *Remove from Picasso…*, on a folder you added
 
-== Your library and its backups
+== Library storage and backups
 
-=== What is kept where
+=== What the library stores
 
 The library, `picasso.db`, holds the folders you added, every photo's stars, caption, rotation, place, fixed date, albums, and edits, your presets, and your GPS tracks.
-It does not hold the photos themselves, so back up your photos as you would any files.
+It does not contain the photo or video files. Back up your media files separately.
 
-The cache holds thumbnails and map tiles; clearing it is safe, and Picasso makes them again.
+The cache holds thumbnails, map tiles and duplicate-search hashes.
+Clearing it does not remove source files or library edits. Picasso rebuilds thumbnails and downloads map tiles as needed.
 Your choices in Settings and your recent searches are kept in `settings.json`, apart from the library.
 *Settings → Storage* shows where each one is.
 
-Two small files can sit beside your photos: `.picasso-geotags.json` holds the places set with *Geotag from GPS track…*, and `.picasso-renames.json` the names *Undo* can put back after *Rename files…*.
+Two sidecar files may be stored beside your photos: `.picasso-geotags.json` contains locations assigned with *Geotag from GPS track…*, and `.picasso-renames.json` records names that *Undo* can restore after *Rename files…*.
+Back up these files with your media if you want to preserve them.
+
+=== Default storage locations
+
+*Settings → Storage* shows the actual paths on your computer. The default locations are:
+
+* Windows: library `%APPDATA%\Picasso\picasso\data`; cache `%LOCALAPPDATA%\Picasso\picasso\cache`; settings `%APPDATA%\Picasso\picasso\config\settings.json`.
+* macOS: library `~/Library/Application Support/app.Picasso.picasso`; cache `~/Library/Caches/app.Picasso.picasso`; settings `~/Library/Application Support/app.Picasso.picasso/settings.json`.
+* Linux: library `~/.local/share/picasso`; cache `~/.cache/picasso`; settings `~/.config/picasso/settings.json`.
+
+You can copy the settings file to preserve preferences. A saved CARTO key is encrypted for the current computer and must be entered again on another computer.
 
 === Backups
 
-Picasso backs up the library once a week when it starts, and keeps the five newest.
+At startup, Picasso creates a backup if none exists or the newest backup is at least one week old.
+Backups are stored in a `backups` folder beside the library; the five newest are kept.
+A library backup includes edits and their history, but excludes media files, `settings.json` and the cache.
+Copy the settings file separately if you want to preserve your preferences.
 In *Settings → Storage*, *Back up now* makes one, and *Restore…* puts one back: Picasso backs up the current library first, then restarts with the one you chose.
 
 [#recovery]
-=== When the library can't be opened
+=== When the library cannot be opened
 
-If the library can't be opened, for example after a disk error, Picasso explains what went wrong instead of starting, and never overwrites the library:
+If the library cannot be opened, Picasso shows a recovery window instead of the library.
+Read the error before choosing an action:
 
 * *Try again*, for when the library was only busy, such as while a backup or sync tool had it open.
 * *Restore the backup of …* puts the newest readable backup in its place.
@@ -563,7 +643,10 @@ Changes since that backup are lost.
 * *Open library folder* shows the files, and *Quit* leaves everything as it is.
 
 Restoring and starting over are offered only when the library file is damaged.
-The old file is kept beside the new one, renamed `picasso-damaged-` with the date, so nothing is lost.
+A busy or inaccessible library is not replaced.
+The damaged file is preserved beside the new one, renamed `picasso-damaged-` with the date.
+Preserving that file does not guarantee that all its data can be recovered.
+Restoring a backup returns the library to the state recorded in that backup.
 
 === Moving and renaming folders
 
@@ -571,10 +654,19 @@ Picasso rescans your folders when it starts and watches them while it runs; kbd:
 
 * Moving photos between folders Picasso already watches needs nothing; the next scan finds them.
 * To move a whole folder somewhere new, move it, remove the old place in *Settings → Folders*, and add the new one with *+ Import*.
-The photos are recognized and get their stars, captions, albums, and edits back.
+Picasso can restore their stars, captions, albums and edits when file size, modification time and capture date still match the earlier records.
 * A folder on a drive that isn't plugged in keeps its photos until the drive is back.
 
-A photo that leaves the library keeps its stars, caption, albums, and edits for 90 days, in case it comes back.
+When a photo is removed from the library, Picasso retains its stars, caption, albums and edits for 90 days so they can be restored if the file returns.
+
+== Privacy and offline use
+
+Photo browsing, editing, search and library statistics run locally.
+Places and the Map panel contact map providers for tiles.
+Elevation lookup requests terrain tiles, and update checks contact GitHub.
+Map and terrain requests reveal the requested areas to their providers.
+To work offline, use local photo features and Travel Map; cached map views may also be available.
+Disable automatic update checks in *Settings → General* if you do not want those requests.
 
 == Keyboard shortcuts
 
@@ -617,7 +709,7 @@ Press kbd:[F1] or kbd:[?] to see every shortcut and mouse gesture in Picasso.
 
 == Troubleshooting
 
-Videos don't show or don't play::
+Videos are missing or do not play::
 Install FFmpeg (see <<ffmpeg>>) and start Picasso again.
 Videos found while FFmpeg was missing are added then.
 
@@ -632,10 +724,18 @@ Press kbd:[F5] to rescan, and look at the files that couldn't be read in the sta
 The Mac says Picasso can't be opened::
 See <<install>>: use *Open Anyway* in *System Settings → Privacy & Security*.
 
-The AppImage doesn't start::
+The AppImage does not start::
 Run it with `--appimage-extract-and-run` where FUSE is missing, as in containers.
 
-Picasso says the library can't be opened::
+GPS matching finds no photos or assigns the wrong places::
+See <<geotagging>>. Check that the track contains timestamps and covers the photo times.
+Verify the camera time zone, then preview the command-line results before saving.
+
+Edits are missing in another application::
+Edits are stored in the Picasso library, not in the source photo.
+Use <<exporting>> to create a file with the edits applied.
+
+Picasso reports that the library cannot be opened::
 See <<recovery>>.
 
 == Getting help

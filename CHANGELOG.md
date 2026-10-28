@@ -18,6 +18,15 @@ section of this file as the release notes.
 
 ### Fixed
 
+- Standardized Traditional Chinese README terminology to match the interface, fixing the
+  terminology test that blocked CI on Windows, Linux and macOS.
+- Empty library views now offer actions for the current context: clear a search, remove the
+  edited filter, return to the library, or rescan a folder. Import is offered for an empty library.
+- Star and Unstar in the thumbnail menu apply to the selected photos and show their count.
+  Toolbar star actions now follow the primary photo consistently for mixed selections.
+- Shared icon buttons provide translated accessibility names and their enabled and selected states.
+- The edited-only filter is separate from sorting, remains visible in the browse toolbar, and
+  supports every sort order. Statistics and Travel Map clear this filter when opened.
 - Clarified documentation about network access, default update checks, original-file handling,
   export filename behavior and the limits of damaged-library recovery.
 - Corrected the release guide: a manual workflow run targeting a version tag can publish a

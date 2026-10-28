@@ -465,7 +465,7 @@ impl PicassoApp {
         } else {
             self.edits.insert(id, settings);
         }
-        if self.sort.edited_only() {
+        if self.edited_only {
             self.library_dirty = true;
         }
         self.forget_thumb(id);

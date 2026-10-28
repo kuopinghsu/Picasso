@@ -1,6 +1,19 @@
 //! Japanese text, keyed by the English text in the code.
 
 pub(super) const TABLE: &[(&str, &str)] = &[
+    // Library filters and selection feedback
+    ("Edited only", "編集済みのみ"),
+    ("Star {} photos", "{} 枚にスターを付ける"),
+    ("Unstar {} photos", "{} 枚のスターを外す"),
+    ("Try another search or clear the search.", "別の条件で検索するか、検索をクリアしてください。"),
+    ("Clear search", "検索をクリア"),
+    ("Remove the edited filter to see all photos in this view.", "編集済みフィルターを解除すると、この画面のすべての写真が表示されます。"),
+    ("Show all photos", "すべての写真を表示"),
+    ("No photos in this album", "このアルバムに写真はありません"),
+    ("Select photos in the library and use Add to Album.", "ライブラリで写真を選択し、「アルバムに追加」を使用してください。"),
+    ("No starred photos", "スター付きの写真はありません"),
+    ("Add stars to photos in the library to see them here.", "ライブラリで写真にスターを付けると、ここに表示されます。"),
+    ("Check the folder and enabled file types in Settings.", "設定でフォルダーと有効なファイル形式を確認してください。"),
     // Header and photo tray
     ("Search photos", "写真を検索"),
     ("Recent searches", "最近の検索"),

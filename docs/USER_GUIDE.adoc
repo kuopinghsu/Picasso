@@ -139,7 +139,10 @@ The sort menu in the toolbar offers:
 
 * *Sort by Date*, newest first, or *Sort by Date, oldest*
 * *Sort by Name*
-* *Sort by Name, edited*, which shows only the photos you have edited
+
+Use the separate *Edited only* checkbox to show photos with edits.
+It works with any sort order. Clear the checkbox to show all photos in the current view.
+When a search has no results, use *Clear search*; an empty edited view offers *Show all photos*.
 
 === Searching
 
@@ -188,6 +191,7 @@ Selection actions apply to all selected photos. Caption editing applies to the o
 === Stars
 
 Press kbd:[S], or click the star in the toolbar, to add or remove stars from the selected photos.
+The thumbnail right-click menu also applies Star or Unstar to the selected photos and shows their count.
 *Starred Photos* in the sidebar lists them all.
 
 === Captions

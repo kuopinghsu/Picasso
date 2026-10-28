@@ -1,6 +1,19 @@
 //! Korean text, keyed by the English text in the code.
 
 pub(super) const TABLE: &[(&str, &str)] = &[
+    // Library filters and selection feedback
+    ("Edited only", "편집한 사진만"),
+    ("Star {} photos", "사진 {}장에 별표 추가"),
+    ("Unstar {} photos", "사진 {}장의 별표 제거"),
+    ("Try another search or clear the search.", "다른 조건으로 검색하거나 검색을 지우세요."),
+    ("Clear search", "검색 지우기"),
+    ("Remove the edited filter to see all photos in this view.", "편집 필터를 해제하면 이 보기의 모든 사진이 표시됩니다."),
+    ("Show all photos", "모든 사진 표시"),
+    ("No photos in this album", "이 앨범에 사진이 없습니다"),
+    ("Select photos in the library and use Add to Album.", "라이브러리에서 사진을 선택한 다음 앨범에 추가하세요."),
+    ("No starred photos", "별표를 추가한 사진이 없습니다"),
+    ("Add stars to photos in the library to see them here.", "라이브러리에서 사진에 별표를 추가하면 여기에 표시됩니다."),
+    ("Check the folder and enabled file types in Settings.", "설정에서 폴더와 활성화된 파일 형식을 확인하세요."),
     // Header and photo tray
     ("Search photos", "사진 검색"),
     ("Recent searches", "최근 검색"),

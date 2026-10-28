@@ -151,17 +151,11 @@ pub enum Sort {
     DateNewest,
     DateOldest,
     Name,
-    /// By name, only photos with an edit applied.
-    NameEdited,
 }
 
 impl Sort {
     pub fn by_name(self) -> bool {
-        matches!(self, Sort::Name | Sort::NameEdited)
-    }
-
-    pub fn edited_only(self) -> bool {
-        self == Sort::NameEdited
+        self == Sort::Name
     }
 }
 
@@ -576,11 +570,10 @@ mod tests {
     }
 
     #[test]
-    fn edited_sort_orders_by_name() {
-        assert!(Sort::NameEdited.by_name() && Sort::Name.by_name());
+    fn only_name_sort_uses_filename_labels() {
+        assert!(Sort::Name.by_name());
         assert!(!Sort::DateNewest.by_name());
-        assert!(Sort::NameEdited.edited_only());
-        assert!(!Sort::Name.edited_only());
+        assert!(!Sort::DateOldest.by_name());
     }
 
     #[test]

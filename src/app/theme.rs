@@ -5,6 +5,8 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use crate::i18n::tr;
+
 use eframe::egui::{self, Color32, CornerRadius, FontId, Pos2, Rect, Shadow, Stroke, TextStyle, Vec2};
 
 /// Lagoon teal, dark enough for white text on it: filled buttons and marks
@@ -418,9 +420,23 @@ pub enum Icon {
 /// A button the size of a short text button with `icon` drawn in it.
 pub fn icon_button(ui: &mut egui::Ui, icon: Icon, enabled: bool, selected: bool) -> egui::Response {
     let response = ui.add_enabled(enabled, egui::Button::new("     ").selected(selected));
+    response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, ui.is_enabled() && enabled, selected, icon_label(icon)));
     let color = if enabled { text() } else { muted().gamma_multiply(0.6) };
     paint_icon(ui.painter(), icon, response.rect.center(), color);
     response
+}
+
+fn icon_label(icon: Icon) -> &'static str {
+    tr(match icon {
+        Icon::RotateLeft => "Rotate Counterclockwise",
+        Icon::RotateRight => "Rotate Clockwise",
+        Icon::Undo => "Undo",
+        Icon::Redo => "Redo",
+        Icon::AddToAlbum => "Add to Album",
+        Icon::RemoveFromAlbum => "Remove from Album",
+        Icon::Clipping => "Show clipped highlights and shadows",
+        Icon::More => "More",
+    })
 }
 
 pub fn paint_icon(painter: &egui::Painter, icon: Icon, center: Pos2, color: Color32) {
@@ -622,6 +638,31 @@ pub fn toolbar_frame(fill: Color32) -> egui::Frame {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn icon_buttons_expose_names_and_states_to_accessibility() {
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        let icons = [Icon::RotateLeft, Icon::RotateRight, Icon::Undo, Icon::Redo, Icon::AddToAlbum, Icon::RemoveFromAlbum, Icon::Clipping, Icon::More];
+        let mut buttons = Vec::new();
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                for icon in icons {
+                    let response = icon_button(ui, icon, icon != Icon::Undo, icon == Icon::Clipping);
+                    buttons.push((response.id.accesskit_id(), icon));
+                }
+            });
+        });
+        output.textures_delta.clear();
+        let update = output.platform_output.accesskit_update.take().expect("accessibility update");
+        for (id, icon) in buttons {
+            let node = &update.nodes.iter().find(|(node_id, _)| *node_id == id).expect("button node").1;
+            assert_eq!(node.role(), egui::Role::Button);
+            assert_eq!(node.label(), Some(icon_label(icon)));
+            assert_eq!(node.is_disabled(), icon == Icon::Undo);
+            assert_eq!(node.toggled(), Some(egui::accesskit::Toggled::from(icon == Icon::Clipping)));
+        }
+    }
 
     /// WCAG contrast ratio between two opaque colors, from 1 to 21.
     fn contrast(a: Color32, b: Color32) -> f32 {

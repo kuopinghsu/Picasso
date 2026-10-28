@@ -1,6 +1,19 @@
 //! German text, keyed by the English text in the code.
 
 pub(super) const TABLE: &[(&str, &str)] = &[
+    // Library filters and selection feedback
+    ("Edited only", "Nur bearbeitete"),
+    ("Star {} photos", "{} Fotos markieren"),
+    ("Unstar {} photos", "Markierung von {} Fotos entfernen"),
+    ("Try another search or clear the search.", "Versuchen Sie eine andere Suche oder löschen Sie die Suche."),
+    ("Clear search", "Suche löschen"),
+    ("Remove the edited filter to see all photos in this view.", "Entfernen Sie den Bearbeitungsfilter, um alle Fotos in dieser Ansicht zu sehen."),
+    ("Show all photos", "Alle Fotos anzeigen"),
+    ("No photos in this album", "Keine Fotos in diesem Album"),
+    ("Select photos in the library and use Add to Album.", "Wählen Sie Fotos in der Bibliothek und verwenden Sie „Zum Album hinzufügen“."),
+    ("No starred photos", "Keine markierten Fotos"),
+    ("Add stars to photos in the library to see them here.", "Markieren Sie Fotos in der Bibliothek, um sie hier zu sehen."),
+    ("Check the folder and enabled file types in Settings.", "Prüfen Sie den Ordner und die aktivierten Dateitypen in den Einstellungen."),
     // Header and photo tray
     ("Search photos", "Fotos durchsuchen"),
     ("Recent searches", "Letzte Suchen"),

@@ -560,9 +560,9 @@ impl PicassoApp {
 
     /// The GPS tracks of the folder in view, as positions in `self.tracks`,
     /// in the order of the sort. Other views show none, and neither does
-    /// the sort of edited photos.
+    /// the edited-only filter.
     pub(super) fn view_tracks(&self) -> Vec<usize> {
-        if self.sort.edited_only() {
+        if self.edited_only {
             return Vec::new();
         }
         let words: Vec<String> = self.search.split_whitespace().map(str::to_lowercase).collect();
@@ -586,7 +586,7 @@ impl PicassoApp {
             .collect();
         let start = |index: &usize| self.tracks[*index].time_span.map(|(start, _)| start);
         match self.sort {
-            Sort::Name | Sort::NameEdited => found.sort_by_key(|index| folder_label(&self.tracks[*index].path).to_lowercase()),
+            Sort::Name => found.sort_by_key(|index| folder_label(&self.tracks[*index].path).to_lowercase()),
             Sort::DateNewest => found.sort_by_key(|index| std::cmp::Reverse(start(index))),
             Sort::DateOldest => found.sort_by_key(start),
         }
@@ -680,14 +680,11 @@ impl PicassoApp {
                         Sort::DateNewest => "Sort by Date",
                         Sort::DateOldest => "Sort by Date, oldest",
                         Sort::Name => "Sort by Name",
-                        Sort::NameEdited => "Sort by Name, edited",
                     }))
                     .show_ui(ui, |ui| {
                         ui.selectable_value(&mut sort, Sort::DateNewest, tr("Sort by Date"));
                         ui.selectable_value(&mut sort, Sort::DateOldest, tr("Sort by Date, oldest"));
                         ui.selectable_value(&mut sort, Sort::Name, tr("Sort by Name"));
-                        ui.selectable_value(&mut sort, Sort::NameEdited, tr("Sort by Name, edited"))
-                            .on_hover_text(tr("Only photos with edits"));
                     });
                 if sort != self.sort {
                     self.sort = sort;
@@ -725,6 +722,13 @@ impl PicassoApp {
                 }
             });
         });
+        if !matches!(self.nav, Nav::Statistics | Nav::TravelMap) {
+            ui.horizontal_wrapped(|ui| {
+                if ui.checkbox(&mut self.edited_only, tr("Edited only")).changed() {
+                    self.reload_view();
+                }
+            });
+        }
         ui.add_space(6.0);
     }
 
@@ -921,8 +925,13 @@ impl PicassoApp {
                 self.editing = true;
                 ui.close();
             }
-            if ui.button(tr(if photo.starred { "Unstar" } else { "Star" })).clicked() {
-                self.toggle_star(id);
+            let star_label = if self.selection.contains(&id) && self.selection.len() > 1 {
+                trf(if photo.starred { "Unstar {} photos" } else { "Star {} photos" }, &[&self.selection.len()])
+            } else {
+                tr(if photo.starred { "Unstar" } else { "Star" }).to_string()
+            };
+            if ui.button(star_label).clicked() {
+                self.star_from_menu(id);
                 ui.close();
             }
             if ui.button(tr("Rotate Clockwise")).clicked() {
@@ -990,25 +999,91 @@ impl PicassoApp {
             let (rect, _) = ui.allocate_exact_size(Vec2::splat(64.0), Sense::hover());
             theme::paint_logo(ui.painter(), &self.logo, rect);
             ui.add_space(16.0);
-            if self.sort.edited_only() {
-                ui.label(egui::RichText::new(tr("No edited photos")).size(20.0).strong().color(theme::text()));
-                ui.add_space(6.0);
-                let hint = tr("Photos you edit show up here. Choose another sort order to see every photo.");
-                ui.label(egui::RichText::new(hint).color(theme::muted()));
-                return;
-            }
-            let title = if self.search.trim().is_empty() { "No photos found" } else { "No results found" };
-            ui.label(egui::RichText::new(tr(title)).size(20.0).strong().color(theme::text()));
+            let state = empty_state(&self.nav, &self.search, self.edited_only);
+            ui.label(egui::RichText::new(tr(state.title)).size(20.0).strong().color(theme::text()));
             ui.add_space(6.0);
-            ui.label(egui::RichText::new(tr("Import a folder and Picasso scans it for pictures.")).color(theme::muted()));
+            ui.label(egui::RichText::new(tr(state.hint)).color(theme::muted()));
             ui.add_space(16.0);
-            if ui.add(theme::primary_button(tr("+  Import folder"))).clicked() {
-                self.modal = super::Modal::AddFolder {
-                    path: String::new(),
-                    error: String::new(),
-                };
+            if ui.add(theme::primary_button(tr(state.button))).clicked() {
+                match state.action {
+                    EmptyAction::ClearSearch => {
+                        self.search.clear();
+                        self.search_due = None;
+                        self.reload_view();
+                    }
+                    EmptyAction::ClearEdited => {
+                        self.edited_only = false;
+                        self.reload_view();
+                    }
+                    EmptyAction::Library => self.set_nav(Nav::Library),
+                    EmptyAction::Rescan => self.rescan(),
+                    EmptyAction::Import => {
+                        self.modal = super::Modal::AddFolder { path: String::new(), error: String::new() };
+                    }
+                }
             }
         });
+    }
+}
+
+#[derive(Debug, PartialEq)]
+enum EmptyAction {
+    ClearSearch,
+    ClearEdited,
+    Library,
+    Rescan,
+    Import,
+}
+
+struct EmptyState {
+    title: &'static str,
+    hint: &'static str,
+    button: &'static str,
+    action: EmptyAction,
+}
+
+fn empty_state(nav: &Nav, search: &str, edited_only: bool) -> EmptyState {
+    if !search.trim().is_empty() {
+        return EmptyState {
+            title: "No results found",
+            hint: "Try another search or clear the search.",
+            button: "Clear search",
+            action: EmptyAction::ClearSearch,
+        };
+    }
+    if edited_only {
+        return EmptyState {
+            title: "No edited photos",
+            hint: "Remove the edited filter to see all photos in this view.",
+            button: "Show all photos",
+            action: EmptyAction::ClearEdited,
+        };
+    }
+    match nav {
+        Nav::Album(_) => EmptyState {
+            title: "No photos in this album",
+            hint: "Select photos in the library and use Add to Album.",
+            button: "Library",
+            action: EmptyAction::Library,
+        },
+        Nav::Starred => EmptyState {
+            title: "No starred photos",
+            hint: "Add stars to photos in the library to see them here.",
+            button: "Library",
+            action: EmptyAction::Library,
+        },
+        Nav::Folder(_) | Nav::Dir(_) => EmptyState {
+            title: "No photos found",
+            hint: "Check the folder and enabled file types in Settings.",
+            button: "Refresh",
+            action: EmptyAction::Rescan,
+        },
+        _ => EmptyState {
+            title: "No photos found",
+            hint: "Import a folder and Picasso scans it for pictures.",
+            button: "+  Import folder",
+            action: EmptyAction::Import,
+        },
     }
 }
 
@@ -1154,6 +1229,46 @@ fn elide(text: &str, max_chars: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn star_actions_target_the_selection_and_use_the_reference_state() {
+        let mut first = photo("first.jpg", 1);
+        first.id = 1;
+        first.starred = true;
+        let mut second = photo("second.jpg", 2);
+        second.id = 2;
+        let mut outside = photo("outside.jpg", 3);
+        outside.id = 3;
+        let photos = [first, second, outside];
+        let selected = [1, 2].into_iter().collect();
+        // Menu labels and toolbar actions must agree for mixed selections.
+        assert_eq!(super::super::star_change(&photos, &selected, 1), Some((vec![1, 2], false)));
+        assert_eq!(super::super::star_change(&photos, &selected, 2), Some((vec![1, 2], true)));
+        // The unrelated selection must not change when another photo is clicked.
+        assert_eq!(super::super::star_change(&photos, &selected, 3), Some((vec![3], true)));
+        assert_eq!(super::super::star_change(&photos, &selected, 99), None);
+    }
+
+    #[test]
+    fn empty_search_offers_clear_search_instead_of_import() {
+        for nav in [Nav::Library, Nav::Album(1), Nav::Starred, Nav::Folder(1)] {
+            let state = empty_state(&nav, "not-found", false);
+            assert_eq!(state.action, EmptyAction::ClearSearch);
+            assert_eq!(state.title, "No results found");
+            // Clearing search is useful even if a second filter is also active.
+            assert_eq!(empty_state(&nav, "not-found", true).action, EmptyAction::ClearSearch);
+        }
+    }
+
+    #[test]
+    fn empty_views_offer_actions_for_the_current_collection() {
+        assert_eq!(empty_state(&Nav::Library, "", false).action, EmptyAction::Import);
+        assert_eq!(empty_state(&Nav::Album(1), "", false).action, EmptyAction::Library);
+        assert_eq!(empty_state(&Nav::Starred, "", false).action, EmptyAction::Library);
+        assert_eq!(empty_state(&Nav::Folder(1), "", false).action, EmptyAction::Rescan);
+        assert_eq!(empty_state(&Nav::Dir("photos".into()), "", false).action, EmptyAction::Rescan);
+        assert_eq!(empty_state(&Nav::Album(1), "  ", true).action, EmptyAction::ClearEdited);
+    }
 
     fn photo(name: &str, taken_at: i64) -> Photo {
         Photo {

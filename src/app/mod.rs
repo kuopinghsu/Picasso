@@ -238,6 +238,8 @@ pub struct PicassoApp {
     index_of: HashMap<i64, usize>,
     nav: Nav,
     sort: Sort,
+    /// Visible filter independent of the photo ordering.
+    edited_only: bool,
     search: String,
     /// When the typed search runs.
     search_due: Option<Instant>,
@@ -543,6 +545,7 @@ impl PicassoApp {
             index_of: HashMap::new(),
             nav: Nav::Library,
             sort: Sort::DateNewest,
+            edited_only: false,
             search: String::new(),
             search_due: None,
             focus_search: false,
@@ -795,7 +798,7 @@ impl PicassoApp {
     /// viewer and the selection where they are still in it.
     fn show_photos(&mut self, photos: Vec<Photo>, keep: Option<i64>) {
         self.photos = photos;
-        if self.sort.edited_only() {
+        if self.edited_only {
             self.photos.retain(|photo| self.edits.contains_key(&photo.id));
         }
         if self.map_starred && self.nav == Nav::Places {
@@ -889,7 +892,7 @@ impl PicassoApp {
         // second so a large library stays responsive.
         // Showing only edited photos, the view waits for the viewer to close,
         // so a photo whose edits are reset doesn't vanish from under it.
-        let editing_view = self.sort.edited_only() && self.mode == Mode::View;
+        let editing_view = self.edited_only && self.mode == Mode::View;
         if self.library_dirty && !editing_view && !self.loading {
             let wait = Duration::from_millis(500);
             if self.scans == 0 || self.last_reload.elapsed() >= wait {
@@ -1864,6 +1867,9 @@ impl PicassoApp {
             (_, Nav::Places) | (Nav::Places, Nav::Library) => true,
             _ => false,
         };
+        if matches!(nav, Nav::Statistics | Nav::TravelMap) {
+            self.edited_only = false;
+        }
         self.nav = nav;
         self.mode = Mode::Browse;
         self.slideshow = None;
@@ -2341,27 +2347,28 @@ impl PicassoApp {
     }
 
     fn toggle_star_selection(&mut self) {
-        let ids: Vec<i64> = if self.selection.is_empty() {
-            self.primary_index()
-                .and_then(|index| self.photos.get(index).map(|photo| photo.id))
-                .into_iter()
-                .collect()
-        } else {
-            self.selection.iter().copied().collect()
-        };
+        if let Some(index) = self.primary_index() {
+            self.star_from_menu(self.photos[index].id);
+        }
+    }
+
+    /// Uses the primary/clicked photo's state for the whole selection.
+    fn star_from_menu(&mut self, id: i64) {
+        if let Some((ids, make)) = star_change(&self.photos, &self.selection, id) {
+            self.set_stars(&ids, make);
+        }
+    }
+
+    fn set_stars(&mut self, ids: &[i64], make: bool) {
         if ids.is_empty() {
             return;
         }
-        let make = !self
-            .index_of(ids[0])
-            .and_then(|index| self.photos.get(index))
-            .is_some_and(|photo| photo.starred);
-        self.db.set_stars(&ids, make);
+        self.db.set_stars(ids, make);
         if self.starred_only() && !make {
-            self.drop_from_view(&ids);
+            self.drop_from_view(ids);
             return;
         }
-        for id in &ids {
+        for id in ids {
             if let Some(photo) = self.index_of.get(id).and_then(|&index| self.photos.get_mut(index)) {
                 photo.starred = make;
             }
@@ -2914,6 +2921,18 @@ fn paint_glyph(painter: &egui::Painter, center_left: egui::Pos2, glyph: Glyph) {
             painter.add(egui::Shape::ellipse_stroke(center, Vec2::new(2.6, 6.0), line));
         }
     }
+}
+
+/// Resolves a star action from the same reference photo used by its label.
+/// Right-clicking outside the selection affects only the clicked photo.
+fn star_change(photos: &[Photo], selection: &HashSet<i64>, reference: i64) -> Option<(Vec<i64>, bool)> {
+    let photo = photos.iter().find(|photo| photo.id == reference)?;
+    let ids = if selection.contains(&reference) {
+        photos.iter().filter(|photo| selection.contains(&photo.id)).map(|photo| photo.id).collect()
+    } else {
+        vec![reference]
+    };
+    Some((ids, !photo.starred))
 }
 
 #[cfg(test)]

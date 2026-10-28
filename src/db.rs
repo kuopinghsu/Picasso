@@ -1293,7 +1293,7 @@ fn order_sql(sort: Sort) -> &'static str {
     match sort {
         Sort::DateNewest => "p.taken_at DESC, p.filename COLLATE NOCASE ASC",
         Sort::DateOldest => "p.taken_at ASC, p.filename COLLATE NOCASE ASC",
-        Sort::Name | Sort::NameEdited => "p.filename COLLATE NOCASE ASC",
+        Sort::Name => "p.filename COLLATE NOCASE ASC",
     }
 }
 

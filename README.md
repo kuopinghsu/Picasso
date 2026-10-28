@@ -58,6 +58,8 @@ Inspired by Picasa, Picasso is written in Rust. It stores your library and edits
 
 - Adjust light, tone curves, white balance, color, detail and effects. Use presets, crop, perspective correction, corner transforms and linear or radial masks.
 
+- Filter edited photos independently of the sort order, and clear searches or filters directly from empty views.
+
 - Keep edit history with undo, redo and before-and-after comparisons. Copy settings to other photos; crop and transform settings are excluded.
 
 - Export edited copies as JPEG, PNG or TIFF, individually or in batches. Choose the output size and JPEG quality.

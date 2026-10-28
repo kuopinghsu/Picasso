@@ -1,6 +1,19 @@
 //! Simplified Chinese text, keyed by the English text in the code.
 
 pub(super) const TABLE: &[(&str, &str)] = &[
+    // Library filters and selection feedback
+    ("Edited only", "仅显示已编辑"),
+    ("Star {} photos", "为 {} 张照片加星标"),
+    ("Unstar {} photos", "移除 {} 张照片的星标"),
+    ("Try another search or clear the search.", "请尝试其他搜索条件，或清除搜索。"),
+    ("Clear search", "清除搜索"),
+    ("Remove the edited filter to see all photos in this view.", "移除已编辑筛选，即可查看此视图的所有照片。"),
+    ("Show all photos", "显示所有照片"),
+    ("No photos in this album", "此相册中没有照片"),
+    ("Select photos in the library and use Add to Album.", "在图库中选择照片，然后使用“添加到相册”。"),
+    ("No starred photos", "没有已加星标的照片"),
+    ("Add stars to photos in the library to see them here.", "在图库中为照片加星标，即可在此查看。"),
+    ("Check the folder and enabled file types in Settings.", "请在设置中检查文件夹和启用的文件类型。"),
     // Header and photo tray
     ("Search photos", "搜索照片"),
     ("Recent searches", "最近搜索"),

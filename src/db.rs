@@ -1,5 +1,7 @@
 //! SQLite catalog. The UI and the background indexer each open their own connection.
 
+mod trips;
+
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
@@ -14,7 +16,7 @@ pub const INDEX_VERSION: i64 = 3;
 
 /// Layout of the library, kept in `PRAGMA user_version`. 0 is any library
 /// from before the number was kept; `docs/DATABASE.md` lists each change.
-pub const SCHEMA_VERSION: i64 = 1;
+pub const SCHEMA_VERSION: i64 = 2;
 
 const PHOTO_COLS: &str = "\
 p.id, p.folder_id, p.path, p.filename, p.width, p.height, p.bytes, \
@@ -296,6 +298,8 @@ impl Database {
                 ",
             )
             .map_err(|err| err.to_string())?;
+        // Trips, their Days and members, and Stories (src/db/trips.rs).
+        self.conn.execute_batch(trips::TABLES).map_err(|err| err.to_string())?;
         self.purge_archive(unix_now() - ARCHIVE_DAYS * 86_400);
         // Older builds stored placeholder dates such as year 1. Those files
         // are probed again on the next scan, which reads the real date.
@@ -1561,14 +1565,14 @@ pub fn pictures_dir() -> Option<PathBuf> {
 mod tests {
     use super::*;
 
-    fn temp_dir(tag: &str) -> PathBuf {
+    pub(super) fn temp_dir(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("picasso-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }
 
-    fn record(folder_id: i64, folder: &Path, name: &str, modified_at: i64) -> ScanRecord {
+    pub(super) fn record(folder_id: i64, folder: &Path, name: &str, modified_at: i64) -> ScanRecord {
         ScanRecord {
             photo: NewPhoto {
                 folder_id,
@@ -1721,7 +1725,7 @@ mod tests {
         db.conn.query_row("SELECT COUNT(*) FROM photo_archive", [], |row| row.get(0)).unwrap()
     }
 
-    fn library(tag: &str) -> (Database, i64, PathBuf) {
+    pub(super) fn library(tag: &str) -> (Database, i64, PathBuf) {
         let dir = temp_dir(tag);
         let db = Database::open(&dir.join("t.db")).unwrap();
         let folder = dir.join("pics");
@@ -2291,7 +2295,7 @@ mod tests {
         assert_eq!(search_terms("kyoto  2019"), [Term::Text("kyoto".into()), Term::Dates(date_range("2019").unwrap().0, date_range("2019").unwrap().1)]);
     }
 
-    fn folder_path(folder: &Path, name: &str) -> String {
+    pub(super) fn folder_path(folder: &Path, name: &str) -> String {
         folder.join(name).to_string_lossy().into_owned()
     }
 }

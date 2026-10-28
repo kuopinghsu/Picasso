@@ -27,6 +27,7 @@ mod shell;
 mod thumbs;
 mod track;
 mod track_edit;
+mod trip;
 mod types;
 mod update;
 mod video;

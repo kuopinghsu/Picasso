@@ -1009,4 +1009,8 @@ pub(super) const TABLE: &[(&str, &str)] = &[
     ("Move a point, or the map", "Mover um ponto ou o mapa"),
     ("Add a point on the line", "Adicionar um ponto na linha"),
     ("Remove a point", "Remover um ponto"),
+    ("Trip name is empty", "O nome da viagem está vazio"),
+    ("The trip ends before it starts", "A viagem termina antes de começar"),
+    ("Pick the trip's time zone", "Escolha o fuso horário da viagem"),
+    ("This story was changed elsewhere. Open it again to see the latest version.", "Esta história foi alterada em outro lugar. Abra-a de novo para ver a versão mais recente."),
 ];

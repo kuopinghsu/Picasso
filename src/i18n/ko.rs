@@ -1009,4 +1009,8 @@ pub(super) const TABLE: &[(&str, &str)] = &[
     ("Move a point, or the map", "점 또는 지도 이동"),
     ("Add a point on the line", "선 위에 점 추가"),
     ("Remove a point", "점 제거"),
+    ("Trip name is empty", "여행 이름을 입력하세요"),
+    ("The trip ends before it starts", "여행 종료일이 시작일보다 앞섭니다"),
+    ("Pick the trip's time zone", "여행의 시간대를 선택하세요"),
+    ("This story was changed elsewhere. Open it again to see the latest version.", "이 스토리는 다른 곳에서 변경되었습니다. 최신 버전을 보려면 다시 여세요."),
 ];

@@ -1009,4 +1009,8 @@ pub(super) const TABLE: &[(&str, &str)] = &[
     ("Move a point, or the map", "点または地図を移動"),
     ("Add a point on the line", "線上に点を追加"),
     ("Remove a point", "点を削除"),
+    ("Trip name is empty", "旅行名を入力してください"),
+    ("The trip ends before it starts", "旅行の終了日が開始日より前です"),
+    ("Pick the trip's time zone", "旅行のタイムゾーンを選択してください"),
+    ("This story was changed elsewhere. Open it again to see the latest version.", "このストーリーは別の場所で変更されました。最新の内容を見るには開き直してください。"),
 ];

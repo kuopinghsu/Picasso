@@ -1009,4 +1009,8 @@ pub(super) const TABLE: &[(&str, &str)] = &[
     ("Move a point, or the map", "移動點或地圖"),
     ("Add a point on the line", "在線條上新增點"),
     ("Remove a point", "移除點"),
+    ("Trip name is empty", "旅程名稱不可空白"),
+    ("The trip ends before it starts", "旅程的結束日期早於開始日期"),
+    ("Pick the trip's time zone", "請選擇旅程的時區"),
+    ("This story was changed elsewhere. Open it again to see the latest version.", "這篇故事已在別處修改。請重新開啟以查看最新版本。"),
 ];

@@ -35,6 +35,12 @@ Picasso also reads the `.picasa.ini` files Picasa left in photo folders, for sta
 | `tracks` | GPX or KML file | `points` is the track in the compact form of `Track::encode`. |
 | `settings` | Value kept with the library | `user_presets` (your edit presets), `side_panel`, `viewer_info`, and `seeded` (the Pictures folder was added on the first start). Settings of older versions that now live in `settings.json` are read from here once. |
 | `id_floor` | | The highest photo id ever used, kept by a trigger, so an id is never given to another photo and nothing cached under it is shown for the wrong one. |
+| `media_refs` | Photo a Trip or Story uses | Its catalog row in `photo_id` while it is in the library, emptied when the row goes, and the path, file name, size, modification time, and file date to find it again; `unlinked_at` is when the row went. Kept as long as anything uses it, past the 90 days of `photo_archive`. Triggers keep the hints current. |
+| `trips` | Trip | Title, description, destination, optional `first_day` and `last_day` (`YYYY-MM-DD`), `zone` (a named zone such as `Asia/Taipei`, or an offset such as `+08:00`), `cover_ref`, and `archived`. |
+| `trip_days` | Day of a Trip | `position` orders them; `day` is an optional date, and several Days may share one. A Day never moves to another Trip. |
+| `trip_media` | Photo or video in a Trip | `position` is the order they joined; `day_id` is a Day of the same Trip, which triggers enforce, with `day_position` its order there and `day_source` who chose it (0 none, 1 suggested, 2 the user). |
+| `trip_tracks` | GPS track linked to a Trip | `track_id` while the track is in the library; the path and name stay when it goes. |
+| `stories`, `story_blocks`, `story_media` | Story, its blocks, and the photos in them | `revision` goes up with each save, so a stale editor can't overwrite. Each block has a `uid` that stays through saves, a `kind`, and a JSON `payload` in the layout of its `version`; a block from a newer Picasso is kept unchanged. Each photo in a block has its own caption and alt text. |
 
 Indexes cover the orders and lookups the window uses: by folder, by date taken and name (the default order), by name, by size (duplicates), by star, and album membership.
 
@@ -45,7 +51,8 @@ Indexes cover the orders and lookups the window uses: by folder, by date taken a
 | Version | Picasso | Change |
 | --- | --- | --- |
 | 0 | up to 0.9.4 | Libraries made before the version was kept. They are recognized by their tables and columns and upgraded in place. |
-| 1 | 0.9.5 | The version is kept. The layout is the one above. |
+| 1 | 0.9.5 | The version is kept. |
+| 2 | 0.9.6 | Trips and Stories: `media_refs`, `trips`, `trip_days`, `trip_media`, `trip_tracks`, `stories`, `story_blocks`, `story_media` ([TRAVEL.md](TRAVEL.md)). |
 
 ## How a library is upgraded
 
@@ -67,4 +74,4 @@ A library from a newer Picasso opens too, and keeps its number. Changes to the l
 - Raise `SCHEMA_VERSION`, add a row to the table above, and add a test beside `upgrades_an_older_library` that starts from the previous layout.
 - When the scanner reads something new from files, raise `INDEX_VERSION` instead, so existing rows are read again on the next scan.
 
-The tests in `src/db.rs` cover an upgrade from an old layout, one that fails halfway (the library is unchanged and its version stays 0), opening a library twice, and opening one from a newer version.
+The tests in `src/db.rs` and `src/db/trips.rs` cover an upgrade from version 1, an upgrade from an old layout, one that fails halfway (the library is unchanged and its version stays 0), opening a library twice, and opening one from a newer version.

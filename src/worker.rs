@@ -507,6 +507,7 @@ impl Indexer {
             self.send_tracks();
         }
         let restored = self.db.adopt_archived();
+        self.db.relink_trip_media();
         if !restored.is_empty() {
             self.notify(UiEvent::Restored(restored));
         }

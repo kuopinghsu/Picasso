@@ -191,6 +191,8 @@ picasso geotag --help
 
 - [資料庫](docs/DATABASE.md)：資料庫內容、結構版本與升級。
 
+- [旅程與故事](docs/TRAVEL.md)：旅行相片如何整理成旅程與故事，以及背後的設計決定。
+
 - [測試](docs/TESTING.md)：自動化測試範圍與發佈前的人工檢查。
 
 - [效能](docs/PERFORMANCE.md)：基準測試及外接、網路磁碟的行為。

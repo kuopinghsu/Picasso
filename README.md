@@ -191,6 +191,8 @@ Renaming history is stored in `.picasso-renames.json` beside your photos. Keep i
 
 - [Database](docs/DATABASE.md): library contents, schema versions and migrations.
 
+- [Trips and Stories](docs/TRAVEL.md): how travel photos are organized into Trips and Stories, and the decisions behind it.
+
 - [Testing](docs/TESTING.md): automated coverage and manual release checks.
 
 - [Performance](docs/PERFORMANCE.md): benchmarks and external or network drive behavior.

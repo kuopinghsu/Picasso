@@ -40,6 +40,7 @@ Rules that follow:
 - **Delete** a Trip only after a summary of what goes with it: its Days, members, Stories, and track links. Deleting never touches photo files, catalog data, or anything published on a website. Records of what was published stay as detached records, so a later publish can't post a duplicate.
 - Deleting a Story removes its blocks; the photos stay in the Trip.
 - Removing a photo from the library, or its file disappearing, never deletes Trip or Story content (see below).
+- Library backups include Trips, Days, members, track links, and Stories, so restoring a backup brings them back with the photos.
 
 ## Media identity
 
@@ -84,7 +85,7 @@ Changes are saved after a pause in typing, and at most five seconds after the fi
 
 `src/story_html.rs` turns a Story into one web page: `index.html` with its styles inline and its photos in `images/`, named after a hash of the rendered bytes so unchanged photos keep their names. The first layout is Photography Journal: one column, large photos, system fonts, and light and dark colors. All text is escaped, and the page loads nothing from the network. Photos that can't be shown appear as unavailable rather than being left out; blocks from a newer Picasso are counted and reported.
 
-**Export** writes the same page, or a Markdown file (`story.md`) with the same `images/` folder, into a new folder named after the Story inside the folder the user picks: `Title`, or `Title 2`, `Title 3` when that name is taken, so an earlier export or anything else there is never replaced. It is written under a hidden name first and renamed only when complete, so a failed export leaves no half-written folder. The user picks the photo size (1200, 1600, or 2400 pixels on the long side) and JPEG quality; the last choices are remembered, with Reset to defaults. Photos never carry camera details or location. The finished folder opens when done.
+**Export** writes the same page, or a Markdown file (`story.md`) with the same `images/` folder, into a new folder named after the Story inside the folder the user picks: `Title`, or `Title 2`, `Title 3` when that name is taken, so an earlier export or anything else there is never replaced. It is written under a hidden name first and renamed only when complete, so a failed export leaves no half-written folder. The user picks the photo size (1200, 1600, or 2400 pixels on the long side) and JPEG quality; the last choices are remembered, with Reset to defaults. Photos never carry camera details or location. Before export, a check lists what needs attention: an empty Story and unavailable photos block export until the user adds content or chooses to export those photos as unavailable; photos without alt text and blocks from a newer Picasso are warnings. Export and preview show how many photos are rendered and can be cancelled, which leaves nothing behind. The finished folder opens when done.
 
 **Preview** writes this page to a folder of its own in Picasso's cache, replacing the previous preview of that Story, and opens it in the web browser.
 
@@ -107,7 +108,7 @@ Changes are saved after a pause in typing, and at most five seconds after the fi
 New pages extend the existing interface rather than adding a visual style of their own:
 
 - Colors, text styles, spacing, corner radii, selection, and hover come from `src/app/theme.rs` (for example `accent()`, `text()`, `muted()`, `select()`, `primary_button`, `danger_button`). Light, dark, and System themes, and the teal accent, work as everywhere else. A missing pattern is added to the theme, not drawn locally.
-- Trips is a sidebar destination like Albums and Places. The toolbar, panels, shortcuts, and selection behave as in the Library.
+- Trips is a sidebar destination like Albums and Places. **All trips** shows every Trip as a card with its cover (or first photo), dates, destination, and counts of photos, Days, Stories, tracks, and unavailable photos; the header's search finds Trips by title, destination, or description, and archived Trips are shown on request. The toolbar, panels, shortcuts, and selection behave as in the Library.
 - Each task has one primary action. Secondary actions are grouped, advanced settings are revealed progressively, and nothing required is shown only on hover.
 - Every state is visible: default, hover, focus, selected, disabled, loading, error, and success, with keyboard focus and a cue that isn't only color.
 - Panels adapt to the smallest window and to high DPI; long translations wrap rather than hide actions.

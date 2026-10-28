@@ -195,6 +195,10 @@ impl PicassoApp {
             self.travel_ui(ui);
             return;
         }
+        if self.nav == Nav::Trips {
+            self.trips_page(ui);
+            return;
+        }
         let tracks = self.view_tracks();
         if self.photos.is_empty() && tracks.is_empty() {
             if self.loading {
@@ -674,7 +678,7 @@ impl PicassoApp {
             if self.loading {
                 ui.add(egui::Spinner::new().size(13.0));
             }
-            if matches!(self.nav, Nav::Statistics | Nav::TravelMap) {
+            if matches!(self.nav, Nav::Statistics | Nav::TravelMap | Nav::Trips) {
                 return;
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -736,7 +740,7 @@ impl PicassoApp {
             });
         });
         self.trip_header(ui);
-        if !matches!(self.nav, Nav::Statistics | Nav::TravelMap) {
+        if !matches!(self.nav, Nav::Statistics | Nav::TravelMap | Nav::Trips) {
             ui.horizontal_wrapped(|ui| {
                 if ui.checkbox(&mut self.edited_only, tr("Edited only")).changed() {
                     self.reload_view();

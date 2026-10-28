@@ -2,6 +2,8 @@
 //! undo and redo for the session and autosave to the library.
 
 use std::collections::HashMap;
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use eframe::egui::{self, Align, Layout, Margin, Modifiers, Pos2, Rect, RichText, Sense, Vec2};
@@ -40,8 +42,8 @@ pub(super) struct StoryEditor {
     typing: Option<(String, u8)>,
     /// Catalog photo of each media reference; `None` while unavailable.
     photos: HashMap<i64, Option<Photo>>,
-    /// A preview is being made.
-    previewing: bool,
+    /// The preview or export being made, to show how far it is and stop it.
+    job: Option<Arc<story_html::Progress>>,
 }
 
 impl StoryEditor {
@@ -80,12 +82,22 @@ struct PageJob {
     words: story_html::Words,
 }
 
+impl PageJob {
+    fn page(&self) -> story_html::Page<'_> {
+        story_html::Page { story: &self.story, dates: self.dates.as_deref(), blocks: &self.blocks, sources: &self.sources, words: &self.words }
+    }
+}
+
 /// The choices of the Export dialog.
 pub(super) struct ExportDialog {
     format: story_html::Format,
     profile: story_html::Profile,
     folder: String,
     error: String,
+    /// What the check before export found, when the dialog opened.
+    check: story_html::Preflight,
+    /// The user chose to export unavailable photos as unavailable.
+    skip_missing: bool,
 }
 
 /// What a block's controls asked for, applied after the blocks are drawn.
@@ -118,7 +130,7 @@ impl PicassoApp {
             redo: Vec::new(),
             typing: None,
             photos: HashMap::new(),
-            previewing: false,
+            job: None,
         });
     }
 
@@ -225,15 +237,22 @@ impl PicassoApp {
                         delete = true;
                     }
                 });
-                if ui.add_enabled(!editor.previewing, egui::Button::new(tr("Export…"))).clicked() {
-                    export = true;
-                }
-                let button = ui.add_enabled(!editor.previewing, egui::Button::new(tr("Preview")));
-                if button.on_hover_text(tr("Open the story in your web browser, as it will look when exported")).clicked() {
-                    preview = true;
-                }
-                if editor.previewing {
+                if let Some(job) = &editor.job {
+                    if ui.button(tr("Cancel")).clicked() {
+                        job.cancel.store(true, Ordering::Relaxed);
+                    }
+                    let (done, total) = (job.done.load(Ordering::Relaxed), job.total.load(Ordering::Relaxed));
+                    ui.label(RichText::new(trf("Rendering photos: {} of {}", &[&done, &total])).size(13.0).color(theme::muted()));
                     ui.add(egui::Spinner::new().size(13.0));
+                    ui.ctx().request_repaint_after(Duration::from_millis(200));
+                } else {
+                    if ui.button(tr("Export…")).clicked() {
+                        export = true;
+                    }
+                    let button = ui.button(tr("Preview"));
+                    if button.on_hover_text(tr("Open the story in your web browser, as it will look when exported")).clicked() {
+                        preview = true;
+                    }
                 }
                 ui.add_space(8.0);
                 if ui.add_enabled(!editor.redo.is_empty(), egui::Button::new(tr("Redo"))).clicked() {
@@ -337,23 +356,29 @@ impl PicassoApp {
             return;
         }
         let Some(job) = self.story_job() else { return };
-        let PageJob { story, blocks, sources, dates, words } = job;
-        let folder = self.cache_dir.join("story-preview").join(story.id.to_string());
-        if let Some(editor) = &mut self.story {
-            editor.previewing = true;
-        }
+        let progress = self.start_story_job();
+        let folder = self.cache_dir.join("story-preview").join(job.story.id.to_string());
         let events = self.events_tx.clone();
         let ctx = ctx.clone();
         let _ = std::thread::Builder::new().name("picasso-preview".into()).spawn(move || {
             // The folder is the preview's own; an earlier preview is replaced.
             let _ = std::fs::remove_dir_all(&folder);
-            let outcome = story_html::write_story(&folder, story_html::Format::Html, story_html::Profile::default(), &story, dates.as_deref(), &blocks, &sources, &words).and_then(|(index, outcome)| {
+            let outcome = story_html::write_story(&folder, story_html::Format::Html, story_html::Profile::default(), &job.page(), &progress).and_then(|(index, outcome)| {
                 open::that(&index).map_err(|err| err.to_string())?;
                 Ok(outcome)
             });
             let _ = events.send(UiEvent::StoryPreviewed(outcome));
             ctx.request_repaint();
         });
+    }
+
+    /// Marks a preview or export of the open Story as started.
+    fn start_story_job(&mut self) -> Arc<story_html::Progress> {
+        let progress = Arc::new(story_html::Progress::default());
+        if let Some(editor) = &mut self.story {
+            editor.job = Some(Arc::clone(&progress));
+        }
+        progress
     }
 
     /// What a page of the open Story is made from, read on this thread.
@@ -385,7 +410,16 @@ impl PicassoApp {
         let edge = self.config.number("story_export_edge").map_or(defaults.edge, |edge| edge as u32);
         let quality = self.config.number("story_export_quality").map_or(defaults.quality, |quality| quality as u8);
         let folder = self.config.text("story_export_folder").map(str::to_string).unwrap_or_default();
-        self.modal = Modal::ExportStory(ExportDialog { format, profile: story_html::Profile { edge, quality }, folder, error: String::new() });
+        let Some(job) = self.story_job() else { return };
+        let check = story_html::preflight(&job.page());
+        self.modal = Modal::ExportStory(ExportDialog {
+            format,
+            profile: story_html::Profile { edge, quality },
+            folder,
+            error: String::new(),
+            check,
+            skip_missing: false,
+        });
     }
 
     pub(super) fn export_story_modal(&mut self, ctx: &egui::Context) {
@@ -430,6 +464,26 @@ impl PicassoApp {
                     .size(12.0)
                     .color(theme::muted()),
                 );
+                let check = &dialog.check;
+                if check.empty {
+                    ui.label(RichText::new(tr("There is nothing in this story to export yet.")).color(theme::DANGER));
+                }
+                if check.missing > 0 {
+                    ui.label(
+                        RichText::new(trf("{} photos are unavailable: they are not in the library now, or their files are gone.", &[&check.missing]))
+                            .color(theme::DANGER),
+                    );
+                    ui.checkbox(&mut dialog.skip_missing, tr("Export anyway, with “Photo unavailable” in their place"));
+                }
+                if check.no_alt > 0 {
+                    ui.label(
+                        RichText::new(trf("{} photos have no description for people who can't see them. You can add one under each photo.", &[&check.no_alt]))
+                            .color(theme::muted()),
+                    );
+                }
+                if check.unknown > 0 {
+                    ui.label(RichText::new(trf("{} blocks from a newer Picasso can't be exported.", &[&check.unknown])).color(theme::muted()));
+                }
                 if !dialog.error.is_empty() {
                     ui.label(RichText::new(&dialog.error).color(theme::DANGER));
                 }
@@ -439,7 +493,8 @@ impl PicassoApp {
                         dialog.profile = story_html::Profile::default();
                     }
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if ui.add(theme::primary_button(tr("Export"))).clicked() {
+                        let ready = !dialog.check.blocked(dialog.skip_missing);
+                        if ui.add_enabled(ready, theme::primary_button(tr("Export"))).clicked() {
                             start = true;
                         }
                         if ui.button(tr("Cancel")).clicked() {
@@ -479,15 +534,13 @@ impl PicassoApp {
         if !self.save_story() {
             return;
         }
-        let Some(PageJob { story, blocks, sources, dates, words }) = self.story_job() else { return };
-        if let Some(editor) = &mut self.story {
-            editor.previewing = true;
-        }
-        let name = story_name(&story);
+        let Some(job) = self.story_job() else { return };
+        let progress = self.start_story_job();
+        let name = story_name(&job.story);
         let events = self.events_tx.clone();
         let ctx = ctx.clone();
         let _ = std::thread::Builder::new().name("picasso-story-export".into()).spawn(move || {
-            let outcome = story_html::export_story(&parent, &name, format, profile, &story, dates.as_deref(), &blocks, &sources, &words)
+            let outcome = story_html::export_story(&parent, &name, format, profile, &job.page(), &progress)
                 .inspect(|(folder, _)| {
                     let _ = open::that(folder);
                 });
@@ -498,9 +551,10 @@ impl PicassoApp {
 
     pub(super) fn on_story_exported(&mut self, outcome: Result<(std::path::PathBuf, story_html::Outcome), String>) {
         if let Some(editor) = &mut self.story {
-            editor.previewing = false;
+            editor.job = None;
         }
         self.activity = match outcome {
+            Err(err) if err == story_html::CANCELLED => tr("Export cancelled. Nothing was written.").into(),
             Ok((folder, outcome)) if outcome.missing > 0 || outcome.unknown > 0 => trf(
                 "Exported to {}. {} photos are unavailable and {} blocks from a newer Picasso aren't included.",
                 &[&folder.display(), &outcome.missing, &outcome.unknown],
@@ -512,9 +566,10 @@ impl PicassoApp {
 
     pub(super) fn on_story_previewed(&mut self, outcome: Result<story_html::Outcome, String>) {
         if let Some(editor) = &mut self.story {
-            editor.previewing = false;
+            editor.job = None;
         }
         self.activity = match outcome {
+            Err(err) if err == story_html::CANCELLED => tr("Preview cancelled").into(),
             Ok(outcome) if outcome.missing > 0 || outcome.unknown > 0 => trf(
                 "Preview opened. {} photos are unavailable and {} blocks from a newer Picasso aren't shown.",
                 &[&outcome.missing, &outcome.unknown],
@@ -889,7 +944,7 @@ mod tests {
             redo: Vec::new(),
             typing: None,
             photos: HashMap::new(),
-            previewing: false,
+            job: None,
         }
     }
 

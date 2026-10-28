@@ -4,10 +4,10 @@
 //! model; the library operations are in `src/db/trips.rs`.
 
 use chrono::{Local, NaiveDate, TimeZone};
-use eframe::egui::{self, Align, Layout, Margin, RichText};
+use eframe::egui::{self, Align, Layout, Margin, RichText, Vec2};
 
 use crate::i18n::{tr, trf};
-use crate::trip::{read_capture, AddPreview, DayFilter, DaySource, DaySuggestion, MemberQuery, Review, Trip, TripDay, TripDraft, TripImpact};
+use crate::trip::{read_capture, TripQuery, AddPreview, DayFilter, DaySource, DaySuggestion, MemberQuery, Review, Trip, TripDay, TripDraft, TripImpact};
 use crate::types::{format_day, Nav};
 
 use super::story::story_name;
@@ -66,6 +66,10 @@ pub(super) struct DeleteDialog {
 impl PicassoApp {
     pub(super) fn trips_sidebar(&mut self, ui: &mut egui::Ui) {
         tree_section(ui, tr("Trips"));
+        let all = self.tree_row(ui, tr("All trips"), Glyph::Trip, self.nav == Nav::Trips, Some(self.trips.len() as i64));
+        if all.on_hover_text(tr("Find, open, and compare your trips")).clicked() {
+            self.set_nav(Nav::Trips);
+        }
         let active: Vec<(i64, String, i64)> =
             self.trips.iter().filter(|trip| !trip.archived).map(|trip| (trip.id, trip.title.clone(), trip.available)).collect();
         for (id, title, count) in active {
@@ -124,30 +128,163 @@ impl PicassoApp {
         }
     }
 
+    /// Every Trip as a card with its cover, dates, and what is in it. The
+    /// header's search finds Trips by title, destination, or description.
+    pub(super) fn trips_page(&mut self, ui: &mut egui::Ui) {
+        const CARD: Vec2 = Vec2::new(260.0, 250.0);
+        let query = TripQuery { archived: self.show_archived_trips, search: self.search.trim().to_string() };
+        let trips = self.db.trips(&query);
+        let mut open: Option<i64> = None;
+        let mut archive: Option<(i64, bool)> = None;
+        let mut edit: Option<i64> = None;
+        let mut delete: Option<i64> = None;
+        ui.horizontal(|ui| {
+            if ui.add(theme::primary_button(tr("New trip"))).clicked() {
+                self.open_new_trip(Vec::new());
+            }
+            ui.add_space(8.0);
+            ui.checkbox(&mut self.show_archived_trips, tr("Archived trips"));
+            if !query.search.is_empty() {
+                ui.label(RichText::new(trf("{} found", &[&trips.len()])).size(13.0).color(theme::muted()));
+            }
+        });
+        ui.add_space(8.0);
+        if trips.is_empty() {
+            ui.add_space(60.0);
+            ui.vertical_centered(|ui| {
+                let text = if !query.search.is_empty() {
+                    tr("No trip matches that search.")
+                } else if query.archived {
+                    tr("No archived trips.")
+                } else {
+                    tr("No trips yet. Select photos and choose Add to Trip, or start a new trip.")
+                };
+                ui.label(RichText::new(text).color(theme::muted()));
+            });
+            return;
+        }
+        egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing = Vec2::splat(14.0);
+                for trip in &trips {
+                    let (rect, response) = ui.allocate_exact_size(CARD, egui::Sense::click());
+                    let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
+                    let painter = ui.painter_at(rect);
+                    let hovered = response.hovered();
+                    painter.rect_filled(rect, 8, theme::sidebar());
+                    if hovered {
+                        painter.rect_stroke(rect, 8, egui::Stroke::new(2.0, theme::ACCENT), egui::StrokeKind::Inside);
+                    }
+                    let cover = egui::Rect::from_min_size(rect.min, Vec2::new(rect.width(), 150.0)).shrink(6.0);
+                    painter.rect_filled(cover, 6, theme::placeholder());
+                    if let Some(photo) = self.db.trip_cover_photo(trip.id).and_then(|id| self.db.photo(id)) {
+                        self.ensure_thumb(photo.id, &photo.path);
+                        if let Some((texture, w, h)) = self.thumb_texture(photo.id) {
+                            theme::paint_image_rounded(&painter, &texture, cover, theme::cover_uv(w, h), photo.rotation, 6.0);
+                        }
+                    }
+                    let mut y = cover.bottom() + 8.0;
+                    let left = rect.left() + 12.0;
+                    let width = rect.width() - 24.0;
+                    // One line each, cut at the card's edge.
+                    let mut line = |text: String, size: f32, color: egui::Color32| {
+                        let galley = painter.layout_no_wrap(text, egui::FontId::proportional(size), color);
+                        let height = galley.size().y;
+                        let clip = egui::Rect::from_min_size(egui::pos2(left, y), Vec2::new(width, height));
+                        painter.with_clip_rect(clip).galley(clip.min, galley, color);
+                        y += height + 4.0;
+                    };
+                    line(trip.title.clone(), 15.0, theme::text());
+                    let mut place = trip_dates(trip).into_iter().collect::<Vec<_>>();
+                    if !trip.destination.is_empty() {
+                        place.push(trip.destination.clone());
+                    }
+                    if !place.is_empty() {
+                        line(place.join(" · "), 12.5, theme::muted());
+                    }
+                    let tracks = self.db.trip_tracks(trip.id).len();
+                    let counts = trf("{} photos · {} days · {} stories · {} tracks", &[&trip.members, &trip.days, &trip.stories, &tracks]);
+                    line(counts, 12.0, theme::muted());
+                    if trip.members > trip.available {
+                        line(trf("{} unavailable", &[&(trip.members - trip.available)]), 12.0, theme::DANGER);
+                    }
+                    if response.clicked() {
+                        open = Some(trip.id);
+                    }
+                    response.context_menu(|ui| {
+                        if ui.button(tr("Edit trip…")).clicked() {
+                            edit = Some(trip.id);
+                            ui.close();
+                        }
+                        let label = if trip.archived { tr("Unarchive trip") } else { tr("Archive trip") };
+                        if ui.button(label).clicked() {
+                            archive = Some((trip.id, !trip.archived));
+                            ui.close();
+                        }
+                        if ui.button(tr("Delete trip…")).clicked() {
+                            delete = Some(trip.id);
+                            ui.close();
+                        }
+                    });
+                }
+            });
+        });
+        if let Some(id) = edit {
+            self.open_edit_trip(id);
+        }
+        if let Some((id, archived)) = archive {
+            self.db.set_trip_archived(id, archived);
+            self.reload();
+        }
+        if let Some(id) = delete {
+            self.open_delete_trip(id);
+        }
+        if let Some(id) = open {
+            self.set_nav(Nav::Trip(id));
+        }
+    }
+
     /// The toolbar menu that adds the selected photos to a Trip, or starts
     /// a new one with them.
     pub(super) fn trip_menu(&mut self, ui: &mut egui::Ui) {
-        let trips: Vec<(i64, String)> = self.trips.iter().filter(|trip| !trip.archived).map(|trip| (trip.id, trip.title.clone())).collect();
-        let mut create = false;
-        let mut add: Option<(i64, String)> = None;
+        let mut pick = None;
         let button = ui.button(tr("Add to Trip"));
-        let popup = egui::Popup::menu(&button).show(|ui| {
-            for (id, name) in &trips {
-                if ui.selectable_label(false, name).clicked() {
-                    add = Some((*id, name.clone()));
-                }
-            }
-            if !trips.is_empty() {
-                ui.separator();
-            }
-            if ui.button(tr("New trip…")).clicked() {
-                create = true;
-            }
-        });
+        let popup = egui::Popup::menu(&button).show(|ui| pick = self.trip_choices(ui));
         if popup.is_none() {
             button.on_hover_text(tr("Add the selected photos to a trip"));
         }
-        let photos = self.selection_in_order();
+        if let Some(pick) = pick {
+            let photos = self.selection_in_order();
+            self.add_photos_to_trip(pick, photos);
+        }
+    }
+
+    /// The Trips to add photos to, and New trip, as menu items. Returns
+    /// the Trip picked, or `None` inside for a new one.
+    pub(super) fn trip_choices(&self, ui: &mut egui::Ui) -> Option<Option<(i64, String)>> {
+        let mut pick = None;
+        let trips = self.trips.iter().filter(|trip| !trip.archived);
+        let mut any = false;
+        for trip in trips {
+            any = true;
+            if ui.selectable_label(false, &trip.title).clicked() {
+                pick = Some(Some((trip.id, trip.title.clone())));
+            }
+        }
+        if any {
+            ui.separator();
+        }
+        if ui.button(tr("New trip…")).clicked() {
+            pick = Some(None);
+        }
+        pick
+    }
+
+    /// Adds `photos` to the Trip picked from [`Self::trip_choices`], after a
+    /// preview, or starts a new Trip with them.
+    pub(super) fn add_photos_to_trip(&mut self, pick: Option<(i64, String)>, photos: Vec<i64>) {
+        let add = pick.clone();
+        let create = pick.is_none();
         if let Some((trip_id, name)) = add {
             let preview = self.db.preview_add_to_trip(trip_id, &photos);
             if preview.photos + preview.videos == 0 {
@@ -729,7 +866,7 @@ impl PicassoApp {
                 ui.label(tr("Title"));
                 ui.add(egui::TextEdit::singleline(&mut dialog.title).hint_text(tr("Optional")).desired_width(f32::INFINITY));
                 ui.label(tr("Date"));
-                ui.add(egui::TextEdit::singleline(&mut dialog.date).hint_text("2026-03-01").desired_width(120.0));
+                date_field(ui, "day-date", &mut dialog.date, "2026-03-01");
                 ui.label(tr("Notes"));
                 ui.add(egui::TextEdit::multiline(&mut dialog.notes).desired_rows(3).desired_width(f32::INFINITY));
                 if !dialog.error.is_empty() {
@@ -860,12 +997,14 @@ impl PicassoApp {
                 ui.horizontal(|ui| {
                     ui.vertical(|ui| {
                         ui.label(tr("First day"));
-                        ui.add(egui::TextEdit::singleline(&mut dialog.first_day).hint_text("2026-03-01").desired_width(120.0));
+                        date_field(ui, "trip-first-day", &mut dialog.first_day, "2026-03-01");
                     });
                     ui.add_space(12.0);
                     ui.vertical(|ui| {
                         ui.label(tr("Last day"));
-                        ui.add(egui::TextEdit::singleline(&mut dialog.last_day).hint_text("2026-03-07").desired_width(120.0));
+                        // An empty last day opens the calendar at the first.
+                        let start = parse_day(&dialog.first_day).flatten();
+                        date_field_from(ui, "trip-last-day", &mut dialog.last_day, "2026-03-07", start);
                     });
                 });
                 ui.label(tr("Description"));
@@ -1107,6 +1246,124 @@ pub(super) fn trip_dates(trip: &Trip) -> Option<String> {
         (Some(first), Some(last)) if first != last => Some(format!("{} – {}", day_label(first), day_label(last))),
         (Some(day), _) | (None, Some(day)) => Some(day_label(day)),
         (None, None) => None,
+    }
+}
+
+/// A date typed as text, with a calendar button beside it to pick one.
+fn date_field(ui: &mut egui::Ui, id: &str, text: &mut String, hint: &str) {
+    date_field_from(ui, id, text, hint, None);
+}
+
+/// [`date_field`], opening at `start` while no date is typed.
+fn date_field_from(ui: &mut egui::Ui, id: &str, text: &mut String, hint: &str, start: Option<NaiveDate>) {
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 4.0;
+        ui.add(egui::TextEdit::singleline(text).hint_text(hint).desired_width(96.0));
+        let button = ui.add(egui::Button::new("    ")).on_hover_text(tr("Choose a date"));
+        paint_calendar_icon(ui, button.rect);
+        let popup = egui::Popup::menu(&button).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
+            let typed = parse_day(text).flatten();
+            let shown_id = ui.make_persistent_id(("calendar-month", id));
+            let today = Local::now().date_naive();
+            let shown = ui.data(|data| data.get_temp::<NaiveDate>(shown_id)).or(typed).or(start).unwrap_or(today);
+            if let Some(picked) = calendar(ui, shown_id, shown, typed, today) {
+                *text = picked.map(|day| day.to_string()).unwrap_or_default();
+                ui.data_mut(|data| data.remove::<NaiveDate>(shown_id));
+                ui.close();
+            }
+        });
+        if popup.is_none() {
+            // Opening again starts from the date in the field.
+            ui.data_mut(|data| data.remove::<NaiveDate>(ui.make_persistent_id(("calendar-month", id))));
+        }
+    });
+}
+
+/// A month of days to click, from Monday. Returns `Some(day)` for a
+/// picked day, `Some(None)` for Clear. `shown` is any day of the month on view.
+fn calendar(ui: &mut egui::Ui, shown_id: egui::Id, shown: NaiveDate, selected: Option<NaiveDate>, today: NaiveDate) -> Option<Option<NaiveDate>> {
+    use chrono::{Datelike, Duration, Months};
+    let first = shown.with_day(1).unwrap_or(shown);
+    let mut picked = None;
+    let mut month = first;
+    // Seven day cells and the gaps between them; nothing in the popup may be
+    // wider, or the menu stretches past the grid.
+    const CELL: f32 = 28.0;
+    const GAP: f32 = 2.0;
+    let width = 7.0 * CELL + 6.0 * GAP;
+    ui.set_width(width);
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 0.0;
+        let arrow = Vec2::new(CELL, 22.0);
+        if ui.add_sized(arrow, egui::Button::new("‹")).on_hover_text(tr("Previous month")).clicked() {
+            month = first.checked_sub_months(Months::new(1)).unwrap_or(first);
+        }
+        let title = RichText::new(crate::types::format_month(first.year(), first.month())).strong();
+        ui.add_sized(Vec2::new(width - 2.0 * CELL, 22.0), egui::Label::new(title));
+        if ui.add_sized(arrow, egui::Button::new("›")).on_hover_text(tr("Next month")).clicked() {
+            month = first.checked_add_months(Months::new(1)).unwrap_or(first);
+        }
+    });
+    // Without these a column is as wide as a button, wider than a day.
+    egui::Grid::new(("calendar", shown_id)).spacing([GAP, GAP]).min_col_width(CELL).max_col_width(CELL).show(ui, |ui| {
+        for weekday in 0..7 {
+            let name = RichText::new(crate::types::short_weekday(weekday)).size(11.0).color(theme::muted());
+            ui.add_sized([CELL, 16.0], egui::Label::new(name));
+        }
+        ui.end_row();
+        let lead = first.weekday().num_days_from_monday() as i64;
+        let mut day = first - Duration::days(lead);
+        for _ in 0..6 {
+            for _ in 0..7 {
+                let in_month = day.month() == first.month();
+                let mut label = RichText::new(day.day().to_string()).size(12.5);
+                if !in_month {
+                    label = label.color(theme::muted().gamma_multiply(0.6));
+                }
+                if day == today {
+                    label = label.strong().underline();
+                }
+                let cell = ui.add_sized([CELL, 24.0], egui::Button::selectable(selected == Some(day), label));
+                if cell.clicked() {
+                    picked = Some(Some(day));
+                }
+                day += Duration::days(1);
+            }
+            ui.end_row();
+            if day.month() != first.month() {
+                break;
+            }
+        }
+    });
+    ui.horizontal(|ui| {
+        ui.set_width(width);
+        if ui.link(tr("Today")).clicked() {
+            picked = Some(Some(today));
+        }
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            if ui.link(tr("Clear")).clicked() {
+                picked = Some(None);
+            }
+        });
+    });
+    if month != first {
+        ui.data_mut(|data| data.insert_temp(shown_id, month));
+    }
+    picked
+}
+
+/// A small calendar page drawn in `rect`: a frame, a top band, and dots for days.
+fn paint_calendar_icon(ui: &egui::Ui, rect: egui::Rect) {
+    let painter = ui.painter();
+    let color = theme::text();
+    let page = egui::Rect::from_center_size(rect.center(), egui::vec2(12.0, 11.0));
+    painter.rect_stroke(page, 1.5, egui::Stroke::new(1.2, color), egui::StrokeKind::Inside);
+    painter.rect_filled(egui::Rect::from_min_max(page.min, egui::pos2(page.max.x, page.min.y + 3.0)), 1.0, color);
+    for row in 0..2 {
+        for col in 0..3 {
+            let at = egui::pos2(page.min.x + 3.0 + col as f32 * 3.0, page.min.y + 5.5 + row as f32 * 2.8);
+            painter.circle_filled(at, 0.7, color);
+        }
     }
 }
 

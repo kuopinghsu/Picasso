@@ -167,6 +167,8 @@ pub enum Nav {
     /// A subfolder inside an added folder, with everything below it.
     Dir(String),
     Album(i64),
+    /// Every Trip, to find and open one.
+    Trips,
     /// The photos of a Trip that are in the library now.
     Trip(i64),
     Places,

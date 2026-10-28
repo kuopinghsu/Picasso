@@ -808,6 +808,22 @@ impl Database {
         })
     }
 
+    /// The photo to show for a Trip: its cover, or else its first member
+    /// in the library.
+    pub fn trip_cover_photo(&self, trip_id: i64) -> Option<i64> {
+        self.conn
+            .query_row(
+                "SELECT m.photo_id FROM trip_media tm JOIN media_refs m ON m.id = tm.media_id JOIN trips t ON t.id = tm.trip_id
+                 WHERE tm.trip_id = ?1 AND m.photo_id IS NOT NULL
+                 ORDER BY (tm.media_id = t.cover_ref) DESC, tm.position LIMIT 1",
+                [trip_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .ok()
+            .flatten()
+    }
+
     /// The catalog photo a media reference points to now.
     pub fn media_photo(&self, media_id: i64) -> Option<i64> {
         self.conn.query_row("SELECT photo_id FROM media_refs WHERE id = ?1", [media_id], |row| row.get(0)).optional().ok().flatten()
@@ -1536,6 +1552,17 @@ mod tests {
         let other = trip(&db, "Other");
         let foreign = db.add_trip_day(other, None, "").unwrap();
         assert!(db.create_story_from_days(trip_id, "", &[foreign], |_| String::new()).is_err());
+    }
+
+    #[test]
+    fn a_trip_shows_its_cover_or_else_its_first_photo() {
+        let (db, _, _, ids) = photos("trip-cover", &["a.jpg", "b.jpg"]);
+        let trip_id = trip(&db, "Alps");
+        assert_eq!(db.trip_cover_photo(trip_id), None);
+        let refs = db.add_to_trip(trip_id, &ids).unwrap();
+        assert_eq!(db.trip_cover_photo(trip_id), Some(ids[0]));
+        db.set_trip_cover(trip_id, Some(refs[1])).unwrap();
+        assert_eq!(db.trip_cover_photo(trip_id), Some(ids[1]));
     }
 
     #[test]

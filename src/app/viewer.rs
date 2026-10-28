@@ -266,6 +266,11 @@ impl PicassoApp {
             if ui.button(tr("Copy path")).clicked() {
                 self.copy_paths(ui.ctx(), &[photo.id]);
             }
+            let mut trip = None;
+            ui.menu_button(tr("Add to Trip"), |ui| trip = self.trip_choices(ui));
+            if let Some(pick) = trip {
+                self.add_photos_to_trip(pick, vec![photo.id]);
+            }
             if ui.button(tr("Export…")).clicked() {
                 self.open_export(&[photo.id]);
             }

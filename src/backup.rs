@@ -318,6 +318,14 @@ mod tests {
         db.exclude_dir(&photos.join("skip")).unwrap();
         let broken = Unreadable { path: path("broken.jpg"), reason: "damaged".into(), folder: false, bytes: 5, modified_at: 6 };
         db.store_unreadable(folder_id, &[broken], true, &Default::default());
+        let trip = db.create_trip(&crate::trip::TripDraft::new("Taipei", "Asia/Taipei")).unwrap();
+        let members = db.add_to_trip(trip, &[a, b]).unwrap();
+        let day = db.add_trip_day(trip, None, "Arrival").unwrap();
+        db.move_to_day(trip, Some(day), &members[..1], crate::trip::DaySource::User).unwrap();
+        db.link_trip_track(trip, db.tracks()[0].0, Some(day)).unwrap();
+        let story = db.create_story(trip, "Rain").unwrap();
+        let blocks = [crate::trip::StoryBlock::new(crate::trip::Block::Photo(crate::trip::MediaUse::new(members[1])))];
+        db.save_story_blocks(story, 1, &blocks).unwrap();
         db.set_caption(ids[2], "kept for 90 days");
         db.remove_missing(folder_id, &[path("a.jpg"), path("b.jpg")]);
         drop(db);
@@ -343,6 +351,13 @@ mod tests {
         assert_eq!(db.excluded_dirs().len(), 1);
         assert_eq!(db.unreadable().len(), 1);
         assert_eq!(db.folders().len(), 1);
+        let trips = db.trips(&crate::trip::TripQuery::default());
+        assert_eq!(trips.iter().map(|trip| trip.title.as_str()).collect::<Vec<_>>(), ["Taipei"], "trips came along");
+        assert_eq!(db.trip_days(trip)[0].title, "Arrival");
+        assert_eq!(db.count_trip_members(trip, &crate::trip::MemberQuery::default()), 2);
+        assert_eq!(db.trip_tracks(trip)[0].day_id, Some(day));
+        assert_eq!(db.story(story).unwrap().title, "Rain");
+        assert_eq!(db.story_blocks(story), blocks, "with the story's blocks and their ids");
         let back = db.write_batch(&[record("gone.jpg")]).unwrap().ids[0];
         assert_eq!(db.adopt_archived(), vec![back], "the archive of removed photos came along");
         assert_eq!(db.photo(back).unwrap().caption, "kept for 90 days");

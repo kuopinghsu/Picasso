@@ -984,6 +984,7 @@ impl Database {
         }
         let order = order_sql(sort);
         match nav {
+            Nav::Trips => Vec::new(),
             Nav::Library | Nav::Statistics => {
                 let sql = format!("SELECT {PHOTO_COLS} FROM photos p ORDER BY {order}");
                 self.map_rows(&sql, [], read_photo)

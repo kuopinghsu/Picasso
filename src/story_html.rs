@@ -5,6 +5,7 @@
 use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use ring::digest;
 
@@ -54,6 +55,69 @@ pub struct Words {
 /// or `None` while it is unavailable.
 pub type Source = Option<(PathBuf, Settings, i32)>;
 
+/// Everything a page of a Story is made from.
+pub struct Page<'a> {
+    pub story: &'a Story,
+    /// The Trip's dates as shown, if wanted.
+    pub dates: Option<&'a str>,
+    pub blocks: &'a [StoryBlock],
+    pub sources: &'a HashMap<i64, Source>,
+    pub words: &'a Words,
+}
+
+/// How far a page's photos are, shared with the thread making them, and
+/// a way to stop it.
+#[derive(Default)]
+pub struct Progress {
+    pub done: AtomicUsize,
+    pub total: AtomicUsize,
+    pub cancel: AtomicBool,
+}
+
+/// What to look at before exporting a Story.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Preflight {
+    /// Nothing to export.
+    pub empty: bool,
+    /// Photos not in the library now, or whose file is gone. They are shown
+    /// as unavailable only if the user says so.
+    pub missing: usize,
+    /// Photos without a description for people who can't see them.
+    pub no_alt: usize,
+    /// Blocks from a newer Picasso, which can't be exported.
+    pub unknown: usize,
+}
+
+impl Preflight {
+    /// Whether export must wait for the user to decide.
+    pub fn blocked(&self, skip_missing: bool) -> bool {
+        self.empty || (self.missing > 0 && !skip_missing)
+    }
+}
+
+/// Checks a Story before it is exported. Reads only whether files exist.
+pub fn preflight(page: &Page) -> Preflight {
+    let mut check = Preflight { empty: page.blocks.is_empty(), ..Preflight::default() };
+    let available = |media_id: i64| matches!(page.sources.get(&media_id), Some(Some((path, _, _))) if path.is_file());
+    if page.story.cover.is_some_and(|cover| !available(cover)) {
+        check.missing += 1;
+    }
+    for block in page.blocks {
+        if matches!(block.block, Block::Unknown { .. }) {
+            check.unknown += 1;
+            continue;
+        }
+        for media in block.block.media() {
+            if !available(media.media_id) {
+                check.missing += 1;
+            } else if media.alt.trim().is_empty() {
+                check.no_alt += 1;
+            }
+        }
+    }
+    check
+}
+
 /// What making a page found: how many photos couldn't be shown, and how
 /// many blocks this build can't show.
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -63,23 +127,21 @@ pub struct Outcome {
 }
 
 /// Writes the Story in `folder` as `format`, with its photos in
-/// `folder/images`. `dates` is the Trip's dates as shown, if wanted.
-/// Returns the page's file.
-#[allow(clippy::too_many_arguments)]
-pub fn write_story(
-    folder: &Path,
-    format: Format,
-    profile: Profile,
-    story: &Story,
-    dates: Option<&str>,
-    blocks: &[StoryBlock],
-    sources: &HashMap<i64, Source>,
-    words: &Words,
-) -> Result<(PathBuf, Outcome), String> {
+/// `folder/images`, counting them in `progress`. Returns the page's file,
+/// or `Err` with the reason, also when `progress` was cancelled.
+pub fn write_story(folder: &Path, format: Format, profile: Profile, input: &Page, progress: &Progress) -> Result<(PathBuf, Outcome), String> {
+    let Page { story, dates, blocks, sources, words } = *input;
     let images_dir = folder.join("images");
     std::fs::create_dir_all(&images_dir).map_err(|err| err.to_string())?;
     let mut images = HashMap::new();
-    for (&media_id, source) in sources {
+    let mut order: Vec<_> = sources.iter().collect();
+    order.sort_by_key(|(id, _)| **id);
+    progress.total.store(order.len(), Ordering::Relaxed);
+    for (&media_id, source) in order {
+        if progress.cancel.load(Ordering::Relaxed) {
+            return Err(CANCELLED.into());
+        }
+        progress.done.fetch_add(1, Ordering::Relaxed);
         let Some((path, settings, rotation)) = source else { continue };
         // A photo that can't be read is shown as unavailable, never left out.
         let Ok(rgba) = crate::edit::render_edited(path, settings, *rotation, Some(profile.edge)) else { continue };
@@ -103,22 +165,14 @@ pub fn write_story(
     Ok((index, outcome))
 }
 
+/// The reason [`write_story`] gives when it was cancelled.
+pub const CANCELLED: &str = "cancelled";
+
 /// Exports the Story into a new folder named `name` in `parent` (or
 /// `name 2`, `name 3`, … when that is taken), so nothing there is ever
 /// replaced. It is written under a hidden name first and renamed once
 /// complete; a failed export leaves no folder behind. Returns the folder.
-#[allow(clippy::too_many_arguments)]
-pub fn export_story(
-    parent: &Path,
-    name: &str,
-    format: Format,
-    profile: Profile,
-    story: &Story,
-    dates: Option<&str>,
-    blocks: &[StoryBlock],
-    sources: &HashMap<i64, Source>,
-    words: &Words,
-) -> Result<(PathBuf, Outcome), String> {
+pub fn export_story(parent: &Path, name: &str, format: Format, profile: Profile, page: &Page, progress: &Progress) -> Result<(PathBuf, Outcome), String> {
     let name = folder_name(name);
     let target = (1..)
         .map(|n| if n == 1 { parent.join(&name) } else { parent.join(format!("{name} {n}")) })
@@ -126,7 +180,7 @@ pub fn export_story(
         .unwrap_or_else(|| parent.join(&name));
     let staging = parent.join(format!(".{name}.partial-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&staging);
-    let written = write_story(&staging, format, profile, story, dates, blocks, sources, words)
+    let written = write_story(&staging, format, profile, page, progress)
         .and_then(|(_, outcome)| std::fs::rename(&staging, &target).map(|()| outcome).map_err(|err| err.to_string()));
     match written {
         Ok(outcome) => Ok((target, outcome)),
@@ -431,7 +485,12 @@ mod tests {
         let photo = Path::new(env!("CARGO_MANIFEST_DIR")).join("images/banner.jpg");
         let sources = HashMap::from([(1, Some((photo, Settings::default(), 0))), (2, None)]);
         let blocks = [StoryBlock::new(Block::Photo(MediaUse::new(1))), StoryBlock::new(Block::Photo(MediaUse::new(2)))];
-        let (index, outcome) = write_story(&folder, Format::Html, Profile::default(), &story(), None, &blocks, &sources, &words()).unwrap();
+        let (story, words) = (story(), words());
+        let page = Page { story: &story, dates: None, blocks: &blocks, sources: &sources, words: &words };
+        let check = preflight(&page);
+        assert_eq!(check, Preflight { missing: 1, no_alt: 1, ..Preflight::default() });
+        assert!(check.blocked(false) && !check.blocked(true), "missing photos wait for the user");
+        let (index, outcome) = write_story(&folder, Format::Html, Profile::default(), &page, &Progress::default()).unwrap();
         assert_eq!(outcome.missing, 1);
         let html = std::fs::read_to_string(&index).unwrap();
         let file = html.split("src=\"").nth(1).unwrap().split('"').next().unwrap();
@@ -470,7 +529,9 @@ mod tests {
         let _ = std::fs::remove_dir_all(&parent);
         std::fs::create_dir_all(parent.join("Kyoto in spring")).unwrap();
         std::fs::write(parent.join("Kyoto in spring/mine.txt"), "keep").unwrap();
-        let export = |format| export_story(&parent, "Kyoto: in/spring", format, Profile::default(), &story(), None, &[], &HashMap::new(), &words());
+        let (story, words, sources) = (story(), words(), HashMap::new());
+        let page = Page { story: &story, dates: None, blocks: &[], sources: &sources, words: &words };
+        let export = |format| export_story(&parent, "Kyoto: in/spring", format, Profile::default(), &page, &Progress::default());
         let (first, _) = export(Format::Html).unwrap();
         assert_eq!(first, parent.join("Kyoto in spring 2"));
         assert!(first.join("index.html").is_file());
@@ -480,6 +541,12 @@ mod tests {
         assert_eq!(std::fs::read_to_string(parent.join("Kyoto in spring/mine.txt")).unwrap(), "keep");
         let names: Vec<_> = std::fs::read_dir(&parent).unwrap().map(|entry| entry.unwrap().file_name()).collect();
         assert_eq!(names.len(), 3, "no staging folder is left: {names:?}");
+        let stopped = Progress::default();
+        stopped.cancel.store(true, Ordering::Relaxed);
+        let photo = HashMap::from([(1, None)]);
+        let page = Page { story: &story, dates: None, blocks: &[], sources: &photo, words: &words };
+        assert_eq!(export_story(&parent, "Stopped", Format::Html, Profile::default(), &page, &stopped), Err(CANCELLED.into()));
+        assert_eq!(std::fs::read_dir(&parent).unwrap().count(), 3, "a cancelled export leaves nothing");
         assert_eq!(folder_name(" ..hidden "), "hidden");
         assert_eq!(folder_name("/"), "Story");
         let _ = std::fs::remove_dir_all(&parent);

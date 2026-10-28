@@ -1267,7 +1267,7 @@ impl PicassoApp {
         let plain = |key| ctx.input_mut(|input| input.consume_key(Modifiers::NONE, key));
         let shift = |key| ctx.input_mut(|input| input.consume_key(Modifiers::SHIFT, key));
         // Statistics and the Travel Map show no photos to select, open, or trash.
-        let photo_keys = self.mode == Mode::View || !(matches!(self.nav, Nav::Statistics | Nav::TravelMap) || self.story_shown());
+        let photo_keys = self.mode == Mode::View || !(matches!(self.nav, Nav::Statistics | Nav::TravelMap | Nav::Trips) || self.story_shown());
 
         if command(Key::A) && self.mode == Mode::Browse && photo_keys {
             self.selection.clear();
@@ -1578,7 +1578,7 @@ impl PicassoApp {
         ui.horizontal(|ui| {
             // Statistics and the Travel Map have no side panel, and they and
             // Places have no thumbnails to size.
-            let charts = matches!(self.nav, Nav::Statistics | Nav::TravelMap);
+            let charts = matches!(self.nav, Nav::Statistics | Nav::TravelMap | Nav::Trips);
             // Laid out from the right first, so the tray gets what is left
             // and a long selection can't push these off the window.
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -1901,7 +1901,7 @@ impl PicassoApp {
             (_, Nav::Places) | (Nav::Places, Nav::Library) => true,
             _ => false,
         };
-        if matches!(nav, Nav::Statistics | Nav::TravelMap) {
+        if matches!(nav, Nav::Statistics | Nav::TravelMap | Nav::Trips) {
             self.edited_only = false;
         }
         if self.nav != nav {
@@ -2239,6 +2239,7 @@ impl PicassoApp {
             Nav::Library => tr("Library").into(),
             Nav::Starred => tr("Starred Photos").into(),
             Nav::Places => tr("Places").into(),
+            Nav::Trips => tr("Trips").into(),
             Nav::Statistics => tr("Statistics").into(),
             Nav::TravelMap => tr("Travel Map").into(),
             Nav::Folder(id) => self
@@ -2821,7 +2822,7 @@ impl eframe::App for PicassoApp {
                 .max_size(340.0)
                 .frame(theme::toolbar_frame(theme::sidebar()).inner_margin(egui::Margin::symmetric(10, 6)))
                 .show(ui, |ui| self.sidebar(ui));
-            if self.side != SidePanel::None && !matches!(self.nav, Nav::Statistics | Nav::TravelMap) && !self.story_shown() {
+            if self.side != SidePanel::None && !matches!(self.nav, Nav::Statistics | Nav::TravelMap | Nav::Trips) && !self.story_shown() {
                 egui::Panel::right("side")
                     .resizable(true)
                     .default_size(300.0)

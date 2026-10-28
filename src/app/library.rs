@@ -719,9 +719,14 @@ impl PicassoApp {
                         }
                     }
                     self.album_menu(ui);
+                    if matches!(self.nav, Nav::Trip(_)) && ui.button(tr("Remove from Trip")).clicked() {
+                        self.remove_selection_from_trip();
+                    }
+                    self.trip_menu(ui);
                 }
             });
         });
+        self.trip_header(ui);
         if !matches!(self.nav, Nav::Statistics | Nav::TravelMap) {
             ui.horizontal_wrapped(|ui| {
                 if ui.checkbox(&mut self.edited_only, tr("Edited only")).changed() {
@@ -1063,6 +1068,12 @@ fn empty_state(nav: &Nav, search: &str, edited_only: bool) -> EmptyState {
         Nav::Album(_) => EmptyState {
             title: "No photos in this album",
             hint: "Select photos in the library and use Add to Album.",
+            button: "Library",
+            action: EmptyAction::Library,
+        },
+        Nav::Trip(_) => EmptyState {
+            title: "No photos in this trip",
+            hint: "Select photos in the library and use Add to Trip.",
             button: "Library",
             action: EmptyAction::Library,
         },

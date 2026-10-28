@@ -7,23 +7,28 @@ use crossbeam_channel::{Receiver, Sender};
 use eframe::egui;
 
 use crate::db::Database;
+use crate::trip::{MemberQuery, Trip, TripQuery};
 use crate::types::{Album, Folder, Nav, Photo, Sort};
 
 use super::tree::{self, FolderRoot};
 
 pub(super) struct LoadJob {
     pub seq: u64,
-    /// Also read the folders, their tree, and the albums.
+    /// Also read the folders, their tree, the albums, and the trips.
     pub full: bool,
     pub nav: Nav,
     pub search: String,
     pub sort: Sort,
+    /// Which of a Trip's photos to show.
+    pub trip_filter: MemberQuery,
 }
 
 pub(super) struct Lists {
     pub folders: Vec<Folder>,
     pub tree: Vec<FolderRoot>,
     pub albums: Vec<Album>,
+    /// Active trips, then archived ones.
+    pub trips: Vec<Trip>,
 }
 
 pub(super) struct Loaded {
@@ -57,9 +62,14 @@ fn run(db: &Database, jobs: &Receiver<LoadJob>, done: &Sender<Loaded>, ctx: &egu
         let lists = job.full.then(|| {
             let folders = db.folders();
             let tree = tree::build(&folders, &db.photo_dirs());
-            Lists { folders, tree, albums: db.albums() }
+            let mut trips = db.trips(&TripQuery::default());
+            trips.extend(db.trips(&TripQuery { archived: true, ..TripQuery::default() }));
+            Lists { folders, tree, albums: db.albums(), trips }
         });
-        let photos = db.photos(&job.nav, &job.search, job.sort);
+        let photos = match job.nav {
+            Nav::Trip(id) if job.search.trim().is_empty() => db.trip_photos(id, &job.trip_filter, job.sort),
+            _ => db.photos(&job.nav, &job.search, job.sort),
+        };
         if done.send(Loaded { seq: job.seq, lists, photos }).is_err() {
             return;
         }

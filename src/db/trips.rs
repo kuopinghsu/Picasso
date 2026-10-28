@@ -15,13 +15,13 @@ use std::collections::HashSet;
 use chrono::NaiveDate;
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 
-use super::Database;
+use super::{order_sql, path_text, read_photo, Database, PHOTO_COLS};
 use crate::i18n::tr;
 use crate::trip::{
     AddPreview, Block, DayAssignment, DayFilter, DaySource, MediaUse, Member, MemberQuery, Story, StoryBlock, Trip, TripDay,
     TripDraft, TripImpact, TripQuery, TripTrack, DEFAULT_TEMPLATE,
 };
-use crate::types::{is_video_path, unix_now};
+use crate::types::{is_video_path, unix_now, Photo, Sort};
 
 pub(super) const TABLES: &str = "\
 -- A photo as Trips and Stories know it. `photo_id` is the catalog row while
@@ -465,6 +465,15 @@ impl Database {
         Ok(removed)
     }
 
+    /// Takes catalog photos out of a Trip; see [`Database::remove_from_trip`].
+    pub fn remove_photos_from_trip(&self, trip_id: i64, photo_ids: &[i64]) -> Result<usize, String> {
+        let media: Vec<i64> = photo_ids
+            .iter()
+            .filter_map(|id| self.conn.query_row("SELECT id FROM media_refs WHERE photo_id = ?1", [id], |row| row.get(0)).ok())
+            .collect();
+        self.remove_from_trip(trip_id, &media)
+    }
+
     /// Members matching `query`, `limit` of them from `offset`: in a Day,
     /// in the Day's order; otherwise in the order they joined the Trip.
     pub fn trip_members(&self, trip_id: i64, query: &MemberQuery, offset: usize, limit: usize) -> Vec<Member> {
@@ -490,6 +499,24 @@ impl Database {
                 day_source: DaySource::from_code(row.get(5)?),
             })
         })
+    }
+
+    /// The catalog photos of the members matching `query`, in `sort`
+    /// order, for the photo grid. Unavailable members have none.
+    pub fn trip_photos(&self, trip_id: i64, query: &MemberQuery, sort: Sort) -> Vec<Photo> {
+        let sql = format!(
+            "SELECT {PHOTO_COLS} FROM trip_media tm JOIN media_refs m ON m.id = tm.media_id JOIN photos p ON p.id = m.photo_id
+             WHERE {} ORDER BY {}",
+            member_filter(query),
+            order_sql(sort)
+        );
+        self.map_rows(&sql, params![trip_id, day_param(query)], read_photo)
+    }
+
+    /// The catalog photo of the file at `path`, to link an unavailable member to.
+    pub fn photo_at_path(&self, path: &std::path::Path) -> Option<i64> {
+        let path = path_text(&path.canonicalize().unwrap_or_else(|_| path.to_path_buf()));
+        self.conn.query_row("SELECT id FROM photos WHERE path = ?1", [path], |row| row.get(0)).optional().ok().flatten()
     }
 
     /// How many members match `query`; the same members [`Database::trip_members`] lists.
@@ -1083,6 +1110,8 @@ mod tests {
         assert_eq!(all(&db, trip_id).len(), 3);
         assert!(all(&db, trip_id)[2].is_video);
         assert!(db.add_to_trip(trip_id, &[9999]).is_err(), "a photo that isn't in the library");
+        assert_eq!(db.remove_photos_from_trip(trip_id, &[ids[2], 9999]).unwrap(), 1, "by catalog photo");
+        db.add_to_trip(trip_id, &[ids[2]]).unwrap();
         assert!(db.add_to_trip(trip_id + 1, &[ids[0]]).is_err(), "a trip that doesn't exist");
         assert_eq!(all(&db, trip_id).len(), 3, "a failed add changes nothing");
     }
@@ -1196,6 +1225,12 @@ mod tests {
             assert_eq!(listed, expected, "{query:?}");
             assert_eq!(db.count_trip_members(trip_id, &query), expected.len() as i64, "{query:?}");
         }
+        let starred = MemberQuery { starred: true, ..MemberQuery::default() };
+        let grid: Vec<i64> = db.trip_photos(trip_id, &starred, Sort::Name).iter().map(|photo| photo.id).collect();
+        assert_eq!(grid, [ids[1]], "the grid uses the same query");
+        assert_eq!(db.trip_photos(trip_id, &MemberQuery::default(), Sort::Name).len(), 3, "unavailable members have no photo");
+        assert_eq!(db.photo_at_path(Path::new(&folder_path(&folder, "a.jpg"))), Some(ids[0]));
+        assert_eq!(db.photo_at_path(Path::new(&folder_path(&folder, "d.jpg"))), None);
         let page: Vec<i64> = db.trip_members(trip_id, &MemberQuery::default(), 1, 2).into_iter().map(|member| member.media_id).collect();
         assert_eq!(page, [refs[1], refs[2]]);
         let trip = db.trip(trip_id).unwrap();

@@ -1009,6 +1009,9 @@ impl Database {
                 );
                 self.map_rows(&sql, [*id], read_photo)
             }
+            Nav::Trip(id) => {
+                self.trip_photos(*id, &crate::trip::MemberQuery::default(), sort)
+            }
             Nav::Places | Nav::TravelMap => {
                 let sql = format!(
                     "SELECT {PHOTO_COLS} FROM photos p

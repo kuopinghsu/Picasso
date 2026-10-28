@@ -23,6 +23,7 @@ mod travel;
 mod theme;
 mod track_editor;
 mod tree;
+mod trips;
 mod unreadable;
 mod updates;
 mod viewer;
@@ -118,6 +119,10 @@ enum Modal {
     /// The duplicate search; `confirm_all` while asking before moving every
     /// extra copy to the trash.
     Duplicates { confirm_all: bool },
+    Trip(trips::TripDialog),
+    AddToTrip(trips::AddDialog),
+    DeleteTrip(trips::DeleteDialog),
+    Unavailable(trips::UnavailableDialog),
     Help,
     About,
     Settings,
@@ -233,6 +238,12 @@ pub struct PicassoApp {
     /// Expanded or collapsed state of folder tree rows the user toggled.
     tree_open: HashMap<String, bool>,
     albums: Vec<crate::types::Album>,
+    /// Active Trips, then archived ones.
+    trips: Vec<crate::trip::Trip>,
+    /// The archived Trips are listed in the side bar.
+    show_archived_trips: bool,
+    /// Which of the Trip's photos the grid shows.
+    trip_filter: crate::trip::MemberQuery,
     photos: Vec<Photo>,
     /// Position of each photo in `photos`.
     index_of: HashMap<i64, usize>,
@@ -541,6 +552,9 @@ impl PicassoApp {
             folder_tree: Vec::new(),
             tree_open: HashMap::new(),
             albums: Vec::new(),
+            trips: Vec::new(),
+            show_archived_trips: false,
+            trip_filter: crate::trip::MemberQuery::default(),
             photos: Vec::new(),
             index_of: HashMap::new(),
             nav: Nav::Library,
@@ -757,6 +771,7 @@ impl PicassoApp {
             nav: self.nav.clone(),
             search: self.search.clone(),
             sort: self.sort,
+            trip_filter: self.trip_filter,
         });
     }
 
@@ -766,6 +781,7 @@ impl PicassoApp {
                 self.folders = lists.folders;
                 self.folder_tree = lists.tree;
                 self.albums = lists.albums;
+                self.trips = lists.trips;
             }
             if loaded.seq != self.load_seq {
                 continue;
@@ -1727,6 +1743,7 @@ impl PicassoApp {
                     error: String::new(),
                 };
             }
+            self.trips_sidebar(ui);
             tree_section(ui, tr("Folders"));
             self.folder_tree_ui(ui);
         });
@@ -1870,6 +1887,9 @@ impl PicassoApp {
         if matches!(nav, Nav::Statistics | Nav::TravelMap) {
             self.edited_only = false;
         }
+        if self.nav != nav {
+            self.trip_filter = crate::trip::MemberQuery::default();
+        }
         self.nav = nav;
         self.mode = Mode::Browse;
         self.slideshow = None;
@@ -1910,6 +1930,10 @@ impl PicassoApp {
             Modal::Geotag(_) => self.geotag_modal(ctx),
             Modal::Rename(_) => self.renamer_modal(ctx),
             Modal::Duplicates { .. } => self.duplicates_modal(ctx),
+            Modal::Trip(_) => self.trip_modal(ctx),
+            Modal::AddToTrip(_) => self.add_to_trip_modal(ctx),
+            Modal::DeleteTrip(_) => self.delete_trip_modal(ctx),
+            Modal::Unavailable(_) => self.unavailable_modal(ctx),
             Modal::Settings => self.settings_modal(ctx),
             Modal::About => {
                 if about::show(ctx, &self.logo) {
@@ -2208,6 +2232,7 @@ impl PicassoApp {
                 .find(|album| album.id == *id)
                 .map(|album| album.name.clone())
                 .unwrap_or_else(|| tr("Album").into()),
+            Nav::Trip(id) => self.trip_title(*id),
         }
     }
 
@@ -2871,11 +2896,22 @@ enum Glyph {
     Copies,
     Chart,
     Globe,
+    Trip,
 }
 
 fn paint_glyph(painter: &egui::Painter, center_left: egui::Pos2, glyph: Glyph) {
     let origin = center_left + Vec2::new(0.0, -7.0);
     match glyph {
+        Glyph::Trip => {
+            // A suitcase.
+            painter.rect_filled(Rect::from_min_size(origin + Vec2::new(0.0, 4.0), Vec2::new(14.0, 10.0)), 3, theme::GOLD);
+            painter.rect_stroke(
+                Rect::from_min_size(origin + Vec2::new(4.5, 0.5), Vec2::new(5.0, 4.0)),
+                1,
+                egui::Stroke::new(1.5, theme::GOLD),
+                egui::StrokeKind::Inside,
+            );
+        }
         Glyph::Album => {
             painter.rect_filled(Rect::from_min_size(origin + Vec2::new(3.0, 0.0), Vec2::new(11.0, 11.0)), 3, theme::ALBUM.gamma_multiply(0.45));
             painter.rect_filled(Rect::from_min_size(origin + Vec2::new(0.0, 3.0), Vec2::new(11.0, 11.0)), 3, theme::ALBUM);

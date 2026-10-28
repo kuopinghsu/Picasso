@@ -3398,7 +3398,7 @@ dependencies = [
 
 [[package]]
 name = "picasso"
-version = "0.9.5"
+version = "0.9.6"
 dependencies = [
  "base64",
  "chrono",

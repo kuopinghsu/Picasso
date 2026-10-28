@@ -3,6 +3,26 @@
 All notable changes to Picasso are listed here, newest first. Each release on GitHub uses its
 section of this file as the release notes.
 
+## [0.9.6] - Unreleased
+
+### Changed
+
+- Reorganized the English and Traditional Chinese READMEs around the project overview,
+  features, installation, common workflows, data storage and development. Simplified the
+  English wording for readers who use English as an additional language.
+- Updated both user guides with clearer navigation, separate export and GPS track workflows,
+  supported formats, storage locations, backup coverage and troubleshooting steps.
+- Expanded the release guide with preparation and verification steps, the complete release
+  file list, checksum commands, macOS signing configuration and recovery from failed releases.
+  Pushed tags are preserved; corrections that change release contents use a new patch version.
+
+### Fixed
+
+- Clarified documentation about network access, default update checks, original-file handling,
+  export filename behavior and the limits of damaged-library recovery.
+- Corrected the release guide: a manual workflow run targeting a version tag can publish a
+  release. Manual runs targeting branches produce build artifacts without publishing.
+
 ## [0.9.5] - 2026-10-27
 
 ### Added
@@ -303,7 +323,8 @@ First release.
 - Light, dark or system theme, ten interface languages, and Help & Shortcuts.
 - Packages for Windows (`.exe` and `.zip`) and Linux (`.deb` and `.tar.gz`).
 
-[0.9.5]: https://github.com/kuopinghsu/picasso/compare/v0.9.4...HEAD
+[0.9.6]: https://github.com/kuopinghsu/picasso/compare/v0.9.5...HEAD
+[0.9.5]: https://github.com/kuopinghsu/picasso/compare/v0.9.4...v0.9.5
 [0.9.4]: https://github.com/kuopinghsu/picasso/compare/v0.9.3...v0.9.4
 [0.9.3]: https://github.com/kuopinghsu/picasso/compare/v0.9.2...v0.9.3
 [0.9.2]: https://github.com/kuopinghsu/picasso/compare/v0.9.1...v0.9.2

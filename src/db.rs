@@ -299,7 +299,7 @@ impl Database {
             )
             .map_err(|err| err.to_string())?;
         // Trips, their Days and members, and Stories (src/db/trips.rs).
-        self.conn.execute_batch(trips::TABLES).map_err(|err| err.to_string())?;
+        trips::upgrade(self)?;
         self.purge_archive(unix_now() - ARCHIVE_DAYS * 86_400);
         // Older builds stored placeholder dates such as year 1. Those files
         // are probed again on the next scan, which reads the real date.
@@ -2168,11 +2168,11 @@ mod tests {
         let old = unix_now() - (UNREADABLE_RETRY_DAYS + 1) * 86_400;
         db.conn.execute("UPDATE unreadable SET checked_at=?1", [old]).unwrap();
         let remembered: HashSet<String> = [bad.path.clone()].into();
-        db.store_unreadable(folder_id, &[bad.clone()], false, &remembered);
+        db.store_unreadable(folder_id, std::slice::from_ref(&bad), false, &remembered);
         assert!(db.unreadable_snapshot(folder_id).is_empty(), "a skipped file keeps its check time, so it is tried again");
         assert_eq!(db.unreadable().len(), 2, "a partial scan only adds");
 
-        db.store_unreadable(folder_id, &[bad.clone()], true, &HashSet::new());
+        db.store_unreadable(folder_id, std::slice::from_ref(&bad), true, &HashSet::new());
         assert_eq!(db.unreadable(), vec![(folder_id, bad.clone())]);
         db.forget_unreadable(&[bad.path]);
         assert!(db.unreadable().is_empty());

@@ -141,7 +141,7 @@ impl PicassoApp {
                 self.picked_track = None;
             } else if let Some(members) = hit {
                 if self.map_zoom < MAX_ZOOM && self.split_closer(members) {
-                    self.zoom_to_photos(&members.to_vec());
+                    self.zoom_to_photos(members);
                 } else {
                     self.select_photos(members);
                 }
@@ -1265,7 +1265,7 @@ pub(super) fn cluster_points(points: &[[f64; 2]], cell: f64) -> Vec<(Vec<usize>,
             None => kept.push((members, at)),
         }
     }
-    kept.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
+    kept.sort_by_key(|k| std::cmp::Reverse(k.0.len()));
     kept
 }
 
@@ -1291,7 +1291,7 @@ pub(super) fn grouped(count: usize) -> String {
     let digits = count.to_string();
     let mut out = String::new();
     for (n, digit) in digits.chars().enumerate() {
-        if n > 0 && (digits.len() - n) % 3 == 0 {
+        if n > 0 && (digits.len() - n).is_multiple_of(3) {
             out.push(',');
         }
         out.push(digit);

@@ -808,7 +808,7 @@ impl Iterator for PipeSource {
     type Item = rodio::Sample;
 
     fn next(&mut self) -> Option<rodio::Sample> {
-        let frame_start = self.emitted % AUDIO_CHANNELS as u64 == 0;
+        let frame_start = self.emitted.is_multiple_of(AUDIO_CHANNELS as u64);
         if self.at >= self.chunk.len() && frame_start && !self.done {
             match self.samples.try_recv() {
                 Ok(chunk) => {

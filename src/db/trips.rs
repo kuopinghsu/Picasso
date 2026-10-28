@@ -12,13 +12,13 @@
 
 use std::collections::HashSet;
 
-use chrono::NaiveDate;
+use chrono::{NaiveDate, NaiveDateTime};
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 
 use super::{order_sql, path_text, read_photo, Database, PHOTO_COLS};
 use crate::i18n::tr;
 use crate::trip::{
-    AddPreview, Block, DayAssignment, DayFilter, DaySource, MediaUse, Member, MemberQuery, Story, StoryBlock, Trip, TripDay,
+    capture_day, AddPreview, Capture, DaySuggestion, Review, TripZone, Block, DayAssignment, DayFilter, DaySource, MediaUse, Member, MemberQuery, Story, StoryBlock, Trip, TripDay,
     TripDraft, TripImpact, TripQuery, TripTrack, DEFAULT_TEMPLATE,
 };
 use crate::types::{is_video_path, unix_now, Photo, Sort};
@@ -151,6 +151,37 @@ CREATE TABLE IF NOT EXISTS story_media (
 CREATE INDEX IF NOT EXISTS idx_story_media_media ON story_media(media_id);
 ";
 
+/// Creates the tables, and adds the columns later builds added to them.
+pub(super) fn upgrade(db: &Database) -> Result<(), String> {
+    db.conn.execute_batch(TABLES).map_err(sql_err)?;
+    // What the file says about when it was taken (`Capture`): `clock_kind`
+    // is 0 unread, 1 a clock reading in `clock` with `clock_offset` when the
+    // file records one, 2 an instant in `clock_utc`, 3 none. `clock_read_for`
+    // is the modification time of the file that was read.
+    for (column, decl) in [
+        ("clock_kind", "INTEGER NOT NULL DEFAULT 0"),
+        ("clock", "TEXT"),
+        ("clock_offset", "INTEGER"),
+        ("clock_utc", "INTEGER"),
+        ("clock_read_for", "INTEGER NOT NULL DEFAULT 0"),
+    ] {
+        db.ensure_column("media_refs", column, decl)?;
+    }
+    // Cameras without a recorded offset were set to Trip time.
+    db.ensure_column("trips", "trip_time", "INTEGER NOT NULL DEFAULT 0")
+}
+
+const CLOCK_FORMAT: &str = "%Y-%m-%d %H:%M:%S";
+
+fn read_capture_row(kind: i64, clock: Option<String>, offset: Option<i32>, utc: Option<i64>) -> Capture {
+    match (kind, clock, utc) {
+        (1, Some(clock), _) => NaiveDateTime::parse_from_str(&clock, CLOCK_FORMAT).map_or(Capture::Missing, |clock| Capture::Clock { clock, offset }),
+        (2, _, Some(utc)) => Capture::Utc(utc),
+        (3, ..) => Capture::Missing,
+        _ => Capture::Unread,
+    }
+}
+
 /// Media references nothing uses any more.
 const UNUSED_REFS: &str = "\
 DELETE FROM media_refs WHERE id NOT IN (SELECT media_id FROM trip_media)
@@ -160,7 +191,7 @@ DELETE FROM media_refs WHERE id NOT IN (SELECT media_id FROM trip_media)
 
 const TRIP_COLS: &str = "\
 t.id, t.title, t.description, t.destination, t.first_day, t.last_day, t.zone, t.cover_ref, t.archived,
-t.created_at, t.updated_at,
+t.created_at, t.updated_at, t.trip_time,
 (SELECT COUNT(*) FROM trip_media tm WHERE tm.trip_id = t.id),
 (SELECT COUNT(*) FROM trip_media tm JOIN media_refs m ON m.id = tm.media_id WHERE tm.trip_id = t.id AND m.photo_id IS NOT NULL),
 (SELECT COUNT(*) FROM trip_days d WHERE d.trip_id = t.id),
@@ -193,10 +224,11 @@ fn read_trip(row: &rusqlite::Row) -> rusqlite::Result<Trip> {
         archived: row.get(8)?,
         created_at: row.get(9)?,
         updated_at: row.get(10)?,
-        members: row.get(11)?,
-        available: row.get(12)?,
-        days: row.get(13)?,
-        stories: row.get(14)?,
+        members: row.get(12)?,
+        available: row.get(13)?,
+        days: row.get(14)?,
+        stories: row.get(15)?,
+        trip_time: row.get(11)?,
     })
 }
 
@@ -282,8 +314,8 @@ impl Database {
         let now = unix_now();
         self.conn
             .execute(
-                "INSERT INTO trips(title, description, destination, first_day, last_day, zone, created_at, updated_at)
-                 VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)",
+                "INSERT INTO trips(title, description, destination, first_day, last_day, zone, trip_time, created_at, updated_at)
+                 VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?8, ?7, ?7)",
                 params![
                     draft.title.trim(),
                     draft.description,
@@ -291,7 +323,8 @@ impl Database {
                     day_text(draft.first_day),
                     day_text(draft.last_day),
                     zone.code(),
-                    now
+                    now,
+                    draft.trip_time
                 ],
             )
             .map_err(sql_err)?;
@@ -304,7 +337,7 @@ impl Database {
             .conn
             .execute(
                 "UPDATE trips SET title = ?2, description = ?3, destination = ?4, first_day = ?5, last_day = ?6,
-                    zone = ?7, updated_at = ?8 WHERE id = ?1",
+                    zone = ?7, updated_at = ?8, trip_time = ?9 WHERE id = ?1",
                 params![
                     id,
                     draft.title.trim(),
@@ -313,7 +346,8 @@ impl Database {
                     day_text(draft.first_day),
                     day_text(draft.last_day),
                     zone.code(),
-                    unix_now()
+                    unix_now(),
+                    draft.trip_time
                 ],
             )
             .map_err(sql_err)?;
@@ -839,6 +873,83 @@ impl Database {
             )
             .map_err(sql_err)
             .and_then(|changed| if changed == 0 { Err(format!("media {media_id} can't be linked to photo {photo_id}")) } else { Ok(()) })
+    }
+
+    /// Members whose file hasn't been read for its capture time, or has
+    /// changed since: (media reference, path, modification time).
+    pub fn captures_to_read(&self, trip_id: i64) -> Vec<(i64, String, i64)> {
+        self.map_rows(
+            "SELECT m.id, p.path, p.modified_at FROM trip_media tm JOIN media_refs m ON m.id = tm.media_id
+             JOIN photos p ON p.id = m.photo_id
+             WHERE tm.trip_id = ?1 AND (m.clock_kind = 0 OR m.clock_read_for != p.modified_at)
+             ORDER BY tm.position",
+            [trip_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+    }
+
+    /// Keeps what a file of modification time `read_for` says about when it was taken.
+    pub fn store_capture(&self, media_id: i64, capture: Capture, read_for: i64) {
+        let (kind, clock, offset, utc) = match capture {
+            Capture::Unread => (0, None, None, None),
+            Capture::Clock { clock, offset } => (1, Some(clock.format(CLOCK_FORMAT).to_string()), offset, None),
+            Capture::Utc(utc) => (2, None, None, Some(utc)),
+            Capture::Missing => (3, None, None, None),
+        };
+        let _ = self.conn.execute(
+            "UPDATE media_refs SET clock_kind = ?2, clock = ?3, clock_offset = ?4, clock_utc = ?5, clock_read_for = ?6 WHERE id = ?1",
+            params![media_id, kind, clock, offset, utc, read_for],
+        );
+    }
+
+    /// Suggests a Day for each member from its capture time in the Trip's
+    /// zone, making a Day for each date that has none, after the others and
+    /// in date order. Members the user put in a Day stay there; members
+    /// whose day is uncertain lose any earlier suggestion and are counted
+    /// for review. The catalog's dates are not changed.
+    pub fn suggest_days(&self, trip_id: i64) -> Result<DaySuggestion, String> {
+        let trip = self.trip(trip_id).ok_or_else(|| format!("trip {trip_id} is gone"))?;
+        let zone = TripZone::parse(&trip.zone).ok_or_else(|| tr("Pick the trip's time zone").to_string())?;
+        let rows: Vec<(i64, i64, Capture, i64)> = self.map_rows(
+            "SELECT tm.media_id, tm.day_source, m.clock_kind, m.clock, m.clock_offset, m.clock_utc,
+                    coalesce(p.taken_at - p.file_taken_at, 0)
+             FROM trip_media tm JOIN media_refs m ON m.id = tm.media_id LEFT JOIN photos p ON p.id = m.photo_id
+             WHERE tm.trip_id = ?1 ORDER BY tm.position",
+            [trip_id],
+            |row| Ok((row.get(0)?, row.get(1)?, read_capture_row(row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?), row.get(6)?)),
+        );
+        let mut outcome = DaySuggestion::default();
+        let mut by_date: std::collections::BTreeMap<NaiveDate, Vec<i64>> = Default::default();
+        let mut review: std::collections::HashMap<Review, usize> = Default::default();
+        let mut unsure = Vec::new();
+        for (media_id, source, capture, shift) in rows {
+            if source == DaySource::User.code() {
+                outcome.kept += 1;
+                continue;
+            }
+            match capture_day(capture, shift, &zone, trip.trip_time) {
+                Ok(date) => by_date.entry(date).or_default().push(media_id),
+                Err(reason) => {
+                    *review.entry(reason).or_default() += 1;
+                    unsure.push(media_id);
+                }
+            }
+        }
+        let days = self.trip_days(trip_id);
+        for (date, members) in by_date {
+            let day_id = match days.iter().find(|day| day.day == Some(date)) {
+                Some(day) => day.id,
+                None => {
+                    outcome.new_days += 1;
+                    self.add_trip_day(trip_id, Some(date), "")?
+                }
+            };
+            outcome.assigned += self.move_to_day(trip_id, Some(day_id), &members, DaySource::Suggested)?.len();
+        }
+        self.move_to_day(trip_id, None, &unsure, DaySource::Suggested)?;
+        outcome.review = review.into_iter().collect();
+        outcome.review.sort_by_key(|(reason, _)| *reason as u8);
+        Ok(outcome)
     }
 
     pub fn create_story(&self, trip_id: i64, title: &str) -> Result<i64, String> {
@@ -1482,6 +1593,74 @@ mod tests {
         drop(db);
         let db = Database::open(&path).unwrap();
         assert_eq!(db.trip(trip_id).unwrap().members, 1, "opening again changes nothing");
+    }
+
+    fn at(text: &str) -> NaiveDateTime {
+        NaiveDateTime::parse_from_str(text, CLOCK_FORMAT).unwrap()
+    }
+
+    #[test]
+    fn days_are_suggested_from_capture_times_and_keep_the_users_choices() {
+        let (db, _, _, ids) = photos("trip-suggest-days", &["a.jpg", "b.jpg", "c.jpg", "d.jpg", "e.jpg", "f.jpg"]);
+        let trip_id = trip(&db, "Taipei");
+        let refs = db.add_to_trip(trip_id, &ids).unwrap();
+        let unread = db.captures_to_read(trip_id);
+        assert_eq!(unread.len(), 6, "nothing read yet");
+        let tokyo = |text| Capture::Clock { clock: at(text), offset: Some(9 * 3600) };
+        let captures = [
+            tokyo("2026-03-02 00:30:00"), // 1 March in Taipei
+            tokyo("2026-03-02 12:00:00"),
+            Capture::Clock { clock: at("2026-03-02 09:00:00"), offset: None },
+            Capture::Missing,
+            tokyo("2026-03-03 12:00:00"),
+            tokyo("2026-03-01 12:00:00"),
+        ];
+        for ((media_id, _, modified_at), capture) in unread.into_iter().zip(captures) {
+            db.store_capture(media_id, capture, modified_at);
+        }
+        assert!(db.captures_to_read(trip_id).is_empty());
+        db.store_capture(refs[0], captures[0], -1);
+        assert_eq!(db.captures_to_read(trip_id).len(), 1, "a file that changed is read again");
+        db.store_capture(refs[0], captures[0], 0);
+        let mine = db.add_trip_day(trip_id, None, "Arrival").unwrap();
+        db.move_to_day(trip_id, Some(mine), &[refs[5]], DaySource::User).unwrap();
+
+        let first = db.suggest_days(trip_id).unwrap();
+        assert_eq!((first.assigned, first.new_days, first.kept), (3, 3, 1));
+        assert_eq!(first.review, [(Review::NoOffset, 1), (Review::NoTime, 1)]);
+        let days = db.trip_days(trip_id);
+        let dates: Vec<_> = days.iter().map(|day| day.day.map(|d| d.to_string())).collect();
+        assert_eq!(dates, [None, Some("2026-03-01".into()), Some("2026-03-02".into()), Some("2026-03-03".into())]);
+        assert_eq!(in_day(&db, trip_id, mine), [refs[5]], "the user's day stays");
+        assert_eq!(in_day(&db, trip_id, days[1].id), [refs[0]]);
+
+        // Accepting that the camera was on Trip time settles the clock without an offset.
+        let mut draft = TripDraft::new("Taipei", "Asia/Taipei");
+        draft.trip_time = true;
+        db.update_trip(trip_id, &draft).unwrap();
+        let again = db.suggest_days(trip_id).unwrap();
+        assert_eq!((again.assigned, again.new_days), (4, 0), "no day twice");
+        assert_eq!(again.review, [(Review::NoTime, 1)]);
+        assert_eq!(in_day(&db, trip_id, days[2].id), [refs[1], refs[2]]);
+
+        // A shift made with Adjust date counts once.
+        db.shift_taken(&[ids[4]], -86_400);
+        db.suggest_days(trip_id).unwrap();
+        assert_eq!(in_day(&db, trip_id, days[2].id), [refs[1], refs[2], refs[4]]);
+        assert_eq!(db.photo(ids[4]).unwrap().taken_at, 1_700_000_000 - 86_400, "catalog dates stay as the user set them");
+    }
+
+    #[test]
+    fn days_do_not_depend_on_the_computers_time_zone() {
+        // Capture times are stored as clock readings and offsets, and Days
+        // are counted in the Trip's zone, so nothing here reads the local zone.
+        let zone = TripZone::parse("Europe/Lisbon").unwrap();
+        let capture = Capture::Clock { clock: at("2026-10-25 01:30:00"), offset: Some(3600) };
+        let day = capture_day(capture, 0, &zone, false);
+        assert_eq!(day.map(|day| day.to_string()), Ok("2026-10-25".into()));
+        assert_eq!(read_capture_row(1, Some("2026-10-25 01:30:00".into()), Some(3600), None), capture);
+        assert_eq!(read_capture_row(2, None, None, Some(5)), Capture::Utc(5));
+        assert_eq!(read_capture_row(0, None, None, None), Capture::Unread);
     }
 
     #[test]

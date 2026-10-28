@@ -34,7 +34,7 @@ pub(super) fn show(ctx: &egui::Context, logo: &egui::TextureHandle) -> bool {
                     let (rect, _) = ui.allocate_exact_size(Vec2::splat(136.0), Sense::hover());
                     theme::paint_logo(ui.painter(), logo, rect);
                     ui.add_space(26.0);
-                    ui.vertical(|ui| body(ui));
+                    ui.vertical(body);
                 });
             });
     });

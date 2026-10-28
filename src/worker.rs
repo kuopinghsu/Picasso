@@ -159,6 +159,11 @@ pub enum UiEvent {
         total: usize,
         groups: Option<Vec<Vec<Photo>>>,
     },
+    /// Days suggested for a Trip from its photos' capture times, or why not.
+    DaysSuggested {
+        trip_id: i64,
+        outcome: Result<crate::trip::DaySuggestion, String>,
+    },
 }
 
 /// Number of threads that probe files during a scan. A probe mostly waits
@@ -867,7 +872,7 @@ static WINDOW_LAST: Mutex<Option<Instant>> = Mutex::new(None);
 fn take_background_slot() -> bool {
     let quiet = WINDOW_LAST
         .lock()
-        .map_or(true, |last| last.map_or(true, |at| at.elapsed() >= WINDOW_QUIET));
+        .map_or(true, |last| last.is_none_or(|at| at.elapsed() >= WINDOW_QUIET));
     if !quiet {
         return false;
     }

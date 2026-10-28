@@ -245,7 +245,7 @@ mod tests {
 
     #[test]
     fn nests_subfolders_with_recursive_counts() {
-        let join = |parts: &[&str]| parts.join(&MAIN_SEPARATOR.to_string());
+        let join = |parts: &[&str]| parts.join(std::path::MAIN_SEPARATOR_STR);
         let root = join(&["", "photos"]);
         let folders = [Folder {
             id: 1,

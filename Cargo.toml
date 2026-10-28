@@ -36,6 +36,8 @@ flate2 = "1"
 ring = "0.17"
 base64 = "0.22"
 machine-uid = "0.6.0"
+# Time zone rules for counting the days of a trip, packaged so they work offline.
+chrono-tz = "0.10"
 
 [target.'cfg(unix)'.dev-dependencies]
 # Peak memory in the benchmark (`make bench`).

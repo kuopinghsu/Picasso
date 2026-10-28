@@ -5,7 +5,7 @@
 // The Trips page that uses these is not built yet; the tests do.
 #![cfg_attr(not(test), allow(dead_code))]
 
-use chrono::NaiveDate;
+use chrono::{NaiveDate, NaiveDateTime};
 use serde_json::{json, Value};
 
 use crate::i18n::tr;
@@ -21,20 +21,36 @@ pub enum TripZone {
 }
 
 impl TripZone {
-    /// A fixed offset such as `+08:00` or `UTC`, or the name of a zone.
-    /// Only the form of a name is checked here; Days are counted with the
-    /// timezone data packaged with Picasso, which knows the real names.
+    /// A fixed offset such as `+08:00` or `UTC`, or the name of a zone in
+    /// the timezone data packaged with Picasso, such as `Asia/Taipei`.
     pub fn parse(text: &str) -> Option<TripZone> {
         let text = text.trim();
         if text.starts_with(['+', '-']) || ["UTC", "GMT", "Z"].iter().any(|prefix| text.starts_with(prefix)) {
             return parse_utc_offset(text).map(TripZone::Fixed);
         }
-        let named = !text.is_empty()
-            && text.split('/').all(|part| {
-                part.starts_with(|c: char| c.is_ascii_alphabetic())
-                    && part.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '+'))
-            });
-        named.then(|| TripZone::Named(text.to_string()))
+        let zone: chrono_tz::Tz = text.parse().ok()?;
+        Some(TripZone::Named(zone.name().to_string()))
+    }
+
+    /// The calendar day of `instant` (Unix seconds) in this zone.
+    pub fn day_of(&self, instant: i64) -> Option<NaiveDate> {
+        let utc = chrono::DateTime::from_timestamp(instant, 0)?;
+        Some(match self {
+            TripZone::Named(name) => utc.with_timezone(&name.parse::<chrono_tz::Tz>().ok()?).date_naive(),
+            TripZone::Fixed(seconds) => utc.with_timezone(&chrono::FixedOffset::east_opt(*seconds)?).date_naive(),
+        })
+    }
+
+    /// The instant a clock showing `clock` in this zone stands for. `None`
+    /// when the reading happens twice or never there, around a change of
+    /// daylight saving time.
+    pub fn instant_of(&self, clock: NaiveDateTime) -> Option<i64> {
+        use chrono::TimeZone;
+        let local = match self {
+            TripZone::Named(name) => name.parse::<chrono_tz::Tz>().ok()?.from_local_datetime(&clock).single()?.timestamp(),
+            TripZone::Fixed(seconds) => chrono::FixedOffset::east_opt(*seconds)?.from_local_datetime(&clock).single()?.timestamp(),
+        };
+        Some(local)
     }
 
     /// The text [`TripZone::parse`] reads back, as stored in the library.
@@ -44,6 +60,86 @@ impl TripZone {
             TripZone::Fixed(seconds) => format_utc_offset(*seconds),
         }
     }
+}
+
+/// What a photo's file says about when it was taken.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Capture {
+    /// The file hasn't been read for it yet.
+    Unread,
+    /// The camera's clock reading, and its offset from UTC when the file
+    /// records it (`OffsetTimeOriginal`).
+    Clock { clock: NaiveDateTime, offset: Option<i32> },
+    /// An instant in UTC, as videos record it.
+    Utc(i64),
+    /// No capture time; the library shows the file's modification time.
+    Missing,
+}
+
+/// Why a member's Day can't be worked out without the user.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Review {
+    /// The file hasn't been read yet.
+    Unread,
+    /// The clock reading has no offset, and the user hasn't said the
+    /// camera was set to Trip time.
+    NoOffset,
+    /// The reading happens twice or never in the Trip's zone.
+    Ambiguous,
+    /// The file has no capture time.
+    NoTime,
+}
+
+/// What `path` says about when it was taken. Reads the file, so it is
+/// called off the window's thread.
+pub fn read_capture(path: &std::path::Path, modified_at: i64) -> Capture {
+    let Ok(probe) = crate::image_io::probe(path, modified_at) else {
+        return Capture::Missing;
+    };
+    // Without a capture time the probe gives the modification time back.
+    if probe.taken_at == modified_at {
+        return Capture::Missing;
+    }
+    if crate::types::is_video_path(path) {
+        return Capture::Utc(probe.taken_at);
+    }
+    // The probe read the clock as a time on this computer; reading it back
+    // the same way gives the clock's own reading.
+    match chrono::DateTime::from_timestamp(probe.taken_at, 0) {
+        Some(time) => Capture::Clock { clock: time.with_timezone(&chrono::Local).naive_local(), offset: probe.zone },
+        None => Capture::Missing,
+    }
+}
+
+/// How suggesting Days went.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct DaySuggestion {
+    /// Members given a suggested Day.
+    pub assigned: usize,
+    /// Days made for dates that had none.
+    pub new_days: usize,
+    /// Members whose Day the user chose, left as they are.
+    pub kept: usize,
+    /// Members left without a suggestion, and why.
+    pub review: Vec<(Review, usize)>,
+}
+
+/// The calendar day in `zone` on which a member was taken.
+///
+/// `shift` is the user's **Adjust date** change in the catalog, applied
+/// once. `trip_time` says the user accepted that cameras without a
+/// recorded offset were set to Trip time. The computer's own time zone is
+/// never used, so the same inputs give the same day anywhere.
+pub fn capture_day(capture: Capture, shift: i64, zone: &TripZone, trip_time: bool) -> Result<NaiveDate, Review> {
+    let instant = match capture {
+        Capture::Unread => return Err(Review::Unread),
+        Capture::Missing => return Err(Review::NoTime),
+        Capture::Utc(instant) => instant,
+        Capture::Clock { clock, offset: Some(offset) } => clock.and_utc().timestamp() - i64::from(offset),
+        Capture::Clock { offset: None, .. } if !trip_time => return Err(Review::NoOffset),
+        Capture::Clock { clock, offset: None } => zone.instant_of(clock).ok_or(Review::Ambiguous)?,
+    };
+    zone.day_of(instant + shift).ok_or(Review::NoTime)
 }
 
 /// What the user enters to create or change a Trip.
@@ -56,6 +152,8 @@ pub struct TripDraft {
     pub last_day: Option<NaiveDate>,
     /// Text of a [`TripZone`]; it has to be chosen, there is no default.
     pub zone: String,
+    /// The user says cameras that record no offset were set to Trip time.
+    pub trip_time: bool,
 }
 
 impl TripDraft {
@@ -67,6 +165,7 @@ impl TripDraft {
             first_day: None,
             last_day: None,
             zone: zone.into(),
+            trip_time: false,
         }
     }
 
@@ -93,6 +192,8 @@ pub struct Trip {
     pub first_day: Option<NaiveDate>,
     pub last_day: Option<NaiveDate>,
     pub zone: String,
+    /// See [`TripDraft::trip_time`].
+    pub trip_time: bool,
     /// Media reference of the cover, one of the Trip's members.
     pub cover: Option<i64>,
     pub archived: bool,
@@ -375,9 +476,52 @@ mod tests {
         assert_eq!(TripZone::parse("UTC-03:30"), Some(TripZone::Fixed(-(3 * 3600 + 1800))));
         assert_eq!(TripZone::parse("UTC"), Some(TripZone::Fixed(0)));
         assert_eq!(TripZone::Fixed(-(3 * 3600 + 1800)).code(), "-03:30");
-        for bad in ["", "  ", "Asia/", "/Taipei", "Asia Taipei", "+25:00", "../etc"] {
+        assert_eq!(TripZone::parse("asia/taipei"), None, "names are spelled as in the timezone data");
+        for bad in ["", "  ", "Asia/", "/Taipei", "Asia Taipei", "Mars/Olympus", "+25:00", "../etc"] {
             assert_eq!(TripZone::parse(bad), None, "{bad:?}");
         }
+    }
+
+    fn clock(text: &str) -> NaiveDateTime {
+        NaiveDateTime::parse_from_str(text, "%Y-%m-%d %H:%M:%S").unwrap()
+    }
+
+    fn date(text: &str) -> NaiveDate {
+        NaiveDate::parse_from_str(text, "%Y-%m-%d").unwrap()
+    }
+
+    #[test]
+    fn a_day_comes_from_the_clock_and_its_offset() {
+        let taipei = TripZone::parse("Asia/Taipei").unwrap();
+        // 00:30 in Tokyo is 23:30 the evening before in Taipei.
+        let tokyo = Capture::Clock { clock: clock("2026-03-02 00:30:00"), offset: Some(9 * 3600) };
+        assert_eq!(capture_day(tokyo, 0, &taipei, false), Ok(date("2026-03-01")));
+        assert_eq!(capture_day(tokyo, 3600, &taipei, false), Ok(date("2026-03-02")), "an Adjust date shift counts once");
+        let video = Capture::Utc(clock("2026-03-01 16:30:00").and_utc().timestamp());
+        assert_eq!(capture_day(video, 0, &taipei, false), Ok(date("2026-03-02")));
+        assert_eq!(capture_day(Capture::Missing, 0, &taipei, true), Err(Review::NoTime));
+        assert_eq!(capture_day(Capture::Unread, 0, &taipei, true), Err(Review::Unread));
+    }
+
+    #[test]
+    fn a_clock_without_offset_needs_the_user_and_daylight_saving_care() {
+        let new_york = TripZone::parse("America/New_York").unwrap();
+        let bare = |text| Capture::Clock { clock: clock(text), offset: None };
+        assert_eq!(capture_day(bare("2026-07-04 23:59:00"), 0, &new_york, false), Err(Review::NoOffset));
+        assert_eq!(capture_day(bare("2026-07-04 23:59:00"), 0, &new_york, true), Ok(date("2026-07-04")));
+        // 02:30 never happens on 8 March 2026, and 01:30 happens twice on 1 November.
+        assert_eq!(capture_day(bare("2026-03-08 02:30:00"), 0, &new_york, true), Err(Review::Ambiguous));
+        assert_eq!(capture_day(bare("2026-11-01 01:30:00"), 0, &new_york, true), Err(Review::Ambiguous));
+        // A fixed offset has no daylight saving.
+        let fixed = TripZone::parse("-05:00").unwrap();
+        assert_eq!(capture_day(bare("2026-03-08 02:30:00"), 0, &fixed, true), Ok(date("2026-03-08")));
+        // Leap day, and across the date line.
+        assert_eq!(capture_day(bare("2028-02-29 12:00:00"), 0, &fixed, true), Ok(date("2028-02-29")));
+        let samoa = TripZone::parse("Pacific/Apia").unwrap();
+        let fiji = Capture::Clock { clock: clock("2026-06-01 10:00:00"), offset: Some(12 * 3600) };
+        assert_eq!(capture_day(fiji, 0, &samoa, false), Ok(date("2026-06-01")), "UTC+13 is ahead of UTC+12");
+        let honolulu = Capture::Clock { clock: clock("2026-06-01 10:00:00"), offset: Some(-10 * 3600) };
+        assert_eq!(capture_day(honolulu, 0, &samoa, false), Ok(date("2026-06-02")));
     }
 
     #[test]

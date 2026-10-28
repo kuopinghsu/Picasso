@@ -7,10 +7,10 @@ use chrono::{Local, NaiveDate, TimeZone};
 use eframe::egui::{self, Align, Layout, Margin, RichText};
 
 use crate::i18n::{tr, trf};
-use crate::trip::{AddPreview, MemberQuery, Trip, TripDraft, TripImpact};
+use crate::trip::{read_capture, AddPreview, DayFilter, DaySource, DaySuggestion, MemberQuery, Review, Trip, TripDay, TripDraft, TripImpact};
 use crate::types::{format_day, Nav};
 
-use super::{about, theme, tree_section, Glyph, Modal, PicassoApp};
+use super::{about, theme, tree_section, Glyph, Modal, PicassoApp, UiEvent};
 
 /// Creating a Trip, from the selected photos or empty, or changing one.
 pub(super) struct TripDialog {
@@ -18,6 +18,7 @@ pub(super) struct TripDialog {
     editing: Option<i64>,
     title: String,
     zone: String,
+    trip_time: bool,
     destination: String,
     description: String,
     first_day: String,
@@ -34,6 +35,15 @@ pub(super) struct AddDialog {
     name: String,
     photos: Vec<i64>,
     preview: AddPreview,
+}
+
+/// Changing a Day's title, date, and notes.
+pub(super) struct DayDialog {
+    day_id: i64,
+    title: String,
+    date: String,
+    notes: String,
+    error: String,
 }
 
 /// Most unavailable photos the repair list shows at once.
@@ -223,6 +233,77 @@ impl PicassoApp {
                 ui.label(RichText::new(trf("{} of {}", &[&shown, &trip_members])).size(13.0).color(theme::muted()));
             }
         });
+        let days = self.db.trip_days(trip_id);
+        let unassigned = self.db.count_trip_members(trip_id, &MemberQuery { day: DayFilter::Unassigned, ..MemberQuery::default() });
+        let mut edit_day: Option<TripDay> = None;
+        let mut delete_day: Option<i64> = None;
+        let mut suggest = false;
+        ui.horizontal_wrapped(|ui| {
+            ui.label(RichText::new(tr("Days")).size(13.0).color(theme::muted()));
+            if ui.selectable_label(filter.day == DayFilter::Any, tr("All")).clicked() {
+                filter.day = DayFilter::Any;
+            }
+            for day in &days {
+                let label = format!("{} ({})", day_name(day), day.members);
+                let chip = ui.selectable_label(filter.day == DayFilter::Day(day.id), label);
+                if chip.clicked() {
+                    filter.day = DayFilter::Day(day.id);
+                }
+                chip.context_menu(|ui| {
+                    if ui.button(tr("Edit day…")).clicked() {
+                        edit_day = Some(day.clone());
+                        ui.close();
+                    }
+                    if ui.button(tr("Delete day")).on_hover_text(tr("Its photos stay in the trip, without a day")).clicked() {
+                        delete_day = Some(day.id);
+                        ui.close();
+                    }
+                });
+            }
+            if unassigned > 0 || filter.day == DayFilter::Unassigned {
+                let label = trf("Not in a day ({})", &[&unassigned]);
+                if ui.selectable_label(filter.day == DayFilter::Unassigned, label).clicked() {
+                    filter.day = DayFilter::Unassigned;
+                }
+            }
+            let busy = self.suggesting.is_some();
+            let button = ui.add_enabled(!busy, egui::Button::new(tr("Suggest days")));
+            if button
+                .on_hover_text(tr("Put photos in days by when they were taken, in the trip's time zone. Days you chose stay as they are."))
+                .clicked()
+            {
+                suggest = true;
+            }
+            if busy {
+                ui.add(egui::Spinner::new().size(13.0));
+            }
+            if let Some((undo_trip, _)) = &self.day_undo {
+                if *undo_trip == trip_id && ui.link(RichText::new(tr("Undo")).size(13.0)).clicked() {
+                    self.undo_day_move();
+                }
+            }
+        });
+        if let Some(day) = edit_day {
+            self.modal = Modal::DayDetails(DayDialog {
+                day_id: day.id,
+                date: day.day.map(|day| day.to_string()).unwrap_or_default(),
+                title: day.title,
+                notes: day.notes,
+                error: String::new(),
+            });
+        }
+        if let Some(day_id) = delete_day {
+            if let Err(err) = self.db.delete_trip_day(day_id) {
+                self.activity = err;
+            }
+            if filter.day == DayFilter::Day(day_id) {
+                filter.day = DayFilter::Any;
+            }
+            self.reload();
+        }
+        if suggest {
+            self.suggest_days(ui.ctx(), trip_id);
+        }
         if filter != self.trip_filter {
             self.trip_filter = filter;
             self.selection.clear();
@@ -292,6 +373,153 @@ impl PicassoApp {
         }
     }
 
+    /// Reads the capture times the Trip's photos lack, then suggests their
+    /// Days, on a thread of its own.
+    fn suggest_days(&mut self, ctx: &egui::Context, trip_id: i64) {
+        self.suggesting = Some(trip_id);
+        self.day_undo = None;
+        let db_path = self.data_dir.join("picasso.db");
+        let events = self.events_tx.clone();
+        let ctx = ctx.clone();
+        let _ = std::thread::Builder::new().name("picasso-days".into()).spawn(move || {
+            let outcome = crate::db::Database::open(&db_path).and_then(|db| {
+                for (media_id, path, modified_at) in db.captures_to_read(trip_id) {
+                    db.store_capture(media_id, read_capture(std::path::Path::new(&path), modified_at), modified_at);
+                }
+                db.suggest_days(trip_id)
+            });
+            let _ = events.send(UiEvent::DaysSuggested { trip_id, outcome });
+            ctx.request_repaint();
+        });
+    }
+
+    pub(super) fn on_days_suggested(&mut self, trip_id: i64, outcome: Result<DaySuggestion, String>) {
+        if self.suggesting == Some(trip_id) {
+            self.suggesting = None;
+        }
+        self.activity = match outcome {
+            Ok(outcome) => {
+                let mut text = trf("Suggested days for {} photos", &[&outcome.assigned]);
+                for (reason, count) in &outcome.review {
+                    text.push_str(" · ");
+                    text.push_str(&trf(
+                        match reason {
+                            Review::NoOffset => "{} without a time zone",
+                            Review::NoTime => "{} without a capture time",
+                            Review::Ambiguous => "{} at a time that is unclear around a clock change",
+                            Review::Unread => "{} not read yet",
+                        },
+                        &[count],
+                    ));
+                }
+                text
+            }
+            Err(err) => err,
+        };
+        self.reload();
+    }
+
+    /// The toolbar menu that puts the selected photos in a Day of the Trip.
+    pub(super) fn day_menu(&mut self, ui: &mut egui::Ui) {
+        let Nav::Trip(trip_id) = self.nav else { return };
+        let days = self.db.trip_days(trip_id);
+        let mut target: Option<Option<i64>> = None;
+        let mut create = false;
+        let button = ui.button(tr("Move to Day"));
+        let popup = egui::Popup::menu(&button).show(|ui| {
+            for day in &days {
+                if ui.selectable_label(false, day_name(day)).clicked() {
+                    target = Some(Some(day.id));
+                }
+            }
+            if !days.is_empty() {
+                ui.separator();
+            }
+            if ui.button(tr("New day")).clicked() {
+                create = true;
+            }
+            if ui.button(tr("No day")).clicked() {
+                target = Some(None);
+            }
+        });
+        if popup.is_none() {
+            button.on_hover_text(tr("Put the selected photos in a day of this trip"));
+        }
+        if create {
+            match self.db.add_trip_day(trip_id, None, "") {
+                Ok(day_id) => target = Some(Some(day_id)),
+                Err(err) => self.activity = err,
+            }
+        }
+        let Some(day_id) = target else { return };
+        let photos = self.selection_in_order();
+        let media = self.db.add_to_trip(trip_id, &photos).unwrap_or_default();
+        match self.db.move_to_day(trip_id, day_id, &media, DaySource::User) {
+            Ok(before) => {
+                self.activity = trf("Moved {} photos", &[&before.len()]);
+                self.day_undo = Some((trip_id, before));
+            }
+            Err(err) => self.activity = err,
+        }
+        self.reload();
+    }
+
+    fn undo_day_move(&mut self) {
+        let Some((trip_id, before)) = self.day_undo.take() else { return };
+        if let Err(err) = self.db.restore_day_assignments(trip_id, &before) {
+            self.activity = err;
+        }
+        self.reload();
+    }
+
+    pub(super) fn day_modal(&mut self, ctx: &egui::Context) {
+        let Modal::DayDetails(dialog) = &mut self.modal else { return };
+        let mut close = false;
+        let mut save = false;
+        let response = egui::Modal::new(egui::Id::unique("trip-day")).frame(about::dialog_frame()).show(ctx, |ui| {
+            ui.set_width(400.0);
+            about::title_bar(ui, &self.logo, tr("Edit day"), &mut close);
+            egui::Frame::new().inner_margin(Margin::symmetric(20, 14)).show(ui, |ui| {
+                ui.spacing_mut().item_spacing.y = 6.0;
+                ui.label(tr("Title"));
+                ui.add(egui::TextEdit::singleline(&mut dialog.title).hint_text(tr("Optional")).desired_width(f32::INFINITY));
+                ui.label(tr("Date"));
+                ui.add(egui::TextEdit::singleline(&mut dialog.date).hint_text("2026-03-01").desired_width(120.0));
+                ui.label(tr("Notes"));
+                ui.add(egui::TextEdit::multiline(&mut dialog.notes).desired_rows(3).desired_width(f32::INFINITY));
+                if !dialog.error.is_empty() {
+                    ui.label(RichText::new(&dialog.error).color(theme::DANGER));
+                }
+                ui.add_space(6.0);
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if ui.add(theme::primary_button(tr("Save"))).clicked() {
+                        save = true;
+                    }
+                    if ui.button(tr("Cancel")).clicked() {
+                        close = true;
+                    }
+                });
+            });
+        });
+        if save {
+            let Some(date) = parse_day(&dialog.date) else {
+                dialog.error = tr("Type dates such as 2026-03-01").into();
+                return;
+            };
+            match self.db.update_trip_day(dialog.day_id, date, &dialog.title, &dialog.notes) {
+                Ok(()) => {
+                    self.modal = Modal::None;
+                    self.reload();
+                }
+                Err(err) => dialog.error = err,
+            }
+            return;
+        }
+        if close || response.should_close() {
+            self.modal = Modal::None;
+        }
+    }
+
     /// Asks for the file of an unavailable member and links it, if the
     /// library has that file. Returns why it couldn't, or nothing.
     fn locate_member(&mut self, media_id: i64) -> String {
@@ -317,6 +545,7 @@ impl PicassoApp {
             editing: None,
             title: String::new(),
             zone: String::new(),
+            trip_time: false,
             destination: String::new(),
             description: String::new(),
             first_day: String::new(),
@@ -335,6 +564,7 @@ impl PicassoApp {
             last_day: trip.last_day.map(|day| day.to_string()).unwrap_or_default(),
             title: trip.title,
             zone: trip.zone,
+            trip_time: trip.trip_time,
             destination: trip.destination,
             description: trip.description,
             photos: Vec::new(),
@@ -377,6 +607,8 @@ impl PicassoApp {
                         .size(12.0)
                         .color(theme::muted()),
                 );
+                ui.checkbox(&mut dialog.trip_time, tr("Cameras that record no time zone were set to this one"))
+                    .on_hover_text(tr("Many cameras keep local time without saying which. Turn this on if you set their clocks to the trip's time; otherwise their photos wait for review."));
                 ui.add_space(4.0);
                 ui.label(tr("Destination"));
                 ui.add(egui::TextEdit::singleline(&mut dialog.destination).hint_text(tr("Optional")).desired_width(f32::INFINITY));
@@ -434,6 +666,7 @@ impl PicassoApp {
             first_day,
             last_day,
             zone: dialog.zone.clone(),
+            trip_time: dialog.trip_time,
         };
         let saved = match dialog.editing {
             Some(id) => self.db.update_trip(id, &draft).map(|_| id),
@@ -564,6 +797,17 @@ fn parse_day(text: &str) -> Option<Option<NaiveDate>> {
         return Some(None);
     }
     NaiveDate::parse_from_str(&text.replace(['/', '.'], "-"), "%Y-%m-%d").ok().map(Some)
+}
+
+/// A Day's title, else its date, else its number in the Trip.
+fn day_name(day: &TripDay) -> String {
+    if !day.title.is_empty() {
+        return day.title.clone();
+    }
+    match day.day {
+        Some(date) => day_label(date),
+        None => trf("Day {}", &[&(day.position + 1)]),
+    }
 }
 
 /// A calendar day written the way the interface language writes dates.

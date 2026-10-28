@@ -273,8 +273,8 @@ mod tests {
     #[test]
     fn untouched_codes_round_trip() {
         let decode = color::decode_table();
-        for code in 0..=255usize {
-            assert_eq!(color::encode(decode[code]) as usize, code, "code {code}");
+        for (code, &value) in decode.iter().enumerate() {
+            assert_eq!(color::encode(value) as usize, code, "code {code}");
         }
         let mut image = RgbaImage::from_fn(16, 16, |x, y| image::Rgba([(x * 16) as u8, (y * 16) as u8, 77, 255]));
         let original = image.clone();

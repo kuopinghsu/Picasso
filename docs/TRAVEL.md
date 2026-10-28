@@ -62,11 +62,11 @@ A member's instant is decided in this order:
 
 1. An instant the user confirmed for this Trip member.
 2. The file's clock reading with the offset the file records (`OffsetTimeOriginal`), plus any **Adjust date** shift the user made in the catalog. The shift is applied once, as the difference between the catalog date and the file's own date.
-3. The clock reading without a recorded offset, read as Trip time once the user accepts that the camera was set to it (for the whole Trip or for chosen photos). Until then the member is in **Needs review**.
+3. The clock reading without a recorded offset, read as Trip time once the user accepts, in the Trip's settings, that cameras without an offset were set to it. Until then the member stays without a suggested Day and is counted for review.
 4. Videos, which record UTC.
 5. No clock reading (the file's modification time stood in): **Needs review**.
 
-The clock reading and offset are read from the file only for Trip members that lack them, never by rescanning the library, and the files are never written. A clock reading that is ambiguous or doesn't exist in the Trip timezone (around a daylight saving change) goes to **Needs review**. With the same confirmed inputs, the same Days come out whatever timezone the computer is in.
+**Suggest days** reads the clock reading and offset only from Trip members that lack them or whose file changed, on a background thread, never by rescanning the library, and never writes the files. It makes a Day for each date that has none, after the existing Days and in date order, and reports how many photos need review and why. The time zone rules come from `chrono-tz`, compiled into Picasso. A clock reading that is ambiguous or doesn't exist in the Trip timezone (around a daylight saving change) goes to **Needs review**. With the same confirmed inputs, the same Days come out whatever timezone the computer is in.
 
 ## Rendering, export, and publishing
 

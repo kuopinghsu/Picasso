@@ -745,13 +745,13 @@ mod tests {
     fn hdr_lifts_shadows_and_tames_highlights() {
         let source = backlit();
         let mut cache = Cache::default();
-        for method in 0..HDR_METHODS.len() {
+        for (method, name) in HDR_METHODS.iter().enumerate() {
             let mut settings = Settings::default();
             settings.set(Control::HDR_METHOD, method as f32);
             settings.set(Control::HDR_STRENGTH, 100.0);
             let out = render(&source, &settings, &Options::default(), Some(&mut cache));
             assert!(out.get_pixel(168, 29)[0] < 255, "{method}: the sun comes down from white");
-            if HDR_METHODS[method] != "Filmic" {
+            if *name != "Filmic" {
                 assert!(out.get_pixel(40, 140)[0] > source.get_pixel(40, 140)[0], "{method}: shadows open up");
             }
         }

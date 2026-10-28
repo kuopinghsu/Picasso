@@ -123,6 +123,7 @@ enum Modal {
     AddToTrip(trips::AddDialog),
     DeleteTrip(trips::DeleteDialog),
     Unavailable(trips::UnavailableDialog),
+    DayDetails(trips::DayDialog),
     Help,
     About,
     Settings,
@@ -244,6 +245,10 @@ pub struct PicassoApp {
     show_archived_trips: bool,
     /// Which of the Trip's photos the grid shows.
     trip_filter: crate::trip::MemberQuery,
+    /// The Trip whose Days are being suggested in the background.
+    suggesting: Option<i64>,
+    /// The last Move to Day, to undo: the Trip and where its photos were.
+    day_undo: Option<(i64, Vec<crate::trip::DayAssignment>)>,
     photos: Vec<Photo>,
     /// Position of each photo in `photos`.
     index_of: HashMap<i64, usize>,
@@ -555,6 +560,8 @@ impl PicassoApp {
             trips: Vec::new(),
             show_archived_trips: false,
             trip_filter: crate::trip::MemberQuery::default(),
+            suggesting: None,
+            day_undo: None,
             photos: Vec::new(),
             index_of: HashMap::new(),
             nav: Nav::Library,
@@ -1060,6 +1067,7 @@ impl PicassoApp {
                 total,
                 groups,
             } => self.on_duplicates(run, checked, total, groups),
+            UiEvent::DaysSuggested { trip_id, outcome } => self.on_days_suggested(trip_id, outcome),
         }
     }
 
@@ -1934,6 +1942,7 @@ impl PicassoApp {
             Modal::AddToTrip(_) => self.add_to_trip_modal(ctx),
             Modal::DeleteTrip(_) => self.delete_trip_modal(ctx),
             Modal::Unavailable(_) => self.unavailable_modal(ctx),
+            Modal::DayDetails(_) => self.day_modal(ctx),
             Modal::Settings => self.settings_modal(ctx),
             Modal::About => {
                 if about::show(ctx, &self.logo) {

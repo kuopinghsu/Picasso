@@ -530,7 +530,7 @@ pub fn cli(args: &[PathBuf]) -> i32 {
     let db = if library.exists() { Database::open(&library).ok() } else { None };
     let options = Options { track: track.clone(), folder: folder.clone(), offset, dry_run };
     let progress = |done: usize, total: usize| {
-        if done % 50 == 0 || done == total {
+        if done.is_multiple_of(50) || done == total {
             eprint!("\rReading {done} of {total} files");
         }
     };

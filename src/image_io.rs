@@ -391,7 +391,7 @@ fn camera_name(make: &str, model: &str) -> String {
 }
 
 fn oriented_size(width: u32, height: u32, orientation: u16) -> (u32, u32) {
-    if matches!(orientation, 5 | 6 | 7 | 8) {
+    if matches!(orientation, 5..=8) {
         (height, width)
     } else {
         (width, height)
@@ -845,7 +845,7 @@ fn parse_exif_time(text: &str) -> Option<i64> {
     (stamp >= EARLIEST_PHOTO).then_some(stamp)
 }
 
-fn field_any<'a>(exif: &'a exif::Exif, tag: exif::Tag) -> Option<&'a exif::Field> {
+fn field_any(exif: &exif::Exif, tag: exif::Tag) -> Option<&exif::Field> {
     exif.get_field(tag, exif::In::PRIMARY)
         .or_else(|| exif.fields().find(|field| field.tag == tag))
 }

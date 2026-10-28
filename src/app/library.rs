@@ -539,7 +539,7 @@ impl PicassoApp {
     fn ensure_layout(&mut self, width: f32, tracks: usize) {
         let width_key = width.round() as i32;
         let thumb_key = self.thumb_size.round() as i32;
-        let stale = self.layout.as_ref().map_or(true, |cache| {
+        let stale = self.layout.as_ref().is_none_or(|cache| {
             cache.epoch != self.view_epoch
                 || cache.width != width_key
                 || cache.sort != self.sort
@@ -721,6 +721,9 @@ impl PicassoApp {
                     self.album_menu(ui);
                     if matches!(self.nav, Nav::Trip(_)) && ui.button(tr("Remove from Trip")).clicked() {
                         self.remove_selection_from_trip();
+                    }
+                    if matches!(self.nav, Nav::Trip(_)) {
+                        self.day_menu(ui);
                     }
                     self.trip_menu(ui);
                 }

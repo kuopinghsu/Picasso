@@ -499,8 +499,8 @@ fn transform_overlay(ui: &mut egui::Ui, session: &mut EditSession, stage: Rect, 
             if edit::is_convex(next_quad) {
                 let mut next = settings.clone();
                 for (i, corner) in next_quad.iter().enumerate() {
-                    for axis in 0..2 {
-                        next.set(Control::corner(i, axis), corner[axis] - edit::SQUARE[i][axis]);
+                    for (axis, value) in corner.iter().enumerate() {
+                        next.set(Control::corner(i, axis), value - edit::SQUARE[i][axis]);
                     }
                 }
                 session.refit_crop(&mut next, turns);

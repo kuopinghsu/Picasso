@@ -956,10 +956,10 @@ fn grading_section(ui: &mut egui::Ui, draft: &mut Draft) {
     let size = ((ui.available_width() - gap * 2.0) / 3.0).clamp(50.0, 86.0);
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = gap;
-        for zone in 0..3 {
+        for (zone, name) in ZONES.iter().enumerate().take(3) {
             ui.vertical(|ui| {
                 ui.set_width(size);
-                ui.label(RichText::new(tr(ZONES[zone])).size(11.0).color(theme::muted()));
+                ui.label(RichText::new(tr(name)).size(11.0).color(theme::muted()));
                 wheel(ui, draft, zone, size);
             });
         }
@@ -973,8 +973,8 @@ fn grading_section(ui: &mut egui::Ui, draft: &mut Draft) {
         });
     });
     subheading(ui, "Luminance");
-    for zone in 0..4 {
-        slider_labeled(ui, draft, Control::grade(zone, 2), Kind::Adjust, ZONES[zone], None);
+    for (zone, name) in ZONES.iter().enumerate() {
+        slider_labeled(ui, draft, Control::grade(zone, 2), Kind::Adjust, name, None);
     }
     slider(ui, draft, Control::GRADE_BLENDING, Kind::Adjust);
     slider(ui, draft, Control::GRADE_BALANCE, Kind::Adjust);

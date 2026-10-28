@@ -18,7 +18,7 @@ use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use super::{order_sql, path_text, read_photo, Database, PHOTO_COLS};
 use crate::i18n::tr;
 use crate::trip::{
-    capture_day, AddPreview, Capture, DaySuggestion, Review, TripZone, Block, DayAssignment, DayFilter, DaySource, MediaUse, Member, MemberQuery, Story, StoryBlock, Trip, TripDay,
+    capture_day, AddPreview, Capture, DaySuggestion, Review, TripZone, Block, DayAssignment, DayFilter, DaySource, MediaUse, Member, MemberQuery, Story, StoryBlock, StoryFilter, Trip, TripDay,
     TripDraft, TripImpact, TripQuery, TripTrack, DEFAULT_TEMPLATE,
 };
 use crate::types::{is_video_path, unix_now, Photo, Sort};
@@ -301,6 +301,13 @@ fn member_filter(query: &MemberQuery) -> String {
     }
     if query.unavailable {
         filter.push_str(" AND p.id IS NULL");
+    }
+    let used = "EXISTS (SELECT 1 FROM story_media sm JOIN story_blocks sb ON sb.id = sm.block_id \
+                JOIN stories s ON s.id = sb.story_id WHERE sm.media_id = tm.media_id AND s.trip_id = tm.trip_id";
+    match query.story {
+        StoryFilter::Any => {}
+        StoryFilter::AnyStory => filter.push_str(&format!(" AND {used})")),
+        StoryFilter::Story(id) => filter.push_str(&format!(" AND {used} AND s.id = {id})")),
     }
     filter
 }
@@ -1386,6 +1393,15 @@ mod tests {
         }])
         .unwrap();
         db.delete_photos(&[ids[3]]);
+        let first = db.create_story(trip_id, "First").unwrap();
+        let photo = |media: i64| StoryBlock::new(Block::Photo(MediaUse::new(media)));
+        db.save_story_blocks(first, 1, &[photo(refs[0]), StoryBlock::new(Block::Gallery(vec![MediaUse::new(refs[3])]))]).unwrap();
+        let second = db.create_story(trip_id, "Second").unwrap();
+        db.save_story_blocks(second, 1, &[photo(refs[2])]).unwrap();
+        let other_trip = trip(&db, "Other");
+        let elsewhere = db.create_story(other_trip, "").unwrap();
+        db.add_to_trip(other_trip, &ids[1..2]).unwrap();
+        db.save_story_blocks(elsewhere, 1, &[photo(refs[1])]).unwrap();
         let cases = [
             (MemberQuery::default(), vec![refs[0], refs[1], refs[2], refs[3]]),
             (MemberQuery { day: DayFilter::Day(day_id), ..MemberQuery::default() }, vec![refs[0], refs[1]]),
@@ -1394,6 +1410,9 @@ mod tests {
             (MemberQuery { no_location: true, ..MemberQuery::default() }, vec![refs[2]]),
             (MemberQuery { unavailable: true, ..MemberQuery::default() }, vec![refs[3]]),
             (MemberQuery { day: DayFilter::Day(day_id), starred: true, ..MemberQuery::default() }, vec![refs[1]]),
+            (MemberQuery { story: StoryFilter::AnyStory, ..MemberQuery::default() }, vec![refs[0], refs[2], refs[3]]),
+            (MemberQuery { story: StoryFilter::Story(first), ..MemberQuery::default() }, vec![refs[0], refs[3]]),
+            (MemberQuery { story: StoryFilter::Story(elsewhere), ..MemberQuery::default() }, vec![]),
         ];
         for (query, expected) in cases {
             let listed: Vec<i64> = db.trip_members(trip_id, &query, 0, 100).into_iter().map(|member| member.media_id).collect();

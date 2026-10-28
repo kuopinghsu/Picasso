@@ -71,6 +71,8 @@ A member's instant is decided in this order:
 
 Members Suggest days couldn't place are kept in **Needs review** with the reason, shown among the Days. Putting them in a Day, or in no Day, settles them; Undo brings the review back. Within a Day, photos keep the order the user gives them, whatever the grid's sort.
 
+The Trip's photos can be narrowed to the starred ones, those without a location, those no longer in the library, and those used by one of the Trip's Stories or by any of them, together with a Day. The grid, its count, and actions on it use the same query, and missing GPS never stops anything else.
+
 GPS tracks already in the library are linked to the Trip from its header, to the whole Trip or to one Day. The link keeps the track's path and name, not its points; while the file is gone it shows as unavailable and comes back when the library finds it.
 
 ## Story editor

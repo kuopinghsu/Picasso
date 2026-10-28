@@ -7,7 +7,7 @@ use chrono::{Local, NaiveDate, TimeZone};
 use eframe::egui::{self, Align, Layout, Margin, RichText, Vec2};
 
 use crate::i18n::{tr, trf};
-use crate::trip::{read_capture, TripQuery, AddPreview, DayFilter, DaySource, DaySuggestion, MemberQuery, Review, Trip, TripDay, TripDraft, TripImpact};
+use crate::trip::{read_capture, TripQuery, AddPreview, DayFilter, DaySource, DaySuggestion, MemberQuery, Review, Story, StoryFilter, Trip, TripDay, TripDraft, TripImpact};
 use crate::types::{format_day, Nav};
 
 use super::story::story_name;
@@ -351,8 +351,9 @@ impl PicassoApp {
         let mut filter = self.trip_filter;
         ui.horizontal_wrapped(|ui| {
             ui.label(RichText::new(tr("Show")).size(13.0).color(theme::muted()));
-            if ui.selectable_label(!filter.starred && !filter.no_location, tr("All")).clicked() {
-                filter = MemberQuery::default();
+            let everything = MemberQuery { day: filter.day, ..MemberQuery::default() };
+            if ui.selectable_label(filter == everything, tr("All")).clicked() {
+                filter = everything;
             }
             if ui.selectable_label(filter.starred, format!("★ {}", tr("Starred"))).clicked() {
                 filter.starred = !filter.starred;
@@ -360,6 +361,41 @@ impl PicassoApp {
             let no_location = ui.selectable_label(filter.no_location, tr("No location"));
             if no_location.on_hover_text(tr("Photos without GPS from the camera or a place set by hand")).clicked() {
                 filter.no_location = !filter.no_location;
+            }
+            let unavailable = ui.selectable_label(filter.unavailable, tr("Unavailable"));
+            if unavailable.on_hover_text(tr("Photos that are no longer in the library. They stay in the trip.")).clicked() {
+                filter.unavailable = !filter.unavailable;
+            }
+            let stories: Vec<Story> = self.db.stories(trip_id);
+            if let StoryFilter::Story(id) = filter.story {
+                if !stories.iter().any(|story| story.id == id) {
+                    filter.story = StoryFilter::Any;
+                }
+            }
+            if !stories.is_empty() {
+                let current = match filter.story {
+                    StoryFilter::Any => tr("In a story").to_string(),
+                    StoryFilter::AnyStory => tr("In any story").to_string(),
+                    StoryFilter::Story(id) => {
+                        let name = stories.iter().find(|story| story.id == id).map(story_name).unwrap_or_default();
+                        trf("In “{}”", &[&name])
+                    }
+                };
+                let chip = ui.selectable_label(filter.story != StoryFilter::Any, current);
+                egui::Popup::menu(&chip).show(|ui| {
+                    if ui.selectable_label(filter.story == StoryFilter::Any, tr("Any photo")).clicked() {
+                        filter.story = StoryFilter::Any;
+                    }
+                    if ui.selectable_label(filter.story == StoryFilter::AnyStory, tr("In any story")).clicked() {
+                        filter.story = StoryFilter::AnyStory;
+                    }
+                    ui.separator();
+                    for story in &stories {
+                        if ui.selectable_label(filter.story == StoryFilter::Story(story.id), story_name(story)).clicked() {
+                            filter.story = StoryFilter::Story(story.id);
+                        }
+                    }
+                });
             }
             if filter != MemberQuery::default() {
                 let shown = self.db.count_trip_members(trip_id, &filter);

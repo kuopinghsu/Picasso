@@ -298,6 +298,18 @@ pub struct MemberQuery {
     pub no_location: bool,
     /// Members whose photo is not in the library now.
     pub unavailable: bool,
+    pub story: StoryFilter,
+}
+
+/// Members used by the Trip's Stories.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum StoryFilter {
+    #[default]
+    Any,
+    /// Used by any of the Trip's Stories.
+    AnyStory,
+    /// Used by this Story.
+    Story(i64),
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

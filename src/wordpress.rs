@@ -442,9 +442,8 @@ impl Client<'_> {
         Ok(true)
     }
 
-    /// The status of post `id` as the site has it now, such as "draft" or
-    /// "publish", or `None` when the site has no such post.
-    pub fn post_status(&self, api: &Api, credentials: &Credentials, id: i64) -> Result<Option<String>, Failure> {
+    /// Post `id` as the site has it now, or `None` when the site has no such post.
+    pub fn post_state(&self, api: &Api, credentials: &Credentials, id: i64) -> Result<Option<PostState>, Failure> {
         let url = api.route(&format!("/wp/v2/posts/{id}"), "context=edit");
         let (_, reply) = self.get(&url, Some(credentials))?;
         if reply.status == 404 || reply.status == 410 {
@@ -452,14 +451,51 @@ impl Client<'_> {
         }
         checked(&reply)?;
         let post = reply.json().ok_or(Failure::BadReply)?;
-        Ok(post.get("status").and_then(Value::as_str).map(str::to_string))
+        let status = post.get("status").and_then(Value::as_str).unwrap_or_default().to_string();
+        Ok(Some(PostState { status, fingerprint: fingerprint(&post) }))
+    }
+
+    /// Every term of `taxonomy` on the site, by name. Reads only; terms are
+    /// never made here. Read a page at a time up to [`MAX_TERM_PAGES`].
+    pub fn terms(&self, api: &Api, credentials: &Credentials, taxonomy: Taxonomy) -> Result<Vec<Term>, Failure> {
+        let mut terms = Vec::new();
+        for page in 1..=MAX_TERM_PAGES {
+            let query = format!("per_page={TERMS_PER_PAGE}&page={page}&orderby=name&order=asc&_fields=id,name,parent");
+            let (_, reply) = self.get(&api.route(taxonomy.route(), &query), Some(credentials))?;
+            // A page past the last is an error on some versions, an empty list on others.
+            if page > 1 && reply.error_code().as_deref() == Some("rest_post_invalid_page_number") {
+                break;
+            }
+            checked(&reply)?;
+            let list = reply.json().and_then(|json| json.as_array().cloned()).ok_or(Failure::BadReply)?;
+            let count = list.len();
+            for term in list {
+                let id = term.get("id").and_then(Value::as_i64).ok_or(Failure::BadReply)?;
+                let name = term.get("name").and_then(Value::as_str).unwrap_or_default();
+                terms.push(Term { id, name: decode_entities(name), parent: term.get("parent").and_then(Value::as_i64).unwrap_or(0) });
+            }
+            let pages = reply.header("x-wp-totalpages").next().and_then(|n| n.trim().parse::<u32>().ok());
+            if count < TERMS_PER_PAGE as usize || pages.is_some_and(|pages| page >= pages) {
+                break;
+            }
+        }
+        Ok(terms)
     }
 
     /// Creates a draft with `title`, `content`, and `featured` media, or,
     /// with `id`, changes those of that post and leaves its status as it is.
-    /// Returns the post's id.
-    pub fn save_draft(&self, api: &Api, credentials: &Credentials, id: Option<i64>, title: &str, content: &str, featured: Option<i64>) -> Result<i64, Failure> {
+    /// `terms` sets its categories and tags, each only when given, so the
+    /// post keeps the ones it has on the site otherwise. Returns the post as
+    /// the site keeps it.
+    pub fn save_draft(&self, api: &Api, credentials: &Credentials, id: Option<i64>, post: &DraftPost) -> Result<PostSaved, Failure> {
+        let DraftPost { title, content, featured, categories, tags } = post;
         let mut body = serde_json::json!({ "title": title, "content": content, "featured_media": featured.unwrap_or(0) });
+        if let Some(categories) = categories {
+            body["categories"] = Value::from(categories.clone());
+        }
+        if let Some(tags) = tags {
+            body["tags"] = Value::from(tags.clone());
+        }
         let route = match id {
             Some(id) => format!("/wp/v2/posts/{id}"),
             None => {
@@ -471,9 +507,70 @@ impl Client<'_> {
         let bytes = serde_json::to_vec(&body).map_err(|_| Failure::BadReply)?;
         let reply = self.post(&url, credentials, vec![("Content-Type", "application/json".to_string())], &bytes)?;
         checked(&reply)?;
-        reply.json().and_then(|post| post.get("id").and_then(Value::as_i64)).ok_or(Failure::BadReply)
+        let post = reply.json().ok_or(Failure::BadReply)?;
+        let id = post.get("id").and_then(Value::as_i64).ok_or(Failure::BadReply)?;
+        Ok(PostSaved { id, fingerprint: fingerprint(&post) })
     }
 }
+
+/// A post as the site has it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PostState {
+    /// Such as "draft" or "publish".
+    pub status: String,
+    /// See [`fingerprint`].
+    pub fingerprint: String,
+}
+
+/// A post the site confirmed saving.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PostSaved {
+    pub id: i64,
+    /// See [`fingerprint`].
+    pub fingerprint: String,
+}
+
+/// What a post is saved with.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct DraftPost {
+    pub title: String,
+    pub content: String,
+    pub featured: Option<i64>,
+    /// Term ids; `None` leaves the post's own on the site as they are.
+    pub categories: Option<Vec<i64>>,
+    pub tags: Option<Vec<i64>>,
+}
+
+/// The two kinds of term a post is filed under.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Taxonomy {
+    Categories,
+    Tags,
+}
+
+impl Taxonomy {
+    fn route(self) -> &'static str {
+        match self {
+            Taxonomy::Categories => "/wp/v2/categories",
+            Taxonomy::Tags => "/wp/v2/tags",
+        }
+    }
+}
+
+/// A category or tag on the site.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Term {
+    pub id: i64,
+    pub name: String,
+    /// The parent category's id, 0 for none and for tags.
+    pub parent: i64,
+}
+
+/// Terms asked for at once, the most WordPress gives in one page.
+const TERMS_PER_PAGE: u32 = 100;
+/// Pages of terms read at most, so a site with very many tags can't keep
+/// the dialog waiting: 5000 of each.
+const MAX_TERM_PAGES: u32 = 50;
 
 /// An upload in the site's media library.
 #[derive(Clone, Debug, PartialEq)]
@@ -492,6 +589,17 @@ fn media_of(json: &Value) -> Result<Media, Failure> {
 
 /// The address of post `id` in the site's editor, which needs the person
 /// signed in, as a draft's own address may not show it.
+/// A digest of what Picasso writes in a post, as the site keeps it: its
+/// title, content and featured photo. Kept after a save and compared before
+/// the next, it tells whether the post was edited on the site in between;
+/// its status, terms and the rest are left out, as Picasso leaves them alone.
+fn fingerprint(post: &Value) -> String {
+    let raw = |field: &str| post.get(field).and_then(|value| value.get("raw").or(Some(value))).and_then(Value::as_str).unwrap_or_default().to_string();
+    let featured = post.get("featured_media").and_then(Value::as_i64).unwrap_or(0);
+    let managed = serde_json::json!([raw("title"), raw("content"), featured]);
+    crate::upload::hash(managed.to_string().as_bytes())
+}
+
 pub fn edit_link(api: &Api, id: i64) -> String {
     let base = api.site.path.split('?').next().unwrap_or("/");
     let dir = if base.ends_with('/') { base.to_string() } else { format!("{base}/") };
@@ -693,6 +801,10 @@ pub(crate) mod tests {
         }
     }
 
+    fn draft(title: &str, content: &str, featured: Option<i64>) -> DraftPost {
+        DraftPost { title: title.into(), content: content.into(), featured, ..DraftPost::default() }
+    }
+
     const INDEX: &str = r#"{"name":"Travels","namespaces":["oembed/1.0","wp/v2"]}"#;
 
     #[test]
@@ -839,8 +951,8 @@ pub(crate) mod tests {
         let fake = Fake::default()
             .answer_to("POST", "https://example.com/blog/wp-json/wp/v2/media", 201, &[], r#"{"id":41,"source_url":"https://example.com/blog/wp-content/uploads/a.jpg"}"#)
             .answer_to("POST", "https://example.com/blog/wp-json/wp/v2/posts", 201, &[], r#"{"id":7,"status":"draft"}"#)
-            .answer_to("POST", "https://example.com/blog/wp-json/wp/v2/posts/7", 200, &[], r#"{"id":7,"status":"draft"}"#)
-            .answer("https://example.com/blog/wp-json/wp/v2/posts/7?context=edit", 200, &[], r#"{"id":7,"status":"draft"}"#)
+            .answer_to("POST", "https://example.com/blog/wp-json/wp/v2/posts/7", 200, &[], r#"{"id":7,"status":"draft","title":{"raw":"Spain"},"content":{"raw":"<p>y</p>"}}"#)
+            .answer("https://example.com/blog/wp-json/wp/v2/posts/7?context=edit", 200, &[], r#"{"id":7,"status":"draft","title":{"raw":"Spain","rendered":"Spain"},"content":{"raw":"<p>y</p>"},"featured_media":0}"#)
             .answer("https://example.com/blog/wp-json/wp/v2/media/41?context=edit", 200, &[], r#"{"id":41}"#);
         let client = Client::new(&fake, Policy::default());
         let media = client.upload_media(&api, &credentials, b"jpeg", "picasso-ab12.jpg").unwrap();
@@ -848,10 +960,13 @@ pub(crate) mod tests {
         assert!(client.media_exists(&api, &credentials, 41).unwrap());
         assert!(!client.media_exists(&api, &credentials, 42).unwrap(), "a 404 is a removed upload");
 
-        assert_eq!(client.save_draft(&api, &credentials, None, "Spain", "<p>x</p>", Some(41)).unwrap(), 7);
-        assert_eq!(client.post_status(&api, &credentials, 7).unwrap().as_deref(), Some("draft"));
-        assert_eq!(client.post_status(&api, &credentials, 8).unwrap(), None);
-        assert_eq!(client.save_draft(&api, &credentials, Some(7), "Spain", "<p>y</p>", None).unwrap(), 7);
+        assert_eq!(client.save_draft(&api, &credentials, None, &draft("Spain", "<p>x</p>", Some(41))).unwrap().id, 7);
+        assert_eq!(client.post_state(&api, &credentials, 8).unwrap(), None);
+        let saved = client.save_draft(&api, &credentials, Some(7), &draft("Spain", "<p>y</p>", None)).unwrap();
+        let found = client.post_state(&api, &credentials, 7).unwrap().unwrap();
+        assert_eq!(found, PostState { status: "draft".into(), fingerprint: saved.fingerprint.clone() }, "unchanged since the save");
+        let edited = Fake::default().answer("https://example.com/blog/wp-json/wp/v2/posts/7?context=edit", 200, &[], r#"{"status":"draft","title":{"raw":"Spain"},"content":{"raw":"<p>edited</p>"}}"#);
+        assert_ne!(Client::new(&edited, Policy::default()).post_state(&api, &credentials, 7).unwrap().unwrap().fingerprint, saved.fingerprint, "edited on the site");
 
         let bodies = fake.bodies.borrow();
         let json = |index: usize| serde_json::from_slice::<Value>(&bodies[index].1).unwrap();
@@ -860,7 +975,41 @@ pub(crate) mod tests {
         assert_eq!(json(1)["featured_media"], 41);
         assert!(json(2).get("status").is_none(), "an update leaves the status alone");
         assert_eq!(json(2)["featured_media"], 0);
+        assert!(json(2).get("categories").is_none() && json(2).get("tags").is_none(), "terms not chosen are left as they are");
         assert_eq!(edit_link(&api, 7), "https://example.com/blog/wp-admin/post.php?post=7&action=edit");
+    }
+
+    #[test]
+    fn categories_and_tags_are_read_page_by_page_and_sent_only_when_chosen() {
+        let api = local_api();
+        let credentials = Credentials { user: "ana".into(), password: "abcd efgh".into() };
+        let page = |taxonomy: &str, n: u32| format!("https://example.com/blog/wp-json/wp/v2/{taxonomy}?per_page=100&page={n}&orderby=name&order=asc&_fields=id,name,parent");
+        let many: Vec<String> = (1..=100).map(|id| format!(r#"{{"id":{id},"name":"Tag {id}","parent":0}}"#)).collect();
+        let first = format!("[{}]", many.join(","));
+        let fake = Fake::default()
+            .answer(&page("categories", 1), 200, &[("x-wp-totalpages", "1")], r#"[{"id":2,"name":"Europe","parent":0},{"id":5,"name":"Food &amp; Wine","parent":2}]"#)
+            .answer(&page("tags", 1), 200, &[("x-wp-totalpages", "2")], &first)
+            .answer(&page("tags", 2), 200, &[("x-wp-totalpages", "2")], r#"[{"id":101,"name":"Alhambra"}]"#)
+            .answer_to("POST", "https://example.com/blog/wp-json/wp/v2/posts", 201, &[], r#"{"id":7}"#);
+        let client = Client::new(&fake, Policy::default());
+        let categories = client.terms(&api, &credentials, Taxonomy::Categories).unwrap();
+        assert_eq!(categories[1], Term { id: 5, name: "Food & Wine".into(), parent: 2 });
+        let tags = client.terms(&api, &credentials, Taxonomy::Tags).unwrap();
+        assert_eq!(tags.len(), 101, "every page is read");
+        assert_eq!(tags[100].name, "Alhambra");
+        assert!(fake.asked.borrow().iter().all(|(_, auth)| auth.is_some()));
+
+        let post = DraftPost { categories: Some(vec![5]), tags: Some(vec![101, 3]), ..draft("Spain", "c", None) };
+        client.save_draft(&api, &credentials, None, &post).unwrap();
+        let bodies = fake.bodies.borrow();
+        let sent: Value = serde_json::from_slice(&bodies[0].1).unwrap();
+        assert_eq!(sent["categories"], serde_json::json!([5]));
+        assert_eq!(sent["tags"], serde_json::json!([101, 3]));
+        // Reading terms never writes: the only change sent was the post.
+        assert_eq!(bodies.len(), 1);
+
+        let missing = Fake::default();
+        assert!(Client::new(&missing, Policy::default()).terms(&api, &credentials, Taxonomy::Tags).is_err());
     }
 
     #[test]
@@ -868,7 +1017,7 @@ pub(crate) mod tests {
         let api = local_api();
         let credentials = Credentials { user: "ana".into(), password: "abcd efgh".into() };
         let fake = Fake::default().answer_to("POST", "https://example.com/blog/wp-json/wp/v2/posts", 301, &[("location", "https://example.com/new/")], "");
-        let result = Client::new(&fake, Policy::default()).save_draft(&api, &credentials, None, "t", "c", None);
+        let result = Client::new(&fake, Policy::default()).save_draft(&api, &credentials, None, &draft("t", "c", None));
         assert_eq!(result, Err(Failure::Status(301)));
         assert_eq!(fake.asked.borrow().len(), 1);
     }

@@ -53,10 +53,24 @@ CREATE TABLE IF NOT EXISTS publications (
     UNIQUE (site_id, post_id)
 );
 CREATE INDEX IF NOT EXISTS idx_publications_story ON publications(story_id);
+-- The site's categories and tags chosen for a Story's post, with their names
+-- as the site gave them. None chosen leaves the post's own as they are.
+CREATE TABLE IF NOT EXISTS publication_terms (
+    story_id INTEGER NOT NULL,
+    site_id INTEGER NOT NULL,
+    taxonomy TEXT NOT NULL,
+    term_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    PRIMARY KEY (story_id, site_id, taxonomy, term_id)
+);
 ";
 
 pub(super) fn upgrade(db: &Database) -> Result<(), String> {
-    db.conn.execute_batch(TABLES).map_err(|err| err.to_string())
+    db.conn.execute_batch(TABLES).map_err(|err| err.to_string())?;
+    // What Picasso wrote in the post as the site kept it, and whether it was
+    // found edited there since.
+    db.ensure_column("publications", "fingerprint", "TEXT NOT NULL DEFAULT ''")?;
+    db.ensure_column("publications", "changed_on_site", "INTEGER NOT NULL DEFAULT 0")
 }
 
 /// A connected site, as the library keeps it.
@@ -171,6 +185,17 @@ impl Database {
     }
 }
 
+/// How `publication_terms` names the two taxonomies, as WordPress does.
+const CATEGORY: &str = "category";
+const TAG: &str = "post_tag";
+
+/// The categories and tags chosen for a post, each as (term id, name).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PostTerms {
+    pub categories: Vec<(i64, String)>,
+    pub tags: Vec<(i64, String)>,
+}
+
 /// A Story's post on a site, as last saved there.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Publication {
@@ -184,6 +209,11 @@ pub struct Publication {
     /// The Story revision it was made from.
     pub revision: i64,
     pub synced_at: i64,
+    /// What Picasso wrote in the post as the site kept it after the last
+    /// save (`wordpress::fingerprint`); empty for one saved before it was kept.
+    pub fingerprint: String,
+    /// The post was found edited on the site since that save.
+    pub changed_on_site: bool,
 }
 
 impl Database {
@@ -219,7 +249,7 @@ impl Database {
     pub fn publication(&self, story_id: i64, site_id: i64) -> Option<Publication> {
         self.conn
             .query_row(
-                "SELECT story_id, site_id, post_id, remote_status, size, revision, synced_at FROM publications
+                "SELECT story_id, site_id, post_id, remote_status, size, revision, synced_at, fingerprint, changed_on_site FROM publications
                  WHERE story_id = ?1 AND site_id = ?2 AND output_key = 'main' AND edition = 1",
                 params![story_id, site_id],
                 |row| {
@@ -231,6 +261,8 @@ impl Database {
                         size: row.get(4)?,
                         revision: row.get(5)?,
                         synced_at: row.get(6)?,
+                        fingerprint: row.get(7)?,
+                        changed_on_site: row.get(8)?,
                     })
                 },
             )
@@ -247,14 +279,51 @@ impl Database {
             .map_err(|err| err.to_string())
     }
 
+    /// The categories and tags chosen for the Story's post on the site.
+    pub fn post_terms(&self, story_id: i64, site_id: i64) -> PostTerms {
+        let mut terms = PostTerms::default();
+        let Ok(mut statement) = self.conn.prepare(
+            "SELECT taxonomy, term_id, name FROM publication_terms WHERE story_id = ?1 AND site_id = ?2 ORDER BY name COLLATE NOCASE, term_id",
+        ) else {
+            return terms;
+        };
+        let rows = statement.query_map(params![story_id, site_id], |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?, row.get::<_, String>(2)?)));
+        for (taxonomy, id, name) in rows.into_iter().flatten().flatten() {
+            match taxonomy.as_str() {
+                CATEGORY => terms.categories.push((id, name)),
+                TAG => terms.tags.push((id, name)),
+                _ => {}
+            }
+        }
+        terms
+    }
+
+    /// Replaces the categories and tags chosen for the Story's post on the site.
+    pub fn save_post_terms(&self, story_id: i64, site_id: i64, terms: &PostTerms) -> Result<(), String> {
+        let tx = self.conn.unchecked_transaction().map_err(|err| err.to_string())?;
+        tx.execute("DELETE FROM publication_terms WHERE story_id = ?1 AND site_id = ?2", params![story_id, site_id]).map_err(|err| err.to_string())?;
+        for (taxonomy, list) in [(CATEGORY, &terms.categories), (TAG, &terms.tags)] {
+            for (id, name) in list {
+                tx.execute(
+                    "INSERT OR REPLACE INTO publication_terms(story_id, site_id, taxonomy, term_id, name) VALUES (?1, ?2, ?3, ?4, ?5)",
+                    params![story_id, site_id, taxonomy, id, name],
+                )
+                .map_err(|err| err.to_string())?;
+            }
+        }
+        tx.commit().map_err(|err| err.to_string())
+    }
+
     /// Records the main post of a Story on a site, the moment the site confirmed it.
     pub fn save_publication(&self, publication: &Publication) -> Result<(), String> {
         self.conn
             .execute(
-                "INSERT INTO publications(story_id, site_id, post_id, remote_status, size, revision, synced_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                "INSERT INTO publications(story_id, site_id, post_id, remote_status, size, revision, synced_at, fingerprint, changed_on_site)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
                  ON CONFLICT (story_id, site_id, output_key, edition) DO UPDATE SET
                  post_id = excluded.post_id, remote_status = excluded.remote_status, size = excluded.size,
-                 revision = excluded.revision, synced_at = excluded.synced_at",
+                 revision = excluded.revision, synced_at = excluded.synced_at,
+                 fingerprint = excluded.fingerprint, changed_on_site = excluded.changed_on_site",
                 params![
                     publication.story_id,
                     publication.site_id,
@@ -262,7 +331,9 @@ impl Database {
                     publication.remote_status,
                     publication.size,
                     publication.revision,
-                    publication.synced_at
+                    publication.synced_at,
+                    publication.fingerprint,
+                    publication.changed_on_site
                 ],
             )
             .map(|_| ())
@@ -333,14 +404,26 @@ mod tests {
         db.forget_upload(site_id, "abc").unwrap();
         assert!(db.uploads(site_id).is_empty());
 
-        let mut publication = Publication { story_id: 3, site_id, post_id: 7, remote_status: "draft".into(), size: "standard".into(), revision: 4, synced_at: 100 };
+        let mut publication = Publication { story_id: 3, site_id, post_id: 7, remote_status: "draft".into(), size: "standard".into(), revision: 4, synced_at: 100, fingerprint: "ab".into(), changed_on_site: false };
         db.save_publication(&publication).unwrap();
         publication.revision = 5;
+        publication.changed_on_site = true;
         db.save_publication(&publication).unwrap();
         assert_eq!(db.publication(3, site_id), Some(publication.clone()));
         assert_eq!(db.publication(3, site_id + 1), None);
         // Another Story can't claim the same post.
         assert!(db.save_publication(&Publication { story_id: 4, ..publication }).is_err());
+
+        // Its categories and tags, kept per Story and site and replaced as a whole.
+        assert_eq!(db.post_terms(3, site_id), PostTerms::default());
+        let terms = PostTerms { categories: vec![(5, "Spain".into()), (2, "Europe".into())], tags: vec![(9, "Alhambra".into())] };
+        db.save_post_terms(3, site_id, &terms).unwrap();
+        let read = db.post_terms(3, site_id);
+        assert_eq!(read.categories, [(2, "Europe".to_string()), (5, "Spain".to_string())], "by name");
+        assert_eq!(read.tags, terms.tags);
+        assert_eq!(db.post_terms(4, site_id), PostTerms::default());
+        db.save_post_terms(3, site_id, &PostTerms { categories: vec![(2, "Europe".into())], tags: Vec::new() }).unwrap();
+        assert_eq!(db.post_terms(3, site_id).tags, []);
 
         // Disconnecting the site keeps what is known to be on it.
         db.delete_site(site_id).unwrap();

@@ -42,7 +42,8 @@ Picasso also reads the `.picasa.ini` files Picasa left in photo folders, for sta
 | `trip_tracks` | GPS track linked to a Trip | `track_id` while the track is in the library; the path and name stay when it goes. |
 | `publish_sites` | WordPress site connected in Settings → Publishing | Its label, address, API root, user name, the account's display name, whether it may upload, edit posts, and publish, and when it was last checked. The Application Password is never here: `secret_ref` names where it is kept in the system's credential store. One row per site address and user name. |
 | `publish_media` | Photo uploaded to a site | The site, the SHA-256 of the uploaded bytes, the upload size, and the media ID and URL WordPress gave it, so the same bytes are not sent twice. A row is removed when the site no longer has the upload. |
-| `publications` | A Story saved to a site | The Story, the site, the post ID, the status last seen there, the upload size, the Story revision sent, and when. One post per Story and site; kept when a site is disconnected. |
+| `publications` | A Story saved to a site | The Story, the site, the post ID, the status last seen there, the upload size, the Story revision sent, and when; a digest of the title, content and featured image as the site kept them after the save, and whether the post was since found edited there. One post per Story and site; kept when a site is disconnected. |
+| `publication_terms` | The categories and tags chosen for a Story's post on a site | The Story, the site, the taxonomy (`category` or `post_tag`), the term ID, and its name as the site gave it. None of a kind leaves the post's own as they are. |
 | `stories`, `story_blocks`, `story_media` | Story, its blocks, and the photos in them | `revision` goes up with each save, so a stale editor can't overwrite; `finished` is 0 while it is a draft. `introduction` and `conclusion` are optional text before and after the blocks, empty for none. Each block has a `uid` that stays through saves, a `kind`, and a JSON `payload` in the layout of its `version`; a block from a newer Picasso is kept unchanged. Each photo in a block has its own caption and alt text. |
 
 Indexes cover the orders and lookups the window uses: by folder, by date taken and name (the default order), by name, by size (duplicates), by star, and album membership.
@@ -55,7 +56,7 @@ Indexes cover the orders and lookups the window uses: by folder, by date taken a
 | --- | --- | --- |
 | 0 | up to 0.9.4 | Libraries made before the version was kept. They are recognized by their tables and columns and upgraded in place. |
 | 1 | 0.9.5 | The version is kept. |
-| 2 | 0.9.6 | Trips and Stories: `media_refs`, `trips`, `trip_days`, `trip_media`, `trip_tracks`, `stories`, `story_blocks`, `story_media` ([TRAVEL.md](TRAVEL.md)); WordPress: `publish_sites`, `publish_media`, `publications`. |
+| 2 | 0.9.6 | Trips and Stories: `media_refs`, `trips`, `trip_days`, `trip_media`, `trip_tracks`, `stories`, `story_blocks`, `story_media` ([TRAVEL.md](TRAVEL.md)); WordPress: `publish_sites`, `publish_media`, `publications`, `publication_terms`. |
 
 ## How a library is upgraded
 

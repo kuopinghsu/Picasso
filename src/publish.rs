@@ -15,7 +15,7 @@ use crate::gutenberg::{self, RouteMap, Unsupported, Uploaded};
 use crate::story_html::{MapTiles, Progress, Source};
 use crate::trip::{Block, Story, StoryBlock};
 use crate::upload::{self, UploadSize};
-use crate::wordpress::{edit_link, Api, Client, Credentials, Failure, Http, Policy};
+use crate::wordpress::{edit_link, DraftPost, Api, Client, Credentials, Failure, Http, Policy};
 
 /// Everything the job needs, read on the UI thread before it starts.
 pub struct Job {
@@ -33,6 +33,11 @@ pub struct Job {
     pub uploads: HashMap<String, (i64, String)>,
     /// The Story's earlier draft on this site.
     pub post_id: Option<i64>,
+    /// What Picasso writes in that post as the site had it after the last
+    /// save (`wordpress::fingerprint`); empty when not known.
+    pub fingerprint: String,
+    /// The person chose to replace edits made to the post on the site since.
+    pub overwrite: bool,
     /// Tiles for the route maps; without them a route is drawn on its own.
     pub map: Option<MapTiles>,
     /// Each Route block's elevation by its uid, drawn in its map's corner.
@@ -40,6 +45,9 @@ pub struct Job {
     /// The person chose to change the earlier post even though it is no
     /// longer a draft; its status on the site stays as it is.
     pub update_published: bool,
+    /// The site's categories and tags chosen for the post; none chosen of
+    /// either leaves the post's own on the site as they are.
+    pub terms: crate::db::PostTerms,
 }
 
 /// What the job learns that the library should keep at once.
@@ -61,6 +69,8 @@ pub struct Saved {
     pub reused: usize,
     /// The post's status on the site: "draft", or the status it kept.
     pub status: String,
+    /// What Picasso wrote, as the site keeps it, to compare before the next save.
+    pub fingerprint: String,
 }
 
 /// Why the draft wasn't saved. `uploaded` counts the photos that did reach
@@ -79,6 +89,9 @@ pub enum Stopped {
     NotDraft(String),
     /// The earlier post is gone from the site.
     PostGone,
+    /// The earlier post was edited on the site since it was saved, and
+    /// replacing those edits wasn't chosen; nothing was sent.
+    ChangedOnSite,
 }
 
 /// A finished job, for the library: which Story and site, in which size,
@@ -98,15 +111,22 @@ pub fn run(http: &dyn Http, job: &Job, progress: &Progress, report: &mut dyn FnM
     let mut uploaded = 0;
     let mut reused = 0;
     let site = |failure: Failure, uploaded: usize| Stopped::Site { failure, uploaded };
-    // A post published since is changed only when that was chosen, and is
-    // checked before anything is sent.
+    // A post published or edited on the site since is changed only when
+    // that was chosen, and is checked before anything is sent. The site
+    // has no conditional write, so an edit in the moments between this
+    // check and the save can still be replaced.
     let mut status = "draft".to_string();
     if let Some(id) = job.post_id {
-        match client.post_status(&job.api, &job.credentials, id).map_err(|failure| site(failure, 0))? {
-            None => return Err(Stopped::PostGone),
-            Some(found) if found == "trash" || (found != "draft" && !job.update_published) => return Err(Stopped::NotDraft(found)),
-            Some(found) => status = found,
+        let Some(found) = client.post_state(&job.api, &job.credentials, id).map_err(|failure| site(failure, 0))? else {
+            return Err(Stopped::PostGone);
+        };
+        if found.status == "trash" || (found.status != "draft" && !job.update_published) {
+            return Err(Stopped::NotDraft(found.status));
         }
+        if !job.fingerprint.is_empty() && found.fingerprint != job.fingerprint && !job.overwrite {
+            return Err(Stopped::ChangedOnSite);
+        }
+        status = found.status;
     }
     let mut order: Vec<i64> = job.sources.keys().copied().collect();
     order.sort_unstable();
@@ -157,11 +177,17 @@ pub fn run(http: &dyn Http, job: &Job, progress: &Progress, report: &mut dyn FnM
     }
     let post = gutenberg::post(&job.story, &job.blocks, &|id| media.get(&id).cloned(), &|uid| maps.get(uid).cloned()).map_err(Stopped::Unsupported)?;
     // A Story without a title makes a post WordPress shows as "(no title)".
-    let post_id = client
-        .save_draft(&job.api, &job.credentials, job.post_id, &post.title, &post.content, post.featured)
+    let saved = client
+        .save_draft(&job.api, &job.credentials, job.post_id, &draft_post(post, &job.terms))
         .map_err(|failure| site(failure, uploaded))?;
     progress.done.fetch_add(1, Ordering::Relaxed);
-    Ok(Saved { post_id, edit_link: edit_link(&job.api, post_id), uploaded, reused, status })
+    Ok(Saved { post_id: saved.id, edit_link: edit_link(&job.api, saved.id), uploaded, reused, status, fingerprint: saved.fingerprint })
+}
+
+/// The post as WordPress takes it, with the chosen terms.
+fn draft_post(post: gutenberg::Post, terms: &crate::db::PostTerms) -> DraftPost {
+    let ids = |list: &[(i64, String)]| (!list.is_empty()).then(|| list.iter().map(|(id, _)| *id).collect());
+    DraftPost { title: post.title, content: post.content, featured: post.featured, categories: ids(&terms.categories), tags: ids(&terms.tags) }
 }
 
 /// A confirmed upload of these bytes that is still on the site, or the
@@ -229,9 +255,12 @@ mod tests {
             exif: true,
             uploads,
             post_id,
+            fingerprint: String::new(),
+            overwrite: false,
             map: None,
             profiles: HashMap::new(),
             update_published: false,
+            terms: crate::db::PostTerms::default(),
         }
     }
 
@@ -255,6 +284,18 @@ mod tests {
         assert_eq!(post["status"], "draft");
         assert_eq!(post["featured_media"], 41);
         assert!(post["content"].as_str().unwrap().contains("wp-image-41"));
+        assert!(post.get("categories").is_none() && post.get("tags").is_none(), "none chosen, none sent");
+        drop(bodies);
+
+        // Chosen categories go with the post; tags left unchosen aren't sent.
+        let chosen = Job { terms: crate::db::PostTerms { categories: vec![(5, "Spain".into())], tags: Vec::new() }, ..job };
+        let fake = Fake::default()
+            .answer_to("POST", MEDIA, 201, &[], r#"{"id":41,"source_url":"https://example.com/blog/a.jpg"}"#)
+            .answer_to("POST", POSTS, 201, &[], r#"{"id":8}"#);
+        run(&fake, &chosen, &Progress::default(), &mut |_| {}).unwrap();
+        let post: serde_json::Value = serde_json::from_slice(&fake.bodies.borrow().last().unwrap().1).unwrap();
+        assert_eq!(post["categories"], serde_json::json!([5]));
+        assert!(post.get("tags").is_none());
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -321,6 +362,31 @@ mod tests {
         assert_eq!(run(&trashed, &chosen, &Progress::default(), &mut |_| {}), Err(Stopped::NotDraft("trash".into())), "a trashed post is never changed");
         let gone = Fake::default();
         assert_eq!(run(&gone, &job(&dir, Some(7), HashMap::new()), &Progress::default(), &mut |_| {}), Err(Stopped::PostGone));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_post_edited_on_the_site_is_left_alone_unless_replacing_was_chosen() {
+        let dir = temp_dir("edited");
+        let saved = r#"{"id":7,"status":"draft","title":{"raw":"Spain"},"content":{"raw":"<p>ours</p>"}}"#;
+        let edited = r#"{"id":7,"status":"draft","title":{"raw":"Spain"},"content":{"raw":"<p>theirs</p>"}}"#;
+        let fake = Fake::default()
+            .answer_to("POST", &format!("{POSTS}/7"), 200, &[], saved)
+            .answer_to("POST", MEDIA, 201, &[], r#"{"id":41,"source_url":"https://example.com/blog/a.jpg"}"#)
+            .answer(&format!("{POSTS}/7?context=edit"), 200, &[], saved);
+        let first = run(&fake, &job(&dir, Some(7), HashMap::new()), &Progress::default(), &mut |_| {}).unwrap();
+        let mut again = job(&dir, Some(7), HashMap::new());
+        again.fingerprint = first.fingerprint.clone();
+        assert!(run(&fake, &again, &Progress::default(), &mut |_| {}).is_ok(), "unchanged since: saved again");
+
+        let changed = Fake::default().answer(&format!("{POSTS}/7?context=edit"), 200, &[], edited);
+        assert_eq!(run(&changed, &again, &Progress::default(), &mut |_| {}), Err(Stopped::ChangedOnSite));
+        assert!(changed.bodies.borrow().is_empty(), "nothing was sent");
+        let replacing = changed
+            .answer_to("POST", MEDIA, 201, &[], r#"{"id":41,"source_url":"https://example.com/blog/a.jpg"}"#)
+            .answer_to("POST", &format!("{POSTS}/7"), 200, &[], saved);
+        again.overwrite = true;
+        assert_eq!(run(&replacing, &again, &Progress::default(), &mut |_| {}).unwrap().fingerprint, first.fingerprint);
         let _ = std::fs::remove_dir_all(dir);
     }
 

@@ -29,11 +29,12 @@ enum Page {
     FileTypes,
     Map,
     Tracks,
+    Publishing,
     Storage,
 }
 
 impl Page {
-    const ALL: [Page; 6] = [Page::General, Page::Folders, Page::FileTypes, Page::Map, Page::Tracks, Page::Storage];
+    const ALL: [Page; 7] = [Page::General, Page::Folders, Page::FileTypes, Page::Map, Page::Tracks, Page::Publishing, Page::Storage];
 
     fn label(self) -> &'static str {
         match self {
@@ -42,6 +43,7 @@ impl Page {
             Page::FileTypes => "File types",
             Page::Map => "Map",
             Page::Tracks => "GPS tracks",
+            Page::Publishing => "Publishing",
             Page::Storage => "Storage",
         }
     }
@@ -122,6 +124,8 @@ pub(super) struct SettingsState {
     /// Track cleanup settings on the GPS tracks page, read again each time
     /// the dialog opens.
     tracks: Option<crate::track_edit::Settings>,
+    /// The Publishing page's sites being connected or checked.
+    pub(super) publishing: super::publishing::PublishingState,
 }
 
 struct RestoreAsk {
@@ -278,6 +282,7 @@ impl PicassoApp {
                             Page::FileTypes => self.file_types_page(ui),
                             Page::Map => self.map_page(ui),
                             Page::Tracks => self.tracks_page(ui),
+                            Page::Publishing => self.publishing_page(ui),
                             Page::Storage => self.storage_page(ui),
                         }
                     });
@@ -770,13 +775,13 @@ fn nav_item(ui: &mut egui::Ui, label: &str, selected: bool) -> egui::Response {
 }
 
 /// Section title, with room above it unless it opens the page.
-fn heading(ui: &mut egui::Ui, title: &str) {
+pub(super) fn heading(ui: &mut egui::Ui, title: &str) {
     let first = ui.min_rect().height() < 1.0;
     ui.add_space(if first { 0.0 } else { 12.0 });
     ui.label(RichText::new(title).size(14.5).strong().color(theme::text()));
 }
 
-fn note(ui: &mut egui::Ui, text: &str) {
+pub(super) fn note(ui: &mut egui::Ui, text: &str) {
     ui.add(egui::Label::new(RichText::new(text).size(12.5).color(theme::muted())).wrap());
 }
 

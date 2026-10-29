@@ -24,6 +24,35 @@ CREATE TABLE IF NOT EXISTS publish_sites (
     created_at INTEGER NOT NULL,
     UNIQUE (site_url, user)
 );
+-- Photos uploaded to a site, by the SHA-256 of the bytes sent, so a retry
+-- or another Story reuses a confirmed upload. Kept when the site or Story
+-- goes: the uploads stay on the site.
+CREATE TABLE IF NOT EXISTS publish_media (
+    site_id INTEGER NOT NULL,
+    hash TEXT NOT NULL,
+    size TEXT NOT NULL,
+    media_id INTEGER NOT NULL,
+    url TEXT NOT NULL,
+    uploaded_at INTEGER NOT NULL,
+    PRIMARY KEY (site_id, hash)
+);
+-- A Story's post on a site. `output_key` and `edition` leave room for
+-- more posts per Story; there is one main post, edition 1, for now.
+CREATE TABLE IF NOT EXISTS publications (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    story_id INTEGER NOT NULL,
+    site_id INTEGER NOT NULL,
+    output_key TEXT NOT NULL DEFAULT 'main',
+    edition INTEGER NOT NULL DEFAULT 1,
+    post_id INTEGER NOT NULL,
+    remote_status TEXT NOT NULL DEFAULT '',
+    size TEXT NOT NULL,
+    revision INTEGER NOT NULL,
+    synced_at INTEGER NOT NULL,
+    UNIQUE (story_id, site_id, output_key, edition),
+    UNIQUE (site_id, post_id)
+);
+CREATE INDEX IF NOT EXISTS idx_publications_story ON publications(story_id);
 ";
 
 pub(super) fn upgrade(db: &Database) -> Result<(), String> {
@@ -142,6 +171,105 @@ impl Database {
     }
 }
 
+/// A Story's post on a site, as last saved there.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Publication {
+    pub story_id: i64,
+    pub site_id: i64,
+    pub post_id: i64,
+    /// The status the site last reported, such as "draft".
+    pub remote_status: String,
+    /// The upload size's code (`UploadSize::code`).
+    pub size: String,
+    /// The Story revision it was made from.
+    pub revision: i64,
+    pub synced_at: i64,
+}
+
+impl Database {
+    /// The confirmed uploads of site `site_id`, by the hash of their bytes:
+    /// (media id, address).
+    pub fn uploads(&self, site_id: i64) -> std::collections::HashMap<String, (i64, String)> {
+        let Ok(mut statement) = self.conn.prepare("SELECT hash, media_id, url FROM publish_media WHERE site_id = ?1") else {
+            return Default::default();
+        };
+        statement
+            .query_map([site_id], |row| Ok((row.get::<_, String>(0)?, (row.get(1)?, row.get(2)?))))
+            .map(|rows| rows.filter_map(Result::ok).collect())
+            .unwrap_or_default()
+    }
+
+    /// Records an upload the site confirmed, the moment it did.
+    pub fn record_upload(&self, site_id: i64, hash: &str, size: &str, media_id: i64, url: &str) -> Result<(), String> {
+        self.conn
+            .execute(
+                "INSERT OR REPLACE INTO publish_media(site_id, hash, size, media_id, url, uploaded_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![site_id, hash, size, media_id, url, unix_now()],
+            )
+            .map(|_| ())
+            .map_err(|err| err.to_string())
+    }
+
+    /// Forgets an upload the site no longer has.
+    pub fn forget_upload(&self, site_id: i64, hash: &str) -> Result<(), String> {
+        self.conn.execute("DELETE FROM publish_media WHERE site_id = ?1 AND hash = ?2", params![site_id, hash]).map(|_| ()).map_err(|err| err.to_string())
+    }
+
+    /// Story `story_id`'s main post on site `site_id`, if one was made.
+    pub fn publication(&self, story_id: i64, site_id: i64) -> Option<Publication> {
+        self.conn
+            .query_row(
+                "SELECT story_id, site_id, post_id, remote_status, size, revision, synced_at FROM publications
+                 WHERE story_id = ?1 AND site_id = ?2 AND output_key = 'main' AND edition = 1",
+                params![story_id, site_id],
+                |row| {
+                    Ok(Publication {
+                        story_id: row.get(0)?,
+                        site_id: row.get(1)?,
+                        post_id: row.get(2)?,
+                        remote_status: row.get(3)?,
+                        size: row.get(4)?,
+                        revision: row.get(5)?,
+                        synced_at: row.get(6)?,
+                    })
+                },
+            )
+            .optional()
+            .ok()
+            .flatten()
+    }
+
+    /// Forgets Story `story_id`'s post on site `site_id`, once the site no longer has it.
+    pub fn forget_publication(&self, story_id: i64, site_id: i64) -> Result<(), String> {
+        self.conn
+            .execute("DELETE FROM publications WHERE story_id = ?1 AND site_id = ?2 AND output_key = 'main' AND edition = 1", params![story_id, site_id])
+            .map(|_| ())
+            .map_err(|err| err.to_string())
+    }
+
+    /// Records the main post of a Story on a site, the moment the site confirmed it.
+    pub fn save_publication(&self, publication: &Publication) -> Result<(), String> {
+        self.conn
+            .execute(
+                "INSERT INTO publications(story_id, site_id, post_id, remote_status, size, revision, synced_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                 ON CONFLICT (story_id, site_id, output_key, edition) DO UPDATE SET
+                 post_id = excluded.post_id, remote_status = excluded.remote_status, size = excluded.size,
+                 revision = excluded.revision, synced_at = excluded.synced_at",
+                params![
+                    publication.story_id,
+                    publication.site_id,
+                    publication.post_id,
+                    publication.remote_status,
+                    publication.size,
+                    publication.revision,
+                    publication.synced_at
+                ],
+            )
+            .map(|_| ())
+            .map_err(|err| err.to_string())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::tests::library;
@@ -193,5 +321,29 @@ mod tests {
         db.delete_site(id).unwrap();
         assert_eq!(db.site(id), None);
         assert!(db.save_site(&Site { id, ..site("https://example.com", "ana") }).is_err(), "a removed site isn't saved by its old id");
+    }
+
+    #[test]
+    fn uploads_and_posts_are_remembered_per_site() {
+        let (db, _, _) = library("publications");
+        let site_id = db.save_site(&site("https://example.com", "ana")).unwrap();
+        db.record_upload(site_id, "abc", "low", 41, "https://example.com/a.jpg").unwrap();
+        assert_eq!(db.uploads(site_id).get("abc"), Some(&(41, "https://example.com/a.jpg".to_string())));
+        assert!(db.uploads(site_id + 1).is_empty(), "another site has its own uploads");
+        db.forget_upload(site_id, "abc").unwrap();
+        assert!(db.uploads(site_id).is_empty());
+
+        let mut publication = Publication { story_id: 3, site_id, post_id: 7, remote_status: "draft".into(), size: "standard".into(), revision: 4, synced_at: 100 };
+        db.save_publication(&publication).unwrap();
+        publication.revision = 5;
+        db.save_publication(&publication).unwrap();
+        assert_eq!(db.publication(3, site_id), Some(publication.clone()));
+        assert_eq!(db.publication(3, site_id + 1), None);
+        // Another Story can't claim the same post.
+        assert!(db.save_publication(&Publication { story_id: 4, ..publication }).is_err());
+
+        // Disconnecting the site keeps what is known to be on it.
+        db.delete_site(site_id).unwrap();
+        assert!(db.publication(3, site_id).is_some());
     }
 }

@@ -221,6 +221,10 @@ pub enum Failure {
     ApiBlocked,
     /// The user name or Application Password was refused.
     Unauthorized,
+    /// The site didn't look at the Application Password at all: WordPress
+    /// accepts them only over HTTPS or on a site set up as local, and some
+    /// servers drop the header that carries them.
+    CredentialsIgnored,
     /// The account may not do this.
     Forbidden,
     /// The server refused the size of what was sent.
@@ -233,10 +237,22 @@ pub enum Failure {
     BadReply,
 }
 
+/// One request to the site.
+#[derive(Clone, Debug)]
+pub struct Request<'b> {
+    /// "GET" or "POST": WordPress takes changes as POST.
+    pub method: &'static str,
+    pub url: SiteUrl,
+    /// The Authorization header, sent only to the origin it was made for.
+    pub auth: Option<String>,
+    pub headers: Vec<(&'static str, String)>,
+    pub body: Option<&'b [u8]>,
+}
+
 /// The network, as Picasso uses it: one request at a time, with no
 /// redirects followed and any status returned as a [`Reply`].
 pub trait Http {
-    fn get(&self, url: &SiteUrl, auth: Option<&str>) -> Result<Reply, Failure>;
+    fn send(&self, request: &Request) -> Result<Reply, Failure>;
 }
 
 /// The site's REST API, found from its address.
@@ -311,7 +327,8 @@ impl<'a> Client<'a> {
         let header = auth.map(Credentials::header);
         let mut url = url.clone();
         for _ in 0..=MAX_REDIRECTS {
-            let reply = self.http.get(&url, header.as_deref())?;
+            let request = Request { method: "GET", url: url.clone(), auth: header.clone(), headers: Vec::new(), body: None };
+            let reply = self.http.send(&request)?;
             if !matches!(reply.status, 301 | 302 | 303 | 307 | 308) {
                 return Ok((url, reply));
             }
@@ -391,6 +408,96 @@ impl<'a> Client<'a> {
     }
 }
 
+impl Client<'_> {
+    /// POST `body` to `url` with `credentials`. A change is never sent on
+    /// through a redirect: one is refused, so nothing is sent twice or elsewhere.
+    fn post(&self, url: &SiteUrl, credentials: &Credentials, headers: Vec<(&'static str, String)>, body: &[u8]) -> Result<Reply, Failure> {
+        self.policy.check(url)?;
+        let request = Request { method: "POST", url: url.clone(), auth: Some(credentials.header()), headers, body: Some(body) };
+        let reply = self.http.send(&request)?;
+        if (300..400).contains(&reply.status) {
+            return Err(Failure::Status(reply.status));
+        }
+        Ok(reply)
+    }
+
+    /// Uploads one JPEG to the site's media library as `name`.
+    pub fn upload_media(&self, api: &Api, credentials: &Credentials, bytes: &[u8], name: &str) -> Result<Media, Failure> {
+        let url = api.route("/wp/v2/media", "");
+        // The name is ours, made of letters, digits, and dashes, so it needs no quoting rules.
+        let headers = vec![("Content-Type", "image/jpeg".to_string()), ("Content-Disposition", format!("attachment; filename=\"{name}\""))];
+        let reply = self.post(&url, credentials, headers, bytes)?;
+        checked(&reply)?;
+        media_of(&reply.json().ok_or(Failure::BadReply)?)
+    }
+
+    /// Whether the upload `id` is still in the site's media library.
+    pub fn media_exists(&self, api: &Api, credentials: &Credentials, id: i64) -> Result<bool, Failure> {
+        let url = api.route(&format!("/wp/v2/media/{id}"), "context=edit");
+        let (_, reply) = self.get(&url, Some(credentials))?;
+        if reply.status == 404 || reply.status == 410 {
+            return Ok(false);
+        }
+        checked(&reply)?;
+        Ok(true)
+    }
+
+    /// The status of post `id` as the site has it now, such as "draft" or
+    /// "publish", or `None` when the site has no such post.
+    pub fn post_status(&self, api: &Api, credentials: &Credentials, id: i64) -> Result<Option<String>, Failure> {
+        let url = api.route(&format!("/wp/v2/posts/{id}"), "context=edit");
+        let (_, reply) = self.get(&url, Some(credentials))?;
+        if reply.status == 404 || reply.status == 410 {
+            return Ok(None);
+        }
+        checked(&reply)?;
+        let post = reply.json().ok_or(Failure::BadReply)?;
+        Ok(post.get("status").and_then(Value::as_str).map(str::to_string))
+    }
+
+    /// Creates a draft with `title`, `content`, and `featured` media, or,
+    /// with `id`, changes those of that post and leaves its status as it is.
+    /// Returns the post's id.
+    pub fn save_draft(&self, api: &Api, credentials: &Credentials, id: Option<i64>, title: &str, content: &str, featured: Option<i64>) -> Result<i64, Failure> {
+        let mut body = serde_json::json!({ "title": title, "content": content, "featured_media": featured.unwrap_or(0) });
+        let route = match id {
+            Some(id) => format!("/wp/v2/posts/{id}"),
+            None => {
+                body["status"] = Value::from("draft");
+                "/wp/v2/posts".to_string()
+            }
+        };
+        let url = api.route(&route, "");
+        let bytes = serde_json::to_vec(&body).map_err(|_| Failure::BadReply)?;
+        let reply = self.post(&url, credentials, vec![("Content-Type", "application/json".to_string())], &bytes)?;
+        checked(&reply)?;
+        reply.json().and_then(|post| post.get("id").and_then(Value::as_i64)).ok_or(Failure::BadReply)
+    }
+}
+
+/// An upload in the site's media library.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Media {
+    pub id: i64,
+    /// The address of the file as uploaded.
+    pub url: String,
+}
+
+fn media_of(json: &Value) -> Result<Media, Failure> {
+    Ok(Media {
+        id: json.get("id").and_then(Value::as_i64).ok_or(Failure::BadReply)?,
+        url: json.get("source_url").and_then(Value::as_str).ok_or(Failure::BadReply)?.to_string(),
+    })
+}
+
+/// The address of post `id` in the site's editor, which needs the person
+/// signed in, as a draft's own address may not show it.
+pub fn edit_link(api: &Api, id: i64) -> String {
+    let base = api.site.path.split('?').next().unwrap_or("/");
+    let dir = if base.ends_with('/') { base.to_string() } else { format!("{base}/") };
+    format!("{}{dir}wp-admin/post.php?post={id}&action=edit", api.site.origin())
+}
+
 /// The API root a reply describes, when it is one.
 fn api_index(site: &SiteUrl, root: &SiteUrl, reply: &Reply) -> Option<Api> {
     if reply.status != 200 {
@@ -401,9 +508,49 @@ fn api_index(site: &SiteUrl, root: &SiteUrl, reply: &Reply) -> Option<Api> {
     Some(Api {
         site: site.clone(),
         root: root.clone(),
-        name: index.get("name").and_then(Value::as_str).unwrap_or_default().to_string(),
+        name: decode_entities(index.get("name").and_then(Value::as_str).unwrap_or_default()),
         namespaces,
     })
+}
+
+/// `text` with the HTML entities WordPress puts in titles, such as
+/// "&#039;" and "&amp;", turned back into characters.
+fn decode_entities(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(start) = rest.find('&') {
+        out.push_str(&rest[..start]);
+        rest = &rest[start..];
+        let decoded = rest.find(';').filter(|&end| end <= 10).and_then(|end| {
+            let name = &rest[1..end];
+            let c = match name {
+                "amp" => Some('&'),
+                "lt" => Some('<'),
+                "gt" => Some('>'),
+                "quot" => Some('"'),
+                "apos" => Some('\''),
+                _ => name
+                    .strip_prefix("#x")
+                    .or_else(|| name.strip_prefix("#X"))
+                    .and_then(|hex| u32::from_str_radix(hex, 16).ok())
+                    .or_else(|| name.strip_prefix('#').and_then(|dec| dec.parse().ok()))
+                    .and_then(char::from_u32),
+            };
+            c.map(|c| (c, end))
+        });
+        match decoded {
+            Some((c, end)) => {
+                out.push(c);
+                rest = &rest[end + 1..];
+            }
+            None => {
+                out.push('&');
+                rest = &rest[1..];
+            }
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 /// The addresses a Link header gives for the REST API.
@@ -426,6 +573,8 @@ fn api_links(header: &str) -> Vec<String> {
 fn checked(reply: &Reply) -> Result<(), Failure> {
     match reply.status {
         200..=299 => Ok(()),
+        // Signed out despite the credentials: WordPress never read them.
+        401 if reply.error_code().as_deref() == Some("rest_not_logged_in") => Err(Failure::CredentialsIgnored),
         401 => Err(Failure::Unauthorized),
         403 => Err(if reply.error_code().is_some_and(|code| code.contains("disabled")) { Failure::ApiBlocked } else { Failure::Forbidden }),
         404 => Err(Failure::NotWordPress),
@@ -453,12 +602,31 @@ impl Network {
 }
 
 impl Http for Network {
-    fn get(&self, url: &SiteUrl, auth: Option<&str>) -> Result<Reply, Failure> {
-        let mut request = self.agent.get(url.to_url()).header("Accept", "application/json");
-        if let Some(auth) = auth {
-            request = request.header("Authorization", auth);
+    fn send(&self, request: &Request) -> Result<Reply, Failure> {
+        let url = request.url.to_url();
+        let mut response = match (request.method, request.body) {
+            ("POST", body) => {
+                let mut call = self.agent.post(&url).header("Accept", "application/json");
+                if let Some(auth) = &request.auth {
+                    call = call.header("Authorization", auth);
+                }
+                for (name, value) in &request.headers {
+                    call = call.header(*name, value);
+                }
+                call.send(body.unwrap_or_default())
+            }
+            _ => {
+                let mut call = self.agent.get(&url).header("Accept", "application/json");
+                if let Some(auth) = &request.auth {
+                    call = call.header("Authorization", auth);
+                }
+                for (name, value) in &request.headers {
+                    call = call.header(*name, value);
+                }
+                call.call()
+            }
         }
-        let mut response = request.call().map_err(|err| network_failure(&err))?;
+        .map_err(|err| network_failure(&err))?;
         let headers = response
             .headers()
             .iter()
@@ -488,30 +656,40 @@ fn network_failure(err: &ureq::Error) -> Failure {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use std::cell::RefCell;
     use std::collections::HashMap;
 
-    /// Answers by address, and remembers what was asked with which credentials.
+    /// Answers by method and address, and remembers what was asked with
+    /// which credentials and body.
     #[derive(Default)]
-    struct Fake {
+    pub(crate) struct Fake {
         replies: HashMap<String, Reply>,
-        asked: RefCell<Vec<(String, Option<String>)>>,
+        pub(crate) asked: RefCell<Vec<(String, Option<String>)>>,
+        pub(crate) bodies: RefCell<Vec<(String, Vec<u8>)>>,
     }
 
     impl Fake {
-        fn answer(mut self, url: &str, status: u16, headers: &[(&str, &str)], body: &str) -> Self {
+        pub(crate) fn answer(self, url: &str, status: u16, headers: &[(&str, &str)], body: &str) -> Self {
+            self.answer_to("GET", url, status, headers, body)
+        }
+
+        pub(crate) fn answer_to(mut self, method: &str, url: &str, status: u16, headers: &[(&str, &str)], body: &str) -> Self {
             let headers = headers.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
-            self.replies.insert(url.to_string(), Reply { status, headers, body: body.as_bytes().to_vec() });
+            self.replies.insert(format!("{method} {url}"), Reply { status, headers, body: body.as_bytes().to_vec() });
             self
         }
     }
 
     impl Http for Fake {
-        fn get(&self, url: &SiteUrl, auth: Option<&str>) -> Result<Reply, Failure> {
-            self.asked.borrow_mut().push((url.to_url(), auth.map(str::to_string)));
-            Ok(self.replies.get(&url.to_url()).cloned().unwrap_or(Reply { status: 404, ..Reply::default() }))
+        fn send(&self, request: &Request) -> Result<Reply, Failure> {
+            let key = format!("{} {}", request.method, request.url.to_url());
+            self.asked.borrow_mut().push((request.url.to_url(), request.auth.clone()));
+            if let Some(body) = request.body {
+                self.bodies.borrow_mut().push((key.clone(), body.to_vec()));
+            }
+            Ok(self.replies.get(&key).cloned().unwrap_or(Reply { status: 404, ..Reply::default() }))
         }
     }
 
@@ -610,6 +788,7 @@ mod tests {
 
         for (status, headers, failure) in [
             (401, vec![], Failure::Unauthorized),
+            (401, vec![("content-type", "application/json")], Failure::Unauthorized),
             (403, vec![], Failure::Forbidden),
             (429, vec![("retry-after", "30")], Failure::RateLimited(Some(30))),
             (500, vec![], Failure::Status(500)),
@@ -628,8 +807,83 @@ mod tests {
     }
 
     #[test]
+    fn a_site_that_ignores_the_password_is_told_apart_from_a_wrong_one() {
+        let url = "http://localhost:10003/wp-json/wp/v2/users/me?context=edit";
+        let api = Api {
+            site: SiteUrl::parse("http://localhost:10003").unwrap(),
+            root: SiteUrl::parse("http://localhost:10003/wp-json/").unwrap(),
+            name: String::new(),
+            namespaces: vec!["wp/v2".into()],
+        };
+        let credentials = Credentials { user: "ana".into(), password: "abcd efgh".into() };
+        let dev = Policy { development: true };
+        let ignored = Fake::default().answer(url, 401, &[], r#"{"code":"rest_not_logged_in"}"#);
+        assert_eq!(Client::new(&ignored, dev).account(&api, &credentials), Err(Failure::CredentialsIgnored));
+        let wrong = Fake::default().answer(url, 401, &[], r#"{"code":"incorrect_password"}"#);
+        assert_eq!(Client::new(&wrong, dev).account(&api, &credentials), Err(Failure::Unauthorized));
+    }
+
+    pub(crate) fn local_api() -> Api {
+        Api {
+            site: SiteUrl::parse("https://example.com/blog").unwrap(),
+            root: SiteUrl::parse("https://example.com/blog/wp-json/").unwrap(),
+            name: String::new(),
+            namespaces: vec!["wp/v2".into()],
+        }
+    }
+
+    #[test]
+    fn a_photo_is_uploaded_and_a_draft_made_and_changed_in_place() {
+        let api = local_api();
+        let credentials = Credentials { user: "ana".into(), password: "abcd efgh".into() };
+        let fake = Fake::default()
+            .answer_to("POST", "https://example.com/blog/wp-json/wp/v2/media", 201, &[], r#"{"id":41,"source_url":"https://example.com/blog/wp-content/uploads/a.jpg"}"#)
+            .answer_to("POST", "https://example.com/blog/wp-json/wp/v2/posts", 201, &[], r#"{"id":7,"status":"draft"}"#)
+            .answer_to("POST", "https://example.com/blog/wp-json/wp/v2/posts/7", 200, &[], r#"{"id":7,"status":"draft"}"#)
+            .answer("https://example.com/blog/wp-json/wp/v2/posts/7?context=edit", 200, &[], r#"{"id":7,"status":"draft"}"#)
+            .answer("https://example.com/blog/wp-json/wp/v2/media/41?context=edit", 200, &[], r#"{"id":41}"#);
+        let client = Client::new(&fake, Policy::default());
+        let media = client.upload_media(&api, &credentials, b"jpeg", "picasso-ab12.jpg").unwrap();
+        assert_eq!(media, Media { id: 41, url: "https://example.com/blog/wp-content/uploads/a.jpg".into() });
+        assert!(client.media_exists(&api, &credentials, 41).unwrap());
+        assert!(!client.media_exists(&api, &credentials, 42).unwrap(), "a 404 is a removed upload");
+
+        assert_eq!(client.save_draft(&api, &credentials, None, "Spain", "<p>x</p>", Some(41)).unwrap(), 7);
+        assert_eq!(client.post_status(&api, &credentials, 7).unwrap().as_deref(), Some("draft"));
+        assert_eq!(client.post_status(&api, &credentials, 8).unwrap(), None);
+        assert_eq!(client.save_draft(&api, &credentials, Some(7), "Spain", "<p>y</p>", None).unwrap(), 7);
+
+        let bodies = fake.bodies.borrow();
+        let json = |index: usize| serde_json::from_slice::<Value>(&bodies[index].1).unwrap();
+        assert_eq!(bodies[0].1, b"jpeg");
+        assert_eq!(json(1)["status"], "draft", "a new post is a draft");
+        assert_eq!(json(1)["featured_media"], 41);
+        assert!(json(2).get("status").is_none(), "an update leaves the status alone");
+        assert_eq!(json(2)["featured_media"], 0);
+        assert_eq!(edit_link(&api, 7), "https://example.com/blog/wp-admin/post.php?post=7&action=edit");
+    }
+
+    #[test]
+    fn a_change_is_never_sent_on_through_a_redirect() {
+        let api = local_api();
+        let credentials = Credentials { user: "ana".into(), password: "abcd efgh".into() };
+        let fake = Fake::default().answer_to("POST", "https://example.com/blog/wp-json/wp/v2/posts", 301, &[("location", "https://example.com/new/")], "");
+        let result = Client::new(&fake, Policy::default()).save_draft(&api, &credentials, None, "t", "c", None);
+        assert_eq!(result, Err(Failure::Status(301)));
+        assert_eq!(fake.asked.borrow().len(), 1);
+    }
+
+    #[test]
+    fn a_site_title_loses_its_html_entities() {
+        assert_eq!(decode_entities("Kuoping&#039;s Travel"), "Kuoping's Travel");
+        assert_eq!(decode_entities("A &amp; B &#x41; &lt;3"), "A & B A <3");
+        assert_eq!(decode_entities("Fish & chips &unknown; &"), "Fish & chips &unknown; &");
+    }
+
+    #[test]
     fn the_password_stays_out_of_debug_output() {
         let credentials = Credentials { user: "ana".into(), password: "secret pass".into() };
         assert!(!format!("{credentials:?}").contains("secret"));
     }
 }
+

@@ -227,6 +227,8 @@ cargo test --release --locked
 
 The executable is `target/release/picasso` on macOS and Linux, or `target/release/picasso.exe` on Windows. Release builds provide better scanning, thumbnail and editing performance than debug builds.
 
+On macOS, each build is signed ad hoc and is a new app to the Keychain, which then asks twice for every saved WordPress password and forgets **Always Allow** at the next build. To sign every build the same way, make a code-signing certificate once: in Keychain Access, choose **Certificate Assistant → Create a Certificate…**, name it `Picasso Development`, set **Certificate Type** to **Code Signing**, and create it. From then on, `make` and `make run` sign `target/release/picasso` with it (another name can be given with `SIGN_IDENTITY=...`); after the first **Always Allow**, later builds are not asked again. Builds made with `cargo` directly are not signed this way.
+
 OpenGL is the default renderer. Set `PICASSO_RENDERER=wgpu` to select the alternative wgpu renderer.
 
 ### Project structure

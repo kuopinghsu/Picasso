@@ -104,7 +104,9 @@ pub enum Kept {
     Session,
 }
 
-/// The system's store, with this session as the fallback.
+/// The system's store, with this session as the fallback. A secret read
+/// from or saved to the system's store is also kept in memory until
+/// Picasso quits, so macOS asks to unlock it at most once a session.
 pub struct Vault {
     system: Box<dyn Store>,
     session: Session,
@@ -127,8 +129,8 @@ impl Vault {
     pub fn save(&self, reference: &str, secret: &str) -> Result<Kept, StoreError> {
         match self.system.save(reference, secret) {
             Ok(()) => {
-                // A secret from an earlier fallback would otherwise shadow nothing but linger.
-                self.session.delete(reference)?;
+                // Replaces an earlier fallback, and spares asking the store again.
+                self.session.save(reference, secret)?;
                 Ok(Kept::System)
             }
             Err(StoreError::Unavailable) => {
@@ -139,13 +141,18 @@ impl Vault {
         }
     }
 
-    /// The secret under `reference`, from this session first.
+    /// The secret under `reference`, from this session first; the system's
+    /// store is asked only once.
     pub fn load(&self, reference: &str) -> Result<Option<String>, StoreError> {
         if let Some(secret) = self.session.load(reference)? {
             return Ok(Some(secret));
         }
         match self.system.load(reference) {
             Err(StoreError::Unavailable) => Ok(None),
+            Ok(Some(secret)) => {
+                self.session.save(reference, &secret)?;
+                Ok(Some(secret))
+            }
             other => other,
         }
     }
@@ -193,6 +200,38 @@ mod tests {
         assert_eq!(vault.delete("site"), Ok(()));
         assert_eq!(vault.load("site"), Ok(None));
         assert_eq!(vault.delete("site"), Ok(()));
+    }
+
+    /// A system store that counts how often it is read.
+    #[derive(Default)]
+    struct Counted(Session, std::sync::Arc<std::sync::atomic::AtomicUsize>);
+
+    impl Store for Counted {
+        fn save(&self, reference: &str, secret: &str) -> Result<(), StoreError> {
+            self.0.save(reference, secret)
+        }
+        fn load(&self, reference: &str) -> Result<Option<String>, StoreError> {
+            self.1.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            self.0.load(reference)
+        }
+        fn delete(&self, reference: &str) -> Result<(), StoreError> {
+            self.0.delete(reference)
+        }
+    }
+
+    #[test]
+    fn the_system_store_is_asked_once_a_session() {
+        let store = Counted::default();
+        store.0.save("site", "abcd efgh").unwrap();
+        let reads = store.1.clone();
+        let vault = Vault::new(Box::new(store));
+        for _ in 0..3 {
+            assert_eq!(vault.load("site"), Ok(Some("abcd efgh".to_string())));
+        }
+        assert_eq!(reads.load(std::sync::atomic::Ordering::Relaxed), 1, "macOS asks to unlock it once");
+        assert_eq!(vault.save("other", "ijkl"), Ok(Kept::System));
+        assert_eq!(vault.load("other"), Ok(Some("ijkl".to_string())));
+        assert_eq!(reads.load(std::sync::atomic::Ordering::Relaxed), 1, "a secret just saved isn't read back");
     }
 
     #[test]

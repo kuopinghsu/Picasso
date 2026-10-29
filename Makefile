@@ -22,6 +22,14 @@ else
   PLATFORM := $(shell uname -s | tr A-Z a-z)
 endif
 
+# On macOS, a build signed ad hoc is a new app to the Keychain each time,
+# which asks again for each saved password, twice. A code-signing identity
+# of this name, made once in Keychain Access, signs every build the same
+# way, so "Always Allow" lasts (README.md). Without it nothing changes.
+SIGN_IDENTITY ?= Picasso Development
+sign = if [ "$(PLATFORM)" = darwin ] && security find-identity -v -p codesigning 2>/dev/null | grep -q '"$(SIGN_IDENTITY)"'; then \
+	codesign --force --sign "$(SIGN_IDENTITY)" --identifier app.Picasso.picasso $(1); fi
+
 # `make` alone builds the release binary; `make help` lists every target.
 .DEFAULT_GOAL := release
 
@@ -40,6 +48,7 @@ help: ## List the targets and the variables they take
 	@echo "  T=...          only the tests whose name contains it: make test T=backup"
 	@echo "  CORPUS=dir     folder of your own photos for make corpus"
 	@echo "  PREFIX=dir     where install puts Picasso (default ~/.local)"
+	@echo "  SIGN_IDENTITY  macOS code-signing identity for builds (default Picasso Development)"
 	@echo "  PICASSO_BENCH_PHOTOS, PICASSO_BENCH_FILES   sizes for make bench (docs/PERFORMANCE.md)"
 
 ##@ Build and run
@@ -47,6 +56,7 @@ help: ## List the targets and the variables they take
 # Release build. `make` and `make release` both produce target/release/picasso.
 release: ## Build target/release/picasso (the default)
 	$(CARGO) build --release
+	@$(call sign,target/release/picasso)
 
 # Compiles faster than release, but scanning, thumbnails, and editing are much slower.
 debug: ## Build target/debug/picasso, quicker to compile
@@ -54,8 +64,8 @@ debug: ## Build target/debug/picasso, quicker to compile
 
 # Launch the release binary. Extra arguments are photo folders:
 #   make run ARGS="~/Pictures ~/Photos"
-run: ## Build and start Picasso; ARGS adds photo folders
-	$(CARGO) run --release -- $(ARGS)
+run: release ## Build and start Picasso; ARGS adds photo folders
+	target/release/picasso $(ARGS)
 
 # Prints frame times to the terminal every five seconds (docs/PERFORMANCE.md).
 run-stats: ## Start Picasso printing frame times (PICASSO_FRAME_STATS=1)

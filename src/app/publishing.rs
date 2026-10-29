@@ -15,13 +15,16 @@ use crate::wordpress::{Account, Api, Client, Credentials, Failure, Network, Poli
 use super::settings::{heading, local_time, note};
 use super::{theme, PicassoApp};
 
+/// What checking a site finds: its API and the account, or why not.
+type Checked = Result<(Api, Account), Failure>;
+
 /// What the page keeps between frames.
 #[derive(Default)]
 pub(super) struct PublishingState {
     /// The site being connected or changed.
     form: Option<SiteForm>,
     /// A check running on a thread, for the site with this id (0 for a new one).
-    checking: Option<(i64, Receiver<Result<(Api, Account), Failure>>)>,
+    checking: Option<(i64, Receiver<Checked>)>,
     /// What the latest action did, or why it failed.
     note: String,
     error: String,
@@ -308,7 +311,7 @@ impl PicassoApp {
 }
 
 /// What a person can do about `failure`.
-fn failure_text(failure: &Failure) -> String {
+pub(super) fn failure_text(failure: &Failure) -> String {
     match failure {
         Failure::InvalidUrl => tr("That isn't a web address. Enter the site's address, such as example.com/blog.").to_string(),
         Failure::NotHttps => tr("The site has to use HTTPS. Enter its address with https://.").to_string(),
@@ -321,6 +324,7 @@ fn failure_text(failure: &Failure) -> String {
         Failure::NotWordPress => tr("No WordPress REST API was found at that address. Check the address, including any folder the site is in.").to_string(),
         Failure::ApiBlocked => tr("The site's REST API is turned off or blocked, often by a security plugin. Ask the site's administrator to allow it.").to_string(),
         Failure::Unauthorized => tr("The user name or Application Password was refused. Check both, or make a new Application Password.").to_string(),
+        Failure::CredentialsIgnored => tr("The site ignored the Application Password. WordPress accepts them only over HTTPS, or on a site whose environment type is \"local\"; it also ignores them until one has been made on the site, and some servers drop the sign-in. For a development site, add define( 'WP_ENVIRONMENT_TYPE', 'local' ); to its wp-config.php.").to_string(),
         Failure::Forbidden => tr("This account isn't allowed to do that on the site.").to_string(),
         Failure::TooLarge => tr("The site refused something too large.").to_string(),
         Failure::RateLimited(Some(seconds)) => trf("The site asked Picasso to slow down. Try again in {} seconds.", &[seconds]),
@@ -355,6 +359,7 @@ mod tests {
             Failure::NotWordPress,
             Failure::ApiBlocked,
             Failure::Unauthorized,
+            Failure::CredentialsIgnored,
             Failure::Forbidden,
             Failure::TooLarge,
             Failure::RateLimited(Some(30)),

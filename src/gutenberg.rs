@@ -33,6 +33,13 @@ pub enum Unsupported {
     Photo(i64),
 }
 
+/// A route drawn on its map and uploaded, with the credit its tiles ask for.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RouteMap {
+    pub uploaded: Uploaded,
+    pub credit: &'static str,
+}
+
 /// The post: its block markup, and the cover as the featured image.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Post {
@@ -43,8 +50,9 @@ pub struct Post {
 
 /// The Story as a post. The introduction comes before the blocks and the
 /// conclusion after them, as paragraphs; the title, subtitle, and byline
-/// are the post's own.
-pub fn post(story: &Story, blocks: &[StoryBlock], media: &dyn Fn(i64) -> Option<Uploaded>) -> Result<Post, Unsupported> {
+/// are the post's own. `maps` gives each Route block's map picture by the
+/// block's uid; a route without one is drawn on its own.
+pub fn post(story: &Story, blocks: &[StoryBlock], media: &dyn Fn(i64) -> Option<Uploaded>, maps: &dyn Fn(&str) -> Option<RouteMap>) -> Result<Post, Unsupported> {
     let mut out = String::new();
     paragraphs(&mut out, &story.introduction, None);
     for (index, block) in blocks.iter().enumerate() {
@@ -91,7 +99,19 @@ pub fn post(story: &Story, blocks: &[StoryBlock], media: &dyn Fn(i64) -> Option<
             Block::Gallery(items) => out.push_str(&gallery(items, None, "", media)?),
             Block::Grid { columns, caption, media: items, .. } => out.push_str(&gallery(items, Some(*columns), caption, media)?),
             Block::Separator => out.push_str("<!-- wp:separator -->\n<hr class=\"wp-block-separator has-alpha-channel-opacity\"/>\n<!-- /wp:separator -->\n\n"),
-            // A drawing WordPress keeps as it is, coloured by the theme's text.
+            Block::Route { caption, route, .. } if !route.is_empty() && maps(&block.uid).is_some() => {
+                let Some(map) = maps(&block.uid) else { continue };
+                let attrs: Value = json!({ "id": map.uploaded.id, "sizeSlug": "large", "linkDestination": "none", "className": "picasso-route" });
+                let _ = write!(
+                    out,
+                    "<!-- wp:image {attrs} -->\n<figure class=\"wp-block-image size-large picasso-route\"><img src=\"{}\" alt=\"{}\" class=\"wp-image-{}\"/><figcaption class=\"wp-element-caption\">{}</figcaption></figure>\n<!-- /wp:image -->\n\n",
+                    esc(&map.uploaded.url),
+                    esc(caption.trim()),
+                    map.uploaded.id,
+                    crate::story_html::route_words(route, caption, map.credit)
+                );
+            }
+            // Without its map, a drawing WordPress keeps as it is, coloured by the theme's text.
             Block::Route { caption, route, .. } => {
                 let figure = crate::story_html::route_figure(route, caption);
                 if !figure.is_empty() {
@@ -228,7 +248,7 @@ mod tests {
             StoryBlock::new(Block::List { ordered: true, items: vec!["**Tea**".into(), String::new(), "[Map](https://x.test)".into()] }),
             StoryBlock::new(Block::Quote { text: "Go *slowly*".into(), citation: "Bashō".into() }),
         ];
-        let post = post(&story(), &blocks, &uploads).unwrap();
+        let post = post(&story(), &blocks, &uploads, &|_| None).unwrap();
         assert_eq!((post.title.as_str(), post.featured), ("Kyoto", Some(103)));
         let content = &post.content;
         let order = [
@@ -261,8 +281,19 @@ mod tests {
     #[test]
     fn a_block_without_a_core_form_or_a_photo_without_an_upload_stops_it() {
         let unknown = StoryBlock::new(Block::Unknown { kind: "map".into(), version: 9, payload: "{}".into(), media: Vec::new() });
-        assert_eq!(post(&story(), &[StoryBlock::new(Block::Separator), unknown], &uploads), Err(Unsupported::Unknown(1)));
+        assert_eq!(post(&story(), &[StoryBlock::new(Block::Separator), unknown], &uploads, &|_| None), Err(Unsupported::Unknown(1)));
         let missing = StoryBlock::new(Block::Photo(MediaUse::new(42)));
-        assert_eq!(post(&story(), &[missing], &uploads), Err(Unsupported::Photo(42)));
+        assert_eq!(post(&story(), &[missing], &uploads, &|_| None), Err(Unsupported::Photo(42)));
+    }
+
+    #[test]
+    fn a_route_with_its_map_is_an_image_and_without_one_a_drawing() {
+        let route = StoryBlock::new(Block::Route { caption: "Walk".into(), source: String::new(), route: vec![vec![[0, 0], [100_000, 100_000]]] });
+        let uid = route.uid.clone();
+        let map = |key: &str| (key == uid).then(|| RouteMap { uploaded: Uploaded { id: 9, url: "https://x.test/m.jpg".into() }, credit: "© Maps" });
+        let with = post(&story(), std::slice::from_ref(&route), &uploads, &map).unwrap().content;
+        assert!(with.contains("<!-- wp:image {") && with.contains("wp-image-9") && with.contains("© Maps") && !with.contains("<svg"), "{with}");
+        let without = post(&story(), &[route], &uploads, &|_| None).unwrap().content;
+        assert!(without.contains("<!-- wp:html -->") && without.contains("<svg"), "{without}");
     }
 }

@@ -80,6 +80,8 @@ pub struct Page<'a> {
     pub words: &'a Words,
     /// Tiles for the route maps; without them a route is drawn on its own.
     pub map: Option<&'a MapTiles>,
+    /// Each Route block's elevation, by its uid, drawn in its map's corner.
+    pub profiles: &'a HashMap<String, crate::elevation::Profile>,
 }
 
 /// How far a page's photos are, shared with the thread making them, and
@@ -178,7 +180,7 @@ pub struct Outcome {
 /// `folder/images`, counting them in `progress`. Returns the page's file,
 /// or `Err` with the reason, also when `progress` was cancelled.
 pub fn write_story(folder: &Path, format: Format, profile: Profile, input: &Page, progress: &Progress) -> Result<(PathBuf, Outcome), String> {
-    let Page { story, dates, blocks, sources, words, map } = *input;
+    let Page { story, dates, blocks, sources, words, map, profiles } = *input;
     let images_dir = folder.join("images");
     std::fs::create_dir_all(&images_dir).map_err(|err| err.to_string())?;
     let mut images = HashMap::new();
@@ -208,7 +210,7 @@ pub fn write_story(folder: &Path, format: Format, profile: Profile, input: &Page
         if progress.cancel.load(Ordering::Relaxed) {
             return Err(CANCELLED.into());
         }
-        let Some(rgba) = map.and_then(|tiles| route_map(route, tiles)) else { continue };
+        let Some(rgba) = map.and_then(|tiles| route_map(route, tiles, profiles.get(&block.uid).map(Vec::as_slice))) else { continue };
         let bytes = crate::image_io::encode_jpeg(&rgba, profile.quality.clamp(1, 100))?;
         let file = format!("images/{}.jpg", key(&bytes));
         crate::image_io::write_whole(&folder.join(&file), &bytes)?;
@@ -652,7 +654,7 @@ fn route_picture(route: &[Vec<[i32; 2]>], caption: &str, image: &WebImage, credi
 }
 
 /// A route's description and length, and the map's credit, as escaped text.
-fn route_words(route: &[Vec<[i32; 2]>], caption: &str, credit: &str) -> String {
+pub fn route_words(route: &[Vec<[i32; 2]>], caption: &str, credit: &str) -> String {
     let length = crate::track::format_distance(crate::trip::route_meters(route));
     let words = [esc(caption.trim()), esc(&length)].into_iter().filter(|text| !text.is_empty()).collect::<Vec<_>>().join(" · ");
     if credit.is_empty() {
@@ -674,8 +676,9 @@ const ROUTE_INK: [u8; 3] = [0x1f, 0x7a, 0x7a];
 /// the drawing so it is [`ROUTE_SCALE`] times as sharp, the line in white
 /// and then the accent, a dot where it starts and a ring where it ends.
 /// `None` when the source needs a key it doesn't have or no tile could be
-/// had, so the page draws the route on its own.
-fn route_map(route: &[Vec<[i32; 2]>], tiles: &MapTiles) -> Option<image::RgbaImage> {
+/// had, so the page draws the route on its own. A `profile` is drawn in
+/// its bottom-right corner.
+pub fn route_map(route: &[Vec<[i32; 2]>], tiles: &MapTiles, profile: Option<&[[f32; 2]]>) -> Option<image::RgbaImage> {
     if tiles.source.needs_key() && tiles.key.trim().is_empty() {
         return None;
     }
@@ -734,6 +737,9 @@ fn route_map(route: &[Vec<[i32; 2]>], tiles: &MapTiles) -> Option<image::RgbaIma
         let Some(dot) = tiny_skia::PathBuilder::from_circle(x * scale, y * scale, 6.0 * scale) else { continue };
         pixmap.fill_path(&dot, if n == 0 { &ink } else { &white }, tiny_skia::FillRule::Winding, tiny_skia::Transform::identity(), None);
         pixmap.stroke_path(&dot, if n == 0 { &white } else { &ink }, &stroke(3.0), tiny_skia::Transform::identity(), None);
+    }
+    if let Some(profile) = profile {
+        crate::elevation::draw(&mut pixmap, profile, scale, ROUTE_INK);
     }
     image::RgbaImage::from_raw(w, h, pixmap.take())
 }
@@ -927,7 +933,7 @@ mod tests {
         let sources = HashMap::from([(1, Some((photo, Settings::default(), 0))), (2, None)]);
         let blocks = [StoryBlock::new(Block::Photo(MediaUse::new(1))), StoryBlock::new(Block::Photo(MediaUse::new(2)))];
         let (story, words) = (story(), words());
-        let page = Page { story: &story, dates: None, blocks: &blocks, sources: &sources, words: &words, map: None };
+        let page = Page { story: &story, dates: None, blocks: &blocks, sources: &sources, words: &words, map: None, profiles: &HashMap::new() };
         let check = preflight(&page);
         assert_eq!(check, Preflight { missing: 1, no_alt: 1, first: [Some(1), Some(0), None, None], photos: 1, ..Preflight::default() });
         assert!(check.blocked(false) && !check.blocked(true), "missing photos wait for the user");
@@ -959,7 +965,7 @@ mod tests {
         let sources = HashMap::from([(1, Some((bad, Settings::default(), 0)))]);
         let blocks = [StoryBlock::new(Block::Heading("Day 1".into())), StoryBlock::new(Block::Photo(described))];
         let (story, words) = (story(), words());
-        let page = Page { story: &story, dates: None, blocks: &blocks, sources: &sources, words: &words, map: None };
+        let page = Page { story: &story, dates: None, blocks: &blocks, sources: &sources, words: &words, map: None, profiles: &HashMap::new() };
         let check = preflight(&page);
         assert_eq!((check.unreadable, check.missing, check.photos, check.first[3]), (1, 0, 0, Some(1)));
         assert!(check.blocked(false) && !check.blocked(true));
@@ -1034,7 +1040,7 @@ mod tests {
         std::fs::create_dir_all(parent.join("Kyoto in spring")).unwrap();
         std::fs::write(parent.join("Kyoto in spring/mine.txt"), "keep").unwrap();
         let (story, words, sources) = (story(), words(), HashMap::new());
-        let page = Page { story: &story, dates: None, blocks: &[], sources: &sources, words: &words, map: None };
+        let page = Page { story: &story, dates: None, blocks: &[], sources: &sources, words: &words, map: None, profiles: &HashMap::new() };
         let export = |format| export_story(&parent, "Kyoto: in/spring", format, Profile::default(), &page, &Progress::default());
         let (first, _) = export(Format::Html).unwrap();
         assert_eq!(first, parent.join("Kyoto in spring 2"));
@@ -1048,7 +1054,7 @@ mod tests {
         let stopped = Progress::default();
         stopped.cancel.store(true, Ordering::Relaxed);
         let photo = HashMap::from([(1, None)]);
-        let page = Page { story: &story, dates: None, blocks: &[], sources: &photo, words: &words, map: None };
+        let page = Page { story: &story, dates: None, blocks: &[], sources: &photo, words: &words, map: None, profiles: &HashMap::new() };
         assert_eq!(export_story(&parent, "Stopped", Format::Html, Profile::default(), &page, &stopped), Err(CANCELLED.into()));
         assert_eq!(std::fs::read_dir(&parent).unwrap().count(), 3, "a cancelled export leaves nothing");
         assert_eq!(folder_name(" ..hidden "), "hidden");

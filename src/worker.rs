@@ -177,6 +177,10 @@ pub enum UiEvent {
     StoryPreviewed(i64, Result<crate::story_html::Outcome, String>),
     /// A Story was exported to a new folder, or why not.
     StoryExported(i64, Result<(std::path::PathBuf, crate::story_html::Outcome), String>),
+    /// A Story's publishing learned something to keep at once, on site `.0`.
+    PublishProgress(i64, crate::publish::Event),
+    /// A Story's draft was saved on a site, or why not.
+    StoryPublished(Box<crate::publish::Finished>),
     /// A Trip package was saved, with how many photos were unavailable, or why not.
     TripPackaged(Result<(std::path::PathBuf, usize), String>),
     /// A Trip package's photos were written to a folder, ready to import.

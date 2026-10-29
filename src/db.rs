@@ -1,5 +1,7 @@
 //! SQLite catalog. The UI and the background indexer each open their own connection.
 
+mod sites;
+pub use sites::{Publication, Site};
 mod trips;
 
 use std::collections::{HashMap, HashSet};
@@ -300,6 +302,8 @@ impl Database {
             .map_err(|err| err.to_string())?;
         // Trips, their Days and members, and Stories (src/db/trips.rs).
         trips::upgrade(self)?;
+        // WordPress sites to publish to (src/db/sites.rs).
+        sites::upgrade(self)?;
         self.purge_archive(unix_now() - ARCHIVE_DAYS * 86_400);
         // Older builds stored placeholder dates such as year 1. Those files
         // are probed again on the next scan, which reads the real date.

@@ -227,6 +227,8 @@ cargo test --release --locked
 
 macOS 與 Linux 的執行檔為 `target/release/picasso`，Windows 則為 `target/release/picasso.exe`。Release 建置的掃描、縮圖與編輯效能優於除錯建置。
 
+在 macOS 上，每次建置都以臨時（ad hoc）方式簽署，對鑰匙圈而言都是新的 App，因此每個已儲存的 WordPress 密碼都會詢問兩次，下次建置時也會忘記**永遠允許**。若要讓每次建置都以相同方式簽署，請先建立一次程式碼簽署憑證：在「鑰匙圈存取」中選擇**憑證輔助程式 → 製作憑證…**，名稱設為 `Picasso Development`，**憑證類型**選**程式碼簽署**，然後建立。之後 `make` 與 `make run` 會用它簽署 `target/release/picasso`（可用 `SIGN_IDENTITY=...` 指定其他名稱）；第一次選擇**永遠允許**後，之後的建置就不會再詢問。直接用 `cargo` 建置的版本不會以此方式簽署。
+
 預設使用 OpenGL 繪圖。設定 `PICASSO_RENDERER=wgpu` 可改用 wgpu 繪圖後端。
 
 ### 專案結構

@@ -13,6 +13,8 @@ mod help;
 mod library;
 mod loader;
 mod places;
+mod publish_story;
+mod publishing;
 mod recovery;
 mod renamer;
 mod settings;
@@ -129,6 +131,7 @@ enum Modal {
     /// Delete Story (id, name)?
     DeleteStory(i64, String),
     ExportStory(story::ExportDialog),
+    PublishStory(publish_story::PublishDialog),
     Help,
     About,
     Settings,
@@ -359,6 +362,8 @@ pub struct PicassoApp {
     /// Ask before moving photos to the system trash.
     confirm_trash: bool,
     settings: settings::SettingsState,
+    /// Passwords of the WordPress sites, in the system's credential store.
+    vault: crate::keychain::Vault,
     updates: updates::UpdateState,
     /// Applied edit of every edited photo.
     edits: HashMap<i64, crate::edit::Settings>,
@@ -646,6 +651,7 @@ impl PicassoApp {
             slideshow_shuffle: false,
             confirm_trash: true,
             settings: settings::SettingsState::default(),
+            vault: crate::keychain::Vault::default(),
             updates: updates::UpdateState::default(),
             edits: HashMap::new(),
             editing: false,
@@ -1090,6 +1096,8 @@ impl PicassoApp {
             UiEvent::DaysSuggested { trip_id, outcome } => self.on_days_suggested(trip_id, outcome),
             UiEvent::StoryPreviewed(story_id, outcome) => self.on_story_previewed(story_id, outcome),
             UiEvent::StoryExported(story_id, outcome) => self.on_story_exported(story_id, outcome),
+            UiEvent::PublishProgress(site_id, event) => self.on_publish_progress(site_id, event),
+            UiEvent::StoryPublished(done) => self.on_story_published(*done),
             UiEvent::TripPackaged(outcome) => self.on_trip_packaged(outcome),
             UiEvent::TripUnpacked(outcome) => self.on_trip_unpacked(*outcome),
         }
@@ -1982,6 +1990,7 @@ impl PicassoApp {
             Modal::DayDetails(_) => self.day_modal(ctx),
             Modal::DeleteStory(..) => self.delete_story_modal(ctx),
             Modal::ExportStory(_) => self.export_story_modal(ctx),
+            Modal::PublishStory(_) => self.publish_story_modal(ctx),
             Modal::Settings => self.settings_modal(ctx),
             Modal::About => {
                 if about::show(ctx, &self.logo) {

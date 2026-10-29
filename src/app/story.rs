@@ -43,12 +43,12 @@ const PICK_LIMIT: usize = 2000;
 
 #[derive(Clone, PartialEq)]
 struct Snapshot {
-    story: Story,
+    pub(super) story: Story,
     blocks: Vec<StoryBlock>,
 }
 
 pub(super) struct StoryEditor {
-    story: Story,
+    pub(super) story: Story,
     blocks: Vec<StoryBlock>,
     /// The cover as last saved, so a save changes it only when it changed.
     saved_cover: Option<i64>,
@@ -61,6 +61,9 @@ pub(super) struct StoryEditor {
     typing: Option<(String, u8)>,
     /// Catalog photo of each media reference; `None` while unavailable.
     photos: HashMap<i64, Option<Photo>>,
+    /// Each route source's elevation, read from its track files once:
+    /// a track's path, or "" for all the Trip's tracks.
+    profiles: HashMap<String, Option<crate::elevation::Profile>>,
     /// The preview or export being made, to show how far it is and stop it.
     job: Option<Arc<story_html::Progress>>,
     /// The block to scroll to on the next frame.
@@ -73,6 +76,37 @@ pub(super) struct StoryEditor {
     hovered: Option<String>,
     /// The caret and the format buttons of the text fields.
     text: TextCtl,
+}
+
+/// A route's elevation in the bottom-right corner of its drawing, as the
+/// page's map picture has it (`src/elevation.rs`).
+fn elevation_chart(painter: &egui::Painter, rect: Rect, profile: &[[f32; 2]]) {
+    let (Some(first), Some(last)) = (profile.first(), profile.last()) else { return };
+    let panel = Rect::from_min_size(rect.right_bottom() - Vec2::new(230.0 + 12.0, 96.0 + 12.0), Vec2::new(230.0, 96.0));
+    if !rect.contains_rect(panel) {
+        return;
+    }
+    painter.rect_filled(panel, 6, egui::Color32::from_white_alpha(crate::elevation::VEIL));
+    let low = profile.iter().map(|point| point[1]).fold(f32::INFINITY, f32::min);
+    let high = profile.iter().map(|point| point[1]).fold(f32::NEG_INFINITY, f32::max);
+    let span = (high - low).max(20.0);
+    let chart = Rect::from_min_max(panel.min + Vec2::new(62.0, 10.0), panel.max - Vec2::new(10.0, 10.0));
+    let length = last[0] - first[0];
+    let line: Vec<egui::Pos2> = profile
+        .iter()
+        .map(|&[along, ele]| egui::pos2(chart.left() + (along - first[0]) / length * chart.width(), chart.bottom() - (ele - low) / span * chart.height()))
+        .collect();
+    // The area under the line, as thin columns, since egui fills only convex shapes.
+    let fill = theme::ACCENT.gamma_multiply(0.27);
+    for pair in line.windows(2) {
+        let (a, b) = (pair[0], pair[1]);
+        painter.add(egui::Shape::convex_polygon(vec![a, b, egui::pos2(b.x, chart.bottom()), egui::pos2(a.x, chart.bottom())], fill, egui::Stroke::NONE));
+    }
+    painter.add(egui::Shape::line(line, egui::Stroke::new(2.0, theme::ACCENT)));
+    let ink = egui::Color32::from_gray(58);
+    let font = egui::FontId::proportional(12.0);
+    painter.text(egui::pos2(panel.left() + 10.0, chart.top()), egui::Align2::LEFT_TOP, format!("{} m", high.round() as i64), font.clone(), ink);
+    painter.text(egui::pos2(panel.left() + 10.0, chart.bottom()), egui::Align2::LEFT_BOTTOM, format!("{} m", low.round() as i64), font, ink);
 }
 
 /// Picking the Trip's photos into one gallery or grid.
@@ -112,18 +146,19 @@ impl StoryEditor {
 }
 
 /// What a page of a Story is made from.
-struct PageJob {
-    story: Story,
-    blocks: Vec<StoryBlock>,
-    sources: HashMap<i64, story_html::Source>,
+pub(super) struct PageJob {
+    pub(super) story: Story,
+    pub(super) blocks: Vec<StoryBlock>,
+    pub(super) sources: HashMap<i64, story_html::Source>,
     dates: Option<String>,
     words: story_html::Words,
-    map: story_html::MapTiles,
+    pub(super) map: story_html::MapTiles,
+    pub(super) profiles: HashMap<String, crate::elevation::Profile>,
 }
 
 impl PageJob {
-    fn page(&self) -> story_html::Page<'_> {
-        story_html::Page { story: &self.story, dates: self.dates.as_deref(), blocks: &self.blocks, sources: &self.sources, words: &self.words, map: Some(&self.map) }
+    pub(super) fn page(&self) -> story_html::Page<'_> {
+        story_html::Page { story: &self.story, dates: self.dates.as_deref(), blocks: &self.blocks, sources: &self.sources, words: &self.words, map: Some(&self.map), profiles: &self.profiles }
     }
 }
 
@@ -259,6 +294,7 @@ impl PicassoApp {
             redo: Vec::new(),
             typing: None,
             photos: HashMap::new(),
+            profiles: HashMap::new(),
             job: None,
             reveal: None,
             picking: None,
@@ -345,6 +381,7 @@ impl PicassoApp {
         let mut delete = false;
         let mut preview = false;
         let mut export = false;
+        let mut publish = false;
         // Undo and redo of the Story, while no text field has the keys.
         if !ui.ctx().egui_wants_keyboard_input() {
             ui.ctx().input_mut(|input| {
@@ -397,6 +434,10 @@ impl PicassoApp {
                 }
                 let more = theme::named(ui.button("⋯"), tr("More"));
                 egui::Popup::menu(&more).show(|ui| {
+                    if ui.add_enabled(editor.job.is_none(), egui::Button::new(tr("Publish to WordPress…"))).clicked() {
+                        publish = true;
+                    }
+                    ui.separator();
                     let label = if editor.story.archived { tr("Restore story") } else { tr("Archive story") };
                     if ui.button(label).clicked() {
                         archive = true;
@@ -502,6 +543,9 @@ impl PicassoApp {
         if export {
             self.ask_export_story();
         }
+        if publish {
+            self.ask_publish_story();
+        }
         if back {
             self.close_story();
         }
@@ -532,7 +576,7 @@ impl PicassoApp {
     }
 
     /// Marks a preview or export of the open Story as started.
-    fn start_story_job(&mut self) -> Arc<story_html::Progress> {
+    pub(super) fn start_story_job(&mut self) -> Arc<story_html::Progress> {
         let progress = Arc::new(story_html::Progress::default());
         if let Some(editor) = &mut self.story {
             editor.job = Some(Arc::clone(&progress));
@@ -541,14 +585,14 @@ impl PicassoApp {
     }
 
     /// Marks the job of Story `story_id` as over, if that Story is still open.
-    fn end_story_job(&mut self, story_id: i64) {
+    pub(super) fn end_story_job(&mut self, story_id: i64) {
         if let Some(editor) = self.story.as_mut().filter(|editor| editor.story.id == story_id) {
             editor.job = None;
         }
     }
 
     /// What a page of the open Story is made from, read on this thread.
-    fn story_job(&mut self) -> Option<PageJob> {
+    pub(super) fn story_job(&mut self) -> Option<PageJob> {
         let editor = self.story.as_ref()?;
         let (story, blocks) = (editor.story.clone(), editor.blocks.clone());
         let media: Vec<i64> = story.cover.into_iter().chain(blocks.iter().flat_map(|block| block.block.media().iter().map(|m| m.media_id))).collect();
@@ -564,7 +608,32 @@ impl PicassoApp {
             unavailable: tr("Photo unavailable").into(),
         };
         let map = story_html::MapTiles { source: self.map_source, key: self.carto_key.clone(), cache: self.cache_dir.clone() };
-        Some(PageJob { story, blocks, sources, dates, words, map })
+        let mut profiles = HashMap::new();
+        for block in &blocks {
+            let Block::Route { source, route, .. } = &block.block else { continue };
+            if let Some(profile) = self.route_profile(source).filter(|_| !route.is_empty()) {
+                profiles.insert(block.uid.clone(), profile);
+            }
+        }
+        Some(PageJob { story, blocks, sources, dates, words, map, profiles })
+    }
+
+    /// The elevation of a route drawn from `source`, the one track's path or
+    /// "" for all the Trip's tracks, read once while the Story is open.
+    fn route_profile(&mut self, source: &str) -> Option<crate::elevation::Profile> {
+        let editor = self.story.as_ref()?;
+        if let Some(known) = editor.profiles.get(source) {
+            return known.clone();
+        }
+        let paths: Vec<String> = if source.is_empty() {
+            self.db.trip_tracks(editor.story.trip_id).into_iter().filter(|link| link.track_id.is_some()).map(|link| link.path).collect()
+        } else {
+            vec![source.to_string()]
+        };
+        let paths: Vec<&std::path::Path> = paths.iter().map(std::path::Path::new).collect();
+        let profile = crate::elevation::profile_of(&paths);
+        self.story.as_mut()?.profiles.insert(source.to_string(), profile.clone());
+        profile
     }
 
     /// The Export dialog, with the settings of the last Story export.
@@ -1050,7 +1119,8 @@ impl PicassoApp {
         let mut chosen: Option<(String, Vec<Vec<[i32; 2]>>)> = None;
         if let Some(Block::Route { route, source, .. }) = self.story.as_ref().map(|editor| &editor.blocks[index].block) {
             let (route, source) = (route.clone(), source.clone());
-            self.route_drawing(ui, &route, width);
+            let profile = self.route_profile(&source);
+            self.route_drawing(ui, &route, profile.as_deref(), width);
             let open = self.story.as_ref().is_some_and(|editor| editor.active.as_deref() == Some(uid));
             if open || route.is_empty() {
                 chosen = self.route_chooser(ui, uid, &source, route.is_empty());
@@ -1148,7 +1218,7 @@ impl PicassoApp {
     /// A Route block's line on the map, the closest that shows all of it,
     /// from a dot where it starts to a ring where it ends, with the map's
     /// credit and scale.
-    fn route_drawing(&mut self, ui: &mut egui::Ui, route: &[Vec<[i32; 2]>], width: f32) {
+    fn route_drawing(&mut self, ui: &mut egui::Ui, route: &[Vec<[i32; 2]>], profile: Option<&[[f32; 2]]>, width: f32) {
         let height = (width * 0.55).min(400.0);
         let (rect, _) = ui.allocate_exact_size(Vec2::new(width, height), Sense::hover());
         let painter = ui.painter_at(rect);
@@ -1177,6 +1247,9 @@ impl PicassoApp {
         let corner = Rect::from_min_size(rect.left_top() + Vec2::new(8.0, 8.0), galley.size() + Vec2::new(10.0, 4.0));
         painter.rect_filled(corner, 4, egui::Color32::from_white_alpha(210));
         painter.galley(corner.min + Vec2::new(5.0, 2.0), galley, egui::Color32::from_gray(40));
+        if let Some(profile) = profile {
+            elevation_chart(&painter, rect, profile);
+        }
     }
 
     /// Which of the Trip's tracks a Route block draws: all of them or one.
@@ -1304,7 +1377,7 @@ impl PicassoApp {
         height * w / h
     }
 
-    fn story_photo(&mut self, media_id: i64) -> Option<Photo> {
+    pub(super) fn story_photo(&mut self, media_id: i64) -> Option<Photo> {
         let editor = self.story.as_mut()?;
         let db = &self.db;
         editor.photos.entry(media_id).or_insert_with(|| db.media_photo(media_id).and_then(|id| db.photo(id))).clone()
@@ -2341,6 +2414,7 @@ mod tests {
             redo: Vec::new(),
             typing: None,
             photos: HashMap::new(),
+            profiles: HashMap::new(),
             job: None,
             reveal: None,
             picking: None,

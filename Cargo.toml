@@ -31,6 +31,9 @@ roxmltree = "0.21"
 # Without "rayon" each decode starts a thread per color channel, and with
 # eight thumbnail workers memory grew by about 1 MB per photo (`make bench`).
 jpeg-decoder = { version = "0.3", default-features = false, features = ["rayon"] }
+# Text and the font for the elevation chart on route maps; both already come with egui.
+ab_glyph = "0.2"
+epaint_default_fonts = "0.37"
 tiny-skia = { version = "0.11", default-features = false, features = ["std", "simd"] }
 flate2 = "1"
 ring = "0.17"
@@ -42,6 +45,16 @@ chrono-tz = "0.10"
 [target.'cfg(unix)'.dependencies]
 # Free space before a Story export, and peak memory in the benchmark (`make bench`).
 libc = "0.2"
+
+# WordPress Application Passwords, kept in the system's own credential store.
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { version = "3.6", features = ["apple-native"] }
+
+[target.'cfg(windows)'.dependencies]
+keyring = { version = "3.6", features = ["windows-native"] }
+
+[target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
+keyring = { version = "3.6", features = ["sync-secret-service", "crypto-rust", "vendored"] }
 
 [profile.dev.package."*"]
 opt-level = 1

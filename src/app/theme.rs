@@ -426,8 +426,6 @@ pub fn icon_button(ui: &mut egui::Ui, icon: Icon, enabled: bool, selected: bool)
     response
 }
 
-/// Names a button that shows only a symbol or a painted icon, for screen
-/// readers, and shows the name on hover.
 /// Actions at the right end of a header row made with
 /// `horizontal_wrapped`. When they didn't fit beside what comes first,
 /// as measured last frame under `id`, they go on a line of their own, so a
@@ -456,15 +454,27 @@ pub fn end_actions<R>(ui: &mut egui::Ui, id: &str, add: impl FnOnce(&mut egui::U
             })
             .inner;
     }
+    trailing(ui, id, add)
+}
+
+/// Actions against the right end of a row, added in reading order so Tab
+/// goes through them left to right, as a right-to-left layout wouldn't.
+/// They start as far from the end as they were wide last frame, as
+/// measured under `id`.
+pub fn trailing<R>(ui: &mut egui::Ui, id: &str, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    let key = egui::Id::unique(("end-actions", id));
+    let needed = ui.ctx().data(|data| data.get_temp::<f32>(key)).unwrap_or(0.0);
     let top = ui.cursor().min;
-    let free = egui::Rect::from_min_max(top, egui::pos2(ui.max_rect().right(), top.y + ui.spacing().interact_size.y));
-    ui.scope_builder(egui::UiBuilder::new().max_rect(free).layout(egui::Layout::right_to_left(egui::Align::Center)), |ui| {
+    let right = ui.max_rect().right();
+    let left = (right - needed).max(top.x);
+    let rect = egui::Rect::from_min_max(egui::pos2(left, top.y), egui::pos2(right, top.y + ui.spacing().interact_size.y));
+    ui.scope_builder(egui::UiBuilder::new().max_rect(rect).layout(egui::Layout::left_to_right(egui::Align::Center)), |ui| {
         let inner = add(ui);
         let width = ui.min_rect().width();
         if (width - needed).abs() > 0.5 {
             ui.ctx().data_mut(|data| data.insert_temp(key, width));
             // Lay the frame out again with the width now known, before it shows.
-            ui.ctx().request_discard("the header's actions changed width");
+            ui.ctx().request_discard("the actions at the end of a row changed width");
         }
         inner
     })
@@ -479,6 +489,25 @@ pub fn focus_ring(ui: &egui::Ui, response: &egui::Response, rect: egui::Rect) {
     }
 }
 
+/// A ring around whichever widget has keyboard focus, while focus is being
+/// moved with the keyboard. egui draws a focused button like a pressed one,
+/// which is hard to tell from its other states.
+pub fn keyboard_focus_ring(ctx: &egui::Context) {
+    let id = egui::Id::unique("keyboard-focus");
+    let (tab, pointer) = ctx.input(|input| (input.key_pressed(egui::Key::Tab), input.pointer.any_pressed()));
+    if tab || pointer {
+        ctx.data_mut(|data| data.insert_temp(id, tab));
+    }
+    if !ctx.data(|data| data.get_temp::<bool>(id)).unwrap_or(false) {
+        return;
+    }
+    let Some(response) = ctx.memory(|memory| memory.focused()).and_then(|focused| ctx.read_response(focused)) else { return };
+    let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, id));
+    painter.rect_stroke(response.rect, 6, egui::Stroke::new(2.0, ACCENT), egui::StrokeKind::Inside);
+}
+
+/// Names a button that shows only a symbol or a painted icon, for screen
+/// readers, and shows the name on hover.
 pub fn named(response: egui::Response, name: &str) -> egui::Response {
     let enabled = response.enabled();
     response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, name));

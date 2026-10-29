@@ -1535,23 +1535,8 @@ impl PicassoApp {
                     ui.ctx().request_repaint_after(left);
                 }
             }
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let gear = ui.button("     ");
-                theme::paint_settings_icon(ui.painter(), gear.rect.center(), theme::text());
-                if gear.on_hover_text(tr("Settings")).clicked() {
-                    self.open_settings(ui.ctx());
-                }
-                let help = ui.button("     ");
-                theme::paint_help_icon(ui.painter(), help.rect.center(), theme::text());
-                if help.on_hover_text(tr("Help & Shortcuts (F1)")).clicked() {
-                    self.modal = Modal::Help;
-                }
-                if ui.button(tr("Slideshow")).on_hover_text(tr("Play Fullscreen Slideshow")).clicked() {
-                    self.start_slideshow();
-                }
-                if ui.button(tr("Refresh")).on_hover_text(tr("Rescan folders")).clicked() {
-                    self.rescan();
-                }
+            theme::trailing(ui, "top-bar", |ui| {
+                self.update_link(ui);
                 if ui
                     .add(theme::primary_button(tr("+  Import")))
                     .on_hover_text(tr("Add Folder to Picasso…"))
@@ -1562,7 +1547,22 @@ impl PicassoApp {
                         error: String::new(),
                     };
                 }
-                self.update_link(ui);
+                if ui.button(tr("Refresh")).on_hover_text(tr("Rescan folders")).clicked() {
+                    self.rescan();
+                }
+                if ui.button(tr("Slideshow")).on_hover_text(tr("Play Fullscreen Slideshow")).clicked() {
+                    self.start_slideshow();
+                }
+                let help = ui.button("     ");
+                theme::paint_help_icon(ui.painter(), help.rect.center(), theme::text());
+                if help.on_hover_text(tr("Help & Shortcuts (F1)")).clicked() {
+                    self.modal = Modal::Help;
+                }
+                let gear = ui.button("     ");
+                theme::paint_settings_icon(ui.painter(), gear.rect.center(), theme::text());
+                if gear.on_hover_text(tr("Settings")).clicked() {
+                    self.open_settings(ui.ctx());
+                }
             });
         });
     }
@@ -2873,6 +2873,7 @@ impl eframe::App for PicassoApp {
                 .show(ui, |ui| self.library_ui(ui));
         }
         self.modals(ui.ctx());
+        theme::keyboard_focus_ring(ui.ctx());
         self.publish_wanted_thumbs();
     }
 }

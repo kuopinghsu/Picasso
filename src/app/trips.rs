@@ -369,6 +369,9 @@ impl PicassoApp {
             }
             // The trip's own actions, at the end of the row like the toolbar's.
             theme::end_actions(ui, "trip-tabs", |ui| {
+                if ui.button(tr("Edit trip…")).clicked() {
+                    self.open_edit_trip(trip_id);
+                }
                 let more = theme::named(ui.button("⋯"), tr("More"));
                 let mut export = false;
                 egui::Popup::menu(&more).show(|ui| {
@@ -377,9 +380,6 @@ impl PicassoApp {
                         export = true;
                     }
                 });
-                if ui.button(tr("Edit trip…")).clicked() {
-                    self.open_edit_trip(trip_id);
-                }
                 if export {
                     self.export_trip_package(ui.ctx(), trip_id);
                 }

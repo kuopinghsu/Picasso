@@ -371,6 +371,30 @@ impl PicassoApp {
                 retry = true;
             }
             theme::end_actions(ui, "story-bar", |ui| {
+                if ui.add_enabled(!editor.undo.is_empty(), egui::Button::new(tr("Undo"))).clicked() {
+                    undo = true;
+                }
+                if ui.add_enabled(!editor.redo.is_empty(), egui::Button::new(tr("Redo"))).clicked() {
+                    redo = true;
+                }
+                ui.add_space(8.0);
+                if let Some(job) = &editor.job {
+                    ui.add(egui::Spinner::new().size(13.0));
+                    let (done, total) = (job.done.load(Ordering::Relaxed), job.total.load(Ordering::Relaxed));
+                    ui.label(RichText::new(trf("Rendering photos: {} of {}", &[&done, &total])).size(13.0).color(theme::muted()));
+                    if ui.button(tr("Cancel")).clicked() {
+                        job.cancel.store(true, Ordering::Relaxed);
+                    }
+                    ui.ctx().request_repaint_after(Duration::from_millis(200));
+                } else {
+                    let button = ui.button(tr("Preview"));
+                    if button.on_hover_text(tr("Open the story in your web browser, as it will look when exported")).clicked() {
+                        preview = true;
+                    }
+                    if ui.button(tr("Export…")).clicked() {
+                        export = true;
+                    }
+                }
                 let more = theme::named(ui.button("⋯"), tr("More"));
                 egui::Popup::menu(&more).show(|ui| {
                     let label = if editor.story.archived { tr("Restore story") } else { tr("Archive story") };
@@ -382,30 +406,6 @@ impl PicassoApp {
                         delete = true;
                     }
                 });
-                if let Some(job) = &editor.job {
-                    if ui.button(tr("Cancel")).clicked() {
-                        job.cancel.store(true, Ordering::Relaxed);
-                    }
-                    let (done, total) = (job.done.load(Ordering::Relaxed), job.total.load(Ordering::Relaxed));
-                    ui.label(RichText::new(trf("Rendering photos: {} of {}", &[&done, &total])).size(13.0).color(theme::muted()));
-                    ui.add(egui::Spinner::new().size(13.0));
-                    ui.ctx().request_repaint_after(Duration::from_millis(200));
-                } else {
-                    if ui.button(tr("Export…")).clicked() {
-                        export = true;
-                    }
-                    let button = ui.button(tr("Preview"));
-                    if button.on_hover_text(tr("Open the story in your web browser, as it will look when exported")).clicked() {
-                        preview = true;
-                    }
-                }
-                ui.add_space(8.0);
-                if ui.add_enabled(!editor.redo.is_empty(), egui::Button::new(tr("Redo"))).clicked() {
-                    redo = true;
-                }
-                if ui.add_enabled(!editor.undo.is_empty(), egui::Button::new(tr("Undo"))).clicked() {
-                    undo = true;
-                }
             });
         });
         ui.add_space(6.0);

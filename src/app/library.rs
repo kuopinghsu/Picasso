@@ -696,6 +696,41 @@ impl PicassoApp {
                 return;
             }
             theme::end_actions(ui, "library-toolbar", |ui| {
+                if !self.selection.is_empty() {
+                    self.trip_menu(ui);
+                    if matches!(self.nav, Nav::Trip(_)) {
+                        self.add_to_story_menu(ui);
+                        self.arrange_menu(ui);
+                        self.day_menu(ui);
+                    }
+                    if matches!(self.nav, Nav::Trip(_)) && ui.button(tr("Remove from Trip")).clicked() {
+                        self.remove_selection_from_trip();
+                    }
+                    self.album_menu(ui);
+                    if matches!(self.nav, Nav::Album(_)) {
+                        let remove = theme::icon_button(ui, theme::Icon::RemoveFromAlbum, true, false);
+                        if remove.on_hover_text(tr("Remove from Album")).clicked() {
+                            self.remove_selection_from_album();
+                        }
+                    }
+                    let rotate = theme::icon_button(ui, theme::Icon::RotateLeft, true, false);
+                    if rotate.on_hover_text(tr("Rotate counterclockwise (Ctrl+[)")).clicked() {
+                        self.rotate_current(-90);
+                    }
+                    let rotate = theme::icon_button(ui, theme::Icon::RotateRight, true, false);
+                    if rotate.on_hover_text(tr("Rotate clockwise (Ctrl+])")).clicked() {
+                        self.rotate_current(90);
+                    }
+                    let starred = self.primary_starred();
+                    let star = egui::RichText::new(if starred { "★" } else { "☆" }).color(if starred { STAR } else { theme::text() });
+                    if theme::named(ui.button(star), tr(if starred { "Unstar" } else { "Star" })).clicked() {
+                        self.toggle_star_selection();
+                    }
+                    ui.add(egui::Separator::default().vertical().spacing(10.0));
+                }
+                if theme::named(ui.button(egui::RichText::new("★").color(STAR)), tr("Select starred photos")).clicked() {
+                    self.select_starred();
+                }
                 let mut sort = self.sort;
                 egui::ComboBox::from_id_salt("sort")
                     .selected_text(tr(match sort {
@@ -711,41 +746,6 @@ impl PicassoApp {
                 if sort != self.sort {
                     self.sort = sort;
                     self.reload_view();
-                }
-                if theme::named(ui.button(egui::RichText::new("★").color(STAR)), tr("Select starred photos")).clicked() {
-                    self.select_starred();
-                }
-                if !self.selection.is_empty() {
-                    ui.add(egui::Separator::default().vertical().spacing(10.0));
-                    let starred = self.primary_starred();
-                    let star = egui::RichText::new(if starred { "★" } else { "☆" }).color(if starred { STAR } else { theme::text() });
-                    if theme::named(ui.button(star), tr(if starred { "Unstar" } else { "Star" })).clicked() {
-                        self.toggle_star_selection();
-                    }
-                    let rotate = theme::icon_button(ui, theme::Icon::RotateRight, true, false);
-                    if rotate.on_hover_text(tr("Rotate clockwise (Ctrl+])")).clicked() {
-                        self.rotate_current(90);
-                    }
-                    let rotate = theme::icon_button(ui, theme::Icon::RotateLeft, true, false);
-                    if rotate.on_hover_text(tr("Rotate counterclockwise (Ctrl+[)")).clicked() {
-                        self.rotate_current(-90);
-                    }
-                    if matches!(self.nav, Nav::Album(_)) {
-                        let remove = theme::icon_button(ui, theme::Icon::RemoveFromAlbum, true, false);
-                        if remove.on_hover_text(tr("Remove from Album")).clicked() {
-                            self.remove_selection_from_album();
-                        }
-                    }
-                    self.album_menu(ui);
-                    if matches!(self.nav, Nav::Trip(_)) && ui.button(tr("Remove from Trip")).clicked() {
-                        self.remove_selection_from_trip();
-                    }
-                    if matches!(self.nav, Nav::Trip(_)) {
-                        self.day_menu(ui);
-                        self.arrange_menu(ui);
-                        self.add_to_story_menu(ui);
-                    }
-                    self.trip_menu(ui);
                 }
             });
         });

@@ -24,6 +24,7 @@ mod travel;
 mod theme;
 mod track_editor;
 mod tree;
+mod trip_package;
 mod trips;
 mod unreadable;
 mod updates;
@@ -253,6 +254,8 @@ pub struct PicassoApp {
     trip_filter: crate::trip::MemberQuery,
     /// The filters each Trip was left with, for coming back to it this session.
     trip_filters: HashMap<i64, crate::trip::MemberQuery>,
+    /// The Trips showing their Stories in place of their photos, this session.
+    trip_stories: std::collections::HashSet<i64>,
     /// The grid's selection and anchor when the viewer opened, given back when it closes.
     browse_selection: Option<(HashSet<i64>, Option<i64>)>,
     /// The Trip whose Days are being suggested in the background.
@@ -375,6 +378,8 @@ pub struct PicassoApp {
     /// What the latest scan of each folder could not read, by folder id.
     unreadable: HashMap<i64, Vec<crate::types::Unreadable>>,
     export_run: Option<export::ExportRun>,
+    /// A Trip package being saved or imported, shown in the status bar.
+    trip_job: Option<trip_package::TripJob>,
     dupes: Option<dupes::DupeScan>,
     dupes_run: u64,
     scans: i32,
@@ -572,6 +577,7 @@ impl PicassoApp {
             show_archived_trips: false,
             trip_filter: crate::trip::MemberQuery::default(),
             trip_filters: HashMap::new(),
+            trip_stories: std::collections::HashSet::new(),
             browse_selection: None,
             suggesting: None,
             day_undo: None,
@@ -658,6 +664,7 @@ impl PicassoApp {
             last_trashed: None,
             unreadable: HashMap::new(),
             export_run: None,
+            trip_job: None,
             dupes: None,
             dupes_run: 0,
             scans: 0,
@@ -1083,6 +1090,8 @@ impl PicassoApp {
             UiEvent::DaysSuggested { trip_id, outcome } => self.on_days_suggested(trip_id, outcome),
             UiEvent::StoryPreviewed(story_id, outcome) => self.on_story_previewed(story_id, outcome),
             UiEvent::StoryExported(story_id, outcome) => self.on_story_exported(story_id, outcome),
+            UiEvent::TripPackaged(outcome) => self.on_trip_packaged(outcome),
+            UiEvent::TripUnpacked(outcome) => self.on_trip_unpacked(*outcome),
         }
     }
 
@@ -1683,6 +1692,7 @@ impl PicassoApp {
             }
         }
         self.export_status(ui);
+        self.trip_job_status(ui);
         if let Some((at, files)) = &self.last_trashed {
             let left = UNDO_TRASH_FOR.saturating_sub(at.elapsed());
             if left.is_zero() {

@@ -362,6 +362,10 @@ pub struct Story {
     pub subtitle: String,
     pub author: String,
     pub show_date: bool,
+    /// Text that opens the Story, before its blocks; empty for none.
+    pub introduction: String,
+    /// Text that closes the Story, after its blocks; empty for none.
+    pub conclusion: String,
     /// Media reference of the cover, picked for this Story alone.
     pub cover: Option<i64>,
     pub template: String,
@@ -397,6 +401,8 @@ pub const BLOCK_VERSION: i64 = 1;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Block {
     Heading(String),
+    /// A heading one level below [`Block::Heading`].
+    Subheading(String),
     Paragraph(String),
     Photo(MediaUse),
     Gallery(Vec<MediaUse>),
@@ -405,6 +411,15 @@ pub enum Block {
     Grid { columns: u8, rows: u8, caption: String, media: Vec<MediaUse> },
     Separator,
     Credits(String),
+    /// Items with bullets, or numbered when `ordered`.
+    List { ordered: bool, items: Vec<String> },
+    /// Quoted words, and who said or wrote them.
+    Quote { text: String, citation: String },
+    /// A GPS track drawn as a line: its stretches as [latitude, longitude]
+    /// in hundred-thousandths of a degree, copied from the Trip's tracks
+    /// when chosen so the Story keeps it wherever it goes. `source` names
+    /// the track chosen, or is empty for all of the Trip's.
+    Route { caption: String, source: String, route: Vec<Vec<[i32; 2]>> },
     /// A kind or version this build doesn't know, kept as it was read.
     Unknown { kind: String, version: i64, payload: String, media: Vec<MediaUse> },
 }
@@ -414,6 +429,10 @@ impl Block {
     pub fn kind(&self) -> &str {
         match self {
             Block::Heading(_) => "heading",
+            Block::Subheading(_) => "subheading",
+            Block::List { .. } => "list",
+            Block::Quote { .. } => "quote",
+            Block::Route { .. } => "route",
             Block::Paragraph(_) => "paragraph",
             Block::Photo(_) => "photo",
             Block::Gallery(_) => "gallery",
@@ -435,8 +454,11 @@ impl Block {
     /// own rows, so the library knows which ones each Story uses.
     pub fn payload(&self) -> String {
         match self {
-            Block::Heading(text) | Block::Paragraph(text) | Block::Credits(text) => json!({ "text": text }).to_string(),
+            Block::Heading(text) | Block::Subheading(text) | Block::Paragraph(text) | Block::Credits(text) => json!({ "text": text }).to_string(),
+            Block::List { ordered, items } => json!({ "ordered": ordered, "items": items }).to_string(),
+            Block::Quote { text, citation } => json!({ "text": text, "citation": citation }).to_string(),
             Block::Grid { columns, rows, caption, .. } => json!({ "columns": columns, "rows": rows, "caption": caption }).to_string(),
+            Block::Route { caption, source, route } => json!({ "caption": caption, "source": source, "route": route }).to_string(),
             Block::Photo(_) | Block::Gallery(_) | Block::Separator => "{}".into(),
             Block::Unknown { payload, .. } => payload.clone(),
         }
@@ -468,8 +490,27 @@ impl Block {
                 _ => unknown(media),
             };
         }
+        if kind == "route" {
+            let route = serde_json::from_value::<Vec<Vec<[i32; 2]>>>(value["route"].clone()).ok();
+            return match (value["caption"].as_str(), value["source"].as_str(), route) {
+                (Some(caption), Some(source), Some(route)) if media.is_empty() => Block::Route { caption: caption.into(), source: source.into(), route },
+                _ => unknown(media),
+            };
+        }
         match (kind, text, media.len()) {
             ("heading", Some(text), 0) => Block::Heading(text),
+            ("subheading", Some(text), 0) => Block::Subheading(text),
+            ("quote", Some(text), 0) => match value["citation"].as_str() {
+                Some(citation) => Block::Quote { text, citation: citation.into() },
+                None => unknown(media),
+            },
+            ("list", _, 0) => {
+                let items = value["items"].as_array().and_then(|items| items.iter().map(|item| item.as_str().map(str::to_string)).collect::<Option<Vec<_>>>());
+                match (value["ordered"].as_bool(), items) {
+                    (Some(ordered), Some(items)) => Block::List { ordered, items },
+                    _ => unknown(media),
+                }
+            }
             ("paragraph", Some(text), 0) => Block::Paragraph(text),
             ("credits", Some(text), 0) => Block::Credits(text),
             ("separator", _, 0) => Block::Separator,
@@ -493,6 +534,76 @@ pub fn grid_layout_for(count: usize) -> (u8, u8) {
         .filter(|(columns, rows)| usize::from(columns * rows) >= count)
         .min_by_key(|(columns, rows)| (usize::from(columns * rows) - count, columns.abs_diff(*rows)))
         .unwrap_or((3, 3))
+}
+
+/// Most points a Route block keeps: enough for a line across a page.
+pub const ROUTE_POINTS: usize = 800;
+
+/// The points of `tracks` for a Route block, every so many kept so there
+/// are no more than [`ROUTE_POINTS`], each stretch with its last point.
+pub fn route_of(tracks: &[crate::track::Track]) -> Vec<Vec<[i32; 2]>> {
+    let segments: Vec<&Vec<crate::track::Point>> = tracks.iter().flat_map(|track| &track.segments).collect();
+    let total: usize = segments.iter().map(|segment| segment.len()).sum();
+    let step = total.div_ceil(ROUTE_POINTS).max(1);
+    let fixed = |point: &crate::track::Point| [(point.lat * 1e5).round() as i32, (point.lon * 1e5).round() as i32];
+    segments
+        .into_iter()
+        .filter_map(|segment| {
+            let mut kept: Vec<[i32; 2]> = segment.iter().step_by(step).map(fixed).collect();
+            if (segment.len() - 1) % step != 0 {
+                kept.extend(segment.last().map(fixed));
+            }
+            (kept.len() >= 2).then_some(kept)
+        })
+        .collect()
+}
+
+/// Closest zoom a route map shows, a few streets across.
+pub const ROUTE_MAX_ZOOM: u8 = 16;
+
+/// Where a Route block's map is: its zoom, and the middle of the map as a
+/// world position in pixels at that zoom.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RouteView {
+    pub zoom: u8,
+    pub x: f64,
+    pub y: f64,
+}
+
+/// The closest map that shows a Route block's stretches in a `width` ×
+/// `height` box, `pad` from its edges, and the stretches in that box, north
+/// up. `None` for a route without points.
+pub fn route_shape(route: &[Vec<[i32; 2]>], width: f32, height: f32, pad: f32) -> Option<(RouteView, Vec<Vec<[f32; 2]>>)> {
+    let world = |[lat, lon]: [i32; 2]| crate::geo::latlon_to_world(f64::from(lat) / 1e5, f64::from(lon) / 1e5, 0);
+    let points: Vec<Vec<(f64, f64)>> = route.iter().map(|segment| segment.iter().map(|&point| world(point)).collect()).collect();
+    let (mut min, mut max) = ((f64::MAX, f64::MAX), (f64::MIN, f64::MIN));
+    for &(x, y) in points.iter().flatten() {
+        min = (min.0.min(x), min.1.min(y));
+        max = (max.0.max(x), max.1.max(y));
+    }
+    if min.0 > max.0 {
+        return None;
+    }
+    let (inner_w, inner_h) = (f64::from((width - 2.0 * pad).max(1.0)), f64::from((height - 2.0 * pad).max(1.0)));
+    let fits = |zoom: u8| {
+        let scale = f64::from(1u32 << zoom);
+        (max.0 - min.0) * scale <= inner_w && (max.1 - min.1) * scale <= inner_h
+    };
+    let zoom = (0..=ROUTE_MAX_ZOOM).rev().find(|&zoom| fits(zoom)).unwrap_or(0);
+    let scale = f64::from(1u32 << zoom);
+    let view = RouteView { zoom, x: (min.0 + max.0) / 2.0 * scale, y: (min.1 + max.1) / 2.0 * scale };
+    let (half_w, half_h) = (f64::from(width) / 2.0, f64::from(height) / 2.0);
+    let shape = points
+        .iter()
+        .map(|segment| segment.iter().map(|&(x, y)| [(half_w + x * scale - view.x) as f32, (half_h + y * scale - view.y) as f32]).collect())
+        .collect();
+    Some((view, shape))
+}
+
+/// How long a Route block's line is, in meters.
+pub fn route_meters(route: &[Vec<[i32; 2]>]) -> f64 {
+    let point = |[lat, lon]: [i32; 2]| crate::track::Point { lat: f64::from(lat) / 1e5, lon: f64::from(lon) / 1e5, time: None };
+    route.iter().flat_map(|segment| segment.windows(2)).map(|pair| crate::track::distance_m(&point(pair[0]), &point(pair[1]))).sum()
 }
 
 /// A block and the id it keeps through edits, moves, and saves.
@@ -524,6 +635,24 @@ pub fn new_uid() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_route_keeps_few_points_and_draws_inside_its_box() {
+        let point = |n: usize| crate::track::Point { lat: 35.0 + n as f64 * 1e-4, lon: 135.0, time: None };
+        let track = crate::track::Track { name: "Walk".into(), segments: vec![(0..2001).map(point).collect(), vec![point(0)]] };
+        let route = route_of(&[track]);
+        assert_eq!(route.len(), 1, "a stretch of one point is no line");
+        assert!(route[0].len() <= ROUTE_POINTS + 1);
+        assert_eq!(route[0].last(), Some(&[3_520_000, 13_500_000]), "the last point stays");
+        assert!((route_meters(&route) - 22_240.0).abs() < 100.0);
+        let block = Block::Route { caption: "Kyoto".into(), source: "/w.gpx".into(), route: route.clone() };
+        assert_eq!(Block::read(block.kind(), block.version(), &block.payload(), Vec::new()), block);
+        let (view, shape) = route_shape(&route, 200.0, 100.0, 10.0).unwrap();
+        assert!(shape.iter().flatten().all(|&[x, y]| (10.0..=190.0).contains(&x) && (10.0..=90.0).contains(&y)));
+        let (closer, _) = route_shape(&route, 400.0, 200.0, 20.0).unwrap();
+        assert_eq!(closer.zoom, view.zoom + 1, "twice the box is one zoom closer");
+        assert!(route_shape(&[], 200.0, 100.0, 10.0).is_none());
+    }
 
     #[test]
     fn a_trip_zone_is_a_named_zone_or_a_fixed_offset() {

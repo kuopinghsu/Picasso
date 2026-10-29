@@ -666,6 +666,14 @@ impl Database {
         }
     }
 
+    /// The id and path of every photo of exactly `bytes` bytes.
+    pub fn photos_with_bytes(&self, bytes: u64) -> Vec<(i64, String)> {
+        self.conn
+            .prepare("SELECT id, path FROM photos WHERE bytes = ?1")
+            .and_then(|mut stmt| stmt.query_map([bytes as i64], |row| Ok((row.get(0)?, row.get(1)?)))?.collect())
+            .unwrap_or_default()
+    }
+
     /// Photos sharing their byte count, pixel size, and the date in the file
     /// with another, in groups that may hold copies of the same file. Some
     /// cameras pad every file to a block size, so the byte count alone
@@ -963,6 +971,21 @@ impl Database {
             .filter(|(_, path)| !seen.contains(path.as_str()))
             .filter(|(id, _)| self.conn.execute("DELETE FROM tracks WHERE id=?1", [id]).unwrap_or(0) > 0)
             .count()
+    }
+
+    /// The paths of every stored track.
+    pub fn track_paths(&self) -> Vec<String> {
+        self.map_rows("SELECT path FROM tracks", [], |row| row.get(0))
+    }
+
+    /// The stored track `id` with its points.
+    pub fn track(&self, id: i64) -> Option<Track> {
+        self.conn
+            .query_row("SELECT name, points FROM tracks WHERE id = ?1", [id], |row| {
+                let points: Vec<u8> = row.get(1)?;
+                Ok(Track::decode(row.get(0)?, &points))
+            })
+            .ok()
     }
 
     /// Every stored track as (id, folder id, path, track), oldest first.

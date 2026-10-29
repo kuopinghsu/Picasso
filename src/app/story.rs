@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 use eframe::egui::{self, Align, Layout, Margin, Modifiers, Pos2, Rect, RichText, Sense, Vec2};
 
 use crate::i18n::{tr, trf};
+use crate::inline::{self, Mark};
 use crate::trip::{grid_layout_for, Block, DayFilter, MediaUse, MemberQuery, Story, StoryBlock, GRID_LAYOUTS};
 use crate::story_html;
 use crate::types::{Nav, Photo};
@@ -19,8 +20,22 @@ use super::{about, theme, Modal, PicassoApp, UiEvent};
 const SAVE_PAUSE: Duration = Duration::from_secs(1);
 /// Changes are saved at the latest this long after the first unsaved one.
 const SAVE_WITHIN: Duration = Duration::from_secs(5);
-const PHOTO_HEIGHT: f32 = 180.0;
-const GALLERY_TILE: f32 = 96.0;
+/// Tallest a single photo is shown in the editor.
+const PHOTO_MAX_HEIGHT: f32 = 520.0;
+/// Height of the tools floating above a block.
+const TOOLS_HEIGHT: f32 = 30.0;
+/// Height of the gap between blocks, where a block is added or dropped.
+const GAP: f32 = 14.0;
+/// Photos in a row of a gallery in the editor.
+const GALLERY_COLUMNS: u8 = 3;
+/// The width of the Story's text and photos, like a page.
+const PAGE_WIDTH: f32 = 720.0;
+/// The tallest the cover is drawn across the top of the Story.
+const COVER_MAX_HEIGHT: f32 = 300.0;
+/// The room between a block's outline and its text.
+const BLOCK_INSET: i8 = 10;
+/// Words read in a minute, for the reading time.
+const WORDS_A_MINUTE: usize = 200;
 /// Photos in the strip to pick from.
 const PICK_TILE: f32 = 72.0;
 /// Most photos the strip shows at once; a Day narrows it.
@@ -52,6 +67,12 @@ pub(super) struct StoryEditor {
     reveal: Option<usize>,
     /// The gallery or grid photos are being picked for, from the Trip.
     picking: Option<Picker>,
+    /// The block last clicked, whose tools stay shown, by id.
+    active: Option<String>,
+    /// The block under the pointer, by id.
+    hovered: Option<String>,
+    /// The caret and the format buttons of the text fields.
+    text: TextCtl,
 }
 
 /// Picking the Trip's photos into one gallery or grid.
@@ -97,11 +118,12 @@ struct PageJob {
     sources: HashMap<i64, story_html::Source>,
     dates: Option<String>,
     words: story_html::Words,
+    map: story_html::MapTiles,
 }
 
 impl PageJob {
     fn page(&self) -> story_html::Page<'_> {
-        story_html::Page { story: &self.story, dates: self.dates.as_deref(), blocks: &self.blocks, sources: &self.sources, words: &self.words }
+        story_html::Page { story: &self.story, dates: self.dates.as_deref(), blocks: &self.blocks, sources: &self.sources, words: &self.words, map: Some(&self.map) }
     }
 }
 
@@ -115,6 +137,12 @@ pub(super) struct ExportDialog {
     check: story_html::Preflight,
     /// The user chose to export unavailable photos as unavailable.
     skip_missing: bool,
+}
+
+#[derive(Clone, Copy)]
+enum Section {
+    Introduction,
+    Conclusion,
 }
 
 /// How photos added to a Story together are placed.
@@ -142,6 +170,31 @@ enum Action {
     Toggle(usize, i64),
     /// Puts a dragged photo at place `n` of the gallery or grid at `i`.
     Drop(Drag, usize, usize),
+    /// Splits the text block at `i` at character `n`: the rest goes to a
+    /// new paragraph below, with the caret.
+    Split(usize, usize),
+    /// Removes the empty text block at `i`, the caret going to the end of
+    /// the text block before it.
+    RemoveEmpty(usize),
+    /// Makes the block at `i` another kind, as chosen with "/".
+    Replace(usize, Block),
+    /// Moves the block at `i` to the gap before block `n`.
+    Move(usize, usize),
+    /// Splits item `n` of the list at `i` at character `at`: the rest is
+    /// a new item below, with the caret.
+    ListSplit(usize, usize, usize),
+    /// Ends the list at `i` at its empty item `n`, with a paragraph after.
+    ListEnd(usize, usize),
+    /// Removes the empty item `n` of the list at `i`; the only one turns
+    /// the list back into a paragraph.
+    ListBack(usize, usize),
+    /// Puts a style around the selection of the field last typed in.
+    Format(Mark),
+    /// Moves the caret from the block at `i` to the text block before it
+    /// (true) or after it.
+    Step(usize, bool),
+    /// Joins the text block at `i` to the end of the text block before it.
+    Merge(usize),
 }
 
 /// How a block's photos are laid out.
@@ -209,6 +262,9 @@ impl PicassoApp {
             job: None,
             reveal: None,
             picking: None,
+            active: None,
+            hovered: None,
+            text: TextCtl::default(),
         });
     }
 
@@ -301,6 +357,9 @@ impl PicassoApp {
                 (None, None) => (tr("Saved").to_string(), theme::muted()),
             };
             ui.label(RichText::new(status).size(13.0).color(color));
+            let words = story_words(editor);
+            let minutes = words.div_ceil(WORDS_A_MINUTE).max(1);
+            ui.label(RichText::new(trf("{} words · {} min read", &[&words, &minutes])).size(13.0).color(theme::muted()));
             if editor.error.is_some() && ui.button(tr("Try again")).clicked() {
                 retry = true;
             }
@@ -311,6 +370,7 @@ impl PicassoApp {
                     if ui.button(label).clicked() {
                         archive = true;
                     }
+                    ui.separator();
                     if ui.button(tr("Delete story…")).clicked() {
                         delete = true;
                     }
@@ -345,10 +405,19 @@ impl PicassoApp {
 
         let mut actions = Vec::new();
         let mut typed: Option<(String, u8)> = None;
-        egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-            ui.set_max_width(760.0);
-            self.story_details(ui, &mut actions, &mut typed);
-            ui.add_space(10.0);
+        egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |outer| {
+            let ui = &mut *outer;
+            // A column the width of a page, in the middle like a document.
+            let side = ((ui.available_width() - PAGE_WIDTH) / 2.0).max(0.0);
+            let column = Rect::from_min_size(ui.cursor().min + Vec2::new(side, 0.0), Vec2::new(ui.available_width().min(PAGE_WIDTH), f32::INFINITY));
+            let mut page = ui.new_child(egui::UiBuilder::new().max_rect(column).layout(Layout::top_down(Align::Min)));
+            let ui = &mut page;
+            // The title and sections start where the blocks' text does.
+            egui::Frame::new().inner_margin(Margin::symmetric(BLOCK_INSET, 0)).show(ui, |ui| {
+                self.story_details(ui, &mut actions, &mut typed);
+                ui.add_space(10.0);
+                self.story_section(ui, Section::Introduction, &mut typed);
+            });
             let count = self.story.as_ref().map_or(0, |editor| editor.blocks.len());
             if count == 0 {
                 ui.label(
@@ -359,19 +428,22 @@ impl PicassoApp {
                 );
             }
             for index in 0..count {
+                inserter(ui, index, &mut actions);
                 self.story_block(ui, index, count, &mut actions, &mut typed);
             }
-            ui.add_space(6.0);
-            ui.horizontal(|ui| {
-                ui.label(RichText::new(tr("Add")).size(13.0).color(theme::muted()));
-                for (label, block) in new_blocks() {
-                    if ui.button(tr(label)).clicked() {
-                        actions.push(Action::Insert(count, block));
-                    }
-                }
-                grid_menu(ui, count, &mut actions);
+            inserter(ui, count, &mut actions);
+            // Like the end of a page: a click starts a new paragraph there.
+            let start = egui::Button::new(RichText::new(tr("Start writing, or type / to choose a block")).size(15.0).color(theme::muted())).frame(false);
+            if ui.add(start).clicked() {
+                actions.push(Action::Insert(count, Block::Paragraph(String::new())));
+            }
+            ui.add_space(10.0);
+            egui::Frame::new().inner_margin(Margin::symmetric(BLOCK_INSET, 0)).show(ui, |ui| {
+                self.story_section(ui, Section::Conclusion, &mut typed);
             });
-            ui.add_space(20.0);
+            ui.add_space(40.0);
+            let used = page.min_rect();
+            outer.allocate_rect(used, Sense::hover());
         });
 
         let Some(editor) = &mut self.story else { return };
@@ -484,7 +556,8 @@ impl PicassoApp {
             untitled: tr("Untitled story").into(),
             unavailable: tr("Photo unavailable").into(),
         };
-        Some(PageJob { story, blocks, sources, dates, words })
+        let map = story_html::MapTiles { source: self.map_source, key: self.carto_key.clone(), cache: self.cache_dir.clone() };
+        Some(PageJob { story, blocks, sources, dates, words, map })
     }
 
     /// The Export dialog, with the settings of the last Story export.
@@ -697,256 +770,442 @@ impl PicassoApp {
         };
     }
 
+    /// The top of the Story as it reads: the cover across the page, the
+    /// title and subtitle in large type, and the byline and settings in a
+    /// quiet row below them.
     fn story_details(&mut self, ui: &mut egui::Ui, actions: &mut Vec<Action>, typed: &mut Option<(String, u8)>) {
         let cover = self.story.as_ref().and_then(|editor| editor.story.cover);
-        ui.horizontal(|ui| {
-            let (rect, response) = ui.allocate_exact_size(Vec2::new(120.0, 90.0), Sense::click());
-            match cover {
-                Some(media_id) => {
-                    self.paint_media(ui, media_id, rect, true);
-                    response.context_menu(|ui| {
-                        if ui.button(tr("Remove cover")).clicked() {
-                            actions.push(Action::Cover(None));
-                            ui.close();
-                        }
-                    });
-                }
-                None => {
-                    ui.painter().rect_filled(rect, 4, theme::placeholder());
-                    let hint = tr("No cover");
-                    ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, hint, egui::FontId::proportional(12.0), theme::muted());
-                    response.on_hover_text(tr("Right-click a photo in the story to make it the cover"));
-                }
-            }
-            ui.vertical(|ui| {
-                let Some(editor) = &mut self.story else { return };
-                let story = &mut editor.story;
-                let title = egui::TextEdit::singleline(&mut story.title)
-                    .hint_text(tr("Untitled story"))
-                    .font(egui::FontId::proportional(22.0))
-                    .desired_width(f32::INFINITY);
-                if ui.add(title).changed() {
-                    *typed = Some((String::new(), 0));
-                }
-                let subtitle = egui::TextEdit::singleline(&mut story.subtitle).hint_text(tr("Subtitle")).desired_width(f32::INFINITY);
-                if ui.add(subtitle).changed() {
-                    *typed = Some((String::new(), 1));
-                }
-                ui.horizontal(|ui| {
-                    let author = egui::TextEdit::singleline(&mut story.author).hint_text(tr("Author")).desired_width(200.0);
-                    if ui.add(author).changed() {
-                        *typed = Some((String::new(), 2));
+        let width = ui.available_width();
+        match cover {
+            Some(media_id) => {
+                let (rect, response) = ui.allocate_exact_size(Vec2::new(width, (width * 0.42).min(COVER_MAX_HEIGHT)), Sense::click());
+                self.paint_media(ui, media_id, rect, true);
+                response.context_menu(|ui| {
+                    if ui.button(tr("Remove cover")).clicked() {
+                        actions.push(Action::Cover(None));
+                        ui.close();
                     }
-                    ui.checkbox(&mut story.show_date, tr("Show the trip's dates"));
-                    ui.checkbox(&mut story.finished, tr("Finished")).on_hover_text(tr("A story is a draft until you mark it finished."));
                 });
-            });
+                ui.add_space(16.0);
+            }
+            None => {
+                let hint = format!("{} · {}", tr("No cover"), tr("Right-click a photo in the story to make it the cover"));
+                ui.label(RichText::new(hint).size(12.0).color(theme::muted()));
+                ui.add_space(6.0);
+            }
+        }
+        let Some(editor) = &mut self.story else { return };
+        let story = &mut editor.story;
+        let title = egui::TextEdit::singleline(&mut story.title)
+            .hint_text(RichText::new(tr("Untitled story")).size(32.0).color(theme::muted()))
+            .font(egui::FontId::proportional(32.0))
+            .frame(egui::Frame::NONE)
+            .desired_width(f32::INFINITY);
+        if ui.add(title).changed() {
+            *typed = Some((String::new(), 0));
+        }
+        let subtitle = egui::TextEdit::singleline(&mut story.subtitle)
+            .hint_text(RichText::new(tr("Subtitle")).size(18.0).color(theme::muted()))
+            .font(egui::FontId::proportional(18.0))
+            .text_color(theme::muted())
+            .frame(egui::Frame::NONE)
+            .desired_width(f32::INFINITY);
+        if ui.add(subtitle).changed() {
+            *typed = Some((String::new(), 1));
+        }
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            let author = egui::TextEdit::singleline(&mut story.author).hint_text(tr("Author")).frame(egui::Frame::NONE).desired_width(180.0);
+            if ui.add(author).changed() {
+                *typed = Some((String::new(), 2));
+            }
+            ui.label(RichText::new("·").color(theme::muted()));
+            ui.checkbox(&mut story.show_date, tr("Show the trip's dates"));
+            ui.label(RichText::new("·").color(theme::muted()));
+            ui.checkbox(&mut story.finished, tr("Finished")).on_hover_text(tr("A story is a draft until you mark it finished."));
+        });
+        ui.add_space(8.0);
+        ui.separator();
+    }
+
+    /// The optional Introduction before the blocks or Conclusion after
+    /// them; left empty, the export leaves it out.
+    fn story_section(&mut self, ui: &mut egui::Ui, section: Section, typed: &mut Option<(String, u8)>) {
+        let Some(StoryEditor { story, text: ctl, .. }) = &mut self.story else { return };
+        let (label, hint, text, field) = match section {
+            Section::Introduction => (tr("Introduction"), tr("How the story begins (optional)"), &mut story.introduction, 3),
+            Section::Conclusion => (tr("Conclusion"), tr("How the story ends (optional)"), &mut story.conclusion, 4),
+        };
+        ui.label(RichText::new(label).size(13.0).color(theme::muted()));
+        if styled_field(ui, text, field_id("story", usize::from(field)), 16.0, true, hint, ctl, None).0.changed() {
+            *typed = Some((String::new(), field));
+        }
+        ui.add_space(6.0);
+    }
+
+    /// One block as it reads on the page, with no frame until it is pointed
+    /// at or chosen; its tools float above it then.
+    fn story_block(&mut self, ui: &mut egui::Ui, index: usize, count: usize, actions: &mut Vec<Action>, typed: &mut Option<(String, u8)>) {
+        let Some(editor) = &self.story else { return };
+        let uid = editor.blocks[index].uid.clone();
+        let active = editor.active.as_deref() == Some(uid.as_str());
+        let stroke = if active {
+            egui::Stroke::new(1.0, theme::ACCENT)
+        } else if editor.hovered.as_deref() == Some(uid.as_str()) {
+            egui::Stroke::new(1.0, theme::muted().gamma_multiply(0.4))
+        } else {
+            egui::Stroke::NONE
+        };
+        let frame = egui::Frame::new().stroke(stroke).corner_radius(4).inner_margin(Margin::symmetric(BLOCK_INSET, 6));
+        let shown = frame.show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            self.block_body(ui, index, &uid, actions, typed);
+        });
+        let rect = shown.response.rect;
+        // The block, or its tools as last drawn: they float over the gap
+        // above, so pointing at the gap itself leaves them to its +.
+        let tools = egui::Id::unique(("block-tools", &uid));
+        // The tools are a layer above the page, so the pointer is checked
+        // against where they are, not against what is on top there.
+        let pointer = ui.input(|input| input.pointer.hover_pos());
+        let over_tools = ui.ctx().memory(|memory| memory.area_rect(tools)).zip(pointer).is_some_and(|(tools, at)| tools.contains(at));
+        let pointed = ui.rect_contains_pointer(rect) || over_tools;
+        let Some(editor) = &mut self.story else { return };
+        if pointed {
+            editor.hovered = Some(uid.clone());
+            if ui.input(|input| input.pointer.primary_pressed()) {
+                editor.active = Some(uid.clone());
+            }
+        } else if editor.hovered.as_deref() == Some(uid.as_str()) {
+            editor.hovered = None;
+        }
+        if active || pointed {
+            let top = (rect.top() - TOOLS_HEIGHT).max(ui.clip_rect().top());
+            egui::Area::new(tools)
+                .order(egui::Order::Foreground)
+                .fixed_pos(egui::pos2(rect.left(), top))
+                .show(ui.ctx(), |ui| {
+                    egui::Frame::popup(ui.style()).inner_margin(Margin::symmetric(6, 2)).show(ui, |ui| {
+                        ui.horizontal(|ui| self.block_tools(ui, index, count, &uid, actions));
+                    });
+                });
+        }
+        if let Some(editor) = self.story.as_mut().filter(|editor| editor.reveal == Some(index)) {
+            editor.reveal = None;
+            ui.scroll_to_rect(rect, Some(Align::Center));
+        }
+    }
+
+    /// The tools of the block pointed at or chosen: a handle to drag it by,
+    /// its kind and layout, moving it, and the rest in ⋯.
+    fn block_tools(&mut self, ui: &mut egui::Ui, index: usize, count: usize, uid: &str, actions: &mut Vec<Action>) {
+        let Some(editor) = &self.story else { return };
+        let block = &editor.blocks[index].block;
+        let media = block.media().len();
+        let gallery = matches!(block, Block::Gallery(_));
+        let grid = match block {
+            Block::Grid { columns, rows, .. } => Some((*columns, *rows)),
+            _ => None,
+        };
+        let photos = matches!(block, Block::Photo(_)) || gallery || grid.is_some();
+        let label = block_label(block);
+        let handle = ui.add(egui::Label::new(RichText::new("⋮⋮").size(15.0).color(theme::muted())).sense(Sense::drag()));
+        if handle.drag_started() || handle.dragged() {
+            handle.dnd_set_drag_payload(MoveBlock(index));
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+        } else if handle.on_hover_text(tr("Drag to move this block")).hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+        }
+        ui.label(RichText::new(tr(label)).size(12.0).color(theme::muted()));
+        if photos {
+            layout_menu(ui, index, uid, media, grid, gallery, actions);
+        }
+        if is_text(block) {
+            text_tools(ui, index, block, actions);
+        }
+        if theme::named(ui.add_enabled(index > 0, egui::Button::new("↑").small()), tr("Move up")).clicked() {
+            actions.push(Action::Up(index));
+        }
+        if theme::named(ui.add_enabled(index + 1 < count, egui::Button::new("↓").small()), tr("Move down")).clicked() {
+            actions.push(Action::Down(index));
+        }
+        let more = theme::named(ui.add(egui::Button::new("⋯").small()), tr("More"));
+        egui::Popup::menu(&more).show(|ui| {
+            if ui.button(tr("Duplicate")).clicked() {
+                actions.push(Action::Duplicate(index));
+            }
+            ui.menu_button(tr("Add below"), |ui| block_menu(ui, index + 1, actions));
+            ui.separator();
+            if ui.button(tr("Remove")).clicked() {
+                actions.push(Action::Remove(index));
+            }
         });
     }
 
-    fn story_block(&mut self, ui: &mut egui::Ui, index: usize, count: usize, actions: &mut Vec<Action>, typed: &mut Option<(String, u8)>) {
-        let frame = egui::Frame::new()
-            .fill(theme::sidebar())
-            .corner_radius(6)
-            .inner_margin(Margin::symmetric(12, 8));
-        let shown = frame.show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            let Some(editor) = &self.story else { return };
-            let block = &editor.blocks[index].block;
-            let label = block_label(block);
-            let uid = editor.blocks[index].uid.clone();
-            let media: Vec<i64> = block.media().iter().map(|media| media.media_id).collect();
-            let (photo, gallery) = (matches!(block, Block::Photo(_)), matches!(block, Block::Gallery(_)));
-            let grid = match block {
-                Block::Grid { columns, rows, .. } => Some((*columns, *rows)),
-                _ => None,
-            };
-            let mut pick = false;
-            ui.horizontal(|ui| {
-                ui.label(RichText::new(tr(label)).size(12.0).color(theme::muted()));
-                if photo || gallery || grid.is_some() {
-                    layout_menu(ui, index, &uid, media.len(), grid, gallery, actions);
+    /// What a block holds, drawn the width of the page: photos at their
+    /// size, and text in the type it will have.
+    fn block_body(&mut self, ui: &mut egui::Ui, index: usize, uid: &str, actions: &mut Vec<Action>, typed: &mut Option<(String, u8)>) {
+        let Some(editor) = &self.story else { return };
+        let block = &editor.blocks[index].block;
+        let media: Vec<i64> = block.media().iter().map(|media| media.media_id).collect();
+        let (photo, gallery) = (matches!(block, Block::Photo(_)), matches!(block, Block::Gallery(_)));
+        let grid = match block {
+            Block::Grid { columns, rows, .. } => Some((*columns, *rows)),
+            _ => None,
+        };
+        let width = ui.available_width();
+        let gap = 4.0;
+        let mut pick = false;
+        if photo {
+            let aspect = self.media_width(media[0], 1.0);
+            let height = (width / aspect).min(PHOTO_MAX_HEIGHT);
+            let (rect, response) = ui.allocate_exact_size(Vec2::new((height * aspect).min(width), height), Sense::click_and_drag());
+            self.paint_media(ui, media[0], rect, false);
+            drag_source(ui, &response, Drag::Placed(index, 0));
+            drop_target(ui, &response, index, 0, actions);
+            response.context_menu(|ui| {
+                if ui.button(tr("Use as cover")).clicked() {
+                    actions.push(Action::Cover(Some(media[0])));
+                    ui.close();
                 }
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    let more = theme::named(ui.button("⋯"), tr("More"));
-                    egui::Popup::menu(&more).show(|ui| {
-                        if ui.add_enabled(index > 0, egui::Button::new(tr("Move up"))).clicked() {
-                            actions.push(Action::Up(index));
-                        }
-                        if ui.add_enabled(index + 1 < count, egui::Button::new(tr("Move down"))).clicked() {
-                            actions.push(Action::Down(index));
-                        }
-                        if ui.button(tr("Duplicate")).clicked() {
-                            actions.push(Action::Duplicate(index));
-                        }
-                        ui.menu_button(tr("Add below"), |ui| {
-                            for (label, block) in new_blocks() {
-                                if ui.button(tr(label)).clicked() {
-                                    actions.push(Action::Insert(index + 1, block));
-                                }
+            });
+        } else if let Some((columns, rows)) = grid {
+            // The grid as it will be laid out: places in order, more rows
+            // for photos beyond them, and empty places outlined.
+            let cell = (width - gap * f32::from(columns - 1)) / f32::from(columns);
+            let height = if columns == 1 { cell * 2.0 / 3.0 } else { cell * 3.0 / 4.0 };
+            let places = usize::from(columns) * usize::from(rows).max(media.len().div_ceil(usize::from(columns)));
+            for row in 0..places / usize::from(columns) {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = gap;
+                    for column in 0..usize::from(columns) {
+                        let n = row * usize::from(columns) + column;
+                        let (rect, response) = ui.allocate_exact_size(Vec2::new(cell, height), Sense::click_and_drag());
+                        let Some(&media_id) = media.get(n) else {
+                            let stroke = egui::Stroke::new(1.0, theme::muted().gamma_multiply(0.5));
+                            ui.painter().rect_stroke(rect, 4, stroke, egui::StrokeKind::Inside);
+                            ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, "+", egui::FontId::proportional(20.0), theme::muted());
+                            drop_target(ui, &response, index, media.len(), actions);
+                            if response.on_hover_text(tr("Add photos from the trip, or drop one here")).clicked() {
+                                pick = true;
                             }
-                            grid_menu(ui, index + 1, actions);
+                            continue;
+                        };
+                        self.paint_media(ui, media_id, rect, true);
+                        drag_source(ui, &response, Drag::Placed(index, n));
+                        drop_target(ui, &response, index, n, actions);
+                        response.context_menu(|ui| {
+                            if ui.button(tr("Use as cover")).clicked() {
+                                actions.push(Action::Cover(Some(media_id)));
+                                ui.close();
+                            }
+                            if ui.button(tr("Remove from grid")).clicked() {
+                                actions.push(Action::RemoveFromGallery(index, n));
+                                ui.close();
+                            }
                         });
-                        ui.separator();
-                        if ui.button(tr("Remove")).clicked() {
-                            actions.push(Action::Remove(index));
-                        }
-                    });
-                    if theme::named(ui.add_enabled(index + 1 < count, egui::Button::new("↓")), tr("Move down")).clicked() {
-                        actions.push(Action::Down(index));
-                    }
-                    if theme::named(ui.add_enabled(index > 0, egui::Button::new("↑")), tr("Move up")).clicked() {
-                        actions.push(Action::Up(index));
                     }
                 });
-            });
-            if photo {
-                {
-                    let height = PHOTO_HEIGHT;
-                    let width = self.media_width(media[0], height).min(ui.available_width());
-                    let (rect, response) = ui.allocate_exact_size(Vec2::new(width, height), Sense::click_and_drag());
-                    self.paint_media(ui, media[0], rect, false);
-                    drag_source(ui, &response, Drag::Placed(index, 0));
-                    drop_target(ui, &response, index, 0, actions);
+                ui.add_space(gap - ui.spacing().item_spacing.y);
+            }
+        } else if gallery {
+            let tile = (width - gap * f32::from(GALLERY_COLUMNS - 1)) / f32::from(GALLERY_COLUMNS);
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing = Vec2::splat(gap);
+                for (n, &media_id) in media.iter().enumerate() {
+                    let (rect, response) = ui.allocate_exact_size(Vec2::splat(tile), Sense::click_and_drag());
+                    self.paint_media(ui, media_id, rect, true);
+                    drag_source(ui, &response, Drag::Placed(index, n));
+                    drop_target(ui, &response, index, n, actions);
                     response.context_menu(|ui| {
                         if ui.button(tr("Use as cover")).clicked() {
-                            actions.push(Action::Cover(Some(media[0])));
+                            actions.push(Action::Cover(Some(media_id)));
+                            ui.close();
+                        }
+                        if ui.button(tr("Remove from gallery")).clicked() {
+                            actions.push(Action::RemoveFromGallery(index, n));
                             ui.close();
                         }
                     });
                 }
-            } else if let Some((columns, rows)) = grid {
-                // The grid as it will be laid out: places in order, more rows
-                // for photos beyond them, and empty places outlined.
-                let gap = 4.0;
-                let cell = ((ui.available_width().min(560.0) - gap * f32::from(columns - 1)) / f32::from(columns)).min(160.0);
-                let height = if columns == 1 { cell * 2.0 / 3.0 } else { cell * 3.0 / 4.0 };
-                let places = usize::from(columns) * usize::from(rows).max(media.len().div_ceil(usize::from(columns)));
-                for row in 0..places / usize::from(columns) {
-                    ui.horizontal(|ui| {
-                        ui.spacing_mut().item_spacing.x = gap;
-                        for column in 0..usize::from(columns) {
-                            let n = row * usize::from(columns) + column;
-                            let (rect, response) = ui.allocate_exact_size(Vec2::new(cell, height), Sense::click_and_drag());
-                            let Some(&media_id) = media.get(n) else {
-                                let stroke = egui::Stroke::new(1.0, theme::muted().gamma_multiply(0.5));
-                                ui.painter().rect_stroke(rect, 4, stroke, egui::StrokeKind::Inside);
-                                ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, "+", egui::FontId::proportional(20.0), theme::muted());
-                                drop_target(ui, &response, index, media.len(), actions);
-                                if response.on_hover_text(tr("Add photos from the trip, or drop one here")).clicked() {
-                                    pick = true;
-                                }
-                                continue;
-                            };
-                            self.paint_media(ui, media_id, rect, true);
-                            drag_source(ui, &response, Drag::Placed(index, n));
-                            drop_target(ui, &response, index, n, actions);
-                            response.context_menu(|ui| {
-                                if ui.button(tr("Use as cover")).clicked() {
-                                    actions.push(Action::Cover(Some(media_id)));
-                                    ui.close();
-                                }
-                                if ui.button(tr("Remove from grid")).clicked() {
-                                    actions.push(Action::RemoveFromGallery(index, n));
-                                    ui.close();
-                                }
-                            });
-                        }
-                    });
-                    ui.add_space(gap - ui.spacing().item_spacing.y);
-                }
-            } else if gallery {
-                {
-                    ui.horizontal_wrapped(|ui| {
-                        for (n, &media_id) in media.iter().enumerate() {
-                            let (rect, response) = ui.allocate_exact_size(Vec2::splat(GALLERY_TILE), Sense::click_and_drag());
-                            self.paint_media(ui, media_id, rect, true);
-                            drag_source(ui, &response, Drag::Placed(index, n));
-                            drop_target(ui, &response, index, n, actions);
-                            response.context_menu(|ui| {
-                                if ui.button(tr("Use as cover")).clicked() {
-                                    actions.push(Action::Cover(Some(media_id)));
-                                    ui.close();
-                                }
-                                if ui.button(tr("Remove from gallery")).clicked() {
-                                    actions.push(Action::RemoveFromGallery(index, n));
-                                    ui.close();
-                                }
-                            });
-                        }
-                    });
-                }
+            });
+        }
+        if gallery || grid.is_some() {
+            self.photo_picker(ui, index, uid, &media, pick, actions);
+        }
+        let mut chosen: Option<(String, Vec<Vec<[i32; 2]>>)> = None;
+        if let Some(Block::Route { route, source, .. }) = self.story.as_ref().map(|editor| &editor.blocks[index].block) {
+            let (route, source) = (route.clone(), source.clone());
+            self.route_drawing(ui, &route, width);
+            let open = self.story.as_ref().is_some_and(|editor| editor.active.as_deref() == Some(uid));
+            if open || route.is_empty() {
+                chosen = self.route_chooser(ui, uid, &source, route.is_empty());
             }
-            if gallery || grid.is_some() {
-                self.photo_picker(ui, index, &uid, &media, pick, actions);
-            }
-            let Some(editor) = &mut self.story else { return };
-            match &mut editor.blocks[index].block {
-                Block::Heading(text) => {
-                    let edit = egui::TextEdit::singleline(text)
-                        .hint_text(tr("Heading"))
-                        .font(egui::FontId::proportional(18.0))
+        }
+        let Some(editor) = &mut self.story else { return };
+        // Empty captions show on the chosen block only, so pointing at
+        // blocks doesn't make the page below jump.
+        let open = editor.active.as_deref() == Some(uid);
+        let StoryEditor { blocks, text: ctl, .. } = editor;
+        let uid = uid.to_string();
+        match &mut blocks[index].block {
+            Block::Heading(text) => text_block(ui, text, TextKind::Heading, &uid, index, ctl, actions, typed),
+            Block::Subheading(text) => text_block(ui, text, TextKind::Subheading, &uid, index, ctl, actions, typed),
+            Block::Paragraph(text) => text_block(ui, text, TextKind::Paragraph, &uid, index, ctl, actions, typed),
+            Block::Credits(text) => text_block(ui, text, TextKind::Credits, &uid, index, ctl, actions, typed),
+            Block::List { ordered, items } => list_block(ui, *ordered, items, &uid, index, ctl, actions, typed),
+            Block::Quote { text, citation } => quote_block(ui, text, citation, &uid, ctl, typed),
+            Block::Photo(media) => media_words(ui, media, &uid, 0, open, typed),
+            Block::Grid { columns, rows, caption, media } => {
+                let places = usize::from(*columns) * usize::from(*rows);
+                if media.len() > places {
+                    ui.label(RichText::new(trf("{} more photos than places: they make more rows", &[&(media.len() - places)])).size(12.0).color(theme::muted()));
+                }
+                if open || !caption.is_empty() {
+                    let edit = egui::TextEdit::multiline(caption)
+                        .hint_text(tr("Description of these photos"))
+                        .text_color(theme::muted())
+                        .frame(egui::Frame::NONE)
+                        .desired_rows(1)
                         .desired_width(f32::INFINITY);
-                    if ui.add(edit).changed() {
-                        *typed = Some((uid, 0));
-                    }
-                }
-                Block::Paragraph(text) | Block::Credits(text) => {
-                    let edit = egui::TextEdit::multiline(text).hint_text(tr("Write here")).desired_rows(3).desired_width(f32::INFINITY);
-                    if ui.add(edit).changed() {
-                        *typed = Some((uid, 0));
-                    }
-                }
-                Block::Photo(media) => media_words(ui, media, &uid, 0, typed),
-                Block::Grid { columns, rows, caption, media } => {
-                    let places = usize::from(*columns) * usize::from(*rows);
-                    if media.len() > places {
-                        ui.label(RichText::new(trf("{} more photos than places: they make more rows", &[&(media.len() - places)])).size(12.0).color(theme::muted()));
-                    }
-                    let edit = egui::TextEdit::multiline(caption).hint_text(tr("Description of these photos")).desired_rows(2).desired_width(f32::INFINITY);
                     if ui.add(edit).changed() {
                         *typed = Some((uid.clone(), 0));
                     }
-                    let missing = media.iter().filter(|item| item.alt.trim().is_empty()).count();
-                    let title = if missing > 0 { trf("Alt text ({} missing)", &[&missing]) } else { tr("Alt text").into() };
-                    egui::CollapsingHeader::new(title).id_salt(("grid-alt", &uid)).show(ui, |ui| {
-                        for (n, item) in media.iter_mut().enumerate() {
-                            let alt = egui::TextEdit::singleline(&mut item.alt)
-                                .hint_text(trf("What photo {} shows, for people who can't see it", &[&(n + 1)]))
-                                .desired_width(f32::INFINITY);
-                            if ui.add(alt).changed() {
-                                *typed = Some((uid.clone(), n as u8 + 1));
-                            }
-                        }
-                    });
                 }
-                Block::Gallery(items) => {
-                    // Each photo has its own words, in the order shown above.
-                    for (n, item) in items.iter_mut().enumerate() {
-                        let caption = egui::TextEdit::singleline(&mut item.caption)
-                            .hint_text(trf("Caption of photo {}", &[&(n + 1)]))
+                if !open {
+                    return;
+                }
+                let missing = media.iter().filter(|item| item.alt.trim().is_empty()).count();
+                let title = if missing > 0 { trf("Alt text ({} missing)", &[&missing]) } else { tr("Alt text").into() };
+                egui::CollapsingHeader::new(title).id_salt(("grid-alt", &uid)).show(ui, |ui| {
+                    for (n, item) in media.iter_mut().enumerate() {
+                        let alt = egui::TextEdit::singleline(&mut item.alt)
+                            .hint_text(trf("What photo {} shows, for people who can't see it", &[&(n + 1)]))
                             .desired_width(f32::INFINITY);
-                        if ui.add(caption).changed() {
-                            *typed = Some((uid.clone(), n as u8));
+                        if ui.add(alt).changed() {
+                            *typed = Some((uid.clone(), n as u8 + 1));
                         }
                     }
+                });
+            }
+            Block::Gallery(items) => {
+                // Each photo has its own words, in the order shown above.
+                for (n, item) in items.iter_mut().enumerate().filter(|(_, item)| open || !item.caption.is_empty()) {
+                    let caption = egui::TextEdit::singleline(&mut item.caption)
+                        .hint_text(trf("Caption of photo {}", &[&(n + 1)]))
+                        .text_color(theme::muted())
+                        .frame(egui::Frame::NONE)
+                        .desired_width(f32::INFINITY);
+                    if ui.add(caption).changed() {
+                        *typed = Some((uid.clone(), n as u8));
+                    }
                 }
-                Block::Separator => {
-                    ui.separator();
+            }
+            Block::Separator => {
+                ui.add_space(8.0);
+                ui.separator();
+                ui.add_space(8.0);
+            }
+            Block::Route { caption, source, route } => {
+                if let Some((new_source, new_route)) = chosen {
+                    (*source, *route) = (new_source, new_route);
+                    *typed = Some((uid.clone(), 0));
                 }
-                Block::Unknown { .. } => {
-                    ui.label(
-                        RichText::new(tr("Made with a newer version of Picasso. It is kept as it is and can be moved or removed."))
-                            .color(theme::muted()),
-                    );
+                if open || !caption.is_empty() {
+                    let edit = egui::TextEdit::singleline(caption)
+                        .hint_text(tr("Description of this route"))
+                        .text_color(theme::muted())
+                        .frame(egui::Frame::NONE)
+                        .desired_width(f32::INFINITY);
+                    if ui.add(edit).changed() {
+                        *typed = Some((uid.clone(), 0));
+                    }
+                }
+            }
+            Block::Unknown { .. } => {
+                ui.label(
+                    RichText::new(tr("Made with a newer version of Picasso. It is kept as it is and can be moved or removed."))
+                        .color(theme::muted()),
+                );
+            }
+        }
+    }
+
+    /// A Route block's line on the map, the closest that shows all of it,
+    /// from a dot where it starts to a ring where it ends, with the map's
+    /// credit and scale.
+    fn route_drawing(&mut self, ui: &mut egui::Ui, route: &[Vec<[i32; 2]>], width: f32) {
+        let height = (width * 0.55).min(400.0);
+        let (rect, _) = ui.allocate_exact_size(Vec2::new(width, height), Sense::hover());
+        let painter = ui.painter_at(rect);
+        painter.rect_filled(rect, 6, theme::placeholder());
+        let Some((view, shape)) = crate::trip::route_shape(route, rect.width(), rect.height(), 28.0) else {
+            painter.text(rect.center(), egui::Align2::CENTER_CENTER, tr("No route yet"), egui::FontId::proportional(14.0), theme::muted());
+            return;
+        };
+        let (lat, lon) = crate::geo::world_to_latlon(view.x, view.y, view.zoom);
+        let map = super::places::MapView { lat, lon, zoom: view.zoom, pan: Vec2::ZERO };
+        self.paint_tiles(&painter, rect, map);
+        let at = |[x, y]: [f32; 2]| rect.min + Vec2::new(x, y);
+        for (width, color) in [(6.0, egui::Color32::WHITE), (3.5, theme::ACCENT)] {
+            for segment in &shape {
+                painter.add(egui::Shape::line(segment.iter().map(|&point| at(point)).collect(), egui::Stroke::new(width, color)));
+            }
+        }
+        let ends = [shape.first().and_then(|segment| segment.first()), shape.last().and_then(|segment| segment.last())];
+        for (n, &point) in ends.into_iter().flatten().enumerate() {
+            let (fill, ring) = if n == 0 { (theme::ACCENT, egui::Color32::WHITE) } else { (egui::Color32::WHITE, theme::ACCENT) };
+            painter.circle(at(point), 6.0, fill, egui::Stroke::new(2.5, ring));
+        }
+        self.paint_map_notes(&painter, rect, map);
+        let length = crate::track::format_distance(crate::trip::route_meters(route));
+        let galley = painter.layout_no_wrap(length, egui::FontId::proportional(12.0), egui::Color32::from_gray(40));
+        let corner = Rect::from_min_size(rect.left_top() + Vec2::new(8.0, 8.0), galley.size() + Vec2::new(10.0, 4.0));
+        painter.rect_filled(corner, 4, egui::Color32::from_white_alpha(210));
+        painter.galley(corner.min + Vec2::new(5.0, 2.0), galley, egui::Color32::from_gray(40));
+    }
+
+    /// Which of the Trip's tracks a Route block draws: all of them or one.
+    /// Returns the choice made, as the block's source and points.
+    fn route_chooser(&mut self, ui: &mut egui::Ui, uid: &str, source: &str, empty: bool) -> Option<(String, Vec<Vec<[i32; 2]>>)> {
+        let trip_id = self.story.as_ref()?.story.trip_id;
+        let links: Vec<_> = self.db.trip_tracks(trip_id).into_iter().filter(|link| link.track_id.is_some()).collect();
+        if links.is_empty() {
+            ui.label(RichText::new(tr("Link a GPS track to the trip first, in its Tracks row.")).size(12.0).color(theme::muted()));
+            return None;
+        }
+        let days = self.db.trip_days(trip_id);
+        let name = |link: &crate::trip::TripTrack| match link.day_id.and_then(|id| days.iter().find(|day| day.id == id)) {
+            Some(day) => format!("{} · {}", link.name, super::trips::day_name(day)),
+            None => link.name.clone(),
+        };
+        let all = tr("All the trip's tracks").to_string();
+        let shown = if empty {
+            tr("Choose a track…").to_string()
+        } else if source.is_empty() {
+            all.clone()
+        } else {
+            links.iter().find(|link| link.path == source).map_or_else(|| source.to_string(), name)
+        };
+        let mut picked: Option<Option<usize>> = None;
+        egui::ComboBox::from_id_salt(("route-track", uid)).selected_text(shown).height(320.0).show_ui(ui, |ui| {
+            if ui.selectable_label(!empty && source.is_empty(), &all).clicked() {
+                picked = Some(None);
+            }
+            for (n, link) in links.iter().enumerate() {
+                if ui.selectable_label(!empty && link.path == source, name(link)).clicked() {
+                    picked = Some(Some(n));
                 }
             }
         });
-        if let Some(editor) = self.story.as_mut().filter(|editor| editor.reveal == Some(index)) {
-            editor.reveal = None;
-            ui.scroll_to_rect(shown.response.rect, Some(Align::Center));
-        }
-        ui.add_space(6.0);
+        let picked = picked?;
+        let chosen: Vec<_> = match picked {
+            Some(n) => vec![&links[n]],
+            None => links.iter().collect(),
+        };
+        let tracks: Vec<crate::track::Track> = chosen.iter().filter_map(|link| self.db.track(link.track_id?)).collect();
+        let source = picked.map_or_else(String::new, |n| links[n].path.clone());
+        Some((source, crate::trip::route_of(&tracks)))
     }
 
     /// The Add photos button of a gallery or grid, and while it is on, a
@@ -1124,14 +1383,525 @@ fn show_link(ui: &mut egui::Ui, first: Option<usize>, show: &mut Option<usize>) 
     }
 }
 
+/// A block being dragged by its handle, from its place in the Story.
+#[derive(Clone, Copy, Debug)]
+struct MoveBlock(usize);
+
+/// The kinds of text block, each with its own type size.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TextKind {
+    Heading,
+    Subheading,
+    Paragraph,
+    Credits,
+}
+
+/// The caret and the format buttons of the Story's text fields.
+#[derive(Default)]
+struct TextCtl {
+    /// The field to put the caret in on the next frame: its block's id, the
+    /// field in the block, and the character to put it before (`END` for
+    /// after the last).
+    focus: Option<(String, usize, usize)>,
+    /// The field last typed in, and its selection in characters, which the
+    /// format buttons act on: the click takes the caret away from it.
+    last: Option<(egui::Id, usize, usize)>,
+    /// A format button pressed, for the last field on the next frame.
+    pending: Option<Mark>,
+    /// The choice picked with ↑ and ↓ in the "/" menu.
+    slash: usize,
+}
+
+/// A caret position after the last character of a field.
+const END: usize = usize::MAX;
+
+fn field_id(uid: &str, field: usize) -> egui::Id {
+    egui::Id::unique(("block-text", uid, field))
+}
+
+/// The text with its styles: the words between marks bold, italic,
+/// struck, as code, or as a link, and the marks dimmed while the field is
+/// being edited and hidden otherwise, so it reads as it will on the page.
+fn styled_job(ui: &egui::Ui, text: &str, size: f32, wrap: f32, marks: bool) -> egui::text::LayoutJob {
+    let visuals = ui.visuals();
+    let (normal, strong) = (visuals.text_color(), visuals.strong_text_color());
+    let mut job = egui::text::LayoutJob::default();
+    job.wrap.max_width = wrap;
+    let plain = egui::TextFormat::simple(egui::FontId::proportional(size), normal);
+    for (n, line) in text.split('\n').enumerate() {
+        if n > 0 {
+            job.append("\n", 0.0, plain.clone());
+        }
+        for span in inline::spans(line) {
+            let style = &span.style;
+            let mut format = plain.clone();
+            if span.mark && !marks {
+                format.font_id = egui::FontId::proportional(0.5);
+                format.color = egui::Color32::TRANSPARENT;
+            } else if span.mark {
+                format.color = theme::muted().gamma_multiply(0.6);
+            } else {
+                if style.code {
+                    format.font_id = egui::FontId::monospace(size * 0.9);
+                    format.background = visuals.faint_bg_color;
+                }
+                if style.bold {
+                    format.color = strong;
+                    format.coords = egui::epaint::text::VariationCoords::new([(b"wght", 700.0)]);
+                }
+                format.italics = style.italic;
+                if style.strike {
+                    format.strikethrough = egui::Stroke::new(1.0, format.color);
+                }
+                if style.link.is_some() {
+                    format.color = theme::ACCENT;
+                    format.underline = egui::Stroke::new(1.0, theme::ACCENT);
+                }
+            }
+            job.append(span.text, 0.0, format);
+        }
+    }
+    // An empty field still has a line of the text's height.
+    if job.sections.is_empty() {
+        job.append("", 0.0, plain);
+    }
+    job
+}
+
+/// A text field of the Story, drawn with its styles. ⌘B, ⌘I, ⌘⇧X, ⌘E,
+/// and ⌘K put bold, italic, struck, code, or a link around the
+/// selection, and so do the format buttons, for the field last typed in.
+#[allow(clippy::too_many_arguments)]
+fn styled_field(
+    ui: &mut egui::Ui,
+    text: &mut String,
+    id: egui::Id,
+    size: f32,
+    multiline: bool,
+    hint: &str,
+    ctl: &mut TextCtl,
+    focus: Option<usize>,
+) -> (egui::Response, Rect) {
+    let selection = |ui: &egui::Ui| {
+        egui::TextEdit::load_state(ui.ctx(), id).and_then(|state| state.cursor.char_range()).map(|range| {
+            let [a, b] = [range.primary.index.0, range.secondary.index.0];
+            (a.min(b), a.max(b))
+        })
+    };
+    let mut select: Option<(usize, usize)> = None;
+    let mut mark = ctl.pending.filter(|_| ctl.last.is_some_and(|(last, ..)| last == id));
+    if mark.is_some() {
+        ctl.pending = None;
+    } else if ui.memory(|memory| memory.has_focus(id)) {
+        let keys = [
+            (Modifiers::COMMAND | Modifiers::SHIFT, egui::Key::X, Mark::Strike),
+            (Modifiers::COMMAND, egui::Key::B, Mark::Bold),
+            (Modifiers::COMMAND, egui::Key::I, Mark::Italic),
+            (Modifiers::COMMAND, egui::Key::E, Mark::Code),
+            (Modifiers::COMMAND, egui::Key::K, Mark::Link),
+        ];
+        mark = ui.input_mut(|input| keys.into_iter().find(|&(modifiers, key, _)| input.consume_key(modifiers, key)).map(|(.., mark)| mark));
+    }
+    if let Some(mark) = mark {
+        let (start, end) = ctl.last.filter(|(last, ..)| *last == id).map(|(_, start, end)| (start, end)).or_else(|| selection(ui)).unwrap_or((0, 0));
+        let count = text.chars().count();
+        select = Some(inline::wrap(text, start.min(count), end.min(count), mark));
+    }
+    let marks = select.is_some() || focus.is_some() || ui.memory(|memory| memory.has_focus(id));
+    let mut layouter = |ui: &egui::Ui, buffer: &dyn egui::TextBuffer, wrap: f32| ui.painter().layout_job(styled_job(ui, buffer.as_str(), size, wrap, marks));
+    let edit = if multiline { egui::TextEdit::multiline(text).desired_rows(1) } else { egui::TextEdit::singleline(text) };
+    let edit = edit.id(id).frame(egui::Frame::NONE).font(egui::FontId::proportional(size)).hint_text(RichText::new(hint).size(size).color(theme::muted())).desired_width(f32::INFINITY).layouter(&mut layouter);
+    let output = edit.show(ui);
+    let response = output.response.response.clone();
+    // Where the first line of text is drawn, for marks set beside it.
+    let first = output.galley.rows.first().map_or(response.rect, |row| row.rect().translate(output.galley_pos.to_vec2()));
+    let count = text.chars().count();
+    if let Some((start, end)) = select.or(focus.map(|at| (at.min(count), at.min(count)))) {
+        response.request_focus();
+        if let Some(mut state) = egui::TextEdit::load_state(ui.ctx(), id) {
+            let range = egui::text::CCursorRange::two(egui::text::CCursor::new(start), egui::text::CCursor::new(end));
+            state.cursor.set_char_range(Some(range));
+            state.store(ui.ctx(), id);
+        }
+    }
+    if response.has_focus() || select.is_some() {
+        let (start, end) = select.or_else(|| selection(ui)).unwrap_or((0, 0));
+        ctl.last = Some((id, start, end));
+    }
+    (response, first)
+}
+
+/// Whether field `field` of block `uid` is to get the caret, and where.
+fn take_focus(ctl: &mut TextCtl, uid: &str, field: usize) -> Option<usize> {
+    let (_, _, caret) = ctl.focus.take_if(|(wanted, at, _)| wanted == uid && *at == field)?;
+    Some(caret)
+}
+
+/// The caret of a field, in characters, when nothing is selected.
+fn caret(ui: &egui::Ui, id: egui::Id) -> Option<usize> {
+    let range = egui::TextEdit::load_state(ui.ctx(), id)?.cursor.char_range()?;
+    (range.primary.index == range.secondary.index).then_some(range.primary.index.0)
+}
+
+/// ↑ with the caret at the start of a field, or ↓ with it at the end,
+/// goes on to the field before or after, as in one page of text.
+fn arrow_step(ui: &egui::Ui, id: egui::Id, text: &str) -> Option<bool> {
+    let at = caret(ui, id)?;
+    ui.input_mut(|input| {
+        if at == 0 && input.consume_key(Modifiers::NONE, egui::Key::ArrowUp) {
+            Some(true)
+        } else if at == text.chars().count() && input.consume_key(Modifiers::NONE, egui::Key::ArrowDown) {
+            Some(false)
+        } else {
+            None
+        }
+    })
+}
+
+/// The blocks named by what follows "/", floating under the paragraph: an
+/// icon, the name, and what it is for each, the chosen one marked.
+fn slash_menu(ui: &egui::Ui, query: &str, below: Rect, index: usize, ctl: &mut TextCtl, actions: &mut Vec<Action>) {
+    const ROW: f32 = 44.0;
+    let choices = slash_choices(query);
+    if choices.is_empty() {
+        return;
+    }
+    egui::Area::new(egui::Id::unique(("slash-menu", index)))
+        .order(egui::Order::Foreground)
+        .fixed_pos(below.left_bottom() + Vec2::new(0.0, 4.0))
+        .show(ui.ctx(), |ui| {
+            egui::Frame::popup(ui.style()).inner_margin(Margin::same(6)).corner_radius(10).show(ui, |ui| {
+                ui.set_width(300.0);
+                ui.spacing_mut().item_spacing.y = 2.0;
+                ui.label(RichText::new(tr("Blocks")).size(11.0).color(theme::muted()));
+                for (n, (label, block)) in choices.into_iter().take(SLASH_SHOWN).enumerate() {
+                    let (rect, row) = ui.allocate_exact_size(Vec2::new(ui.available_width(), ROW), Sense::click());
+                    if row.hovered() {
+                        ctl.slash = n;
+                    }
+                    let painter = ui.painter();
+                    let visuals = ui.visuals();
+                    if n == ctl.slash {
+                        painter.rect_filled(rect, 6, theme::ACCENT.gamma_multiply(0.14));
+                    }
+                    let icon = Rect::from_center_size(egui::pos2(rect.left() + 22.0, rect.center().y), Vec2::splat(30.0));
+                    painter.rect_filled(icon, 6, visuals.faint_bg_color);
+                    painter.rect_stroke(icon, 6, egui::Stroke::new(1.0, visuals.widgets.noninteractive.bg_stroke.color), egui::StrokeKind::Inside);
+                    painter.text(icon.center(), egui::Align2::CENTER_CENTER, block_icon(&block), egui::FontId::proportional(14.0), visuals.strong_text_color());
+                    let left = icon.right() + 10.0;
+                    painter.text(egui::pos2(left, rect.top() + 7.0), egui::Align2::LEFT_TOP, &label, egui::FontId::proportional(14.0), visuals.strong_text_color());
+                    painter.text(egui::pos2(left, rect.top() + 25.0), egui::Align2::LEFT_TOP, tr(block_hint(&block)), egui::FontId::proportional(11.5), theme::muted());
+                    if n == ctl.slash {
+                        painter.text(egui::pos2(rect.right() - 10.0, rect.center().y), egui::Align2::RIGHT_CENTER, "↵", egui::FontId::proportional(13.0), theme::muted());
+                    }
+                    if row.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+                        actions.push(Action::Replace(index, block));
+                    }
+                }
+                ui.add_space(4.0);
+                ui.separator();
+                ui.label(RichText::new(tr("↑ ↓ to choose, Enter to add")).size(11.0).color(theme::muted()));
+            });
+        });
+}
+
+/// The mark of a kind of block in the "/" menu.
+fn block_icon(block: &Block) -> &'static str {
+    match block {
+        Block::Heading(_) => "H2",
+        Block::Subheading(_) => "H3",
+        Block::Paragraph(_) => "¶",
+        Block::List { ordered: false, .. } => "•",
+        Block::List { ordered: true, .. } => "1.",
+        Block::Quote { .. } => "“",
+        Block::Separator => "—",
+        Block::Credits(_) => "©",
+        Block::Route { .. } => "🗺",
+        _ => "▦",
+    }
+}
+
+/// What a kind of block is for, in the "/" menu.
+fn block_hint(block: &Block) -> &'static str {
+    match block {
+        Block::Heading(_) => "A large title for a part of the story",
+        Block::Subheading(_) => "A smaller title inside a part",
+        Block::Paragraph(_) => "Plain text",
+        Block::List { ordered: false, .. } => "Points with bullets",
+        Block::List { ordered: true, .. } => "Steps or points in order",
+        Block::Quote { .. } => "Words someone said, and who said them",
+        Block::Separator => "A line between parts",
+        Block::Credits(_) => "Small print, such as photo credits",
+        Block::Route { .. } => "A GPS track of the trip, drawn as a line",
+        _ => "Photos in rows and columns",
+    }
+}
+
+/// The room before a list's items for their numbers or dots.
+const LIST_INDENT: f32 = 24.0;
+
+/// How many blocks the "/" menu shows.
+const SLASH_SHOWN: usize = 8;
+
+/// A heading or paragraph typed as it will read. Enter starts a new
+/// paragraph from the caret on, Shift+Enter breaks the line, Backspace in
+/// an empty block removes it and at the start of one joins it to the text
+/// before, ↑ and ↓ at its ends go on to the blocks around it, "/" in an empty paragraph picks another
+/// kind of block by name, and "- ", "1. ", or "> " at its start make it
+/// a list, a numbered list, or a quote.
+#[allow(clippy::too_many_arguments)]
+fn text_block(
+    ui: &mut egui::Ui,
+    text: &mut String,
+    kind: TextKind,
+    uid: &str,
+    index: usize,
+    ctl: &mut TextCtl,
+    actions: &mut Vec<Action>,
+    typed: &mut Option<(String, u8)>,
+) {
+    let id = field_id(uid, 0);
+    // A first line starting with "/" that names a block, spaces and all.
+    let slash = kind == TextKind::Paragraph && text.starts_with('/') && !text.contains('\n') && !slash_choices(&text[1..]).is_empty();
+    let focused = ui.memory(|memory| memory.has_focus(id));
+    if !slash && focused {
+        ctl.slash = 0;
+    }
+    if focused && slash {
+        let shown = slash_choices(&text[1..]).len().min(SLASH_SHOWN);
+        ui.input_mut(|input| {
+            if input.consume_key(Modifiers::NONE, egui::Key::ArrowDown) {
+                ctl.slash = (ctl.slash + 1) % shown;
+            } else if input.consume_key(Modifiers::NONE, egui::Key::ArrowUp) {
+                ctl.slash = (ctl.slash + shown - 1) % shown;
+            }
+        });
+        ctl.slash = ctl.slash.min(shown - 1);
+    }
+    if focused {
+        // Shift+Enter is left to the field, as a line break.
+        let enter = ui.input_mut(|input| !input.modifiers.shift && input.consume_key(Modifiers::NONE, egui::Key::Enter));
+        if enter && slash {
+            if let Some((_, block)) = slash_choices(&text[1..]).into_iter().nth(ctl.slash) {
+                actions.push(Action::Replace(index, block));
+            }
+        } else if let Some(up) = (!slash).then(|| arrow_step(ui, id, text)).flatten() {
+            actions.push(Action::Step(index, up));
+        } else if !text.is_empty() && caret(ui, id) == Some(0) && ui.input_mut(|input| input.consume_key(Modifiers::NONE, egui::Key::Backspace)) {
+            actions.push(Action::Merge(index));
+        } else if enter {
+            let at = egui::TextEdit::load_state(ui.ctx(), id)
+                .and_then(|state| state.cursor.char_range())
+                .map_or(text.chars().count(), |range| range.primary.index.0);
+            actions.push(Action::Split(index, at));
+        } else if text.is_empty() && ui.input_mut(|input| input.consume_key(Modifiers::NONE, egui::Key::Backspace)) {
+            actions.push(Action::RemoveEmpty(index));
+        }
+    }
+    let (size, hint) = match kind {
+        TextKind::Heading => (24.0, tr("Heading")),
+        TextKind::Subheading => (19.0, tr("Subheading")),
+        TextKind::Paragraph => (16.0, tr("Type / to choose a block")),
+        TextKind::Credits => (13.0, tr("Credits")),
+    };
+    let focus = take_focus(ctl, uid, 0);
+    let (response, _) = styled_field(ui, text, id, size, kind != TextKind::Heading && kind != TextKind::Subheading, hint, ctl, focus);
+    if response.changed() {
+        *typed = Some((uid.to_string(), 0));
+        if kind == TextKind::Paragraph {
+            let shortcut = match text.as_str() {
+                "- " | "* " => Some(Block::List { ordered: false, items: vec![String::new()] }),
+                "1. " => Some(Block::List { ordered: true, items: vec![String::new()] }),
+                "> " => Some(Block::Quote { text: String::new(), citation: String::new() }),
+                _ => None,
+            };
+            if let Some(block) = shortcut {
+                actions.push(Action::Replace(index, block));
+            }
+        }
+    }
+    // Typing in the field may have taken the "/" away this frame.
+    if let Some(query) = text.strip_prefix('/').filter(|query| slash && !query.contains('\n')) {
+        slash_menu(ui, query, response.rect, index, ctl, actions);
+    }
+}
+
+/// A list, one field an item, each with its bullet or number. Enter makes
+/// a new item from the caret on, Enter on an empty item ends the list there
+/// with a paragraph, and Backspace on an empty item removes it.
+#[allow(clippy::too_many_arguments)]
+fn list_block(
+    ui: &mut egui::Ui,
+    ordered: bool,
+    items: &mut [String],
+    uid: &str,
+    index: usize,
+    ctl: &mut TextCtl,
+    actions: &mut Vec<Action>,
+    typed: &mut Option<(String, u8)>,
+) {
+    let count = items.len();
+    for (n, item) in items.iter_mut().enumerate() {
+        let id = field_id(uid, n);
+        if ui.memory(|memory| memory.has_focus(id)) {
+            let enter = ui.input_mut(|input| !input.modifiers.shift && input.consume_key(Modifiers::NONE, egui::Key::Enter));
+            if enter && item.trim().is_empty() {
+                actions.push(Action::ListEnd(index, n));
+            } else if enter {
+                let at = egui::TextEdit::load_state(ui.ctx(), id)
+                    .and_then(|state| state.cursor.char_range())
+                    .map_or(item.chars().count(), |range| range.primary.index.0);
+                actions.push(Action::ListSplit(index, n, at));
+            } else if item.is_empty() && ui.input_mut(|input| input.consume_key(Modifiers::NONE, egui::Key::Backspace)) {
+                actions.push(Action::ListBack(index, n));
+            } else if let Some(up) = arrow_step(ui, id, item) {
+                match (up, n) {
+                    (true, 0) => actions.push(Action::Step(index, true)),
+                    (true, _) => ctl.focus = Some((uid.to_string(), n - 1, END)),
+                    (false, _) if n + 1 == count => actions.push(Action::Step(index, false)),
+                    (false, _) => ctl.focus = Some((uid.to_string(), n + 1, 0)),
+                }
+            }
+        }
+        ui.horizontal(|ui| {
+            // A column for the number or dot, drawn on the middle of the
+            // item's first line once the field has its place.
+            ui.add_space(LIST_INDENT);
+            let focus = take_focus(ctl, uid, n);
+            let (field, line) = styled_field(ui, item, id, 16.0, false, tr("List item"), ctl, focus);
+            if field.changed() {
+                *typed = Some((uid.to_string(), n as u8));
+            }
+            // Laid out like the item's text from the top of its first line,
+            // so the number sits on the same baseline.
+            let left = field.rect.left() - LIST_INDENT;
+            let color = ui.visuals().text_color();
+            if ordered {
+                let font = egui::FontId::proportional(16.0);
+                ui.painter().text(egui::pos2(left, line.top()), egui::Align2::LEFT_TOP, format!("{}.", n + 1), font, color);
+            } else {
+                ui.painter().circle_filled(egui::pos2(left + 6.0, line.center().y), 2.5, color);
+            }
+        });
+    }
+}
+
+/// Quoted words, and below them who said or wrote them.
+#[allow(clippy::too_many_arguments)]
+fn quote_block(ui: &mut egui::Ui, text: &mut String, citation: &mut String, uid: &str, ctl: &mut TextCtl, typed: &mut Option<(String, u8)>) {
+    let frame = egui::Frame::new().inner_margin(Margin { left: 14, ..Margin::ZERO });
+    let shown = frame.show(ui, |ui| {
+        let focus = take_focus(ctl, uid, 0);
+        if styled_field(ui, text, field_id(uid, 0), 17.0, true, tr("Quote"), ctl, focus).0.changed() {
+            *typed = Some((uid.to_string(), 0));
+        }
+        let focus = take_focus(ctl, uid, 1);
+        if styled_field(ui, citation, field_id(uid, 1), 13.0, false, tr("Who said it (optional)"), ctl, focus).0.changed() {
+            *typed = Some((uid.to_string(), 1));
+        }
+    });
+    let rect = shown.response.rect;
+    ui.painter().vline(rect.left() + 2.0, rect.y_range(), egui::Stroke::new(3.0, theme::muted().gamma_multiply(0.5)));
+}
+
+/// The format buttons of a text block: styles for the selection, the
+/// heading's level, and the list's kind.
+fn text_tools(ui: &mut egui::Ui, index: usize, block: &Block, actions: &mut Vec<Action>) {
+    ui.separator();
+    let styles = [
+        (RichText::new("B").strong(), Mark::Bold, "Bold (⌘B)"),
+        (RichText::new("I").italics(), Mark::Italic, "Italic (⌘I)"),
+        (RichText::new("S").strikethrough(), Mark::Strike, "Strikethrough (⌘⇧X)"),
+        (RichText::new("</>").monospace(), Mark::Code, "Code (⌘E)"),
+        (RichText::new("🔗"), Mark::Link, "Link (⌘K)"),
+    ];
+    for (label, mark, name) in styles {
+        if theme::named(ui.add(egui::Button::new(label).small()), tr(name)).clicked() {
+            actions.push(Action::Format(mark));
+        }
+    }
+    let other = match block {
+        Block::Heading(text) => Some(("H3", "Make it a subheading", Block::Subheading(text.clone()))),
+        Block::Subheading(text) => Some(("H2", "Make it a heading", Block::Heading(text.clone()))),
+        Block::Paragraph(text) => {
+            let items = text.split('\n').map(str::to_string).collect();
+            Some(("•", "Make it a list", Block::List { ordered: false, items }))
+        }
+        Block::List { ordered: false, items } => Some(("1.", "Make it a numbered list", Block::List { ordered: true, items: items.clone() })),
+        Block::List { ordered: true, items } => Some(("•", "Make it a bulleted list", Block::List { ordered: false, items: items.clone() })),
+        _ => None,
+    };
+    if let Some((label, name, block)) = other {
+        ui.separator();
+        if theme::named(ui.add(egui::Button::new(label).small()), tr(name)).clicked() {
+            actions.push(Action::Replace(index, block));
+        }
+    }
+}
+
+/// Blocks whose name has `query` in it, in English or as shown, for "/".
+fn slash_choices(query: &str) -> Vec<(String, Block)> {
+    let query = query.to_lowercase();
+    let mut all: Vec<(String, String, Block)> = new_blocks().into_iter().map(|(name, block)| (tr(name).to_string(), name.to_lowercase(), block)).collect();
+    for (columns, rows) in GRID_LAYOUTS {
+        let label = format!("{} {columns} × {rows}", tr("Photo grid"));
+        let block = Block::Grid { columns, rows, caption: String::new(), media: Vec::new() };
+        all.push((label, format!("photo grid {columns}x{rows}"), block));
+    }
+    all.into_iter().filter(|(label, english, _)| english.contains(&query) || label.to_lowercase().contains(&query)).map(|(label, _, block)| (label, block)).collect()
+}
+
+/// The gap before block `at`: a line with + when pointed at, which opens
+/// the blocks to add there, and where a block dragged by its handle lands.
+fn inserter(ui: &mut egui::Ui, at: usize, actions: &mut Vec<Action>) {
+    let (rect, response) = ui.allocate_exact_size(Vec2::new(ui.available_width(), GAP), Sense::click());
+    let moving = response.dnd_hover_payload::<MoveBlock>().is_some();
+    if moving {
+        ui.painter().hline(rect.x_range(), rect.center().y, egui::Stroke::new(3.0, theme::ACCENT));
+    } else if response.hovered() {
+        // The + at the right end, clear of the tools floating at the left.
+        let plus = egui::pos2(rect.right() - GAP, rect.center().y);
+        ui.painter().hline(rect.x_range(), rect.center().y, egui::Stroke::new(1.0, theme::ACCENT));
+        ui.painter().circle_filled(plus, GAP / 2.0 + 1.0, theme::ACCENT);
+        ui.painter().text(plus, egui::Align2::CENTER_CENTER, "+", egui::FontId::proportional(14.0), egui::Color32::WHITE);
+    }
+    if let Some(moved) = response.dnd_release_payload::<MoveBlock>() {
+        actions.push(Action::Move(moved.0, at));
+    }
+    let response = response.on_hover_text(tr("Add a block here"));
+    egui::Popup::menu(&response).show(|ui| block_menu(ui, at, actions));
+}
+
+/// The blocks that can be added at `at`.
+fn block_menu(ui: &mut egui::Ui, at: usize, actions: &mut Vec<Action>) {
+    for (label, block) in new_blocks() {
+        if ui.button(tr(label)).clicked() {
+            actions.push(Action::Insert(at, block));
+        }
+    }
+    grid_menu(ui, at, actions);
+}
+
 /// The caption and alt text of one photo, as used in this Story.
-fn media_words(ui: &mut egui::Ui, media: &mut MediaUse, uid: &str, field: u8, typed: &mut Option<(String, u8)>) {
-    let caption = egui::TextEdit::singleline(&mut media.caption).hint_text(tr("Caption")).desired_width(f32::INFINITY);
-    if ui.add(caption).changed() {
-        *typed = Some((uid.to_string(), field));
+/// A photo's caption and alt text. Empty, they stay out of the way until
+/// the block is chosen, and the alt text only shows then.
+fn media_words(ui: &mut egui::Ui, media: &mut MediaUse, uid: &str, field: u8, open: bool, typed: &mut Option<(String, u8)>) {
+    if open || !media.caption.is_empty() {
+        let caption = egui::TextEdit::singleline(&mut media.caption)
+            .hint_text(tr("Caption"))
+            .text_color(theme::muted())
+            .frame(egui::Frame::NONE)
+            .desired_width(f32::INFINITY);
+        if ui.add(caption).changed() {
+            *typed = Some((uid.to_string(), field));
+        }
+    }
+    if !open {
+        return;
     }
     let alt = egui::TextEdit::singleline(&mut media.alt)
         .hint_text(tr("Description for people who can't see the photo"))
+        .frame(egui::Frame::NONE)
         .desired_width(f32::INFINITY);
     if ui.add(alt).changed() {
         *typed = Some((uid.to_string(), field + 1));
@@ -1150,7 +1920,115 @@ fn apply(editor: &mut StoryEditor, action: Action) {
         Action::Remove(i) => {
             blocks.remove(i);
         }
-        Action::Insert(i, block) => blocks.insert(i.min(blocks.len()), StoryBlock::new(block)),
+        Action::Insert(i, block) => {
+            let block = StoryBlock::new(block);
+            if is_text(&block.block) {
+                editor.text.focus = Some((block.uid.clone(), 0, 0));
+            }
+            blocks.insert(i.min(blocks.len()), block);
+        }
+        Action::Split(i, n) => {
+            let rest = match &mut blocks[i].block {
+                Block::Heading(text) | Block::Subheading(text) | Block::Paragraph(text) | Block::Credits(text) => {
+                    let at = text.char_indices().nth(n).map_or(text.len(), |(at, _)| at);
+                    text.split_off(at)
+                }
+                _ => return,
+            };
+            let rest = if matches!(blocks[i].block, Block::Credits(_)) { Block::Credits(rest) } else { Block::Paragraph(rest) };
+            let block = StoryBlock::new(rest);
+            editor.text.focus = Some((block.uid.clone(), 0, 0));
+            blocks.insert(i + 1, block);
+        }
+        Action::RemoveEmpty(i) => {
+            blocks.remove(i);
+            if let Some(before) = i.checked_sub(1).and_then(|i| blocks.get(i)).filter(|block| is_text(&block.block)) {
+                let last = match &before.block {
+                    Block::List { items, .. } => items.len().saturating_sub(1),
+                    _ => 0,
+                };
+                editor.text.focus = Some((before.uid.clone(), last, END));
+            }
+        }
+        Action::Replace(i, block) => {
+            if is_text(&block) {
+                editor.text.focus = Some((blocks[i].uid.clone(), 0, END));
+            }
+            blocks[i].block = block;
+        }
+        Action::ListSplit(i, n, at) => {
+            if let Block::List { items, .. } = &mut blocks[i].block {
+                let item = &mut items[n];
+                let rest = item.split_off(item.char_indices().nth(at).map_or(item.len(), |(at, _)| at));
+                items.insert(n + 1, rest);
+                editor.text.focus = Some((blocks[i].uid.clone(), n + 1, 0));
+            }
+        }
+        Action::ListEnd(i, n) => {
+            if let Block::List { ordered, items } = &mut blocks[i].block {
+                // The items after the empty one go on as a list of their own,
+                // after the new paragraph.
+                let after = items.split_off(n + 1);
+                items.pop();
+                let ordered = *ordered;
+                let paragraph = StoryBlock::new(Block::Paragraph(String::new()));
+                editor.text.focus = Some((paragraph.uid.clone(), 0, 0));
+                if !after.is_empty() {
+                    blocks.insert(i + 1, StoryBlock::new(Block::List { ordered, items: after }));
+                }
+                if matches!(&blocks[i].block, Block::List { items, .. } if items.is_empty()) {
+                    blocks[i] = paragraph;
+                } else {
+                    blocks.insert(i + 1, paragraph);
+                }
+            }
+        }
+        Action::ListBack(i, n) => {
+            if let Block::List { items, .. } = &mut blocks[i].block {
+                if items.len() == 1 {
+                    blocks[i].block = Block::Paragraph(String::new());
+                    editor.text.focus = Some((blocks[i].uid.clone(), 0, 0));
+                } else {
+                    items.remove(n);
+                    editor.text.focus = Some((blocks[i].uid.clone(), n.saturating_sub(1), if n > 0 { END } else { 0 }));
+                }
+            }
+        }
+        Action::Format(mark) => editor.text.pending = Some(mark),
+        Action::Step(i, up) => {
+            let near: Box<dyn Iterator<Item = &StoryBlock>> = if up { Box::new(blocks[..i].iter().rev()) } else { Box::new(blocks[i + 1..].iter()) };
+            if let Some(block) = near.into_iter().find(|block| is_text(&block.block)) {
+                let field = match &block.block {
+                    Block::List { items, .. } if up => items.len() - 1,
+                    Block::Quote { .. } if up => 1,
+                    _ => 0,
+                };
+                editor.text.focus = Some((block.uid.clone(), field, if up { END } else { 0 }));
+            }
+        }
+        Action::Merge(i) => {
+            let Some(before) = i.checked_sub(1) else { return };
+            let rest = match &blocks[i].block {
+                Block::Heading(text) | Block::Subheading(text) | Block::Paragraph(text) | Block::Credits(text) => text.clone(),
+                _ => return,
+            };
+            let uid = blocks[before].uid.clone();
+            let (field, joined) = match &mut blocks[before].block {
+                Block::Heading(text) | Block::Subheading(text) | Block::Paragraph(text) | Block::Credits(text) => (0, text),
+                Block::List { items, .. } => (items.len() - 1, items.last_mut().expect("a list has an item")),
+                _ => return,
+            };
+            let at = joined.chars().count();
+            joined.push_str(&rest);
+            editor.text.focus = Some((uid, field, at));
+            blocks.remove(i);
+        }
+        Action::Move(from, to) => {
+            if from < blocks.len() && to != from && to != from + 1 {
+                let block = blocks.remove(from);
+                blocks.insert(if to > from { to - 1 } else { to }.min(blocks.len()), block);
+            }
+        }
         Action::Cover(media) => editor.story.cover = media,
         Action::RemoveFromGallery(i, n) => match &mut blocks[i].block {
             Block::Gallery(items) => {
@@ -1332,26 +2210,63 @@ fn grid_menu(ui: &mut egui::Ui, at: usize, actions: &mut Vec<Action>) {
 }
 
 /// The blocks that can be added as text, with their names.
-fn new_blocks() -> [(&'static str, Block); 4] {
+fn new_blocks() -> [(&'static str, Block); 9] {
     [
         ("Heading", Block::Heading(String::new())),
+        ("Subheading", Block::Subheading(String::new())),
         ("Paragraph", Block::Paragraph(String::new())),
+        ("List", Block::List { ordered: false, items: vec![String::new()] }),
+        ("Numbered list", Block::List { ordered: true, items: vec![String::new()] }),
+        ("Quote", Block::Quote { text: String::new(), citation: String::new() }),
         ("Separator", Block::Separator),
         ("Credits", Block::Credits(String::new())),
+        ("Route map", Block::Route { caption: String::new(), source: String::new(), route: Vec::new() }),
     ]
+}
+
+fn is_text(block: &Block) -> bool {
+    matches!(block, Block::Heading(_) | Block::Subheading(_) | Block::Paragraph(_) | Block::Credits(_) | Block::List { .. } | Block::Quote { .. })
 }
 
 fn block_label(block: &Block) -> &'static str {
     match block {
         Block::Heading(_) => "Heading",
+        Block::Subheading(_) => "Subheading",
         Block::Paragraph(_) => "Paragraph",
+        Block::List { ordered: false, .. } => "List",
+        Block::List { ordered: true, .. } => "Numbered list",
+        Block::Quote { .. } => "Quote",
         Block::Photo(_) => "Photo",
         Block::Gallery(_) => "Gallery",
         Block::Grid { .. } => "Photo grid",
         Block::Separator => "Separator",
         Block::Credits(_) => "Credits",
+        Block::Route { .. } => "Route map",
         Block::Unknown { .. } => "Unknown block",
     }
+}
+
+/// The words of the Story's text: a word for each run of letters, and one
+/// for each Chinese, Japanese, or Korean character, which have no spaces.
+fn story_words(editor: &StoryEditor) -> usize {
+    let story = &editor.story;
+    let mut texts: Vec<&str> = vec![&story.title, &story.subtitle, &story.introduction, &story.conclusion];
+    for block in &editor.blocks {
+        match &block.block {
+            Block::Heading(text) | Block::Subheading(text) | Block::Paragraph(text) | Block::Credits(text) => texts.push(text),
+            Block::List { items, .. } => texts.extend(items.iter().map(String::as_str)),
+            Block::Quote { text, citation } => texts.extend([text.as_str(), citation.as_str()]),
+            _ => {}
+        }
+    }
+    texts.into_iter().map(|text| words(&inline::plain(text))).sum()
+}
+
+fn words(text: &str) -> usize {
+    let wide = |c: char| matches!(c as u32, 0x3040..=0x30FF | 0x3400..=0x9FFF | 0xAC00..=0xD7AF | 0xF900..=0xFAFF);
+    let wide_count = text.chars().filter(|&c| wide(c)).count();
+    let spaced = text.split(|c: char| c.is_whitespace() || wide(c)).filter(|word| word.chars().any(char::is_alphanumeric)).count();
+    wide_count + spaced
 }
 
 pub(super) fn story_name(story: &Story) -> String {
@@ -1372,6 +2287,8 @@ mod tests {
             trip_id: 1,
             title: String::new(),
             subtitle: String::new(),
+            introduction: String::new(),
+            conclusion: String::new(),
             author: String::new(),
             show_date: true,
             cover: None,
@@ -1394,11 +2311,97 @@ mod tests {
             job: None,
             reveal: None,
             picking: None,
+            active: None,
+            hovered: None,
+            text: TextCtl::default(),
         }
     }
 
     fn kinds(editor: &StoryEditor) -> Vec<&str> {
         editor.blocks.iter().map(|block| block.block.kind()).collect()
+    }
+
+    fn text(editor: &StoryEditor, i: usize) -> &str {
+        match &editor.blocks[i].block {
+            Block::Heading(text) | Block::Subheading(text) | Block::Paragraph(text) | Block::Credits(text) => text,
+            _ => "",
+        }
+    }
+
+    #[test]
+    fn enter_splits_a_block_at_the_caret_and_backspace_removes_an_empty_one() {
+        let mut editor = editor(vec![Block::Heading("Kyōto day".into()), Block::Paragraph("ab".into())]);
+        apply(&mut editor, Action::Split(0, 5));
+        assert_eq!(kinds(&editor), ["heading", "paragraph", "paragraph"]);
+        assert_eq!((text(&editor, 0), text(&editor, 1)), ("Kyōto", " day"), "split by character, not byte");
+        assert_eq!(editor.text.focus.as_ref().map(|focus| (focus.0.as_str(), focus.2)), Some((editor.blocks[1].uid.as_str(), 0)));
+        apply(&mut editor, Action::Split(2, 2));
+        assert_eq!(text(&editor, 3), "");
+        apply(&mut editor, Action::RemoveEmpty(3));
+        assert_eq!(editor.blocks.len(), 3);
+        assert_eq!(editor.text.focus.as_ref().map(|focus| (focus.0.as_str(), focus.2)), Some((editor.blocks[2].uid.as_str(), END)), "the caret goes to the end before");
+    }
+
+    #[test]
+    fn enter_and_backspace_add_end_and_remove_list_items() {
+        let mut editor = editor(vec![Block::List { ordered: false, items: vec!["onetwo".into()] }]);
+        apply(&mut editor, Action::ListSplit(0, 0, 3));
+        assert_eq!(editor.blocks[0].block, Block::List { ordered: false, items: vec!["one".into(), "two".into()] });
+        assert_eq!(editor.text.focus.as_ref().map(|focus| focus.1), Some(1));
+        apply(&mut editor, Action::ListSplit(0, 1, 3));
+        apply(&mut editor, Action::ListEnd(0, 2));
+        assert_eq!(kinds(&editor), ["list", "paragraph"], "Enter on an empty last item ends the list");
+        let mut middle = super::tests::editor(vec![Block::List { ordered: true, items: vec!["a".into(), String::new(), "b".into()] }]);
+        apply(&mut middle, Action::ListEnd(0, 1));
+        assert_eq!(kinds(&middle), ["list", "paragraph", "list"], "Enter on an empty item in the middle puts a paragraph there");
+        assert_eq!(middle.text.focus.as_ref().map(|focus| focus.0.as_str()), Some(middle.blocks[1].uid.as_str()));
+        assert_eq!(editor.text.focus.as_ref().map(|focus| focus.0.as_str()), Some(editor.blocks[1].uid.as_str()));
+        apply(&mut editor, Action::ListBack(0, 1));
+        assert_eq!(editor.text.focus.as_ref().map(|focus| (focus.1, focus.2)), Some((0, END)));
+        apply(&mut editor, Action::ListBack(0, 0));
+        assert_eq!(kinds(&editor), ["paragraph", "paragraph"], "the only item turns back into a paragraph");
+        assert!(slash_choices("quote").iter().any(|(_, block)| matches!(block, Block::Quote { .. })));
+        assert!(slash_choices("numbered").iter().any(|(_, block)| matches!(block, Block::List { ordered: true, .. })));
+    }
+
+    #[test]
+    fn words_count_runs_of_letters_and_each_wide_character() {
+        assert_eq!(words("A day in Kyōto — 5 photos"), 6);
+        assert_eq!(words("京都の一日"), 5);
+        assert_eq!(words("Day 1：東京"), 4);
+    }
+
+    #[test]
+    fn backspace_at_the_start_joins_the_text_before_and_arrows_step_between_blocks() {
+        let mut editor = editor(vec![Block::Paragraph("Kyō".into()), Block::Separator, Block::Paragraph("to".into())]);
+        apply(&mut editor, Action::Merge(2));
+        assert_eq!(kinds(&editor), ["paragraph", "separator", "paragraph"], "a photo or separator before is left alone");
+        apply(&mut editor, Action::Step(2, true));
+        assert_eq!(editor.text.focus.as_ref().map(|focus| (focus.0.as_str(), focus.2)), Some((editor.blocks[0].uid.as_str(), END)), "the separator is passed over");
+        editor.blocks.remove(1);
+        apply(&mut editor, Action::Merge(1));
+        assert_eq!(text(&editor, 0), "Kyōto");
+        assert_eq!(editor.text.focus.as_ref().map(|focus| focus.2), Some(3), "the caret is where they joined");
+        let mut list = super::tests::editor(vec![Block::List { ordered: false, items: vec!["a".into(), "b".into()] }, Block::Paragraph("c".into())]);
+        apply(&mut list, Action::Merge(1));
+        assert_eq!(list.blocks[0].block, Block::List { ordered: false, items: vec!["a".into(), "bc".into()] });
+        apply(&mut list, Action::Step(0, false));
+        assert!(list.text.focus.is_some());
+    }
+
+    #[test]
+    fn a_block_moves_to_a_gap_and_slash_finds_blocks_by_name() {
+        let mut editor = editor(vec![Block::Heading("A".into()), Block::Separator, Block::Paragraph("C".into())]);
+        apply(&mut editor, Action::Move(0, 3));
+        assert_eq!(kinds(&editor), ["separator", "paragraph", "heading"]);
+        apply(&mut editor, Action::Move(2, 0));
+        assert_eq!(kinds(&editor), ["heading", "separator", "paragraph"]);
+        apply(&mut editor, Action::Move(1, 2));
+        assert_eq!(kinds(&editor), ["heading", "separator", "paragraph"], "a gap next to it changes nothing");
+        assert!(matches!(slash_choices("grid 3x2").as_slice(), [(_, Block::Grid { columns: 3, rows: 2, .. })]));
+        assert!(matches!(slash_choices("head").first(), Some((_, Block::Heading(_)))));
+        apply(&mut editor, Action::Replace(2, Block::Heading(String::new())));
+        assert_eq!(kinds(&editor), ["heading", "separator", "heading"]);
     }
 
     #[test]

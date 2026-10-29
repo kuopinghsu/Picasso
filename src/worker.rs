@@ -72,6 +72,15 @@ pub enum ThumbJob {
     Exif { id: i64, path: String },
 }
 
+/// A read Trip package, the extracted photos by key, the library photos
+/// that stand for others by key, and the folder of the extracted ones.
+pub type Unpacked = (
+    crate::trip_package::Package,
+    std::collections::HashMap<i64, std::path::PathBuf>,
+    std::collections::HashMap<i64, i64>,
+    std::path::PathBuf,
+);
+
 pub enum UiEvent {
     ScanStarted(String),
     ScanProgress {
@@ -168,6 +177,10 @@ pub enum UiEvent {
     StoryPreviewed(i64, Result<crate::story_html::Outcome, String>),
     /// A Story was exported to a new folder, or why not.
     StoryExported(i64, Result<(std::path::PathBuf, crate::story_html::Outcome), String>),
+    /// A Trip package was saved, with how many photos were unavailable, or why not.
+    TripPackaged(Result<(std::path::PathBuf, usize), String>),
+    /// A Trip package's photos were written to a folder, ready to import.
+    TripUnpacked(Box<Result<Unpacked, String>>),
 }
 
 /// Number of threads that probe files during a scan. A probe mostly waits

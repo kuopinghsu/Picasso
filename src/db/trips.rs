@@ -173,7 +173,10 @@ pub(super) fn upgrade(db: &Database) -> Result<(), String> {
     // the user places it; 0 when nothing is to review.
     db.ensure_column("trip_media", "review", "INTEGER NOT NULL DEFAULT 0")?;
     // 1 once the author marks the Story finished; a draft until then.
-    db.ensure_column("stories", "finished", "INTEGER NOT NULL DEFAULT 0")
+    db.ensure_column("stories", "finished", "INTEGER NOT NULL DEFAULT 0")?;
+    // Optional text before and after the Story's blocks.
+    db.ensure_column("stories", "introduction", "TEXT NOT NULL DEFAULT ''")?;
+    db.ensure_column("stories", "conclusion", "TEXT NOT NULL DEFAULT ''")
 }
 
 const CLOCK_FORMAT: &str = "%Y-%m-%d %H:%M:%S";
@@ -202,7 +205,7 @@ t.created_at, t.updated_at, t.trip_time,
 (SELECT COUNT(*) FROM trip_days d WHERE d.trip_id = t.id),
 (SELECT COUNT(*) FROM stories s WHERE s.trip_id = t.id)";
 
-const STORY_COLS: &str = "id, trip_id, title, subtitle, author, show_date, cover_ref, template, archived, revision, updated_at, finished";
+const STORY_COLS: &str = "id, trip_id, title, subtitle, author, show_date, cover_ref, template, archived, revision, updated_at, finished, introduction, conclusion";
 
 fn sql_err(err: rusqlite::Error) -> String {
     err.to_string()
@@ -251,6 +254,8 @@ fn read_story(row: &rusqlite::Row) -> rusqlite::Result<Story> {
         revision: row.get(9)?,
         updated_at: row.get(10)?,
         finished: row.get(11)?,
+        introduction: row.get(12)?,
+        conclusion: row.get(13)?,
     })
 }
 
@@ -1068,6 +1073,127 @@ impl Database {
         Ok((id, videos))
     }
 
+    /// Adds a Trip package as a new Trip, with the package's Days, its
+    /// photos as members in their Days, and its Stories, in one transaction.
+    /// `files` says where each carried photo was written; until a scan finds
+    /// them there, the photos wait unavailable, as references with those
+    /// paths as hints, and are linked by the scan. Photos the package
+    /// carried as unavailable stay so. `existing` names, by key, photos
+    /// already in the library that stand for carried ones. Returns the new
+    /// Trip.
+    pub fn import_trip(
+        &self,
+        package: &crate::trip_package::Package,
+        files: &std::collections::HashMap<i64, std::path::PathBuf>,
+        existing: &std::collections::HashMap<i64, i64>,
+    ) -> Result<i64, String> {
+        let zone = TripZone::parse(&package.trip.zone)
+            .ok_or_else(|| format!("unknown time zone {}", package.trip.zone))?;
+        let trip = &package.trip;
+        let now = unix_now();
+        let tx = self.conn.unchecked_transaction().map_err(sql_err)?;
+        tx.execute(
+            "INSERT INTO trips(title, description, destination, first_day, last_day, zone, trip_time, created_at, updated_at)
+             VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)",
+            params![trip.title.trim(), trip.description, trip.destination.trim(), day_text(trip.first_day), day_text(trip.last_day), zone.code(), trip.trip_time, now],
+        )
+        .map_err(sql_err)?;
+        let trip_id = tx.last_insert_rowid();
+        let mut days = Vec::new();
+        for (position, day) in package.days.iter().enumerate() {
+            tx.execute(
+                "INSERT INTO trip_days(trip_id, position, day, title, notes) VALUES(?1, ?2, ?3, ?4, ?5)",
+                params![trip_id, position as i64, day_text(day.day), day.title, day.notes],
+            )
+            .map_err(sql_err)?;
+            days.push(tx.last_insert_rowid());
+        }
+        let mut refs = std::collections::HashMap::new();
+        let mut in_day = vec![0i64; days.len()];
+        for (position, photo) in package.photos.iter().enumerate() {
+            let media_id = if let Some(&photo_id) = existing.get(&photo.key) {
+                media_ref(&tx, photo_id)?
+            } else {
+                let (path, bytes, modified) = match files.get(&photo.key) {
+                    Some(path) => {
+                        let meta = std::fs::metadata(path).map_err(|err| err.to_string())?;
+                        let modified = meta
+                            .modified()
+                            .ok()
+                            .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+                            .map_or(0, |d| d.as_secs() as i64);
+                        (path_text(path), meta.len() as i64, modified)
+                    }
+                    None => (String::new(), 0, 0),
+                };
+                let name = files
+                    .get(&photo.key)
+                    .and_then(|path| path.file_name())
+                    .map_or(photo.name.clone(), |name| {
+                        name.to_string_lossy().into_owned()
+                    });
+                tx.execute(
+                    "INSERT INTO media_refs(photo_id, path, filename, bytes, modified_at, file_taken_at, unlinked_at, created_at)
+                     VALUES(NULL, ?1, ?2, ?3, ?4, 0, ?5, ?5)",
+                    params![path, name, bytes, modified, now],
+                )
+                .map_err(sql_err)?;
+                tx.last_insert_rowid()
+            };
+            refs.insert(photo.key, media_id);
+            if !photo.member {
+                continue;
+            }
+            let day = photo.day.map(|index| (days[index], index));
+            let day_position = day.map_or(0, |(_, index)| {
+                in_day[index] += 1;
+                in_day[index] - 1
+            });
+            tx.execute(
+                "INSERT OR IGNORE INTO trip_media(trip_id, media_id, position, day_id, day_source, day_position, added_at) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![trip_id, media_id, position as i64, day.map(|(id, _)| id), if day.is_some() { DaySource::User.code() } else { 0 }, day_position, now],
+            )
+            .map_err(sql_err)?;
+        }
+        for crate::trip_package::PackStory { story, blocks } in &package.stories {
+            let story_id = insert_story(&tx, trip_id, &story.title)?;
+            tx.execute(
+                "UPDATE stories SET subtitle = ?2, author = ?3, show_date = ?4, template = ?5, finished = ?6, cover_ref = ?7, archived = ?8,
+                    introduction = ?9, conclusion = ?10 WHERE id = ?1",
+                params![story_id, story.subtitle.trim(), story.author.trim(), story.show_date, story.template, story.finished, story.cover.and_then(|key| refs.get(&key)), story.archived, story.introduction.trim(), story.conclusion.trim()],
+            )
+            .map_err(sql_err)?;
+            let mut blocks = blocks.clone();
+            for block in &mut blocks {
+                let media = match &mut block.block {
+                    Block::Photo(one) => std::slice::from_mut(one),
+                    Block::Gallery(items)
+                    | Block::Grid { media: items, .. }
+                    | Block::Unknown { media: items, .. } => items.as_mut_slice(),
+                    _ => &mut [],
+                };
+                for item in media {
+                    item.media_id = *refs
+                        .get(&item.media_id)
+                        .ok_or("a block uses a photo the package doesn't have")?;
+                }
+            }
+            write_blocks(&tx, story_id, &blocks)?;
+        }
+        // Tracks link by path; those just written wait for the scan.
+        for track in &package.tracks {
+            let Some(path) = &track.path else { continue };
+            tx.execute(
+                "INSERT INTO trip_tracks(trip_id, day_id, track_id, path, name) VALUES(?1, ?2, (SELECT id FROM tracks WHERE path = ?3), ?3, ?4)
+                 ON CONFLICT(trip_id, path) DO NOTHING",
+                params![trip_id, track.day.map(|index| days[index]), path_text(path), track.name],
+            )
+            .map_err(sql_err)?;
+        }
+        tx.commit().map_err(sql_err)?;
+        Ok(trip_id)
+    }
+
     pub fn story(&self, id: i64) -> Option<Story> {
         self.conn.query_row(&format!("SELECT {STORY_COLS} FROM stories WHERE id = ?1"), [id], read_story).optional().ok().flatten()
     }
@@ -1098,16 +1224,26 @@ impl Database {
             .collect()
     }
 
-    /// Saves the Story's title, subtitle, author, date display, template, and
-    /// whether it is finished.
+    /// Saves the Story's title, subtitle, author, date display, template,
+    /// introduction and conclusion, and whether it is finished.
     /// Fails without a change if the Story was saved since `revision`.
     /// Returns its new revision.
     pub fn save_story_details(&self, story: &Story, revision: i64) -> Result<i64, String> {
         let tx = self.conn.unchecked_transaction().map_err(sql_err)?;
         let next = next_revision(&tx, story.id, revision)?;
         tx.execute(
-            "UPDATE stories SET title = ?2, subtitle = ?3, author = ?4, show_date = ?5, template = ?6, finished = ?7 WHERE id = ?1",
-            params![story.id, story.title.trim(), story.subtitle.trim(), story.author.trim(), story.show_date, story.template, story.finished],
+            "UPDATE stories SET title = ?2, subtitle = ?3, author = ?4, show_date = ?5, template = ?6, finished = ?7, introduction = ?8, conclusion = ?9 WHERE id = ?1",
+            params![
+                story.id,
+                story.title.trim(),
+                story.subtitle.trim(),
+                story.author.trim(),
+                story.show_date,
+                story.template,
+                story.finished,
+                story.introduction.trim(),
+                story.conclusion.trim()
+            ],
         )
         .map_err(sql_err)?;
         tx.commit().map_err(sql_err)?;
@@ -1529,12 +1665,15 @@ mod tests {
         let mut details = db.story(story_id).unwrap();
         assert!(!details.finished, "a new story is a draft");
         details.subtitle = "A week by the sea".into();
+        details.introduction = "Why we went.".into();
+        details.conclusion = "We'll go back.".into();
         details.show_date = false;
         details.finished = true;
         let revision = db.save_story_details(&details, revision).unwrap();
         let revision = db.set_story_cover(story_id, Some(refs[1]), revision).unwrap();
         let saved = db.story(story_id).unwrap();
         assert_eq!((saved.subtitle.as_str(), saved.show_date, saved.cover, saved.revision), ("A week by the sea", false, Some(refs[1]), revision));
+        assert_eq!((saved.introduction.as_str(), saved.conclusion.as_str()), ("Why we went.", "We'll go back."));
         assert!(saved.finished);
         assert!(!db.photo(ids[1]).unwrap().starred, "the cover is the story's own");
 
@@ -1665,6 +1804,137 @@ mod tests {
         assert_eq!(db.trip_tracks(trip_id)[0].track_id, Some(db.tracks()[0].0));
         db.unlink_trip_track(link);
         assert!(db.trip_tracks(trip_id).is_empty());
+    }
+
+    #[test]
+    fn an_imported_trip_is_a_new_trip_whose_photos_link_after_a_scan() {
+        use crate::trip_package::{PackDay, PackPhoto, PackStory, PackTrip, Package};
+        let (db, _, folder, ids) = photos("trip-import", &["a.jpg"]);
+        std::fs::create_dir_all(&folder).unwrap();
+        let file = folder.join("a.jpg");
+        std::fs::write(&file, b"jpeg").unwrap();
+        let mut story = db
+            .story(db.create_story(trip(&db, "Elsewhere"), "Sea").unwrap())
+            .unwrap();
+        story.cover = Some(11);
+        story.finished = true;
+        let grid = Block::Grid {
+            columns: 2,
+            rows: 1,
+            caption: "Two".into(),
+            media: vec![MediaUse::new(11), MediaUse::new(12)],
+        };
+        let package = Package {
+            trip: PackTrip {
+                title: "Coast".into(),
+                zone: "Europe/Lisbon".into(),
+                ..PackTrip::default()
+            },
+            days: vec![
+                PackDay {
+                    title: "Arrival".into(),
+                    ..PackDay::default()
+                },
+                PackDay::default(),
+            ],
+            stories: vec![PackStory {
+                story,
+                blocks: vec![
+                    StoryBlock::new(Block::Heading("Day 1".into())),
+                    StoryBlock::new(grid),
+                ],
+            }],
+            photos: vec![
+                PackPhoto {
+                    key: 11,
+                    name: "a.jpg".into(),
+                    day: Some(0),
+                    size: Some(4),
+                    member: true,
+                    hash: None,
+                },
+                PackPhoto {
+                    key: 12,
+                    name: String::new(),
+                    day: Some(0),
+                    size: None,
+                    member: true,
+                    hash: None,
+                },
+            ],
+            tracks: vec![crate::trip_package::PackTrack {
+                name: "Walk".into(),
+                day: Some(1),
+                path: Some(folder.join("walk.gpx")),
+                ..Default::default()
+            }],
+        };
+        let files = std::collections::HashMap::from([(11, file)]);
+        let existing = std::collections::HashMap::<i64, i64>::new();
+        let trip_id = db.import_trip(&package, &files, &existing).unwrap();
+        let story_id = db.stories(trip_id)[0].id;
+        let track = &db.trip_tracks(trip_id)[0];
+        assert_eq!(
+            (track.name.as_str(), track.day_id, track.track_id),
+            ("Walk", Some(db.trip_days(trip_id)[1].id), None),
+            "the track waits for the scan, in its day"
+        );
+
+        let imported = db.trip(trip_id).unwrap();
+        assert_eq!(
+            (
+                imported.title.as_str(),
+                imported.zone.as_str(),
+                imported.members,
+                imported.available
+            ),
+            ("Coast", "Europe/Lisbon", 2, 0)
+        );
+        assert_eq!(
+            db.trip_days(trip_id)
+                .iter()
+                .map(|day| (day.title.as_str(), day.members))
+                .collect::<Vec<_>>(),
+            [("Arrival", 2), ("", 0)]
+        );
+        assert_eq!(
+            db.relink_trip_media(),
+            1,
+            "the scan links the photo written at its path"
+        );
+        let members = db.trip_members(trip_id, &MemberQuery::default(), 0, 10);
+        assert_eq!(
+            members
+                .iter()
+                .map(|member| member.photo_id)
+                .collect::<Vec<_>>(),
+            [Some(ids[0]), None]
+        );
+        let saved = db.story(story_id).unwrap();
+        assert_eq!(
+            (saved.title.as_str(), saved.finished, saved.cover),
+            ("Sea", true, Some(members[0].media_id))
+        );
+        let blocks = db.story_blocks(story_id);
+        let refs: Vec<i64> = members.iter().map(|member| member.media_id).collect();
+        assert!(
+            matches!(&blocks[1].block, Block::Grid { caption, media, .. } if caption == "Two" && media.iter().map(|m| m.media_id).collect::<Vec<_>>() == refs)
+        );
+
+        let reused = db.import_trip(&package, &files, &std::collections::HashMap::from([(11, ids[0])])).unwrap();
+        let members = db.trip_members(reused, &MemberQuery::default(), 0, 10);
+        assert_eq!(members[0].photo_id, Some(ids[0]), "a photo already in the library is used at once");
+        assert_eq!(db.relink_trip_media(), 0);
+
+        let mut bad = package.clone();
+        bad.trip.zone = "Mars/Olympus".into();
+        let before = db.trips(&TripQuery::default()).len();
+        assert!(db.import_trip(&bad, &files, &existing).is_err());
+        assert_eq!(
+            db.trips(&TripQuery::default()).len(),
+            before,
+            "a failed import adds nothing"
+        );
     }
 
     #[test]

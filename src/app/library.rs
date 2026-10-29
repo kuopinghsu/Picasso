@@ -199,6 +199,12 @@ impl PicassoApp {
             self.trips_page(ui);
             return;
         }
+        if let Nav::Trip(trip_id) = self.nav {
+            if self.trip_stories.contains(&trip_id) {
+                self.stories_page(ui, trip_id);
+                return;
+            }
+        }
         let tracks = self.view_tracks();
         if self.photos.is_empty() && tracks.is_empty() {
             if self.loading {
@@ -736,7 +742,8 @@ impl PicassoApp {
             });
         });
         self.trip_header(ui);
-        if !matches!(self.nav, Nav::Statistics | Nav::TravelMap | Nav::Trips) {
+        let stories_tab = matches!(self.nav, Nav::Trip(id) if self.trip_stories.contains(&id));
+        if !matches!(self.nav, Nav::Statistics | Nav::TravelMap | Nav::Trips) && !stories_tab {
             ui.horizontal_wrapped(|ui| {
                 if ui.checkbox(&mut self.edited_only, tr("Edited only")).changed() {
                     self.reload_view();

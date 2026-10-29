@@ -192,15 +192,27 @@ pub fn tile_loop(jobs: Receiver<TileJob>, done: Sender<TileDone>, cache: PathBuf
     let agent = agent();
     let tiles = cache.join("tiles");
     while let Ok(job) = jobs.recv() {
-        let image = match job.source {
-            MapSource::OpenFreeMap => vector_tile(&agent, &tiles, &job),
-            _ => picture_tile(&agent, &tiles, &job),
-        };
+        let image = load_tile(&agent, &tiles, &job);
         let reply = TileDone { source: job.source, z: job.z, x: job.x, y: job.y, image };
         if done.send(reply).is_err() {
             break;
         }
     }
+}
+
+fn load_tile(agent: &ureq::Agent, tiles: &Path, job: &TileJob) -> Option<TileImage> {
+    match job.source {
+        MapSource::OpenFreeMap => vector_tile(agent, tiles, job),
+        _ => picture_tile(agent, tiles, job),
+    }
+}
+
+/// Tiles for one picture, such as a Story's route map, loaded here and now
+/// through the same cache as the map's, under `cache`.
+pub fn load_tiles(jobs: &[TileJob], cache: &Path) -> Vec<Option<TileImage>> {
+    let agent = agent();
+    let tiles = cache.join("tiles");
+    jobs.iter().map(|job| load_tile(&agent, &tiles, job)).collect()
 }
 
 fn picture_tile(agent: &ureq::Agent, tiles: &Path, job: &TileJob) -> Option<TileImage> {

@@ -10,6 +10,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use ring::digest;
 
 use crate::edit::Settings;
+use crate::inline;
 use crate::trip::{Block, MediaUse, Story, StoryBlock};
 
 /// How the page's photos are made. Its layout is [`Profile::VERSION`] in
@@ -60,6 +61,15 @@ pub struct Words {
 /// or `None` while it is unavailable.
 pub type Source = Option<(PathBuf, Settings, i32)>;
 
+/// Where route maps' tiles come from: the map source chosen in Settings,
+/// its key, and the folder the tile cache is in.
+#[derive(Clone, Debug)]
+pub struct MapTiles {
+    pub source: crate::geo::MapSource,
+    pub key: String,
+    pub cache: PathBuf,
+}
+
 /// Everything a page of a Story is made from.
 pub struct Page<'a> {
     pub story: &'a Story,
@@ -68,6 +78,8 @@ pub struct Page<'a> {
     pub blocks: &'a [StoryBlock],
     pub sources: &'a HashMap<i64, Source>,
     pub words: &'a Words,
+    /// Tiles for the route maps; without them a route is drawn on its own.
+    pub map: Option<&'a MapTiles>,
 }
 
 /// How far a page's photos are, shared with the thread making them, and
@@ -166,7 +178,7 @@ pub struct Outcome {
 /// `folder/images`, counting them in `progress`. Returns the page's file,
 /// or `Err` with the reason, also when `progress` was cancelled.
 pub fn write_story(folder: &Path, format: Format, profile: Profile, input: &Page, progress: &Progress) -> Result<(PathBuf, Outcome), String> {
-    let Page { story, dates, blocks, sources, words } = *input;
+    let Page { story, dates, blocks, sources, words, map } = *input;
     let images_dir = folder.join("images");
     std::fs::create_dir_all(&images_dir).map_err(|err| err.to_string())?;
     let mut images = HashMap::new();
@@ -189,6 +201,20 @@ pub fn write_story(folder: &Path, format: Format, profile: Profile, input: &Page
         read.push((media_id, path, before));
         images.insert(media_id, WebImage { file, width: rgba.width(), height: rgba.height() });
     }
+    // Each route on its map, as a picture like the photos.
+    let mut maps = HashMap::new();
+    for block in blocks {
+        let Block::Route { route, .. } = &block.block else { continue };
+        if progress.cancel.load(Ordering::Relaxed) {
+            return Err(CANCELLED.into());
+        }
+        let Some(rgba) = map.and_then(|tiles| route_map(route, tiles)) else { continue };
+        let bytes = crate::image_io::encode_jpeg(&rgba, profile.quality.clamp(1, 100))?;
+        let file = format!("images/{}.jpg", key(&bytes));
+        crate::image_io::write_whole(&folder.join(&file), &bytes)?;
+        let credit = map.map_or("", |tiles| tiles.source.attribution());
+        maps.insert(block.uid.clone(), RouteImage { image: WebImage { file, width: rgba.width(), height: rgba.height() }, credit });
+    }
     // The page is what the files were when read: one replaced or changed
     // meanwhile stops it, rather than mixing two versions.
     if read.iter().any(|(_, path, before)| stamp(path) != *before) {
@@ -196,11 +222,11 @@ pub fn write_story(folder: &Path, format: Format, profile: Profile, input: &Page
     }
     let (text, outcome, name) = match format {
         Format::Html => {
-            let (html, outcome) = page(story, dates, blocks, &images, words);
+            let (html, outcome) = page(story, dates, blocks, &images, &maps, words);
             (html, outcome, "index.html")
         }
         Format::Markdown => {
-            let (markdown, outcome) = markdown(story, dates, blocks, &images, words);
+            let (markdown, outcome) = markdown(story, dates, blocks, &images, &maps, words);
             (markdown, outcome, "story.md")
         }
     };
@@ -329,7 +355,14 @@ pub fn folder_name(title: &str) -> String {
 
 /// The Story as Markdown. Photos are images with their alt text, and the
 /// caption below in italics; missing ones are named as unavailable.
-pub fn markdown(story: &Story, dates: Option<&str>, blocks: &[StoryBlock], images: &HashMap<i64, WebImage>, words: &Words) -> (String, Outcome) {
+pub fn markdown(
+    story: &Story,
+    dates: Option<&str>,
+    blocks: &[StoryBlock],
+    images: &HashMap<i64, WebImage>,
+    maps: &HashMap<String, RouteImage>,
+    words: &Words,
+) -> (String, Outcome) {
     let mut outcome = Outcome::default();
     let title = if story.title.trim().is_empty() { words.untitled.as_str() } else { story.title.trim() };
     let mut out = format!("# {}\n\n", md(title));
@@ -343,16 +376,33 @@ pub fn markdown(story: &Story, dates: Option<&str>, blocks: &[StoryBlock], image
     if let Some(cover) = story.cover {
         out.push_str(&md_image(&MediaUse::new(cover), images, words, &mut outcome));
     }
+    md_paragraphs(&mut out, &story.introduction);
     for block in blocks {
         match &block.block {
             Block::Heading(text) => {
-                let _ = write!(out, "## {}\n\n", md(text.trim()));
+                let _ = write!(out, "## {}\n\n", inline::to_markdown(text.trim()));
             }
-            Block::Paragraph(text) | Block::Credits(text) => {
-                for part in text.split("\n\n").map(str::trim).filter(|part| !part.is_empty()) {
-                    let lines: Vec<String> = part.lines().map(|line| md(line.trim_end())).collect();
-                    let _ = write!(out, "{}\n\n", lines.join("  \n"));
+            Block::Subheading(text) => {
+                let _ = write!(out, "### {}\n\n", inline::to_markdown(text.trim()));
+            }
+            Block::Paragraph(text) | Block::Credits(text) => md_paragraphs(&mut out, text),
+            Block::List { ordered, items } => {
+                for (n, item) in items.iter().map(|item| item.trim()).filter(|item| !item.is_empty()).enumerate() {
+                    let bullet = if *ordered { format!("{}.", n + 1) } else { "-".into() };
+                    let _ = writeln!(out, "{bullet} {}", inline::to_markdown(item));
                 }
+                out.push('\n');
+            }
+            Block::Quote { text, citation } => {
+                let mut quoted = String::new();
+                md_paragraphs(&mut quoted, text);
+                if !citation.trim().is_empty() {
+                    let _ = write!(quoted, "— {}\n\n", inline::to_markdown(citation.trim()));
+                }
+                for line in quoted.trim_end().lines() {
+                    let _ = writeln!(out, "> {line}");
+                }
+                out.push('\n');
             }
             Block::Photo(media) => out.push_str(&md_image(media, images, words, &mut outcome)),
             Block::Gallery(items) => {
@@ -371,10 +421,30 @@ pub fn markdown(story: &Story, dates: Option<&str>, blocks: &[StoryBlock], image
                 }
             }
             Block::Separator => out.push_str("---\n\n"),
+            // The route's map, when there is one, then its words and length.
+            Block::Route { caption, route, .. } => {
+                if !route.is_empty() {
+                    if let Some(RouteImage { image, credit }) = maps.get(&block.uid) {
+                        let _ = write!(out, "![{}]({})\n{}\n\n", md(caption.trim()), image.file, md(credit));
+                    }
+                    let length = crate::track::format_distance(crate::trip::route_meters(route));
+                    let words = [caption.trim(), &length].into_iter().filter(|text| !text.is_empty()).map(md).collect::<Vec<_>>().join(" · ");
+                    let _ = write!(out, "*{words}*\n\n");
+                }
+            }
             Block::Unknown { .. } => outcome.unknown += 1,
         }
     }
+    md_paragraphs(&mut out, &story.conclusion);
     (out, outcome)
+}
+
+/// Paragraphs split by blank lines, each line kept as its own.
+fn md_paragraphs(out: &mut String, text: &str) {
+    for part in text.split("\n\n").map(str::trim).filter(|part| !part.is_empty()) {
+        let lines: Vec<String> = part.lines().map(|line| inline::to_markdown(line.trim_end())).collect();
+        let _ = write!(out, "{}\n\n", lines.join("  \n"));
+    }
 }
 
 fn md_image(media: &MediaUse, images: &HashMap<i64, WebImage>, words: &Words, outcome: &mut Outcome) -> String {
@@ -427,7 +497,14 @@ fn key(bytes: &[u8]) -> String {
 }
 
 /// The page's HTML. Photos missing from `images` are shown as unavailable.
-pub fn page(story: &Story, dates: Option<&str>, blocks: &[StoryBlock], images: &HashMap<i64, WebImage>, words: &Words) -> (String, Outcome) {
+pub fn page(
+    story: &Story,
+    dates: Option<&str>,
+    blocks: &[StoryBlock],
+    images: &HashMap<i64, WebImage>,
+    maps: &HashMap<String, RouteImage>,
+    words: &Words,
+) -> (String, Outcome) {
     let mut outcome = Outcome::default();
     let title = if story.title.trim().is_empty() { words.untitled.as_str() } else { story.title.trim() };
     let mut html = String::new();
@@ -449,12 +526,33 @@ pub fn page(story: &Story, dates: Option<&str>, blocks: &[StoryBlock], images: &
         let _ = writeln!(html, "<p class=\"byline\">{}</p>", esc(&byline.join(" · ")));
     }
     html.push_str("</header>\n");
+    if !story.introduction.trim().is_empty() {
+        let _ = write!(html, "<section class=\"introduction\">\n{}</section>\n", paragraphs(&story.introduction));
+    }
     for block in blocks {
         match &block.block {
             Block::Heading(text) => {
-                let _ = writeln!(html, "<h2>{}</h2>", esc(text.trim()));
+                let _ = writeln!(html, "<h2>{}</h2>", inline::to_html(text.trim()));
+            }
+            Block::Subheading(text) => {
+                let _ = writeln!(html, "<h3>{}</h3>", inline::to_html(text.trim()));
             }
             Block::Paragraph(text) => html.push_str(&paragraphs(text)),
+            Block::List { ordered, items } => {
+                let tag = if *ordered { "ol" } else { "ul" };
+                let _ = writeln!(html, "<{tag}>");
+                for item in items.iter().map(|item| item.trim()).filter(|item| !item.is_empty()) {
+                    let _ = writeln!(html, "<li>{}</li>", inline::to_html(item));
+                }
+                let _ = writeln!(html, "</{tag}>");
+            }
+            Block::Quote { text, citation } => {
+                let _ = write!(html, "<blockquote>\n{}", paragraphs(text));
+                if !citation.trim().is_empty() {
+                    let _ = writeln!(html, "<cite>{}</cite>", inline::to_html(citation.trim()));
+                }
+                html.push_str("</blockquote>\n");
+            }
             Block::Photo(media) => html.push_str(&figure(media, images, words, "photo", &mut outcome)),
             Block::Gallery(items) => {
                 html.push_str("<div class=\"gallery\">\n");
@@ -491,14 +589,153 @@ pub fn page(story: &Story, dates: Option<&str>, blocks: &[StoryBlock], images: &
                 html.push_str("</figure>\n");
             }
             Block::Separator => html.push_str("<hr>\n"),
+            Block::Route { caption, route, .. } => match maps.get(&block.uid) {
+                Some(RouteImage { image, credit }) => html.push_str(&route_picture(route, caption, image, credit)),
+                None => html.push_str(&route_figure(route, caption)),
+            },
             Block::Credits(text) => {
                 let _ = write!(html, "<footer class=\"credits\">\n{}</footer>\n", paragraphs(text));
             }
             Block::Unknown { .. } => outcome.unknown += 1,
         }
     }
+    if !story.conclusion.trim().is_empty() {
+        let _ = write!(html, "<section class=\"conclusion\">\n{}</section>\n", paragraphs(&story.conclusion));
+    }
     html.push_str("</article>\n</body>\n</html>\n");
     (html, outcome)
+}
+
+/// A route drawn on its map, written beside the page, and the credit its
+/// map tiles ask for.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RouteImage {
+    pub image: WebImage,
+    pub credit: &'static str,
+}
+
+/// Width and height of a route's drawing, before the page scales it.
+const ROUTE_SIZE: (f32, f32) = (720.0, 400.0);
+
+/// A Route block as a drawing of its line, from a dot where it starts to
+/// a ring where it ends, with its words and length below. Nothing for a
+/// route without points.
+pub fn route_figure(route: &[Vec<[i32; 2]>], caption: &str) -> String {
+    let (width, height) = ROUTE_SIZE;
+    let Some((_, shape)) = crate::trip::route_shape(route, width, height, ROUTE_PAD) else {
+        return String::new();
+    };
+    let (Some(start), Some(end)) = (shape.first().and_then(|segment| segment.first()), shape.last().and_then(|segment| segment.last())) else {
+        return String::new();
+    };
+    let mut svg = format!("<svg viewBox=\"0 0 {width} {height}\" role=\"img\" aria-label=\"{}\">", esc(caption.trim()));
+    for segment in &shape {
+        let points: Vec<String> = segment.iter().map(|[x, y]| format!("{x:.1},{y:.1}")).collect();
+        let _ = write!(svg, "<polyline points=\"{}\"/>", points.join(" "));
+    }
+    let _ = write!(svg, "<circle class=\"start\" cx=\"{:.1}\" cy=\"{:.1}\" r=\"6\"/>", start[0], start[1]);
+    let _ = write!(svg, "<circle class=\"end\" cx=\"{:.1}\" cy=\"{:.1}\" r=\"6\"/></svg>", end[0], end[1]);
+    format!("<figure class=\"route\">{svg}<figcaption>{}</figcaption></figure>\n", route_words(route, caption, ""))
+}
+
+/// A Route block as its picture on the map, with its words, length, and
+/// the map's credit below.
+fn route_picture(route: &[Vec<[i32; 2]>], caption: &str, image: &WebImage, credit: &str) -> String {
+    format!(
+        "<figure class=\"route\"><img src=\"{}\" width=\"{}\" height=\"{}\" alt=\"{}\" loading=\"lazy\"><figcaption>{}</figcaption></figure>\n",
+        esc(&image.file),
+        image.width,
+        image.height,
+        esc(caption.trim()),
+        route_words(route, caption, credit)
+    )
+}
+
+/// A route's description and length, and the map's credit, as escaped text.
+fn route_words(route: &[Vec<[i32; 2]>], caption: &str, credit: &str) -> String {
+    let length = crate::track::format_distance(crate::trip::route_meters(route));
+    let words = [esc(caption.trim()), esc(&length)].into_iter().filter(|text| !text.is_empty()).collect::<Vec<_>>().join(" · ");
+    if credit.is_empty() {
+        words
+    } else {
+        format!("{words}<small class=\"credit\">{}</small>", esc(credit))
+    }
+}
+
+/// Room around a route on its map, at [`ROUTE_SIZE`].
+const ROUTE_PAD: f32 = 28.0;
+/// How many pixels a route map has for each of [`ROUTE_SIZE`]'s, so it is
+/// sharp on fine screens.
+const ROUTE_SCALE: u32 = 2;
+/// The route's colour on its map, the page's accent.
+const ROUTE_INK: [u8; 3] = [0x1f, 0x7a, 0x7a];
+
+/// A route drawn on the map tiles of `tiles`: the map one zoom closer than
+/// the drawing so it is [`ROUTE_SCALE`] times as sharp, the line in white
+/// and then the accent, a dot where it starts and a ring where it ends.
+/// `None` when the source needs a key it doesn't have or no tile could be
+/// had, so the page draws the route on its own.
+fn route_map(route: &[Vec<[i32; 2]>], tiles: &MapTiles) -> Option<image::RgbaImage> {
+    if tiles.source.needs_key() && tiles.key.trim().is_empty() {
+        return None;
+    }
+    let (width, height) = ROUTE_SIZE;
+    let (view, shape) = crate::trip::route_shape(route, width, height, ROUTE_PAD)?;
+    let scale = ROUTE_SCALE as f32;
+    let (w, h) = (width as u32 * ROUTE_SCALE, height as u32 * ROUTE_SCALE);
+    let zoom = view.zoom + 1;
+    let (left, top) = (view.x * f64::from(ROUTE_SCALE) - f64::from(w) / 2.0, view.y * f64::from(ROUTE_SCALE) - f64::from(h) / 2.0);
+    let tile = crate::geo::TILE_PX;
+    let last = (1u32 << zoom) - 1;
+    let range = |from: f64, size: u32| (from / tile).floor().max(0.0) as u32..=(((from + f64::from(size)) / tile).floor().max(0.0) as u32).min(last);
+    let jobs: Vec<crate::geo::TileJob> = range(top, h)
+        .flat_map(|y| range(left, w).map(move |x| (x, y)))
+        .map(|(x, y)| crate::geo::TileJob { source: tiles.source, key: tiles.key.clone(), z: zoom, x, y })
+        .collect();
+    let loaded = crate::geo::load_tiles(&jobs, &tiles.cache);
+    let mut picture = image::RgbaImage::from_pixel(w, h, image::Rgba([0xe8, 0xe4, 0xdc, 0xff]));
+    let mut any = false;
+    for (job, loaded) in jobs.iter().zip(loaded) {
+        let Some(loaded) = loaded else { continue };
+        let Some(pixels) = image::RgbaImage::from_raw(loaded.w as u32, loaded.h as u32, loaded.rgba) else { continue };
+        let side = tile as u32;
+        let pixels = if pixels.width() == side { pixels } else { image::imageops::resize(&pixels, side, side, image::imageops::FilterType::Triangle) };
+        let (x, y) = (f64::from(job.x) * tile - left, f64::from(job.y) * tile - top);
+        image::imageops::overlay(&mut picture, &pixels, x.round() as i64, y.round() as i64);
+        any = true;
+    }
+    if !any {
+        return None;
+    }
+    let mut pixmap = tiny_skia::Pixmap::from_vec(picture.into_raw(), tiny_skia::IntSize::from_wh(w, h)?)?;
+    let mut line = tiny_skia::PathBuilder::new();
+    for segment in &shape {
+        for (n, [x, y]) in segment.iter().enumerate() {
+            if n == 0 {
+                line.move_to(x * scale, y * scale);
+            } else {
+                line.line_to(x * scale, y * scale);
+            }
+        }
+    }
+    let line = line.finish()?;
+    let paint = |[r, g, b]: [u8; 3]| {
+        let mut paint = tiny_skia::Paint::default();
+        paint.set_color_rgba8(r, g, b, 255);
+        paint.anti_alias = true;
+        paint
+    };
+    let (white, ink) = (paint([255, 255, 255]), paint(ROUTE_INK));
+    let stroke = |width: f32| tiny_skia::Stroke { width: width * scale, line_cap: tiny_skia::LineCap::Round, line_join: tiny_skia::LineJoin::Round, ..Default::default() };
+    pixmap.stroke_path(&line, &white, &stroke(7.0), tiny_skia::Transform::identity(), None);
+    pixmap.stroke_path(&line, &ink, &stroke(4.0), tiny_skia::Transform::identity(), None);
+    let ends = [shape.first().and_then(|segment| segment.first()), shape.last().and_then(|segment| segment.last())];
+    for (n, [x, y]) in ends.into_iter().flatten().enumerate() {
+        let Some(dot) = tiny_skia::PathBuilder::from_circle(x * scale, y * scale, 6.0 * scale) else { continue };
+        pixmap.fill_path(&dot, if n == 0 { &ink } else { &white }, tiny_skia::FillRule::Winding, tiny_skia::Transform::identity(), None);
+        pixmap.stroke_path(&dot, if n == 0 { &white } else { &ink }, &stroke(3.0), tiny_skia::Transform::identity(), None);
+    }
+    image::RgbaImage::from_raw(w, h, pixmap.take())
 }
 
 fn figure(media: &MediaUse, images: &HashMap<i64, WebImage>, words: &Words, class: &str, outcome: &mut Outcome) -> String {
@@ -527,7 +764,7 @@ fn figure(media: &MediaUse, images: &HashMap<i64, WebImage>, words: &Words, clas
 fn paragraphs(text: &str) -> String {
     let mut html = String::new();
     for part in text.split("\n\n").map(str::trim).filter(|part| !part.is_empty()) {
-        let lines: Vec<String> = part.lines().map(esc).collect();
+        let lines: Vec<String> = part.lines().map(inline::to_html).collect();
         let _ = writeln!(html, "<p>{}</p>", lines.join("<br>\n"));
     }
     html
@@ -576,8 +813,19 @@ figure.grid{margin-left:-1.25rem;margin-right:-1.25rem}
 .grid .cells img{display:block}
 .missing{aspect-ratio:3/2;display:flex;align-items:center;justify-content:center;background:var(--rule);color:var(--muted);border-radius:4px;font:.9rem system-ui,sans-serif}
 hr{border:0;border-top:1px solid var(--rule);margin:3rem auto;width:40%}
+blockquote{margin:2rem 0;padding-left:1.25rem;border-left:3px solid var(--rule);font-style:italic}
+blockquote cite{display:block;font-style:normal;font-size:.9rem;color:var(--muted)}
+blockquote cite::before{content:'— '}
+code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.9em}
+figure.route svg{display:block;width:100%;height:auto;background:var(--rule);border-radius:4px}
+.route polyline{fill:none;stroke:var(--accent);stroke-width:4;stroke-linecap:round;stroke-linejoin:round}
+.route circle{stroke:var(--accent);stroke-width:3}
+.route .start{fill:var(--accent)}
+.route .end{fill:var(--bg)}
+figure.route img{border-radius:4px}
+.route .credit{display:block;font-size:.75rem}
 .credits{margin-top:3rem;padding-top:1.5rem;border-top:1px solid var(--rule);font-size:.9rem;color:var(--muted)}
-@media (min-width:52rem){figure.photo,figure.cover,figure.grid{margin-left:-4rem;margin-right:-4rem}}
+@media (min-width:52rem){figure.photo,figure.cover,figure.grid,figure.route{margin-left:-4rem;margin-right:-4rem}}
 ";
 
 #[cfg(test)]
@@ -590,6 +838,8 @@ mod tests {
             trip_id: 1,
             title: "Kyoto <in> spring".into(),
             subtitle: String::new(),
+            introduction: String::new(),
+            conclusion: String::new(),
             author: "Ana".into(),
             show_date: true,
             cover: None,
@@ -606,18 +856,48 @@ mod tests {
     }
 
     #[test]
+    fn a_route_on_its_map_is_a_picture_with_the_map_credit() {
+        let route = vec![vec![[3_500_000, 13_500_000], [3_510_000, 13_510_000]]];
+        let blocks = vec![StoryBlock::new(Block::Route { caption: "Walk <1>".into(), source: String::new(), route })];
+        let image = WebImage { file: "images/r.jpg".into(), width: 1440, height: 800 };
+        let maps = HashMap::from([(blocks[0].uid.clone(), RouteImage { image, credit: "© OpenStreetMap contributors" })]);
+        let (html, _) = page(&story(), None, &blocks, &HashMap::new(), &maps, &words());
+        assert!(html.contains("<img src=\"images/r.jpg\" width=\"1440\" height=\"800\" alt=\"Walk &lt;1&gt;\""));
+        assert!(html.contains("<small class=\"credit\">© OpenStreetMap contributors</small>"));
+        let (drawn, _) = page(&story(), None, &blocks, &HashMap::new(), &HashMap::new(), &words());
+        assert!(drawn.contains("<svg") && !drawn.contains("<img"), "without its map, the route is drawn on its own");
+        let (text, _) = markdown(&story(), None, &blocks, &HashMap::new(), &maps, &words());
+        assert!(text.contains("![Walk <1>](images/r.jpg)") || text.contains("](images/r.jpg)"));
+    }
+
+    #[test]
     fn text_is_escaped_and_paragraphs_kept() {
         let blocks = [
             StoryBlock::new(Block::Heading("Day 1 & 2".into())),
             StoryBlock::new(Block::Paragraph("First \"line\"\nsecond\n\n<script>x</script>".into())),
         ];
-        let (html, _) = page(&story(), Some("1 – 3 March"), &blocks, &HashMap::new(), &words());
+        let (html, _) = page(&story(), Some("1 – 3 March"), &blocks, &HashMap::new(), &HashMap::new(), &words());
         assert!(html.contains("<title>Kyoto &lt;in&gt; spring</title>"));
         assert!(html.contains("<h2>Day 1 &amp; 2</h2>"));
         assert!(html.contains("<p>First &quot;line&quot;<br>\nsecond</p>"));
         assert!(html.contains("<p>&lt;script&gt;x&lt;/script&gt;</p>"));
         assert!(!html.contains("<script>"));
         assert!(html.contains("<p class=\"byline\">Ana · 1 – 3 March</p>"));
+    }
+
+    #[test]
+    fn the_introduction_opens_and_the_conclusion_closes_the_story() {
+        let mut story = story();
+        story.introduction = "Why we went".into();
+        story.conclusion = "We'll be back".into();
+        let blocks = [StoryBlock::new(Block::Heading("Day 1".into()))];
+        let (html, _) = page(&story, None, &blocks, &HashMap::new(), &HashMap::new(), &words());
+        let at = |text: &str| html.find(text).unwrap();
+        assert!(at("</header>") < at("Why we went") && at("Why we went") < at("<h2>Day 1</h2>") && at("<h2>Day 1</h2>") < at("We&#39;ll be back"));
+        let (text, _) = markdown(&story, None, &blocks, &HashMap::new(), &HashMap::new(), &words());
+        assert!(text.find("Why we went").unwrap() < text.find("## Day 1").unwrap() && text.find("## Day 1").unwrap() < text.find("We'll be back").unwrap());
+        let (plain, _) = page(&self::story(), None, &blocks, &HashMap::new(), &HashMap::new(), &words());
+        assert!(!plain.contains("<section"), "left empty, neither is written");
     }
 
     #[test]
@@ -631,7 +911,7 @@ mod tests {
             StoryBlock::new(Block::Unknown { kind: "map".into(), version: 9, payload: "{}".into(), media: Vec::new() }),
         ];
         let images = HashMap::from([(1, WebImage { file: "images/ab.jpg".into(), width: 1600, height: 1067 })]);
-        let (html, outcome) = page(&story(), None, &blocks, &images, &words());
+        let (html, outcome) = page(&story(), None, &blocks, &images, &HashMap::new(), &words());
         assert_eq!(outcome, Outcome { missing: 1, unknown: 1 });
         assert!(html.contains("<img src=\"images/ab.jpg\" width=\"1600\" height=\"1067\" alt=\"A &quot;red&quot; gate\""));
         assert!(html.contains("<figcaption>Fushimi</figcaption>"));
@@ -647,7 +927,7 @@ mod tests {
         let sources = HashMap::from([(1, Some((photo, Settings::default(), 0))), (2, None)]);
         let blocks = [StoryBlock::new(Block::Photo(MediaUse::new(1))), StoryBlock::new(Block::Photo(MediaUse::new(2)))];
         let (story, words) = (story(), words());
-        let page = Page { story: &story, dates: None, blocks: &blocks, sources: &sources, words: &words };
+        let page = Page { story: &story, dates: None, blocks: &blocks, sources: &sources, words: &words, map: None };
         let check = preflight(&page);
         assert_eq!(check, Preflight { missing: 1, no_alt: 1, first: [Some(1), Some(0), None, None], photos: 1, ..Preflight::default() });
         assert!(check.blocked(false) && !check.blocked(true), "missing photos wait for the user");
@@ -679,7 +959,7 @@ mod tests {
         let sources = HashMap::from([(1, Some((bad, Settings::default(), 0)))]);
         let blocks = [StoryBlock::new(Block::Heading("Day 1".into())), StoryBlock::new(Block::Photo(described))];
         let (story, words) = (story(), words());
-        let page = Page { story: &story, dates: None, blocks: &blocks, sources: &sources, words: &words };
+        let page = Page { story: &story, dates: None, blocks: &blocks, sources: &sources, words: &words, map: None };
         let check = preflight(&page);
         assert_eq!((check.unreadable, check.missing, check.photos, check.first[3]), (1, 0, 0, Some(1)));
         assert!(check.blocked(false) && !check.blocked(true));
@@ -712,14 +992,14 @@ mod tests {
             (1, WebImage { file: "images/a.jpg".into(), width: 10, height: 10 }),
             (2, WebImage { file: "images/b.jpg".into(), width: 10, height: 10 }),
         ]);
-        let (html, outcome) = page(&story(), None, &blocks, &images, &words());
+        let (html, outcome) = page(&story(), None, &blocks, &images, &HashMap::new(), &words());
         assert_eq!(outcome.missing, 1, "the third photo is shown as unavailable, not left out");
         assert!(html.contains("<figure class=\"grid\" style=\"--cols:2;--ratio:4/3\">"), "{html}");
         assert_eq!(html.matches("<img src=\"images/").count(), 2);
         assert!(html.contains("alt=\"A boat\""));
         assert!(html.contains("<figcaption>Morning &lt;market&gt;</figcaption>"));
         assert!(!html.contains("hidden in a grid"));
-        let (text, _) = markdown(&story(), None, &blocks, &images, &words());
+        let (text, _) = markdown(&story(), None, &blocks, &images, &HashMap::new(), &words());
         assert!(text.contains("![A boat](images/a.jpg)\n\n![](images/b.jpg)"), "{text}");
         assert!(text.contains("*Morning &lt;market&gt;*") && !text.contains("hidden"), "{text}");
     }
@@ -737,7 +1017,7 @@ mod tests {
             StoryBlock::new(Block::Separator),
         ];
         let images = HashMap::from([(1, WebImage { file: "images/ab.jpg".into(), width: 10, height: 10 })]);
-        let (text, outcome) = markdown(&story(), None, &blocks, &images, &words());
+        let (text, outcome) = markdown(&story(), None, &blocks, &images, &HashMap::new(), &words());
         assert_eq!(outcome.missing, 1);
         assert!(text.starts_with("# Kyoto &lt;in&gt; spring\n\nAna\n\n"), "{text}");
         assert!(text.contains("## \\# Day 1\n"));
@@ -754,7 +1034,7 @@ mod tests {
         std::fs::create_dir_all(parent.join("Kyoto in spring")).unwrap();
         std::fs::write(parent.join("Kyoto in spring/mine.txt"), "keep").unwrap();
         let (story, words, sources) = (story(), words(), HashMap::new());
-        let page = Page { story: &story, dates: None, blocks: &[], sources: &sources, words: &words };
+        let page = Page { story: &story, dates: None, blocks: &[], sources: &sources, words: &words, map: None };
         let export = |format| export_story(&parent, "Kyoto: in/spring", format, Profile::default(), &page, &Progress::default());
         let (first, _) = export(Format::Html).unwrap();
         assert_eq!(first, parent.join("Kyoto in spring 2"));
@@ -768,7 +1048,7 @@ mod tests {
         let stopped = Progress::default();
         stopped.cancel.store(true, Ordering::Relaxed);
         let photo = HashMap::from([(1, None)]);
-        let page = Page { story: &story, dates: None, blocks: &[], sources: &photo, words: &words };
+        let page = Page { story: &story, dates: None, blocks: &[], sources: &photo, words: &words, map: None };
         assert_eq!(export_story(&parent, "Stopped", Format::Html, Profile::default(), &page, &stopped), Err(CANCELLED.into()));
         assert_eq!(std::fs::read_dir(&parent).unwrap().count(), 3, "a cancelled export leaves nothing");
         assert_eq!(folder_name(" ..hidden "), "hidden");
@@ -778,7 +1058,7 @@ mod tests {
 
     #[test]
     fn the_page_needs_nothing_from_the_network() {
-        let (html, _) = page(&story(), None, &[], &HashMap::new(), &words());
+        let (html, _) = page(&story(), None, &[], &HashMap::new(), &HashMap::new(), &words());
         assert!(!html.contains("http"), "no remote fonts, styles, or scripts");
         assert_eq!(key(b"same"), key(b"same"));
         assert_ne!(key(b"same"), key(b"other"));

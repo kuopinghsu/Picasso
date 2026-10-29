@@ -82,6 +82,10 @@ impl PicassoApp {
                     self.open_edit_trip(id);
                     ui.close();
                 }
+                if ui.button(tr("Export trip package…")).clicked() {
+                    self.export_trip_package(ui.ctx(), id);
+                    ui.close();
+                }
                 if ui.button(tr("Archive trip")).clicked() {
                     self.db.set_trip_archived(id, true);
                     self.reload();
@@ -137,10 +141,15 @@ impl PicassoApp {
         let mut open: Option<i64> = None;
         let mut archive: Option<(i64, bool)> = None;
         let mut edit: Option<i64> = None;
+        let mut package: Option<i64> = None;
         let mut delete: Option<i64> = None;
         ui.horizontal(|ui| {
             if ui.add(theme::primary_button(tr("New trip"))).clicked() {
                 self.open_new_trip(Vec::new());
+            }
+            let import = ui.button(tr("Import trip…"));
+            if import.on_hover_text(tr("Add a trip package made in Picasso on another computer, with its days, photos, and stories")).clicked() {
+                self.import_trip_package(ui.ctx());
             }
             ui.add_space(8.0);
             ui.checkbox(&mut self.show_archived_trips, tr("Archived trips"));
@@ -219,6 +228,10 @@ impl PicassoApp {
                             edit = Some(trip.id);
                             ui.close();
                         }
+                        if ui.button(tr("Export trip package…")).clicked() {
+                            package = Some(trip.id);
+                            ui.close();
+                        }
                         let label = if trip.archived { tr("Unarchive trip") } else { tr("Archive trip") };
                         if ui.button(label).clicked() {
                             archive = Some((trip.id, !trip.archived));
@@ -232,6 +245,9 @@ impl PicassoApp {
                 }
             });
         });
+        if let Some(id) = package {
+            self.export_trip_package(ui.ctx(), id);
+        }
         if let Some(id) = edit {
             self.open_edit_trip(id);
         }
@@ -332,6 +348,41 @@ impl PicassoApp {
         let missing = trip.members - trip.available;
         let trip_members = trip.members;
         let archived = trip.archived;
+        let story_count = trip.stories;
+        // The trip's photos or its Stories, each with the whole page.
+        let mut stories_tab = self.trip_stories.contains(&trip_id);
+        ui.horizontal(|ui| {
+            if ui.selectable_label(!stories_tab, trf("Photos ({})", &[&trip_members])).clicked() {
+                stories_tab = false;
+            }
+            if ui.selectable_label(stories_tab, trf("Stories ({})", &[&story_count])).clicked() {
+                stories_tab = true;
+            }
+            // The trip's own actions, at the end of the row like the toolbar's.
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                let more = theme::named(ui.button("⋯"), tr("More"));
+                let mut export = false;
+                egui::Popup::menu(&more).show(|ui| {
+                    let item = ui.button(tr("Export trip package…"));
+                    if item.on_hover_text(tr("One file with this trip, its days, photos, and stories, to go on editing it in Picasso on another computer")).clicked() {
+                        export = true;
+                    }
+                });
+                if ui.button(tr("Edit trip…")).clicked() {
+                    self.open_edit_trip(trip_id);
+                }
+                if export {
+                    self.export_trip_package(ui.ctx(), trip_id);
+                }
+            });
+        });
+        if stories_tab != self.trip_stories.contains(&trip_id) {
+            if stories_tab {
+                self.trip_stories.insert(trip_id);
+            } else {
+                self.trip_stories.remove(&trip_id);
+            }
+        }
         ui.horizontal_wrapped(|ui| {
             ui.label(RichText::new(parts.join("  ·  ")).size(13.0).color(theme::muted()));
             if missing > 0 {
@@ -346,14 +397,14 @@ impl PicassoApp {
             if archived {
                 ui.label(RichText::new(tr("Archived")).size(13.0).color(theme::muted()));
             }
-            if ui.link(RichText::new(tr("Edit trip…")).size(13.0)).clicked() {
-                self.open_edit_trip(trip_id);
-            }
         });
+        if stories_tab {
+            return;
+        }
         // Narrow the grid; the counts and the list come from the same query.
         let mut filter = self.trip_filter;
         ui.horizontal_wrapped(|ui| {
-            ui.label(RichText::new(tr("Show")).size(13.0).color(theme::muted()));
+            row_label(ui, tr("Show"));
             let everything = MemberQuery { day: filter.day, ..MemberQuery::default() };
             if ui.selectable_label(filter == everything, tr("All")).clicked() {
                 filter = everything;
@@ -417,7 +468,7 @@ impl PicassoApp {
         let mut move_day: Option<(usize, usize)> = None;
         let mut suggest = false;
         ui.horizontal_wrapped(|ui| {
-            ui.label(RichText::new(tr("Days")).size(13.0).color(theme::muted()));
+            row_label(ui, tr("Days"));
             if ui.selectable_label(filter.day == DayFilter::Any, tr("All")).clicked() {
                 filter.day = DayFilter::Any;
             }
@@ -542,7 +593,7 @@ impl PicassoApp {
             self.suggest_days(ui.ctx(), trip_id);
         }
         self.tracks_row(ui, trip_id, &days);
-        self.stories_row(ui, trip_id, &days);
+        self.stories_line(ui, trip_id, &days);
         if filter != self.trip_filter {
             self.trip_filter = filter;
             self.selection.clear();
@@ -550,79 +601,83 @@ impl PicassoApp {
         }
     }
 
-    /// The Trip's Stories: open one, archive or delete it, or start a new one.
-    fn stories_row(&mut self, ui: &mut egui::Ui, trip_id: i64, days: &[TripDay]) {
+    /// The Stories tab of a Trip: a card for each Story, to open, archive,
+    /// or delete it, and a last card that starts a new one.
+    pub(super) fn stories_page(&mut self, ui: &mut egui::Ui, trip_id: i64) {
+        let days = self.db.trip_days(trip_id);
+        egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+            self.story_cards(ui, trip_id, &days);
+        });
+    }
+
+    /// The Stories in one line above the photos, however many there are:
+    /// the one last worked on, a new one, and the way to all of them.
+    fn stories_line(&mut self, ui: &mut egui::Ui, trip_id: i64, days: &[TripDay]) {
         let stories = self.db.stories(trip_id);
+        let latest = stories.iter().filter(|story| !story.archived).max_by_key(|story| story.updated_at);
         let mut open: Option<i64> = None;
-        let mut archive: Option<(i64, bool)> = None;
-        let mut delete: Option<(i64, String)> = None;
-        let mut blank = false;
-        let mut from_days: Option<Vec<i64>> = None;
-        let mut from_selection = false;
-        let selected = !self.selection.is_empty();
+        let mut all = false;
+        let mut new_story: Option<egui::Response> = None;
         ui.horizontal_wrapped(|ui| {
-            ui.label(RichText::new(tr("Stories")).size(13.0).color(theme::muted()));
-            for story in &stories {
-                let name = story_name(story);
-                let label = if story.archived {
-                    RichText::new(trf("{} (archived)", &[&name])).color(theme::muted())
-                } else if !story.finished {
-                    RichText::new(trf("{} (draft)", &[&name]))
-                } else {
-                    RichText::new(name.clone())
-                };
-                let chip = ui.selectable_label(false, label).on_hover_text(tr("Click to edit. Right-click for more."));
-                if chip.clicked() {
+            row_label(ui, tr("Stories"));
+            if let Some(story) = latest {
+                let chip = ui.selectable_label(false, trf("Continue “{}”", &[&story_name(story)]));
+                if chip.on_hover_text(tr("The story you worked on last")).clicked() {
                     open = Some(story.id);
                 }
-                chip.context_menu(|ui| {
-                    if ui.button(tr("Edit")).clicked() {
-                        open = Some(story.id);
-                        ui.close();
-                    }
-                    let label = if story.archived { tr("Restore story") } else { tr("Archive story") };
-                    if ui.button(label).clicked() {
-                        archive = Some((story.id, !story.archived));
-                        ui.close();
-                    }
-                    if ui.button(tr("Delete story…")).clicked() {
-                        delete = Some((story.id, name.clone()));
-                        ui.close();
-                    }
-                });
             }
-            let button = ui.button(tr("New story"));
-            let popup = egui::Popup::menu(&button).show(|ui| {
-                if ui.button(tr("Blank story")).clicked() {
-                    blank = true;
-                }
-                let filled = days.iter().any(|day| day.members > 0);
-                let by_day = ui.add_enabled(filled, egui::Button::new(tr("From the trip's days")));
-                if by_day
-                    .on_hover_text(tr("A heading for each day and its photos in order, to write around. Videos are left out."))
-                    .on_disabled_hover_text(tr("Put photos in days first"))
-                    .clicked()
-                {
-                    from_days = Some(days.iter().filter(|day| day.members > 0).map(|day| day.id).collect());
-                }
-                ui.add_enabled_ui(filled, |ui| {
-                    ui.menu_button(tr("From one day"), |ui| {
-                        for day in days.iter().filter(|day| day.members > 0) {
-                            if ui.button(day_name(day)).clicked() {
-                                from_days = Some(vec![day.id]);
-                            }
-                        }
-                    });
-                });
-                let picked = ui.add_enabled(selected, egui::Button::new(tr("From the selected photos")));
-                if picked.on_disabled_hover_text(tr("Select photos first")).clicked() {
-                    from_selection = true;
-                }
-            });
-            if popup.is_none() {
-                button.on_hover_text(tr("Write about this trip"));
+            new_story = Some(ui.button(format!("+ {}", tr("New story"))));
+            if !stories.is_empty() && ui.link(RichText::new(trf("All {} stories ›", &[&stories.len()])).size(13.0)).clicked() {
+                all = true;
             }
         });
+        if let Some(button) = new_story {
+            self.new_story_menu(&button, trip_id, days);
+        }
+        if all {
+            self.trip_stories.insert(trip_id);
+        }
+        if let Some(id) = open {
+            self.open_story(id);
+        }
+    }
+
+    /// The menu of ways to start a Story, under `button`; the new Story opens.
+    fn new_story_menu(&mut self, button: &egui::Response, trip_id: i64, days: &[TripDay]) {
+        // The Stories tab hides the grid, so a selection there is out of sight.
+        let selected = !self.selection.is_empty() && !self.trip_stories.contains(&trip_id);
+        let (mut blank, mut from_days, mut from_selection) = (false, None::<Vec<i64>>, false);
+        let popup = egui::Popup::menu(button).show(|ui| {
+            if ui.button(tr("Blank story")).clicked() {
+                blank = true;
+            }
+            let filled = days.iter().any(|day| day.members > 0);
+            let by_day = ui.add_enabled(filled, egui::Button::new(tr("From the trip's days")));
+            if by_day
+                .on_hover_text(tr("A heading for each day and its photos in order, to write around. Videos are left out."))
+                .on_disabled_hover_text(tr("Put photos in days first"))
+                .clicked()
+            {
+                from_days = Some(days.iter().filter(|day| day.members > 0).map(|day| day.id).collect());
+            }
+            ui.add_enabled_ui(filled, |ui| {
+                ui.menu_button(tr("From one day"), |ui| {
+                    for day in days.iter().filter(|day| day.members > 0) {
+                        if ui.button(day_name(day)).clicked() {
+                            from_days = Some(vec![day.id]);
+                        }
+                    }
+                });
+            });
+            let picked = ui.add_enabled(selected, egui::Button::new(tr("From the selected photos")));
+            if picked.on_disabled_hover_text(tr("Select photos first")).clicked() {
+                from_selection = true;
+            }
+        });
+        if popup.is_none() {
+            button.clone().on_hover_text(tr("Write about this trip"));
+        }
+        let mut open = None;
         if blank {
             match self.db.create_story(trip_id, "") {
                 Ok(id) => open = Some(id),
@@ -650,6 +705,89 @@ impl PicassoApp {
                 Err(err) => self.activity = err,
             }
         }
+        if let Some(id) = open {
+            self.open_story(id);
+        }
+    }
+
+    /// The Trip's Stories as cards: open one, archive or delete it, or start a new one.
+    fn story_cards(&mut self, ui: &mut egui::Ui, trip_id: i64, days: &[TripDay]) {
+        let stories = self.db.stories(trip_id);
+        let mut open: Option<i64> = None;
+        let mut archive: Option<(i64, bool)> = None;
+        let mut delete: Option<(i64, String)> = None;
+        // Each Story as a card with its cover and how far along it is, and
+        // a last card that starts a new one.
+        let mut new_story: Option<egui::Response> = None;
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = Vec2::splat(12.0);
+            for story in &stories {
+                let name = story_name(story);
+                let (rect, card) = ui.allocate_exact_size(STORY_CARD, egui::Sense::click());
+                let card = card.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(tr("Click to edit. Right-click for more."));
+                card.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &name));
+                let painter = ui.painter_at(rect);
+                painter.rect_filled(rect, 8, theme::sidebar());
+                if card.hovered() || card.has_focus() {
+                    painter.rect_stroke(rect, 8, egui::Stroke::new(2.0, theme::ACCENT), egui::StrokeKind::Inside);
+                }
+                let cover = egui::Rect::from_min_size(rect.min, Vec2::new(rect.width(), 76.0)).shrink(5.0);
+                painter.rect_filled(cover, 6, theme::placeholder());
+                if let Some(photo) = self.story_cover(story).and_then(|id| self.db.photo(id)) {
+                    self.ensure_thumb(photo.id, &photo.path);
+                    if let Some((texture, w, h)) = self.thumb_texture(photo.id) {
+                        theme::paint_image_rounded(&painter, &texture, cover, theme::cover_uv(w, h), photo.rotation, 6.0);
+                    }
+                }
+                let (status, color) = if story.archived {
+                    (tr("Archived"), theme::muted())
+                } else if story.finished {
+                    (tr("Finished"), theme::ACCENT)
+                } else {
+                    (tr("Draft"), theme::muted())
+                };
+                // The title, cut short of the status badge at the right.
+                let line = cover.bottom() + 15.0;
+                let badge = painter.layout_no_wrap(status.to_string(), egui::FontId::proportional(11.0), color);
+                let badge_rect = egui::Rect::from_min_size(egui::pos2(rect.right() - 8.0 - badge.size().x - 12.0, line - badge.size().y / 2.0 - 2.0), badge.size() + Vec2::new(12.0, 4.0));
+                painter.rect_filled(badge_rect, 8, color.gamma_multiply(0.15));
+                painter.galley(badge_rect.min + Vec2::new(6.0, 2.0), badge, color);
+                let title = painter.layout_no_wrap(name.clone(), egui::FontId::proportional(13.5), theme::text());
+                let left = rect.left() + 9.0;
+                let clip = egui::Rect::from_min_max(egui::pos2(left, line - title.size().y / 2.0), egui::pos2(badge_rect.left() - 6.0, line + title.size().y / 2.0));
+                painter.with_clip_rect(clip).galley(clip.min, title, theme::text());
+                if card.clicked() {
+                    open = Some(story.id);
+                }
+                card.context_menu(|ui| {
+                    if ui.button(tr("Edit")).clicked() {
+                        open = Some(story.id);
+                        ui.close();
+                    }
+                    let label = if story.archived { tr("Restore story") } else { tr("Archive story") };
+                    if ui.button(label).clicked() {
+                        archive = Some((story.id, !story.archived));
+                        ui.close();
+                    }
+                    if ui.button(tr("Delete story…")).clicked() {
+                        delete = Some((story.id, name.clone()));
+                        ui.close();
+                    }
+                });
+            }
+            let (rect, button) = ui.allocate_exact_size(STORY_CARD, egui::Sense::click());
+            let button = button.on_hover_cursor(egui::CursorIcon::PointingHand);
+            button.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tr("New story")));
+            let color = if button.hovered() { theme::ACCENT } else { theme::muted() };
+            let painter = ui.painter_at(rect);
+            painter.rect_stroke(rect.shrink(1.0), 8, egui::Stroke::new(1.0, color.gamma_multiply(0.45)), egui::StrokeKind::Inside);
+            painter.text(rect.center() - Vec2::new(0.0, 10.0), egui::Align2::CENTER_CENTER, "+", egui::FontId::proportional(22.0), color);
+            painter.text(rect.center() + Vec2::new(0.0, 14.0), egui::Align2::CENTER_CENTER, tr("New story"), egui::FontId::proportional(13.0), color);
+            new_story = Some(button);
+        });
+        if let Some(button) = new_story {
+            self.new_story_menu(&button, trip_id, days);
+        }
         if let Some((id, archived)) = archive {
             self.db.set_story_archived(id, archived);
         }
@@ -659,6 +797,12 @@ impl PicassoApp {
         if let Some(id) = open {
             self.open_story(id);
         }
+    }
+
+    /// The photo on a Story's card: its cover, or else its first photo.
+    fn story_cover(&self, story: &Story) -> Option<i64> {
+        let media = story.cover.or_else(|| self.db.story_blocks(story.id).iter().find_map(|block| block.block.media().first().map(|media| media.media_id)))?;
+        self.db.media_photo(media)
     }
 
     /// The toolbar menu that adds the selected photos to one of the Trip's Stories.
@@ -704,7 +848,7 @@ impl PicassoApp {
         let mut link: Option<(i64, Option<i64>)> = None;
         let mut unlink: Option<i64> = None;
         ui.horizontal_wrapped(|ui| {
-            ui.label(RichText::new(tr("Tracks")).size(13.0).color(theme::muted()));
+            row_label(ui, tr("Tracks"));
             for track in &linked {
                 let day = track.day_id.and_then(|id| days.iter().find(|day| day.id == id));
                 let mut label = match day {
@@ -1313,6 +1457,18 @@ impl PicassoApp {
 
 /// Up to this many Days show as chips; more as a selector.
 const DAY_CHIPS: usize = 5;
+/// The width of the names before the trip's rows, so their chips line up.
+const ROW_LABEL: f32 = 64.0;
+/// A Story's card on the trip page.
+const STORY_CARD: Vec2 = Vec2::new(168.0, 108.0);
+
+/// The name of one of the trip's rows, in a column of its own.
+fn row_label(ui: &mut egui::Ui, text: &str) {
+    ui.allocate_ui_with_layout(Vec2::new(ROW_LABEL, 20.0), Layout::left_to_right(Align::Center), |ui| {
+        ui.set_min_width(ROW_LABEL);
+        ui.label(RichText::new(text).size(13.0).color(theme::muted()));
+    });
+}
 
 /// What adding photos to a Trip will do.
 fn preview_lines(ui: &mut egui::Ui, preview: &AddPreview) {

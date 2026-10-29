@@ -6,9 +6,10 @@
 //! little-endian, the header, and then each photo's bytes, one after
 //! another in the header's order. Photos refer to each other by `key`, the
 //! media reference they had where the package was made; the Stories'
-//! blocks and covers use the same keys.
+//! blocks and covers use the same keys. The Trip's GPS track files follow
+//! the photos, in the header's order too.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -24,7 +25,7 @@ use crate::trip::{Block, MediaUse, Story, StoryBlock, DEFAULT_TEMPLATE};
 /// The first bytes of every package.
 const MAGIC: &[u8] = b"PICASSO-TRIP\n";
 /// The header layout this build writes and the newest it reads.
-const VERSION: u64 = 1;
+const VERSION: u64 = 2;
 /// The file extension of packages, without the dot.
 pub const EXTENSION: &str = "picassotrip";
 /// Largest header read, so a damaged file can't ask for any amount of memory.
@@ -60,6 +61,29 @@ pub struct PackPhoto {
     /// Index of its Day in [`Package::days`].
     pub day: Option<usize>,
     pub size: Option<u64>,
+    /// `false` for a photo only a Story still uses, no longer in the Trip.
+    pub member: bool,
+    /// SHA-256 of the carried bytes, in hex, so an import can find the
+    /// same file already in its library.
+    pub hash: Option<String>,
+}
+
+/// One GPS track file linked to the Trip.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PackTrack {
+    /// The name the Trip shows for it.
+    pub name: String,
+    /// File name to give it, without folders.
+    pub file: String,
+    /// Index of its Day in [`Package::days`].
+    pub day: Option<usize>,
+    pub size: u64,
+    /// SHA-256 of the file, in hex, so an import can find the same file
+    /// already in its library.
+    pub hash: String,
+    /// Where the file is in this library: read from when packing, and
+    /// where it was written or found when unpacking. Not carried.
+    pub path: Option<PathBuf>,
 }
 
 /// Everything in a package but the photos' bytes.
@@ -70,6 +94,7 @@ pub struct Package {
     pub stories: Vec<PackStory>,
     /// In the Trip's order.
     pub photos: Vec<PackPhoto>,
+    pub tracks: Vec<PackTrack>,
 }
 
 /// One Story of the Trip.
@@ -84,15 +109,20 @@ pub struct PackStory {
 
 /// The bytes of a photo as the package carries it: the file itself when it
 /// is a JPEG without edits, so nothing is lost, or else the photo rendered
-/// with its edits at full size, as a JPEG.
-fn photo_bytes(source: &(PathBuf, Settings, i32)) -> Result<(Vec<u8>, &'static str), String> {
+/// with its edits at full size, as a JPEG. A file that can't be rendered
+/// without edits, such as a video, is carried as it is.
+fn photo_bytes(source: &(PathBuf, Settings, i32)) -> Result<(Vec<u8>, String), String> {
     let (path, settings, rotation) = source;
-    let jpeg = path.extension().and_then(|ext| ext.to_str()).is_some_and(|ext| ext.eq_ignore_ascii_case("jpg") || ext.eq_ignore_ascii_case("jpeg"));
-    if jpeg && *settings == Settings::default() && *rotation == 0 {
-        return Ok((std::fs::read(path).map_err(|err| err.to_string())?, "jpg"));
+    let ext = path.extension().and_then(|ext| ext.to_str()).unwrap_or("").to_ascii_lowercase();
+    let unedited = *settings == Settings::default() && *rotation == 0;
+    if unedited && (ext == "jpg" || ext == "jpeg") {
+        return Ok((std::fs::read(path).map_err(|err| err.to_string())?, "jpg".into()));
     }
-    let rgba = crate::edit::render_edited(path, settings, *rotation, None)?;
-    Ok((crate::image_io::encode_jpeg(&rgba, 95)?, "jpg"))
+    match crate::edit::render_edited(path, settings, *rotation, None) {
+        Ok(rgba) => Ok((crate::image_io::encode_jpeg(&rgba, 95)?, "jpg".into())),
+        Err(_) if unedited && !ext.is_empty() => Ok((std::fs::read(path).map_err(|err| err.to_string())?, ext)),
+        Err(err) => Err(err),
+    }
 }
 
 /// A file name for a photo from its source: the same stem, never a path.
@@ -128,6 +158,7 @@ fn write_staged(staging: &Path, data: &Path, package: &Package, sources: &HashMa
     // The photos go to a side file first: the header, which says how long
     // each is, comes before them.
     let mut photos = package.photos.clone();
+    let tracks: Vec<PackTrack>;
     let mut missing = 0;
     {
         let mut out = BufWriter::new(File::create(data).map_err(io)?);
@@ -141,8 +172,9 @@ fn write_staged(staging: &Path, data: &Path, package: &Package, sources: &HashMa
             match read {
                 Some((source, (bytes, ext))) => {
                     out.write_all(&bytes).map_err(io)?;
-                    photo.name = photo_name(&source.0, ext, photo.key);
+                    photo.name = photo_name(&source.0, &ext, photo.key);
                     photo.size = Some(bytes.len() as u64);
+                    photo.hash = Some(hex(ring::digest::digest(&ring::digest::SHA256, &bytes).as_ref()));
                 }
                 None => {
                     missing += 1;
@@ -150,9 +182,23 @@ fn write_staged(staging: &Path, data: &Path, package: &Package, sources: &HashMa
                 }
             }
         }
+        // Tracks that can't be read are left out: a link to nothing helps no one.
+        tracks = package
+            .tracks
+            .iter()
+            .filter_map(|track| {
+                let bytes = std::fs::read(track.path.as_ref()?).ok()?;
+                Some((track, bytes))
+            })
+            .map(|(track, bytes)| {
+                out.write_all(&bytes).map_err(io)?;
+                let hash = hex(ring::digest::digest(&ring::digest::SHA256, &bytes).as_ref());
+                Ok(PackTrack { size: bytes.len() as u64, hash, path: None, ..track.clone() })
+            })
+            .collect::<Result<_, String>>()?;
         out.flush().map_err(io)?;
     }
-    let header = header(package, &photos).to_string();
+    let header = header(&Package { photos, tracks, ..package.clone() }).to_string();
     let mut out = BufWriter::new(File::create(staging).map_err(io)?);
     out.write_all(MAGIC).map_err(io)?;
     out.write_all(&(header.len() as u64).to_le_bytes()).map_err(io)?;
@@ -166,8 +212,8 @@ fn day_text(day: Option<NaiveDate>) -> Value {
     day.map_or(Value::Null, |day| Value::String(day.to_string()))
 }
 
-fn header(package: &Package, photos: &[PackPhoto]) -> Value {
-    let Package { trip, days, stories, .. } = package;
+fn header(package: &Package) -> Value {
+    let Package { trip, days, stories, photos, tracks } = package;
     json!({
         "package": VERSION,
         "trip": {
@@ -178,6 +224,7 @@ fn header(package: &Package, photos: &[PackPhoto]) -> Value {
         "days": days.iter().map(|day| json!({ "day": day_text(day.day), "title": day.title, "notes": day.notes })).collect::<Vec<_>>(),
         "stories": stories.iter().map(|PackStory { story, blocks }| json!({
             "title": story.title, "subtitle": story.subtitle, "author": story.author, "show_date": story.show_date,
+            "introduction": story.introduction, "conclusion": story.conclusion,
             "template": story.template, "archived": story.archived, "finished": story.finished, "cover": story.cover,
             "blocks": blocks.iter().map(|block| json!({
                 "uid": block.uid,
@@ -187,7 +234,8 @@ fn header(package: &Package, photos: &[PackPhoto]) -> Value {
                 "media": block.block.media().iter().map(|media| json!({ "key": media.media_id, "caption": media.caption, "alt": media.alt })).collect::<Vec<_>>(),
             })).collect::<Vec<_>>(),
         })).collect::<Vec<_>>(),
-        "photos": photos.iter().map(|photo| json!({ "key": photo.key, "name": photo.name, "day": photo.day, "size": photo.size })).collect::<Vec<_>>(),
+        "photos": photos.iter().map(|photo| json!({ "key": photo.key, "name": photo.name, "day": photo.day, "size": photo.size, "member": photo.member, "hash": photo.hash })).collect::<Vec<_>>(),
+        "tracks": tracks.iter().map(|track| json!({ "name": track.name, "file": track.file, "day": track.day, "size": track.size, "hash": track.hash })).collect::<Vec<_>>(),
     })
 }
 
@@ -216,7 +264,7 @@ pub fn read_package(path: &Path) -> Result<(Package, u64), String> {
     let package = parse(&value).ok_or_else(damaged)?;
     // Every photo's bytes must be there, and nothing more.
     let start = (MAGIC.len() + 8) as u64 + len;
-    let total: u64 = package.photos.iter().filter_map(|photo| photo.size).sum();
+    let total: u64 = package.photos.iter().filter_map(|photo| photo.size).sum::<u64>() + package.tracks.iter().map(|track| track.size).sum::<u64>();
     let file_len = std::fs::metadata(path).map_err(|err| err.to_string())?.len();
     if file_len != start + total {
         return Err(damaged());
@@ -263,9 +311,28 @@ fn parse(value: &Value) -> Option<Package> {
             if size.is_some() && (name.is_empty() || name.contains(['/', '\\']) || name.starts_with('.')) {
                 return None;
             }
-            Some(PackPhoto { key: item["key"].as_i64()?, name, day, size })
+            Some(PackPhoto { key: item["key"].as_i64()?, name, day, size, member: item["member"].as_bool().unwrap_or(true), hash: text(&item["hash"]) })
         })
         .collect::<Option<Vec<_>>>()?;
+    let day_index = |value: &Value| match value {
+        Value::Null => Some(None),
+        index => Some(Some(index.as_u64().filter(|&index| (index as usize) < days.len())? as usize)),
+    };
+    // Packages made before tracks were carried have none.
+    let tracks = match &value["tracks"] {
+        Value::Null => Vec::new(),
+        tracks => tracks
+            .as_array()?
+            .iter()
+            .map(|item| {
+                let file = text(&item["file"])?;
+                if !crate::track::is_track_path(Path::new(&file)) || file.contains(['/', '\\']) || file.starts_with('.') {
+                    return None;
+                }
+                Some(PackTrack { name: text(&item["name"])?, file, day: day_index(&item["day"])?, size: item["size"].as_u64()?, hash: text(&item["hash"])?, path: None })
+            })
+            .collect::<Option<Vec<_>>>()?,
+    };
     let keys: std::collections::HashSet<i64> = photos.iter().map(|photo| photo.key).collect();
     if keys.len() != photos.len() {
         return None;
@@ -296,6 +363,8 @@ fn parse(value: &Value) -> Option<Package> {
                 trip_id: 0,
                 title: text(&item["title"])?,
                 subtitle: text(&item["subtitle"])?,
+                introduction: text(&item["introduction"]).unwrap_or_default(),
+                conclusion: text(&item["conclusion"]).unwrap_or_default(),
                 author: text(&item["author"])?,
                 show_date: item["show_date"].as_bool()?,
                 cover: match &item["cover"] {
@@ -311,13 +380,42 @@ fn parse(value: &Value) -> Option<Package> {
             Some(PackStory { story, blocks })
         })
         .collect::<Option<Vec<_>>>()?;
-    Some(Package { trip, days, stories, photos })
+    Some(Package { trip, days, stories, photos, tracks })
+}
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+/// SHA-256 of the file at `path`, in hex, as [`PackPhoto::hash`] has it.
+pub fn file_hash(path: &Path) -> Option<String> {
+    let mut file = File::open(path).ok()?;
+    let mut context = ring::digest::Context::new(&ring::digest::SHA256);
+    let mut buffer = vec![0u8; 256 * 1024];
+    loop {
+        match file.read(&mut buffer) {
+            Ok(0) => break,
+            Ok(read) => context.update(&buffer[..read]),
+            Err(err) if err.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(_) => return None,
+        }
+    }
+    Some(hex(context.finish().as_ref()))
 }
 
 /// Writes the photos of the package at `path` into `folder`, which is made
-/// if needed. A name already taken there gets " 2", " 3", … so nothing is
-/// replaced. Returns each written photo's path by key.
-pub fn extract_photos(path: &Path, package: &Package, start: u64, folder: &Path, progress: &Progress) -> Result<HashMap<i64, PathBuf>, String> {
+/// if needed, all but those in `skip`, and then its tracks, all but those
+/// with a [`PackTrack::path`] already, setting it for the others. A name
+/// already taken there gets " 2", " 3", … so nothing is replaced. Returns
+/// each written photo's path by key.
+pub fn extract_photos(
+    path: &Path,
+    package: &mut Package,
+    start: u64,
+    folder: &Path,
+    skip: &HashSet<i64>,
+    progress: &Progress,
+) -> Result<HashMap<i64, PathBuf>, String> {
     let io = |err: std::io::Error| err.to_string();
     std::fs::create_dir_all(folder).map_err(io)?;
     let mut file = File::open(path).map_err(io)?;
@@ -330,6 +428,10 @@ pub fn extract_photos(path: &Path, package: &Package, start: u64, folder: &Path,
         if progress.cancel.load(Ordering::Relaxed) {
             return Err(CANCELLED.into());
         }
+        if skip.contains(&photo.key) {
+            file.seek(SeekFrom::Current(size as i64)).map_err(io)?;
+            continue;
+        }
         let target = free_name(folder, &photo.name);
         let mut out = BufWriter::new(File::create(&target).map_err(io)?);
         let copied = std::io::copy(&mut (&mut file).take(size), &mut out).map_err(io)?;
@@ -338,6 +440,20 @@ pub fn extract_photos(path: &Path, package: &Package, start: u64, folder: &Path,
             return Err(crate::i18n::tr("This file isn't a Trip package, or it is damaged.").into());
         }
         written.insert(photo.key, target);
+    }
+    for track in &mut package.tracks {
+        if track.path.is_some() {
+            file.seek(SeekFrom::Current(track.size as i64)).map_err(io)?;
+            continue;
+        }
+        let target = free_name(folder, &track.file);
+        let mut out = BufWriter::new(File::create(&target).map_err(io)?);
+        let copied = std::io::copy(&mut (&mut file).take(track.size), &mut out).map_err(io)?;
+        out.flush().map_err(io)?;
+        if copied != track.size {
+            return Err(crate::i18n::tr("This file isn't a Trip package, or it is damaged.").into());
+        }
+        track.path = Some(target);
     }
     Ok(written)
 }
@@ -376,6 +492,8 @@ mod tests {
             trip_id: 2,
             title: "Kyoto".into(),
             subtitle: "Spring".into(),
+            introduction: "Cherry blossoms.".into(),
+            conclusion: String::new(),
             author: "Ana".into(),
             show_date: true,
             cover: Some(11),
@@ -385,12 +503,13 @@ mod tests {
             revision: 9,
             updated_at: 0,
         };
-        let photo = |key, day| PackPhoto { key, name: String::new(), day, size: None };
+        let photo = |key, day| PackPhoto { key, name: String::new(), day, size: None, member: true, hash: None };
         Package {
             trip: PackTrip { title: "Japan".into(), zone: "Asia/Tokyo".into(), first_day: NaiveDate::from_ymd_opt(2026, 4, 1), ..PackTrip::default() },
             days: vec![PackDay { day: NaiveDate::from_ymd_opt(2026, 4, 1), title: "Arrival".into(), notes: String::new() }],
             stories: vec![PackStory { story, blocks }],
             photos: vec![photo(11, Some(0)), photo(12, None), photo(13, Some(0))],
+            tracks: Vec::new(),
         }
     }
 
@@ -403,26 +522,38 @@ mod tests {
         let original = std::fs::read(&banner).unwrap();
         let sources: HashMap<i64, Source> =
             HashMap::from([(11, Some((banner.clone(), Settings::default(), 0))), (12, Some((banner.clone(), Settings::default(), 90))), (13, None)]);
-        let package = package();
+        let mut package = package();
+        let gpx = dir.join("walk.gpx");
+        std::fs::write(&gpx, "<gpx></gpx>").unwrap();
+        package.tracks = vec![
+            PackTrack { name: "Walk".into(), file: "walk.gpx".into(), day: Some(0), path: Some(gpx.clone()), ..PackTrack::default() },
+            PackTrack { name: "Gone".into(), file: "gone.gpx".into(), path: Some(dir.join("gone.gpx")), ..PackTrack::default() },
+        ];
         let path = dir.join("Japan.picassotrip");
         assert_eq!(write_package(&path, &package, &sources, &Progress::default()).unwrap(), 1, "one photo was unavailable");
+        std::fs::remove_file(&gpx).unwrap();
         assert!(std::fs::read_dir(&dir).unwrap().count() == 1, "nothing left beside it");
 
-        let (read, start) = read_package(&path).unwrap();
+        let (mut read, start) = read_package(&path).unwrap();
         assert_eq!((&read.trip, &read.days, &read.stories[0].blocks), (&package.trip, &package.days, &package.stories[0].blocks));
         let story = &read.stories[0].story;
         assert_eq!((story.title.as_str(), story.cover, story.finished), ("Kyoto", Some(11), true));
         assert_eq!(read.photos.iter().map(|photo| photo.size.is_some()).collect::<Vec<_>>(), [true, true, false]);
         assert_eq!(read.photos[0].name, "banner.jpg");
+        assert_eq!(read.photos[0].hash, file_hash(&banner), "an unedited photo's hash is its file's");
+        assert_eq!(read.photos[2].hash, None);
 
         let folder = dir.join("photos");
         std::fs::create_dir_all(&folder).unwrap();
         std::fs::write(folder.join("banner.jpg"), b"already here").unwrap();
-        let files = extract_photos(&path, &read, start, &folder, &Progress::default()).unwrap();
+        assert_eq!(read.tracks.len(), 1, "a track whose file is gone is left out");
+        assert_eq!((read.tracks[0].name.as_str(), read.tracks[0].day, read.tracks[0].path.as_ref()), ("Walk", Some(0), None));
+        let files = extract_photos(&path, &mut read, start, &folder, &HashSet::new(), &Progress::default()).unwrap();
         assert_eq!(files.len(), 2);
         assert_eq!(std::fs::read(folder.join("banner.jpg")).unwrap(), b"already here", "nothing is replaced");
         assert_eq!(std::fs::read(&files[&11]).unwrap(), original, "an unedited JPEG is carried as it is");
         assert_ne!(std::fs::read(&files[&12]).unwrap(), original, "a turned photo is carried as shown");
+        assert_eq!(std::fs::read(read.tracks[0].path.as_ref().unwrap()).unwrap(), b"<gpx></gpx>", "the track comes after the photos");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -441,16 +572,22 @@ mod tests {
             std::fs::write(&path, bytes).unwrap();
             path
         };
-        let package = package();
-        let mut photos = package.photos.clone();
-        photos[0].name = "a.jpg".into();
-        photos[0].size = Some(3);
-        let good = header(&package, &photos);
+        let mut package = package();
+        package.photos[0].name = "a.jpg".into();
+        package.photos[0].size = Some(3);
+        let good = header(&package);
         assert!(read_package(&write("good", &good, b"abc")).is_ok());
         assert!(read_package(&write("short", &good, b"ab")).is_err(), "a photo's bytes are missing");
         let mut escape = good.clone();
         escape["photos"][0]["name"] = json!("../../evil.jpg");
         assert!(read_package(&write("escape", &escape, b"abc")).is_err(), "a name can't leave the folder");
+        let mut track = good.clone();
+        track["tracks"] = json!([{ "name": "Walk", "file": "../walk.gpx", "day": null, "size": 0, "hash": "" }]);
+        assert!(read_package(&write("track", &track, b"abc")).is_err(), "a track's name can't leave the folder either");
+        let mut old = good.clone();
+        old.as_object_mut().unwrap().remove("tracks");
+        old["package"] = json!(1);
+        assert!(read_package(&write("old", &old, b"abc")).is_ok_and(|(read, _)| read.tracks.is_empty()), "an older package has no tracks");
         let mut newer = good.clone();
         newer["package"] = json!(VERSION + 1);
         assert!(read_package(&write("newer", &newer, b"abc")).unwrap_err().contains("newer"));

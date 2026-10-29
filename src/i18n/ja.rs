@@ -1082,6 +1082,8 @@ pub(super) const TABLE: &[(&str, &str)] = &[
     ("Move to start", "先頭へ移動"),
     ("Move to end", "末尾へ移動"),
     ("Needs review ({})", "確認が必要 ({})"),
+    ("Cover", "カバー"),
+    ("Photo {}", "写真 {}"),
     ("Description of this route", "このルートの説明"),
     ("Link a GPS track to the trip first, in its Tracks row.", "まず旅行の「トラック」行で GPS トラックをリンクしてください。"),
     ("All the trip's tracks", "旅行のすべてのトラック"),

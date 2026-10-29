@@ -1082,6 +1082,8 @@ pub(super) const TABLE: &[(&str, &str)] = &[
     ("Move to start", "Placer au début"),
     ("Move to end", "Placer à la fin"),
     ("Needs review ({})", "À vérifier ({})"),
+    ("Cover", "Couverture"),
+    ("Photo {}", "Photo {}"),
     ("Description of this route", "Description de cet itinéraire"),
     ("Link a GPS track to the trip first, in its Tracks row.", "Liez d’abord une trace GPS au voyage, dans sa ligne Traces."),
     ("All the trip's tracks", "Toutes les traces du voyage"),

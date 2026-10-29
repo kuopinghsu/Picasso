@@ -428,6 +428,26 @@ pub fn icon_button(ui: &mut egui::Ui, icon: Icon, enabled: bool, selected: bool)
 
 /// Names a button that shows only a symbol or a painted icon, for screen
 /// readers, and shows the name on hover.
+/// How wide a row of plain buttons with these labels is, to put them on
+/// a line of their own when they don't fit beside what comes first.
+pub fn buttons_width(ui: &egui::Ui, labels: &[&str]) -> f32 {
+    let spacing = ui.spacing();
+    let font = egui::TextStyle::Button.resolve(ui.style());
+    labels
+        .iter()
+        .map(|label| ui.fonts_mut(|fonts| fonts.layout_no_wrap(label.to_string(), font.clone(), egui::Color32::WHITE).size().x))
+        .map(|text| text + 2.0 * spacing.button_padding.x + spacing.item_spacing.x)
+        .sum()
+}
+
+/// The keyboard focus ring around `rect`, drawn while `response` has focus,
+/// for areas that draw themselves instead of being a widget.
+pub fn focus_ring(ui: &egui::Ui, response: &egui::Response, rect: egui::Rect) {
+    if response.has_focus() {
+        ui.painter().rect_stroke(rect.expand(2.0), 6, egui::Stroke::new(2.0, ACCENT), egui::StrokeKind::Outside);
+    }
+}
+
 pub fn named(response: egui::Response, name: &str) -> egui::Response {
     let enabled = response.enabled();
     response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, name));

@@ -351,12 +351,16 @@ impl PicassoApp {
         let story_count = trip.stories;
         // The trip's photos or its Stories, each with the whole page.
         let mut stories_tab = self.trip_stories.contains(&trip_id);
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             if ui.selectable_label(!stories_tab, trf("Photos ({})", &[&trip_members])).clicked() {
                 stories_tab = false;
             }
             if ui.selectable_label(stories_tab, trf("Stories ({})", &[&story_count])).clicked() {
                 stories_tab = true;
+            }
+            // In a narrow window the actions go on their own line.
+            if ui.available_width() < theme::buttons_width(ui, &["⋯", tr("Edit trip…")]) {
+                ui.end_row();
             }
             // The trip's own actions, at the end of the row like the toolbar's.
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {

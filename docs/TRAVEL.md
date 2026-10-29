@@ -21,9 +21,11 @@ The interface shows only what works. A table may exist before the page that uses
 | **Day** | one Trip | An ordered section of a Trip, with an optional calendar date, a title, and notes. Days may be empty, and several Days may share a date. |
 | **Trip member** | one Trip | A photo or video in the Trip, with its order and, optionally, one Day of the same Trip. A photo can be in several Trips, but in at most one Day of each. Having no Day is valid. |
 | **Story** | one Trip | A narrative: title, subtitle, author and date display, cover, template, and an ordered list of blocks. A blank Story has no blocks but still has its Trip. |
-| **Story block** | one Story | Heading, paragraph, photo, gallery, separator, credits, or route map, with a stable id and a versioned payload. |
+| **Story block** | one Story | Heading, subheading, paragraph, list, quote, photo, gallery, photo grid, separator, credits, or route map, with a stable id and a versioned payload. |
 | **Story media** | one block | A photo used in a block, with its own caption and alt text. The same photo can be in several Stories, each with its own words. |
 | **Track link** | one Trip, optionally one Day | A link to a GPS track already in the library. The track's points are not copied. |
+| **Place** (planned) | one Trip, optionally one Day | A stop on the Trip: a name, an optional name in the local language, coordinates, and notes. It is travel context only; it never changes a photo's place in the catalog. Not stored yet. |
+| **Resource** (planned) | one Trip, optionally one Day or Place | A link or document reference about the Trip, such as a map or a booking page: its kind, reference, title, notes, and whether it is private. Private ones never go into an export or post. Not stored yet. |
 
 Rules that follow:
 
@@ -33,6 +35,29 @@ Rules that follow:
 - Selection for a Story belongs to that Story. There is no shared "selected for story" flag on a Trip member.
 - A Day of one Trip can never be given to a member of another Trip. The database enforces this, not only the interface.
 - A suggested Day assignment and a user's assignment are stored differently. Suggesting again replaces only suggestions, never the user's Days, names, notes, order, or Story content.
+
+### Types and versions
+
+The types are in `src/trip.rs`:
+
+| Concept | Type | Stored in |
+| --- | --- | --- |
+| Trip | `Trip`, `TripDraft` to make or edit one, `TripZone` for its timezone | `trips` |
+| Day | `TripDay`; `DaySource` says whether a Day assignment was suggested or made by the user | `trip_days` |
+| Trip member | `Member`, `DayAssignment` | `trip_media` |
+| Media reference | the `media_id` of a `Member` or `MediaUse` | `media_refs` |
+| Story | `Story` | `stories` |
+| Story block | `StoryBlock` holding a `Block` | `story_blocks` |
+| Story media | `MediaUse`: a media reference with its caption and alt text | `story_media` |
+| Track link | `TripTrack` | `trip_tracks` |
+| Export profile | `Profile` in `src/story_html.rs`: photo size and JPEG quality | each export's `manifest.json` |
+
+Everything stored or written has a version, so a newer Picasso can change it without misreading what an older one wrote:
+
+- **Blocks** are stored with a kind and a version. A block whose kind or version this build doesn't know is kept as it was read (`Block::Unknown`), shown as made with a newer Picasso, and can be moved or removed but not exported.
+- **The export profile** has its own version, written to the manifest with the size and quality, and the manifest has a version of its own.
+- **Trip packages** have a version in their header; a package newer than this build is refused with a message saying so.
+- **The catalog** has a schema version, raised whenever a table is added or changed ([DATABASE.md](DATABASE.md)).
 
 ## Removing things
 
@@ -132,5 +157,6 @@ New pages extend the existing interface rather than adding a visual style of the
 - Each task has one primary action. Secondary actions are grouped, advanced settings are revealed progressively, and nothing required is shown only on hover.
 - Every state is visible: default, hover, focus, selected, disabled, loading, error, and success, with keyboard focus and a cue that isn't only color.
 - A button that shows only a symbol or an icon (◀ ▶, ↑ ↓, ⋯, ★, the calendar) is named for screen readers with `theme::named` or `theme::icon_button`, and shows the same name on hover.
-- Panels adapt to the smallest window and to high DPI; long translations wrap rather than hide actions.
+- An area that draws itself instead of being a widget, such as a Trip or Story card, a photo in a Story block, or a photo in the picker, gets a name with `widget_info`: a card its title, a photo its alt text or else "Photo 2", the picker's photos as checkboxes that say whether they are chosen. While the keyboard is on it, it shows the accent ring (`theme::focus_ring`), as the cards do.
+- Panels adapt to the smallest window (880 × 560) and to high DPI; long translations wrap rather than hide actions. A header with actions at its right end, such as the trip's tabs with Edit trip… and ⋯, or the Story's Undo, Redo, Preview, and Export…, measures them with `theme::buttons_width` and moves them to a line of their own when they don't fit beside what comes first.
 - Desktop controls are native egui. Only the Story's browser preview and exported pages use web layout and typography of their own.

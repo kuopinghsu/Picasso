@@ -1082,6 +1082,8 @@ pub(super) const TABLE: &[(&str, &str)] = &[
     ("Move to start", "맨 앞으로 이동"),
     ("Move to end", "맨 뒤로 이동"),
     ("Needs review ({})", "확인 필요 ({})"),
+    ("Cover", "표지"),
+    ("Photo {}", "사진 {}"),
     ("Description of this route", "이 경로에 대한 설명"),
     ("Link a GPS track to the trip first, in its Tracks row.", "먼저 여행의 트랙 줄에서 GPS 트랙을 연결하세요."),
     ("All the trip's tracks", "여행의 모든 트랙"),

@@ -1082,6 +1082,8 @@ pub(super) const TABLE: &[(&str, &str)] = &[
     ("Move to start", "移到最前"),
     ("Move to end", "移到最后"),
     ("Needs review ({})", "需要检查 ({})"),
+    ("Cover", "封面"),
+    ("Photo {}", "照片 {}"),
     ("Description of this route", "此路线的说明"),
     ("Link a GPS track to the trip first, in its Tracks row.", "请先在旅行的“轨迹”行中关联 GPS 轨迹。"),
     ("All the trip's tracks", "旅行的所有轨迹"),

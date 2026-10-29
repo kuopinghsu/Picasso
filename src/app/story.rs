@@ -347,7 +347,7 @@ impl PicassoApp {
         }
 
         let editor = self.story.as_ref().unwrap();
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             if ui.button(format!("‹ {trip_title}")).on_hover_text(tr("Back to the trip's photos")).clicked() {
                 back = true;
             }
@@ -362,6 +362,10 @@ impl PicassoApp {
             ui.label(RichText::new(trf("{} words · {} min read", &[&words, &minutes])).size(13.0).color(theme::muted()));
             if editor.error.is_some() && ui.button(tr("Try again")).clicked() {
                 retry = true;
+            }
+            // In a narrow window the actions go on their own line.
+            if ui.available_width() < theme::buttons_width(ui, &["⋯", tr("Export…"), tr("Preview"), tr("Redo"), tr("Undo")]) + 8.0 {
+                ui.end_row();
             }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 let more = theme::named(ui.button("⋯"), tr("More"));
@@ -780,6 +784,7 @@ impl PicassoApp {
             Some(media_id) => {
                 let (rect, response) = ui.allocate_exact_size(Vec2::new(width, (width * 0.42).min(COVER_MAX_HEIGHT)), Sense::click());
                 self.paint_media(ui, media_id, rect, true);
+                photo_access(ui, &response, rect, tr("Cover"));
                 response.context_menu(|ui| {
                     if ui.button(tr("Remove cover")).clicked() {
                         actions.push(Action::Cover(None));
@@ -948,6 +953,7 @@ impl PicassoApp {
         let Some(editor) = &self.story else { return };
         let block = &editor.blocks[index].block;
         let media: Vec<i64> = block.media().iter().map(|media| media.media_id).collect();
+        let names: Vec<String> = block.media().iter().enumerate().map(|(n, media)| photo_name(&media.alt, n)).collect();
         let (photo, gallery) = (matches!(block, Block::Photo(_)), matches!(block, Block::Gallery(_)));
         let grid = match block {
             Block::Grid { columns, rows, .. } => Some((*columns, *rows)),
@@ -961,6 +967,7 @@ impl PicassoApp {
             let height = (width / aspect).min(PHOTO_MAX_HEIGHT);
             let (rect, response) = ui.allocate_exact_size(Vec2::new((height * aspect).min(width), height), Sense::click_and_drag());
             self.paint_media(ui, media[0], rect, false);
+            photo_access(ui, &response, rect, &names[0]);
             drag_source(ui, &response, Drag::Placed(index, 0));
             drop_target(ui, &response, index, 0, actions);
             response.context_menu(|ui| {
@@ -985,6 +992,8 @@ impl PicassoApp {
                             let stroke = egui::Stroke::new(1.0, theme::muted().gamma_multiply(0.5));
                             ui.painter().rect_stroke(rect, 4, stroke, egui::StrokeKind::Inside);
                             ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, "+", egui::FontId::proportional(20.0), theme::muted());
+                            response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tr("Add photos…")));
+                            theme::focus_ring(ui, &response, rect);
                             drop_target(ui, &response, index, media.len(), actions);
                             if response.on_hover_text(tr("Add photos from the trip, or drop one here")).clicked() {
                                 pick = true;
@@ -992,6 +1001,7 @@ impl PicassoApp {
                             continue;
                         };
                         self.paint_media(ui, media_id, rect, true);
+                        photo_access(ui, &response, rect, &names[n]);
                         drag_source(ui, &response, Drag::Placed(index, n));
                         drop_target(ui, &response, index, n, actions);
                         response.context_menu(|ui| {
@@ -1015,6 +1025,7 @@ impl PicassoApp {
                 for (n, &media_id) in media.iter().enumerate() {
                     let (rect, response) = ui.allocate_exact_size(Vec2::splat(tile), Sense::click_and_drag());
                     self.paint_media(ui, media_id, rect, true);
+                    photo_access(ui, &response, rect, &names[n]);
                     drag_source(ui, &response, Drag::Placed(index, n));
                     drop_target(ui, &response, index, n, actions);
                     response.context_menu(|ui| {
@@ -1257,11 +1268,14 @@ impl PicassoApp {
         }
         egui::ScrollArea::horizontal().id_salt(("pick-strip", uid)).show(ui, |ui| {
             ui.horizontal(|ui| {
-                for media_id in choices {
+                for (n, media_id) in choices.into_iter().enumerate() {
                     let (rect, response) = ui.allocate_exact_size(Vec2::splat(PICK_TILE), Sense::click_and_drag());
                     self.paint_media(ui, media_id, rect, true);
                     drag_source(ui, &response, Drag::New(media_id));
                     let chosen = media.contains(&media_id);
+                    let name = trf("Photo {}", &[&(n + 1)]);
+                    response.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, true, chosen, &name));
+                    theme::focus_ring(ui, &response, rect);
                     if chosen {
                         let painter = ui.painter();
                         painter.rect_stroke(rect, 4, egui::Stroke::new(3.0, theme::ACCENT), egui::StrokeKind::Inside);
@@ -1576,6 +1590,7 @@ fn slash_menu(ui: &egui::Ui, query: &str, below: Rect, index: usize, ctl: &mut T
                 ui.label(RichText::new(tr("Blocks")).size(11.0).color(theme::muted()));
                 for (n, (label, block)) in choices.into_iter().take(SLASH_SHOWN).enumerate() {
                     let (rect, row) = ui.allocate_exact_size(Vec2::new(ui.available_width(), ROW), Sense::click());
+                    row.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &label));
                     if row.hovered() {
                         ctl.slash = n;
                     }
@@ -1603,6 +1618,21 @@ fn slash_menu(ui: &egui::Ui, query: &str, below: Rect, index: usize, ctl: &mut T
                 ui.label(RichText::new(tr("↑ ↓ to choose, Enter to add")).size(11.0).color(theme::muted()));
             });
         });
+}
+
+/// Gives a photo in the Story its name for screen readers, its alt text
+/// when it has one, and the focus ring while the keyboard is on it.
+fn photo_access(ui: &egui::Ui, response: &egui::Response, rect: Rect, name: &str) {
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Image, true, name));
+    theme::focus_ring(ui, response, rect);
+}
+
+/// What a photo in a block is called: its alt text, or its place.
+fn photo_name(alt: &str, n: usize) -> String {
+    match alt.trim() {
+        "" => trf("Photo {}", &[&(n + 1)]),
+        alt => alt.to_string(),
+    }
 }
 
 /// The mark of a kind of block in the "/" menu.

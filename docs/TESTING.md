@@ -31,7 +31,7 @@ The last line puts every photo in a folder of your own and its subfolders (HEIC,
 | Settings | `src/config.rs`, `src/secret.rs` | Settings move from older libraries to `settings.json`; the CARTO key is encrypted. |
 | Performance | `src/bench.rs` | Catalog queries, scanning, thumbnails, and memory, with limits in CI. |
 
-CI runs the tests (`cargo test --release --locked`, the command `make test` runs) on Windows and Linux, each on x64 and Arm64 machines, and on macOS, and `make bench-check` on both Linux machines. It installs, starts, and removes the `.deb` on Ubuntu 22.04, and starts the AppImage on Ubuntu 22.04 and 24.04 and AlmaLinux 8 and 9, for both processors. It also builds the User Guide as PDF in both languages with `make guide-pdf`, which fails when a character is in none of the fonts. Like the x64 ones, the Arm packages still need the checks below on a real machine, since CI draws without a graphics card.
+CI runs the tests (`cargo test --release --locked`, the command `make test` runs) on Windows and Linux, each on x64 and Arm64 machines, and on macOS, and `make bench-check` on both Linux machines. It installs, starts, and removes the `.deb` on Ubuntu 22.04, and starts the AppImage on AlmaLinux 8, the oldest system it supports, and Ubuntu 24.04, for both processors. It also builds the User Guide as PDF in both languages with `make guide-pdf`, which fails when a character is in none of the fonts. Like the x64 ones, the Arm packages still need the checks below on a real machine, since CI draws without a graphics card.
 
 ## Before a release, by hand
 

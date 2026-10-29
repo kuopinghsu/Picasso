@@ -1,8 +1,10 @@
 //! The JPEGs Picasso sends to a WordPress site, in one of two sizes
 //! (`docs/TRAVEL.md`). Each is rendered from the editing pipeline, with the
 //! photo's edit, crop, and rotation applied first and then made to fit; a
-//! smaller photo is never enlarged. The camera original is never sent, and
-//! the JPEG carries no metadata at all.
+//! smaller photo is never enlarged. The camera original is never sent. When
+//! asked, the JPEG keeps how the photo was taken ([`KEPT`]): the camera,
+//! lens, exposure, and time, never its position, serial numbers, or owner.
+//! Otherwise it carries no metadata at all.
 //!
 //! Publishing to a site uses it; until then only its tests do.
 #![cfg_attr(not(test), allow(dead_code))]
@@ -65,7 +67,7 @@ impl UploadSize {
 
 /// Raised when the same photo and size would come out differently, so
 /// photos rendered before aren't taken for the new ones.
-const RENDER_VERSION: u32 = 1;
+const RENDER_VERSION: u32 = 2;
 
 /// Transparent pixels are laid on this before encoding, as JPEG has no
 /// transparency: white, as the photo shows on a light page.
@@ -83,11 +85,16 @@ pub struct Rendered {
     pub size: UploadSize,
 }
 
-/// `source` with its edit and catalog `rotation`, in `size`.
-pub fn render(source: &Path, settings: &Settings, rotation: i32, size: UploadSize) -> Result<Rendered, String> {
+/// `source` with its edit and catalog `rotation`, in `size`, with the
+/// [`KEPT`] EXIF fields when `exif`.
+pub fn render(source: &Path, settings: &Settings, rotation: i32, size: UploadSize, exif: bool) -> Result<Rendered, String> {
     let mut rgba = crate::edit::render_edited(source, settings, rotation, Some(size.edge()))?;
     flatten(&mut rgba);
     let bytes = crate::image_io::encode_jpeg(&rgba, size.quality())?;
+    let bytes = match crate::photo_info::read_exif(source).filter(|_| exif) {
+        Some(exif) => with_exif(bytes, &exif),
+        None => bytes,
+    };
     let hash = hash(&bytes);
     Ok(Rendered { bytes, width: rgba.width(), height: rgba.height(), hash, size })
 }
@@ -119,6 +126,57 @@ pub fn estimated_bytes(dimensions: &[(u32, u32)], size: UploadSize) -> u64 {
             u64::from(w) * u64::from(h) * bits_x10 / 80
         })
         .sum()
+}
+
+/// The EXIF fields an uploaded photo keeps: how it was taken, for a page
+/// to show beside it. Not the GPS position, the camera's or lens's serial
+/// number, the owner or artist, the maker notes, or the orientation, which
+/// the rendering has already applied.
+const KEPT: [exif::Tag; 13] = [
+    exif::Tag::Make,
+    exif::Tag::Model,
+    exif::Tag::LensMake,
+    exif::Tag::LensModel,
+    exif::Tag::FocalLength,
+    exif::Tag::FocalLengthIn35mmFilm,
+    exif::Tag::FNumber,
+    exif::Tag::ExposureTime,
+    exif::Tag::PhotographicSensitivity,
+    exif::Tag::ExposureBiasValue,
+    exif::Tag::DateTimeOriginal,
+    exif::Tag::OffsetTimeOriginal,
+    exif::Tag::Flash,
+];
+
+/// `jpeg` with the [`KEPT`] fields of `exif` in an APP1 segment after its
+/// start marker. Without any of them, or if they can't be written, `jpeg`
+/// as it was.
+fn with_exif(jpeg: Vec<u8>, exif: &exif::Exif) -> Vec<u8> {
+    let fields: Vec<&exif::Field> = KEPT.iter().filter_map(|&tag| exif.get_field(tag, exif::In::PRIMARY)).collect();
+    if fields.is_empty() || !jpeg.starts_with(&[0xFF, 0xD8]) {
+        return jpeg;
+    }
+    let mut writer = exif::experimental::Writer::new();
+    for field in &fields {
+        writer.push_field(field);
+    }
+    let mut tiff = std::io::Cursor::new(Vec::new());
+    if writer.write(&mut tiff, false).is_err() {
+        return jpeg;
+    }
+    let tiff = tiff.into_inner();
+    // The segment's length counts itself and "Exif\0\0", and fits in 16 bits.
+    let Ok(length) = u16::try_from(2 + 6 + tiff.len()) else {
+        return jpeg;
+    };
+    let mut out = Vec::with_capacity(jpeg.len() + usize::from(length) + 2);
+    out.extend_from_slice(&jpeg[..2]);
+    out.extend_from_slice(&[0xFF, 0xE1]);
+    out.extend_from_slice(&length.to_be_bytes());
+    out.extend_from_slice(b"Exif\0\0");
+    out.extend_from_slice(&tiff);
+    out.extend_from_slice(&jpeg[2..]);
+    out
 }
 
 /// Lays transparent pixels on [`BACKGROUND`], as the page would show them.
@@ -181,35 +239,82 @@ mod tests {
         let small = photo(&dir, "small.png", 900, 600);
         let settings = Settings::default();
         for size in UploadSize::ALL {
-            let wide = render(&landscape, &settings, 0, size).unwrap();
+            let wide = render(&landscape, &settings, 0, size, true).unwrap();
             assert_eq!(wide.width, size.edge());
             assert_eq!((wide.width, wide.height), fitted(3000, 2000, size));
-            let tall = render(&portrait, &settings, 0, size).unwrap();
+            let tall = render(&portrait, &settings, 0, size, true).unwrap();
             assert_eq!(tall.height, size.edge());
             assert!(tall.width < tall.height);
-            let little = render(&small, &settings, 0, size).unwrap();
+            let little = render(&small, &settings, 0, size, true).unwrap();
             assert_eq!((little.width, little.height), (900, 600), "not enlarged");
         }
         // The catalog's rotation is applied before sending.
-        let turned = render(&landscape, &settings, 90, UploadSize::Low).unwrap();
+        let turned = render(&landscape, &settings, 90, UploadSize::Low, true).unwrap();
         assert_eq!((turned.width, turned.height), (853, 1280));
         let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
-    fn the_jpeg_carries_no_metadata_and_is_named_by_its_bytes() {
+    fn a_photo_without_exif_is_sent_without_it_and_is_named_by_its_bytes() {
         let dir = temp_dir("bytes");
         let source = photo(&dir, "a.png", 400, 300);
-        let rendered = render(&source, &Settings::default(), 0, UploadSize::Standard).unwrap();
+        let rendered = render(&source, &Settings::default(), 0, UploadSize::Standard, true).unwrap();
         assert_eq!(&rendered.bytes[..2], &[0xFF, 0xD8]);
         let has = |marker: &[u8]| rendered.bytes.windows(marker.len()).any(|window| window == marker);
         assert!(!has(b"Exif") && !has(b"http://ns.adobe.com/xap"), "no EXIF or XMP");
         assert_eq!(rendered.hash.len(), 64);
-        let again = render(&source, &Settings::default(), 0, UploadSize::Standard).unwrap();
+        let again = render(&source, &Settings::default(), 0, UploadSize::Standard, true).unwrap();
         assert_eq!(again.hash, rendered.hash);
-        let low = render(&source, &Settings::default(), 0, UploadSize::Low).unwrap();
+        let low = render(&source, &Settings::default(), 0, UploadSize::Low, true).unwrap();
         assert_ne!(low.hash, rendered.hash, "the quality is part of the bytes");
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn only_how_the_photo_was_taken_is_kept() {
+        use exif::{Field, In, Tag, Value};
+        let field = |tag, value| Field { tag, ifd_num: In::PRIMARY, value };
+        let ascii = |text: &str| Value::Ascii(vec![text.as_bytes().to_vec()]);
+        let source = [
+            field(Tag::Make, ascii("FUJIFILM")),
+            field(Tag::Model, ascii("X-T5")),
+            field(Tag::FNumber, Value::Rational(vec![(56, 10).into()])),
+            field(Tag::ExposureTime, Value::Rational(vec![(1, 250).into()])),
+            field(Tag::PhotographicSensitivity, Value::Short(vec![400])),
+            field(Tag::DateTimeOriginal, ascii("2025:07:10 18:42:05")),
+            field(Tag::BodySerialNumber, ascii("SERIAL-123")),
+            field(Tag::Artist, ascii("Someone")),
+            field(Tag::GPSLatitudeRef, ascii("N")),
+            field(Tag::GPSLatitude, Value::Rational(vec![(37, 1).into(), (10, 1).into(), (0, 1).into()])),
+        ];
+        let mut writer = exif::experimental::Writer::new();
+        source.iter().for_each(|field| writer.push_field(field));
+        let mut tiff = std::io::Cursor::new(Vec::new());
+        writer.write(&mut tiff, false).unwrap();
+        let exif = exif::Reader::new().read_raw(tiff.into_inner()).unwrap();
+
+        let jpeg = crate::image_io::encode_jpeg(&RgbaImage::from_pixel(8, 8, Rgba([90, 120, 150, 255])), 85).unwrap();
+        let sent = with_exif(jpeg.clone(), &exif);
+        assert_eq!(&sent[..4], &[0xFF, 0xD8, 0xFF, 0xE1]);
+        assert!(image::load_from_memory(&sent).is_ok(), "still a JPEG");
+        let kept = exif::Reader::new().read_from_container(&mut std::io::Cursor::new(&sent)).unwrap();
+        let text = |tag| kept.get_field(tag, In::PRIMARY).map(|f| f.display_value().to_string());
+        assert_eq!(text(Tag::Model).as_deref(), Some("\"X-T5\""));
+        assert_eq!(text(Tag::PhotographicSensitivity).as_deref(), Some("400"));
+        assert!(text(Tag::FNumber).is_some() && text(Tag::ExposureTime).is_some() && text(Tag::DateTimeOriginal).is_some());
+        for gone in [Tag::BodySerialNumber, Tag::Artist, Tag::GPSLatitude, Tag::GPSLatitudeRef] {
+            assert!(text(gone).is_none(), "{gone} is not sent");
+        }
+        let has = |marker: &[u8]| sent.windows(marker.len()).any(|window| window == marker);
+        assert!(!has(b"SERIAL-123") && !has(b"Someone"));
+
+        // Nothing worth keeping: the JPEG as it was.
+        let mut writer = exif::experimental::Writer::new();
+        writer.push_field(&source[6]);
+        let mut tiff = std::io::Cursor::new(Vec::new());
+        writer.write(&mut tiff, false).unwrap();
+        let serial_only = exif::Reader::new().read_raw(tiff.into_inner()).unwrap();
+        assert_eq!(with_exif(jpeg.clone(), &serial_only), jpeg);
     }
 
     #[test]

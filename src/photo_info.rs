@@ -83,7 +83,7 @@ pub fn exif_rows(path: &Path) -> Vec<(&'static str, String)> {
     Vec::new()
 }
 
-fn read_exif(path: &Path) -> Option<exif::Exif> {
+pub(crate) fn read_exif(path: &Path) -> Option<exif::Exif> {
     if is_heic_path(path) {
         let bytes = std::fs::read(path).ok()?;
         let context = heic_rs::context::Context::open(&bytes).ok()?;

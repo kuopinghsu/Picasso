@@ -40,7 +40,8 @@ pub struct RouteMap {
     pub credit: &'static str,
 }
 
-/// The post: its block markup, and the cover as the featured image.
+/// The post: its block markup, and the cover as the featured image, or
+/// without a cover the Story's first photo, as themes open a post on it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Post {
     pub title: String,
@@ -123,7 +124,7 @@ pub fn post(story: &Story, blocks: &[StoryBlock], media: &dyn Fn(i64) -> Option<
         }
     }
     paragraphs(&mut out, &story.conclusion, None);
-    let featured = match story.cover {
+    let featured = match story.cover.or_else(|| blocks.iter().find_map(|block| block.block.media().first().map(|first| first.media_id))) {
         Some(cover) => Some(media(cover).ok_or(Unsupported::Photo(cover))?.id),
         None => None,
     };
@@ -276,6 +277,15 @@ mod tests {
         }
         // Every block opened is closed, and nothing from WordPress was in the Story.
         assert_eq!(content.matches("<!-- wp:").count(), content.matches("<!-- /wp:").count());
+    }
+
+    #[test]
+    fn without_a_cover_the_first_photo_is_featured() {
+        let mut story = story();
+        story.cover = None;
+        let blocks = [StoryBlock::new(Block::Paragraph("Hola".into())), StoryBlock::new(Block::Gallery(vec![MediaUse::new(2), MediaUse::new(1)]))];
+        assert_eq!(post(&story, &blocks, &uploads, &|_| None).unwrap().featured, Some(102));
+        assert_eq!(post(&story, &blocks[..1], &uploads, &|_| None).unwrap().featured, None, "no photo, nothing featured");
     }
 
     #[test]

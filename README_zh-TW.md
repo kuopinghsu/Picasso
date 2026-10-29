@@ -243,6 +243,8 @@ macOS 與 Linux 的執行檔為 `target/release/picasso`，Windows 則為 `targe
 
 - 翻譯：[src/i18n/](src/i18n)；語言選擇邏輯位於 [src/i18n.rs](src/i18n.rs)。
 
+- 發佈故事所用的 WordPress 佈景主題：[wordpress/picasso-folio/](wordpress/picasso-folio)。
+
 ### 檢查與維護
 
 [Makefile](Makefile) 提供建置、測試、基準測試、文件與打包指令。執行 `make help` 查看所有目標，常用指令如下：

@@ -243,6 +243,8 @@ OpenGL is the default renderer. Set `PICASSO_RENDERER=wgpu` to select the altern
 
 - Translations: [src/i18n/](src/i18n) and language selection in [src/i18n.rs](src/i18n.rs).
 
+- The WordPress theme for published Stories: [wordpress/picasso-folio/](wordpress/picasso-folio).
+
 ### Checks and maintenance
 
 The [Makefile](Makefile) provides build, test, benchmark, documentation and packaging commands. Run `make help` for all targets. Common commands are:

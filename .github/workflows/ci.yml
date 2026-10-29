@@ -8,7 +8,8 @@
 # `v0.9.5` also publishes every package on a GitHub release, with the
 # version's section of CHANGELOG.md as the release notes. The tag must match
 # the version in Cargo.toml, CHANGELOG.md must have a dated section for it,
-# and a version is published only once.
+# and a version is published only once. The first job checks that and
+# names the packages for the others.
 # docs/RELEASING.md has the checklist.
 name: CI
 
@@ -41,9 +42,14 @@ jobs:
   # Fails in seconds, not after the builds, when a tag doesn't match
   # Cargo.toml, CHANGELOG.md has no dated section for it, or the documents
   # name links, make targets, scripts, or settings that don't exist.
+  # Its outputs name every package: `version` from Cargo.toml, and `label`,
+  # the version for a tag or the version and short commit otherwise.
   changelog:
     name: Changelog and docs
     runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+      label: ${{ steps.check.outputs.label }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -53,6 +59,7 @@ jobs:
         run: python3 scripts/check-docs.py
 
       - name: Check
+        id: check
         run: |
           set -euo pipefail
           version=$(sed -n 's/^version *= *"\(.*\)"/\1/p' Cargo.toml | head -n 1)
@@ -65,12 +72,16 @@ jobs:
               echo "::error::CHANGELOG.md needs a dated section for $version"
               exit 1
             }
+            label=$version
           else
             bash scripts/release-notes.sh "$version" >/dev/null || {
               echo "::error::CHANGELOG.md has no section for $version"
               exit 1
             }
+            label="$version-${SOURCE_COMMIT::7}"
           fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "label=$label" >> "$GITHUB_OUTPUT"
 
   # Security advisories, licenses, and sources of the dependencies (deny.toml).
   # A new advisory fails this job even without a change here, which is the
@@ -141,17 +152,7 @@ jobs:
         id: package
         shell: pwsh
         run: |
-          $version = (cargo metadata --no-deps --format-version 1 | ConvertFrom-Json).packages[0].version
-          if ($env:GITHUB_REF_TYPE -eq 'tag') {
-            if ($env:GITHUB_REF_NAME -ne "v$version") {
-              Write-Error "Tag $env:GITHUB_REF_NAME does not match version $version in Cargo.toml"
-              exit 1
-            }
-            $label = $version
-          } else {
-            $label = "$version-$($env:SOURCE_COMMIT.Substring(0, 7))"
-          }
-          $name = "picasso-$label-windows-${{ matrix.arch }}"
+          $name = "picasso-${{ needs.changelog.outputs.label }}-windows-${{ matrix.arch }}"
 
           python scripts/third-party-notices.py --target ${{ matrix.target }} -o THIRD-PARTY-NOTICES.txt
           if ($LASTEXITCODE -ne 0) { exit 1 }
@@ -217,16 +218,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')
-          if [ "$GITHUB_REF_TYPE" = tag ]; then
-            if [ "$GITHUB_REF_NAME" != "v$version" ]; then
-              echo "::error::Tag $GITHUB_REF_NAME does not match version $version in Cargo.toml"
-              exit 1
-            fi
-            label=$version
-          else
-            label="$version-${SOURCE_COMMIT::7}"
-          fi
+          version=${{ needs.changelog.outputs.version }}
+          label=${{ needs.changelog.outputs.label }}
           name="picasso-$label-linux-${{ matrix.arch }}"
           strip target/release/picasso
           file target/release/picasso
@@ -332,24 +325,18 @@ jobs:
       # The libraries Picasso loads at runtime are installed without their
       # -devel packages, so the build does not record AlmaLinux's library
       # folders and Picasso looks them up by name, as AppRun arranges.
-      # AlmaLinux mirrors now and then serve empty metadata; clearing it and
-      # trying again picks another mirror.
-      - name: Install build dependencies
-        run: |
-          for attempt in 1 2 3 4 5; do
-            dnf install -y --setopt=install_weak_deps=False \
-              gcc make pkgconf-pkg-config alsa-lib-devel git curl tar gzip jq file desktop-file-utils python3 \
-              fontconfig libX11 libX11-xcb libxcb libXcursor libXi libxkbcommon libxkbcommon-x11 \
-              libwayland-client libwayland-cursor libwayland-egl && break
-            if [ "$attempt" = 5 ]; then exit 1; fi
-            echo "::warning::dnf install failed (attempt $attempt), trying again"
-            dnf clean all
-            sleep $((attempt * 15))
-          done
-
+      # The script is needed before the packages, so it comes from the
+      # checkout, whose action works without git.
       - uses: actions/checkout@v6
         with:
           ref: ${{ env.SOURCE_COMMIT }}
+
+      - name: Install build dependencies
+        run: |
+          bash scripts/dnf-install.sh \
+            gcc make pkgconf-pkg-config alsa-lib-devel git curl tar gzip jq file desktop-file-utils python3 \
+            fontconfig libX11 libX11-xcb libxcb libXcursor libXi libxkbcommon libxkbcommon-x11 \
+            libwayland-client libwayland-cursor libwayland-egl
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -364,16 +351,8 @@ jobs:
         id: package
         run: |
           set -euo pipefail
-          version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')
-          if [ "$GITHUB_REF_TYPE" = tag ]; then
-            if [ "$GITHUB_REF_NAME" != "v$version" ]; then
-              echo "::error::Tag $GITHUB_REF_NAME does not match version $version in Cargo.toml"
-              exit 1
-            fi
-            label=$version
-          else
-            label="$version-${SOURCE_COMMIT::7}"
-          fi
+          version=${{ needs.changelog.outputs.version }}
+          label=${{ needs.changelog.outputs.label }}
           # Same script as `make appimage`; it builds for the machine it runs on.
           VERSION=$label bash scripts/package-appimage.sh
           test -s "dist/picasso-$label-linux-${{ matrix.arch }}.AppImage"
@@ -392,24 +371,26 @@ jobs:
     needs: appimage
     runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
     container: ${{ matrix.image }}
+    # The oldest system the AppImage promises, and a recent one of the other
+    # family; the .deb is tested on Ubuntu 22.04 in the Linux job.
     strategy:
       fail-fast: false
       matrix:
         arch: [x64, arm64]
-        system: [Ubuntu 22.04, Ubuntu 24.04, RHEL 8 (AlmaLinux 8), RHEL 9 (AlmaLinux 9)]
+        system: [RHEL 8 (AlmaLinux 8), Ubuntu 24.04]
         include:
-          - system: Ubuntu 22.04
-            image: ubuntu:22.04
-          - system: Ubuntu 24.04
-            image: ubuntu:24.04
           - system: RHEL 8 (AlmaLinux 8)
             image: almalinux:8
-          - system: RHEL 9 (AlmaLinux 9)
-            image: almalinux:9
+          - system: Ubuntu 24.04
+            image: ubuntu:24.04
     defaults:
       run:
         shell: bash
     steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ env.SOURCE_COMMIT }}
+
       - uses: actions/download-artifact@v8
         with:
           pattern: picasso-*-linux-${{ matrix.arch }}-appimage
@@ -446,14 +427,7 @@ jobs:
             DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=5 install -y --no-install-recommends \
               xvfb libgl1 libglx-mesa0 libegl1 libegl-mesa0 libgl1-mesa-dri
           else
-            for attempt in 1 2 3 4 5; do
-              dnf install -y --setopt=install_weak_deps=False \
-                xorg-x11-server-Xvfb mesa-libGL mesa-libEGL mesa-dri-drivers && break
-              if [ "$attempt" = 5 ]; then exit 1; fi
-              echo "::warning::dnf install failed (attempt $attempt), trying again"
-              dnf clean all
-              sleep $((attempt * 15))
-            done
+            bash scripts/dnf-install.sh xorg-x11-server-Xvfb mesa-libGL mesa-libEGL mesa-dri-drivers
           fi
 
       # Picasso should open its window and keep running until timeout stops it.
@@ -521,16 +495,8 @@ jobs:
           APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
         run: |
           set -euo pipefail
-          version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')
-          if [ "$GITHUB_REF_TYPE" = tag ]; then
-            if [ "$GITHUB_REF_NAME" != "v$version" ]; then
-              echo "::error::Tag $GITHUB_REF_NAME does not match version $version in Cargo.toml"
-              exit 1
-            fi
-            label=$version
-          else
-            label="$version-${SOURCE_COMMIT::7}"
-          fi
+          version=${{ needs.changelog.outputs.version }}
+          label=${{ needs.changelog.outputs.label }}
           name="picasso-$label-macos-universal"
           python3 scripts/third-party-notices.py --target aarch64-apple-darwin --target x86_64-apple-darwin -o THIRD-PARTY-NOTICES.txt
           app=staging/dmg/Picasso.app
@@ -668,12 +634,7 @@ jobs:
         id: guide
         run: |
           set -euo pipefail
-          version=$(sed -n 's/^version *= *"\(.*\)"/\1/p' Cargo.toml | head -n 1)
-          if [ "$GITHUB_REF_TYPE" = tag ]; then
-            label=$version
-          else
-            label=$version-${SOURCE_COMMIT:0:7}
-          fi
+          label=${{ needs.changelog.outputs.label }}
           make guide-pdf
           mkdir -p dist
           cp target/guide/USER_GUIDE.pdf "dist/picasso-$label-user-guide.pdf"

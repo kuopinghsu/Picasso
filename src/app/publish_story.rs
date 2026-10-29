@@ -22,6 +22,8 @@ use super::{about, theme, Modal, PicassoApp};
 pub(super) struct PublishDialog {
     site_id: Option<i64>,
     size: UploadSize,
+    /// Whether photos keep their camera details (`upload::KEPT`).
+    exif: bool,
     /// The person read where the photos go and agreed to upload them.
     approved: bool,
     /// For a post no longer a draft on the site: whether to change it
@@ -49,7 +51,7 @@ impl PicassoApp {
         let remembered = self.config.number("publish_site").map(|id| id as i64);
         let site_id = remembered.filter(|id| sites.iter().any(|site| site.id == *id)).or_else(|| sites.iter().find(|site| usable(site)).map(|site| site.id));
         let size = self.publish_size(job.story.id, site_id);
-        self.modal = Modal::PublishStory(PublishDialog { site_id, size, approved: false, update: Some(true), check, dimensions, error: String::new() });
+        self.modal = Modal::PublishStory(PublishDialog { site_id, size, exif: self.config.flag("publish_exif").unwrap_or(true), approved: false, update: Some(true), check, dimensions, error: String::new() });
     }
 
     /// The size this Story was last saved to the site in, or the last one chosen.
@@ -140,7 +142,11 @@ impl PicassoApp {
                 }
                 let estimate = crate::upload::estimated_bytes(&dialog.dimensions, dialog.size);
                 ui.label(trf("{} photos, about {} before upload", &[&dialog.check.photos, &format_bytes(estimate)]));
-                note(ui, tr("Photos are rendered from your edits, without camera details or location. Photos already on the site in the same size are not sent again."));
+                if ui.checkbox(&mut dialog.exif, tr("Keep camera details")).changed() {
+                    dialog.approved = false;
+                }
+                ui.indent("publish-exif", |ui| note(ui, tr("Camera and lens, focal length, aperture, shutter speed, ISO, and when the photo was taken. Never the location or serial numbers.")));
+                note(ui, tr("Photos are rendered from your edits, never with their location. Photos already on the site in the same size are not sent again."));
 
                 let check = &dialog.check;
                 let mut blocked = check.empty;
@@ -194,14 +200,16 @@ impl PicassoApp {
         }
         let Some(site) = site.filter(|_| start) else { return };
         let size = dialog.size;
+        let exif = dialog.exif;
         // A new draft beside a published post replaces the record of it here, never the post.
         let update = dialog.update == Some(true);
         let earlier = earlier.filter(|publication| publication.remote_status == "draft" || update);
-        match self.start_publishing(ctx, &site, size, earlier, update) {
+        match self.start_publishing(ctx, &site, size, exif, earlier, update) {
             Ok(()) => {
                 self.modal = Modal::None;
                 self.config.set("publish_site", site.id as f64);
                 self.config.set("publish_size", size.code());
+                self.config.set("publish_exif", exif);
             }
             Err(err) => {
                 if let Modal::PublishStory(dialog) = &mut self.modal {
@@ -211,7 +219,7 @@ impl PicassoApp {
         }
     }
 
-    fn start_publishing(&mut self, ctx: &egui::Context, site: &Site, size: UploadSize, earlier: Option<Publication>, update: bool) -> Result<(), String> {
+    fn start_publishing(&mut self, ctx: &egui::Context, site: &Site, size: UploadSize, exif: bool, earlier: Option<Publication>, update: bool) -> Result<(), String> {
         let password = match self.vault.load(&site.secret_ref) {
             Ok(Some(password)) => password,
             Ok(None) => return Err(tr("Picasso doesn't have this site's password any more. Use Edit… in Settings → Publishing to enter it again.").into()),
@@ -233,6 +241,7 @@ impl PicassoApp {
             blocks: page.blocks,
             sources: page.sources,
             size,
+            exif,
             uploads: self.db.uploads(site.id),
             post_id: earlier.map(|publication| publication.post_id),
             map: Some(page.map),

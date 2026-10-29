@@ -34,7 +34,7 @@ sign = if [ "$(PLATFORM)" = darwin ] && security find-identity -v -p codesigning
 .DEFAULT_GOAL := release
 
 .PHONY: help release debug run run-stats version check lint test corpus bench bench-check check-docs deny ci \
-	notices release-notes guide guide-pdf appimage install uninstall world-map clean
+	notices release-notes wordpress-theme guide guide-pdf appimage install uninstall world-map clean
 
 # Each target's `##` text is what `make help` prints; `##@` starts a section.
 help: ## List the targets and the variables they take
@@ -123,6 +123,18 @@ ci: check-docs deny test bench-check ## Run the checks CI runs: docs, deny, test
 # THIRD-PARTY-NOTICES.txt for this platform, as every package carries it.
 notices: ## Write THIRD-PARTY-NOTICES.txt for this platform
 	$(PYTHON) scripts/third-party-notices.py -o THIRD-PARTY-NOTICES.txt
+
+# The WordPress themes for published Stories, each a zip to upload in
+# Appearance → Themes → Add New Theme → Upload Theme (wordpress/).
+WORDPRESS_THEMES = picasso-folio archive-78n
+
+wordpress-theme: ## Zip the WordPress themes in wordpress/ into dist/
+	mkdir -p dist
+	@for theme in $(WORDPRESS_THEMES); do \
+		rm -f dist/$$theme.zip; \
+		(cd wordpress && zip -qrX ../dist/$$theme.zip $$theme -x '*/.DS_Store') || exit 1; \
+		echo dist/$$theme.zip; \
+	done
 
 # The release notes CI publishes for the version in Cargo.toml, from CHANGELOG.md.
 release-notes: ## Print the release notes for this version, from CHANGELOG.md

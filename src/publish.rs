@@ -27,6 +27,8 @@ pub struct Job {
     /// Each photo of the Story by media reference, `None` when it is unavailable.
     pub sources: HashMap<i64, Source>,
     pub size: UploadSize,
+    /// Whether photos keep how they were taken (`upload::render`).
+    pub exif: bool,
     /// Confirmed uploads on this site, by the hash of their bytes: (media id, address).
     pub uploads: HashMap<String, (i64, String)>,
     /// The Story's earlier draft on this site.
@@ -118,7 +120,7 @@ pub fn run(http: &dyn Http, job: &Job, progress: &Progress, report: &mut dyn FnM
         let Some((path, settings, rotation)) = job.sources.get(&media_id).cloned().flatten() else {
             return Err(Stopped::Photo { media_id, uploaded });
         };
-        let rendered = upload::render(&path, &settings, rotation, job.size).map_err(|_| Stopped::Photo { media_id, uploaded })?;
+        let rendered = upload::render(&path, &settings, rotation, job.size, job.exif).map_err(|_| Stopped::Photo { media_id, uploaded })?;
         // The same photo used twice in the Story is sent once.
         if let Some(same) = by_hash.get(&rendered.hash) {
             media.insert(media_id, same.clone());
@@ -224,6 +226,7 @@ mod tests {
             blocks,
             sources,
             size: UploadSize::Low,
+            exif: true,
             uploads,
             post_id,
             map: None,

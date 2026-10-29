@@ -99,8 +99,8 @@ and PDF guide generation.
 - **Windows:** release-mode tests and packages on native x64 and Arm64 runners.
 - **Linux:** release-mode tests, benchmark limits, and Debian package installation,
   version, startup and removal checks on x64 and Arm64.
-- **AppImage:** builds for both architectures and startup tests on Ubuntu 22.04,
-  Ubuntu 24.04, AlmaLinux 8 and AlmaLinux 9.
+- **AppImage:** builds for both architectures and startup tests on AlmaLinux 8
+  and Ubuntu 24.04.
 - **macOS:** tests on the runner and a universal application containing Apple
   silicon and Intel executables. This does not replace testing on both kinds of Mac.
 - **Documentation:** English and Traditional Chinese PDF guides. Missing font

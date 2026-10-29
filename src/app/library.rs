@@ -673,21 +673,29 @@ impl PicassoApp {
     }
 
     fn library_toolbar(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            ui.label(egui::RichText::new(self.view_title()).size(22.0).strong().color(theme::text()));
+        ui.horizontal_wrapped(|ui| {
+            // The title and the smaller count as one line of text, so the
+            // count sits on the title's baseline.
+            let mut title = egui::text::LayoutJob::default();
+            title.append(&self.view_title(), 0.0, egui::TextFormat::simple(egui::FontId::proportional(22.0), theme::text()));
             let mut count = super::photo_count(self.photos.len());
             let tracks = self.view_tracks().len();
             if tracks > 0 {
                 count = format!("{count} · {}", trf(if tracks == 1 { "{} track" } else { "{} tracks" }, &[&tracks]));
             }
-            ui.label(egui::RichText::new(count).size(13.0).color(theme::muted()));
+            // The Trips page lists trips, not photos; its cards have the counts.
+            if !matches!(self.nav, Nav::Trips) {
+                let small = egui::TextFormat { valign: egui::Align::BOTTOM, ..egui::TextFormat::simple(egui::FontId::proportional(13.0), theme::muted()) };
+                title.append(&count, 8.0, small);
+            }
+            ui.label(title);
             if self.loading {
                 ui.add(egui::Spinner::new().size(13.0));
             }
             if matches!(self.nav, Nav::Statistics | Nav::TravelMap | Nav::Trips) {
                 return;
             }
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            theme::end_actions(ui, "library-toolbar", |ui| {
                 let mut sort = self.sort;
                 egui::ComboBox::from_id_salt("sort")
                     .selected_text(tr(match sort {

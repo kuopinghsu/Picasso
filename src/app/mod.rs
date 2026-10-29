@@ -1473,7 +1473,7 @@ impl PicassoApp {
         if plain(Key::I) {
             if self.mode == Mode::View {
                 self.toggle_info();
-            } else {
+            } else if !self.stories_page_shown() {
                 self.toggle_side_panel();
             }
         }
@@ -1594,9 +1594,10 @@ impl PicassoApp {
 
     fn status(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            // Statistics and the Travel Map have no side panel, and they and
-            // Places have no thumbnails to size.
-            let charts = matches!(self.nav, Nav::Statistics | Nav::TravelMap | Nav::Trips);
+            // Statistics, the Travel Map, the Trips page, and pages of
+            // Stories have no side panel, and they and Places have no
+            // thumbnails to size.
+            let charts = matches!(self.nav, Nav::Statistics | Nav::TravelMap | Nav::Trips) || self.stories_page_shown();
             // Laid out from the right first, so the tray gets what is left
             // and a long selection can't push these off the window.
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -2858,7 +2859,7 @@ impl eframe::App for PicassoApp {
                 .max_size(340.0)
                 .frame(theme::toolbar_frame(theme::sidebar()).inner_margin(egui::Margin::symmetric(10, 6)))
                 .show(ui, |ui| self.sidebar(ui));
-            if self.side != SidePanel::None && !matches!(self.nav, Nav::Statistics | Nav::TravelMap | Nav::Trips) && !self.story_shown() {
+            if self.side != SidePanel::None && !matches!(self.nav, Nav::Statistics | Nav::TravelMap | Nav::Trips) && !self.stories_page_shown() {
                 egui::Panel::right("side")
                     .resizable(true)
                     .default_size(300.0)

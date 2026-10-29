@@ -1206,7 +1206,6 @@ pub(super) const TABLE: &[(&str, &str)] = &[
     ("No archived trips.", "没有已归档的旅程。"),
     ("No trips yet. Select photos and choose Add to Trip, or start a new trip.", "还没有旅程。选择照片后选择“添加到旅程”，或开始新的旅程。"),
     ("{} found", "找到 {} 个"),
-    ("{} photos · {} days · {} stories · {} tracks", "{} 张照片 · {} 天 · {} 篇故事 · {} 条轨迹"),
     ("Choose a date", "选择日期"),
     ("Previous month", "上个月"),
     ("Next month", "下个月"),

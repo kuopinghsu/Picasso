@@ -150,13 +150,11 @@ A Trip package (`.picassotrip`) is one file that carries a Trip to Picasso on an
 
 ## Desktop interface
 
-New pages extend the existing interface rather than adding a visual style of their own:
-
 - Colors, text styles, spacing, corner radii, selection, and hover come from `src/app/theme.rs` (for example `accent()`, `text()`, `muted()`, `select()`, `primary_button`, `danger_button`). Light, dark, and System themes, and the teal accent, work as everywhere else. A missing pattern is added to the theme, not drawn locally.
 - Trips is a sidebar destination like Albums and Places. **All trips** shows every Trip as a card with its cover (or first photo), dates, destination, and counts of photos, Days, Stories, tracks, and unavailable photos; the header's search finds Trips by title, destination, or description, and archived Trips are shown on request. Tab moves between the cards and Enter or Space opens one. The toolbar, panels, shortcuts, and selection behave as in the Library.
 - Each task has one primary action. Secondary actions are grouped, advanced settings are revealed progressively, and nothing required is shown only on hover.
 - Every state is visible: default, hover, focus, selected, disabled, loading, error, and success, with keyboard focus and a cue that isn't only color.
 - A button that shows only a symbol or an icon (◀ ▶, ↑ ↓, ⋯, ★, the calendar) is named for screen readers with `theme::named` or `theme::icon_button`, and shows the same name on hover.
 - An area that draws itself instead of being a widget, such as a Trip or Story card, a photo in a Story block, or a photo in the picker, gets a name with `widget_info`: a card its title, a photo its alt text or else "Photo 2", the picker's photos as checkboxes that say whether they are chosen. While the keyboard is on it, it shows the accent ring (`theme::focus_ring`), as the cards do.
-- Panels adapt to the smallest window (880 × 560) and to high DPI; long translations wrap rather than hide actions. A header with actions at its right end, such as the trip's tabs with Edit trip… and ⋯, or the Story's Undo, Redo, Preview, and Export…, measures them with `theme::buttons_width` and moves them to a line of their own when they don't fit beside what comes first.
+- Panels adapt to the smallest window (880 × 560) and to high DPI; long translations wrap rather than hide actions. A header with actions at its right end, such as the Library's sort and selection tools, the trip's tabs with Edit trip… and ⋯, or the Story's Undo, Redo, Preview, and Export…, puts them in `theme::end_actions`, which remembers how wide they were and moves them to a line of their own when they don't fit beside what comes first.
 - Desktop controls are native egui. Only the Story's browser preview and exported pages use web layout and typography of their own.

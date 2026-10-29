@@ -326,6 +326,13 @@ impl PicassoApp {
         self.story.as_ref().is_some_and(|editor| self.nav == Nav::Trip(editor.story.trip_id))
     }
 
+    /// Whether the page is about Stories rather than photos: a Story open,
+    /// or a Trip's Stories tab. Such a page has no grid to size and no
+    /// selected photo for the side panel.
+    pub(super) fn stories_page_shown(&self) -> bool {
+        self.story_shown() || matches!(self.nav, Nav::Trip(id) if self.trip_stories.contains(&id))
+    }
+
     pub(super) fn story_ui(&mut self, ui: &mut egui::Ui) {
         let Some(editor) = &self.story else { return };
         let before = editor.snapshot();
@@ -363,11 +370,7 @@ impl PicassoApp {
             if editor.error.is_some() && ui.button(tr("Try again")).clicked() {
                 retry = true;
             }
-            // In a narrow window the actions go on their own line.
-            if ui.available_width() < theme::buttons_width(ui, &["⋯", tr("Export…"), tr("Preview"), tr("Redo"), tr("Undo")]) + 8.0 {
-                ui.end_row();
-            }
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            theme::end_actions(ui, "story-bar", |ui| {
                 let more = theme::named(ui.button("⋯"), tr("More"));
                 egui::Popup::menu(&more).show(|ui| {
                     let label = if editor.story.archived { tr("Restore story") } else { tr("Archive story") };

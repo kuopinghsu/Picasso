@@ -1206,7 +1206,6 @@ pub(super) const TABLE: &[(&str, &str)] = &[
     ("No archived trips.", "Nessun viaggio archiviato."),
     ("No trips yet. Select photos and choose Add to Trip, or start a new trip.", "Ancora nessun viaggio. Seleziona delle foto e scegli Aggiungi al viaggio, oppure inizia un nuovo viaggio."),
     ("{} found", "{} trovati"),
-    ("{} photos · {} days · {} stories · {} tracks", "{} foto · {} giorni · {} storie · {} tracce"),
     ("Choose a date", "Scegli una data"),
     ("Previous month", "Mese precedente"),
     ("Next month", "Mese successivo"),

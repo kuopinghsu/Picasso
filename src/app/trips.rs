@@ -198,9 +198,11 @@ impl PicassoApp {
                     let mut y = cover.bottom() + 8.0;
                     let left = rect.left() + 12.0;
                     let width = rect.width() - 24.0;
-                    // One line each, cut at the card's edge.
+                    // One line each, ending in "…" at the card's edge.
                     let mut line = |text: String, size: f32, color: egui::Color32| {
-                        let galley = painter.layout_no_wrap(text, egui::FontId::proportional(size), color);
+                        let mut job = egui::text::LayoutJob::simple_singleline(text, egui::FontId::proportional(size), color);
+                        job.wrap = egui::text::TextWrapping { max_width: width, max_rows: 1, break_anywhere: true, overflow_character: Some('…') };
+                        let galley = painter.layout_job(job);
                         let height = galley.size().y;
                         let clip = egui::Rect::from_min_size(egui::pos2(left, y), Vec2::new(width, height));
                         painter.with_clip_rect(clip).galley(clip.min, galley, color);
@@ -215,7 +217,14 @@ impl PicassoApp {
                         line(place.join(" · "), 12.5, theme::muted());
                     }
                     let tracks = self.db.trip_tracks(trip.id).len();
-                    let counts = trf("{} photos · {} days · {} stories · {} tracks", &[&trip.members, &trip.days, &trip.stories, &tracks]);
+                    let count = |n: usize, one: &'static str, many: &'static str| trf(if n == 1 { one } else { many }, &[&n]);
+                    let counts = [
+                        super::photo_count(trip.members as usize),
+                        count(trip.days as usize, "{} day", "{} days"),
+                        count(trip.stories as usize, "{} story", "{} stories"),
+                        count(tracks, "{} track", "{} tracks"),
+                    ]
+                    .join(" · ");
                     line(counts, 12.0, theme::muted());
                     if trip.members > trip.available {
                         line(trf("{} unavailable", &[&(trip.members - trip.available)]), 12.0, theme::DANGER);
@@ -358,12 +367,8 @@ impl PicassoApp {
             if ui.selectable_label(stories_tab, trf("Stories ({})", &[&story_count])).clicked() {
                 stories_tab = true;
             }
-            // In a narrow window the actions go on their own line.
-            if ui.available_width() < theme::buttons_width(ui, &["⋯", tr("Edit trip…")]) {
-                ui.end_row();
-            }
             // The trip's own actions, at the end of the row like the toolbar's.
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            theme::end_actions(ui, "trip-tabs", |ui| {
                 let more = theme::named(ui.button("⋯"), tr("More"));
                 let mut export = false;
                 egui::Popup::menu(&more).show(|ui| {
@@ -407,8 +412,7 @@ impl PicassoApp {
         }
         // Narrow the grid; the counts and the list come from the same query.
         let mut filter = self.trip_filter;
-        ui.horizontal_wrapped(|ui| {
-            row_label(ui, tr("Show"));
+        labelled_row(ui, tr("Show"), |ui| {
             let everything = MemberQuery { day: filter.day, ..MemberQuery::default() };
             if ui.selectable_label(filter == everything, tr("All")).clicked() {
                 filter = everything;
@@ -471,8 +475,7 @@ impl PicassoApp {
         let mut delete_day: Option<i64> = None;
         let mut move_day: Option<(usize, usize)> = None;
         let mut suggest = false;
-        ui.horizontal_wrapped(|ui| {
-            row_label(ui, tr("Days"));
+        labelled_row(ui, tr("Days"), |ui| {
             if ui.selectable_label(filter.day == DayFilter::Any, tr("All")).clicked() {
                 filter.day = DayFilter::Any;
             }
@@ -622,8 +625,7 @@ impl PicassoApp {
         let mut open: Option<i64> = None;
         let mut all = false;
         let mut new_story: Option<egui::Response> = None;
-        ui.horizontal_wrapped(|ui| {
-            row_label(ui, tr("Stories"));
+        labelled_row(ui, tr("Stories"), |ui| {
             if let Some(story) = latest {
                 let chip = ui.selectable_label(false, trf("Continue “{}”", &[&story_name(story)]));
                 if chip.on_hover_text(tr("The story you worked on last")).clicked() {
@@ -851,8 +853,7 @@ impl PicassoApp {
         }
         let mut link: Option<(i64, Option<i64>)> = None;
         let mut unlink: Option<i64> = None;
-        ui.horizontal_wrapped(|ui| {
-            row_label(ui, tr("Tracks"));
+        labelled_row(ui, tr("Tracks"), |ui| {
             for track in &linked {
                 let day = track.day_id.and_then(|id| days.iter().find(|day| day.id == id));
                 let mut label = match day {
@@ -1466,9 +1467,19 @@ const ROW_LABEL: f32 = 64.0;
 /// A Story's card on the trip page.
 const STORY_CARD: Vec2 = Vec2::new(168.0, 108.0);
 
+/// One of the trip's rows: its name in a column of its own, and its chips
+/// after it, wrapping under the first chip rather than under the name.
+fn labelled_row<R>(ui: &mut egui::Ui, text: &str, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    ui.horizontal_top(|ui| {
+        row_label(ui, text);
+        ui.horizontal_wrapped(add).inner
+    })
+    .inner
+}
+
 /// The name of one of the trip's rows, in a column of its own.
 fn row_label(ui: &mut egui::Ui, text: &str) {
-    ui.allocate_ui_with_layout(Vec2::new(ROW_LABEL, 20.0), Layout::left_to_right(Align::Center), |ui| {
+    ui.allocate_ui_with_layout(Vec2::new(ROW_LABEL, ui.spacing().interact_size.y), Layout::left_to_right(Align::Center), |ui| {
         ui.set_min_width(ROW_LABEL);
         ui.label(RichText::new(text).size(13.0).color(theme::muted()));
     });

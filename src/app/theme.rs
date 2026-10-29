@@ -428,16 +428,47 @@ pub fn icon_button(ui: &mut egui::Ui, icon: Icon, enabled: bool, selected: bool)
 
 /// Names a button that shows only a symbol or a painted icon, for screen
 /// readers, and shows the name on hover.
-/// How wide a row of plain buttons with these labels is, to put them on
-/// a line of their own when they don't fit beside what comes first.
-pub fn buttons_width(ui: &egui::Ui, labels: &[&str]) -> f32 {
-    let spacing = ui.spacing();
-    let font = egui::TextStyle::Button.resolve(ui.style());
-    labels
-        .iter()
-        .map(|label| ui.fonts_mut(|fonts| fonts.layout_no_wrap(label.to_string(), font.clone(), egui::Color32::WHITE).size().x))
-        .map(|text| text + 2.0 * spacing.button_padding.x + spacing.item_spacing.x)
-        .sum()
+/// Actions at the right end of a header row made with
+/// `horizontal_wrapped`. When they didn't fit beside what comes first,
+/// as measured last frame under `id`, they go on a line of their own, so a
+/// narrow window or a long translation never lays them over the title.
+pub fn end_actions<R>(ui: &mut egui::Ui, id: &str, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    let key = egui::Id::unique(("end-actions", id));
+    let needed = ui.ctx().data(|data| data.get_temp::<f32>(key)).unwrap_or(0.0);
+    // A wrapping row offers its whole width to a layout; only what is
+    // after the cursor is free.
+    if ui.max_rect().right() - ui.cursor().min.x < needed {
+        ui.end_row();
+    }
+    // Wider than a line of their own, right to left would push them out
+    // past the left edge; they wrap from the left instead.
+    if needed > ui.max_rect().width() {
+        let row = ui.spacing().interact_size.y;
+        return ui
+            .scope_builder(egui::UiBuilder::new().layout(egui::Layout::left_to_right(egui::Align::Center).with_main_wrap(true)), |ui| {
+                let inner = add(ui);
+                // On one line again, they are as wide as they need.
+                if ui.min_rect().height() <= row + 1.0 {
+                    ui.ctx().data_mut(|data| data.insert_temp(key, ui.min_rect().width()));
+                    ui.ctx().request_discard("the header's actions fit on one line again");
+                }
+                inner
+            })
+            .inner;
+    }
+    let top = ui.cursor().min;
+    let free = egui::Rect::from_min_max(top, egui::pos2(ui.max_rect().right(), top.y + ui.spacing().interact_size.y));
+    ui.scope_builder(egui::UiBuilder::new().max_rect(free).layout(egui::Layout::right_to_left(egui::Align::Center)), |ui| {
+        let inner = add(ui);
+        let width = ui.min_rect().width();
+        if (width - needed).abs() > 0.5 {
+            ui.ctx().data_mut(|data| data.insert_temp(key, width));
+            // Lay the frame out again with the width now known, before it shows.
+            ui.ctx().request_discard("the header's actions changed width");
+        }
+        inner
+    })
+    .inner
 }
 
 /// The keyboard focus ring around `rect`, drawn while `response` has focus,

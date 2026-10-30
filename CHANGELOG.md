@@ -38,8 +38,8 @@ section of this file as the release notes.
 
 ### Changed
 
-- macOS builds are signed with a self-signed `Picasso Development` certificate: `make sign-identity`
-  makes it once, and CI releases without a Developer ID use it instead of an ad-hoc signature.
+- Local macOS builds are signed with a self-signed `Picasso Development` certificate that
+  `make sign-identity` makes once; release builds from CI stay signed ad hoc.
 - Reorganized the English and Traditional Chinese READMEs around the project overview,
   features, installation, common workflows, data storage and development. Simplified the
   English wording for readers who use English as an additional language.

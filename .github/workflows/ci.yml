@@ -447,16 +447,11 @@ jobs:
 
   # With the secrets below set in the repository, the app and the disk image
   # are signed with a Developer ID and notarized by Apple, so they open
-  # without a warning. Without them, the app is signed with the self-signed
-  # identity "Picasso Development": the one in MACOS_SELF_SIGNED_CERTIFICATE,
-  # so every release is the same app to the Keychain, or else one made for
-  # this run. It isn't notarized either way.
+  # without a warning. Without them, the app gets an ad-hoc signature.
   #   MACOS_CERTIFICATE           base64 of the Developer ID Application .p12
   #   MACOS_CERTIFICATE_PASSWORD  password of the .p12
   #   APPLE_ID, APPLE_TEAM_ID     the Apple account and team that notarize
   #   APPLE_APP_PASSWORD          an app-specific password of that account
-  #   MACOS_SELF_SIGNED_CERTIFICATE           base64 of the self-signed .p12 (README.md)
-  #   MACOS_SELF_SIGNED_CERTIFICATE_PASSWORD  password of that .p12
   macos:
     name: macOS universal
     needs: changelog
@@ -498,8 +493,6 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
-          MACOS_SELF_SIGNED_CERTIFICATE: ${{ secrets.MACOS_SELF_SIGNED_CERTIFICATE }}
-          MACOS_SELF_SIGNED_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_SELF_SIGNED_CERTIFICATE_PASSWORD }}
         run: |
           set -euo pipefail
           version=${{ needs.changelog.outputs.version }}
@@ -576,26 +569,11 @@ jobs:
             # Hardened runtime and a secure timestamp, as notarization requires.
             codesign --force --options runtime --timestamp --sign "$identity" "$app"
           else
-            # Self-signed: the same identity each release keeps Keychain
-            # approvals. The app is not notarized, so the first launch needs
-            # System Settings > Privacy & Security > Open Anyway (or, up to
-            # macOS 14, Open from the context menu).
-            keychain=$RUNNER_TEMP/signing.keychain-db
-            keychain_password=$(uuidgen)
-            security create-keychain -p "$keychain_password" "$keychain"
-            security set-keychain-settings -lut 3600 "$keychain"
-            security unlock-keychain -p "$keychain_password" "$keychain"
-            identity="Picasso Development"
-            if [ -n "$MACOS_SELF_SIGNED_CERTIFICATE" ]; then
-              echo "$MACOS_SELF_SIGNED_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/self-signed.p12"
-              bash scripts/self-signed-identity.sh --p12 "$RUNNER_TEMP/self-signed.p12" "$MACOS_SELF_SIGNED_CERTIFICATE_PASSWORD" "$keychain" "$keychain_password"
-              rm "$RUNNER_TEMP/self-signed.p12"
-            else
-              echo "::warning::MACOS_SELF_SIGNED_CERTIFICATE is not set; signing with an identity made for this run"
-              bash scripts/self-signed-identity.sh "$identity" "$keychain" "$keychain_password"
-            fi
-            codesign --force --keychain "$keychain" --sign "$identity" --identifier app.Picasso.picasso "$app"
-            security delete-keychain "$keychain"
+            # Ad-hoc signature: Apple silicon refuses to run unsigned code. The
+            # app is not notarized, so the first launch needs System Settings >
+            # Privacy & Security > Open Anyway (or, up to macOS 14, Open from
+            # the context menu).
+            codesign --force --deep --sign - "$app"
           fi
           codesign --verify --deep --strict "$app"
 

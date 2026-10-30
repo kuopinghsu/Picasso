@@ -180,6 +180,13 @@ impl PicassoApp {
             dialog.terms = dialog.site_id.map(|site_id| self.db.post_terms(story_id, site_id)).unwrap_or_default();
             dialog.terms_site = dialog.site_id;
             dialog.site_terms = SiteTerms::default();
+            // As it went to that site last: by Day when its Day posts were saved after its one post.
+            dialog.by_day = dialog.days > 0
+                && dialog.site_id.is_some_and(|site_id| {
+                    let by_day = self.db.day_posts(story_id, site_id).iter().map(|(_, post)| post.synced_at).max();
+                    let single = self.db.publication(story_id, site_id).map(|publication| publication.synced_at);
+                    by_day.is_some_and(|by_day| single.is_none_or(|single| by_day >= single))
+                });
         }
         if let Some(Ok(result)) = dialog.site_terms.reading.as_ref().map(Receiver::try_recv) {
             dialog.site_terms.reading = None;

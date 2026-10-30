@@ -465,13 +465,22 @@ impl Database {
         let member = self.conn.prepare(
             "SELECT 1 FROM trip_media tm JOIN media_refs m ON m.id = tm.media_id WHERE tm.trip_id = ?1 AND m.photo_id = ?2",
         );
-        let photo = self.conn.prepare("SELECT path, taken_at FROM photos WHERE id = ?1");
-        let (Ok(mut member), Ok(mut photo)) = (member, photo) else {
+        let other = self.conn.prepare(
+            "SELECT 1 FROM trip_media tm JOIN media_refs m ON m.id = tm.media_id WHERE tm.trip_id != ?1 AND m.photo_id = ?2",
+        );
+        let photo = self.conn.prepare(
+            "SELECT path, taken_at, gps_lat IS NOT NULL OR pin_lat IS NOT NULL, bytes, width, height, file_taken_at FROM photos WHERE id = ?1",
+        );
+        let (Ok(mut member), Ok(mut other), Ok(mut photo)) = (member, other, photo) else {
             return preview;
         };
         let mut seen = HashSet::new();
+        let mut copies = HashSet::new();
         for &id in photo_ids.iter().filter(|id| seen.insert(**id)) {
-            let Ok((path, taken_at)) = photo.query_row([id], |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))) else {
+            let Ok((path, taken_at, located, copy)) = photo.query_row([id], |row| {
+                let copy: (i64, i64, i64, i64) = (row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?);
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?, row.get::<_, bool>(2)?, copy))
+            }) else {
                 continue;
             };
             if member.exists(params![trip_id, id]).unwrap_or(false) {
@@ -482,6 +491,19 @@ impl Database {
                 preview.videos += 1;
             } else {
                 preview.photos += 1;
+            }
+            if other.exists(params![trip_id, id]).unwrap_or(false) {
+                preview.in_other_trip += 1;
+            }
+            if located {
+                preview.located += 1;
+            }
+            if copy.0 > 0 && !copies.insert(copy) {
+                preview.duplicates += 1;
+            }
+            if taken_at == 0 {
+                preview.no_time += 1;
+                continue;
             }
             preview.taken = Some(preview.taken.map_or((taken_at, taken_at), |(first, last)| (first.min(taken_at), last.max(taken_at))));
         }
@@ -1451,6 +1473,10 @@ mod tests {
         let preview = db.preview_add_to_trip(trip_id, &[ids[0], ids[1], ids[2], ids[1], 9999]);
         assert_eq!((preview.photos, preview.videos, preview.already), (1, 1, 1));
         assert_eq!(preview.taken, Some((1_700_000_000, 1_700_000_000)));
+        // The fixtures share size, pixel size and date, so the second looks like a copy.
+        assert_eq!((preview.no_time, preview.located, preview.in_other_trip, preview.duplicates), (0, 2, 0, 1));
+        let other = trip(&db, "Hills");
+        assert_eq!(db.preview_add_to_trip(other, &[ids[0]]).in_other_trip, 1);
         let refs = db.add_to_trip(trip_id, &[ids[1], ids[0], ids[2]]).unwrap();
         assert_eq!(refs.len(), 3);
         assert_eq!(all(&db, trip_id).len(), 3);
@@ -1458,7 +1484,7 @@ mod tests {
         assert!(db.add_to_trip(trip_id, &[9999]).is_err(), "a photo that isn't in the library");
         assert_eq!(db.remove_photos_from_trip(trip_id, &[ids[2], 9999]).unwrap(), 1, "by catalog photo");
         db.add_to_trip(trip_id, &[ids[2]]).unwrap();
-        assert!(db.add_to_trip(trip_id + 1, &[ids[0]]).is_err(), "a trip that doesn't exist");
+        assert!(db.add_to_trip(other + 1, &[ids[0]]).is_err(), "a trip that doesn't exist");
         assert_eq!(all(&db, trip_id).len(), 3, "a failed add changes nothing");
     }
 

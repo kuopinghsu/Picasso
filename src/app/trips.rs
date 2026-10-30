@@ -1674,6 +1674,22 @@ fn preview_lines(ui: &mut egui::Ui, preview: &AddPreview) {
     if preview.already > 0 {
         ui.label(RichText::new(trf("Already in this trip: {}", &[&preview.already])).color(theme::muted()));
     }
+    let mut notes = Vec::new();
+    if preview.photos + preview.videos > 0 {
+        notes.push(trf("{} with a location", &[&preview.located]));
+    }
+    if preview.in_other_trip > 0 {
+        notes.push(trf("{} also in another trip", &[&preview.in_other_trip]));
+    }
+    if preview.no_time > 0 {
+        notes.push(trf("{} with no date, to place by hand", &[&preview.no_time]));
+    }
+    if preview.duplicates > 0 {
+        notes.push(trf("{} may be copies of another (same size and date)", &[&preview.duplicates]));
+    }
+    if !notes.is_empty() {
+        ui.add(egui::Label::new(RichText::new(notes.join("  ·  ")).color(theme::muted())).wrap());
+    }
 }
 
 /// A typed day: `Some(None)` when empty, `None` when it can't be read.

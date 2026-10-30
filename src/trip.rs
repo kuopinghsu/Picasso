@@ -412,6 +412,14 @@ pub struct AddPreview {
     pub already: usize,
     /// Earliest and latest date taken of the ones that would be added.
     pub taken: Option<(i64, i64)>,
+    /// Of the ones that would be added: with no date taken, so they wait
+    /// for review; with a location from the camera or a pin; already in
+    /// another Trip; and the same size, pixel size and file date as one
+    /// before them, so possibly a copy of it, still added.
+    pub no_time: usize,
+    pub located: usize,
+    pub in_other_trip: usize,
+    pub duplicates: usize,
 }
 
 /// What deleting a Trip takes with it, for the confirmation.

@@ -18,7 +18,7 @@ use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use super::{order_sql, path_text, read_photo, Database, PHOTO_COLS};
 use crate::i18n::tr;
 use crate::trip::{
-    capture_day, AddPreview, Capture, DaySuggestion, Review, TripZone, Block, DayAssignment, DayFilter, DaySource, MediaUse, Member, MemberQuery, Story, StoryBlock, StoryFilter, Trip, TripDay,
+    capture_day, AddPreview, Capture, Shot, DaySuggestion, Review, TripZone, Block, DayAssignment, DayFilter, DaySource, MediaUse, Member, MemberQuery, Story, StoryBlock, StoryFilter, Trip, TripDay,
     TripDraft, TripImpact, TripQuery, TripTrack, DEFAULT_TEMPLATE,
 };
 use crate::types::{is_video_path, unix_now, Photo, Sort};
@@ -441,6 +441,22 @@ impl Database {
         let mut values: Vec<&dyn rusqlite::ToSql> = vec![&query.archived];
         values.extend(words.iter().map(|word| word as &dyn rusqlite::ToSql));
         self.map_rows(&sql, values.as_slice(), read_trip)
+    }
+
+    /// Every library photo as Suggest trips groups them, each with its
+    /// folder's name and whether a Trip has it already.
+    pub fn trip_shots(&self) -> Vec<Shot> {
+        self.map_rows(
+            "SELECT p.id, p.taken_at, p.path, p.camera, p.gps_lat IS NOT NULL OR p.pin_lat IS NOT NULL,
+                    EXISTS (SELECT 1 FROM media_refs m JOIN trip_media tm ON tm.media_id = m.id WHERE m.photo_id = p.id)
+             FROM photos p",
+            [],
+            |row| {
+                let path: String = row.get(2)?;
+                let folder = std::path::Path::new(&path).parent().and_then(|dir| dir.file_name()).map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
+                Ok(Shot { id: row.get(0)?, taken_at: row.get(1)?, folder, camera: row.get(3)?, located: row.get(4)?, in_trip: row.get(5)? })
+            },
+        )
     }
 
     /// What [`Database::add_to_trip`] would do with these photos.
@@ -1350,6 +1366,17 @@ mod tests {
     use super::super::SCHEMA_VERSION;
     use super::*;
     use crate::track::{Point, Track};
+
+    #[test]
+    fn library_photos_say_whether_a_trip_has_them() {
+        let (db, _, folder, ids) = photos("shots", &["a.jpg", "b.jpg"]);
+        let trip = db.create_trip(&TripDraft::new("Kyoto", "Asia/Tokyo")).unwrap();
+        db.add_to_trip(trip, &ids[..1]).unwrap();
+        let mut shots = db.trip_shots();
+        shots.sort_by_key(|shot| shot.id);
+        let name = folder.file_name().unwrap().to_string_lossy().into_owned();
+        assert_eq!(shots.iter().map(|shot| (shot.id, shot.in_trip, shot.folder.clone())).collect::<Vec<_>>(), vec![(ids[0], true, name.clone()), (ids[1], false, name)]);
+    }
 
     /// A library with photos `a.jpg`, `b.jpg`, … in its folder, by name.
     fn photos(tag: &str, names: &[&str]) -> (Database, i64, std::path::PathBuf, Vec<i64>) {

@@ -7,7 +7,7 @@ use chrono::{Local, NaiveDate, TimeZone};
 use eframe::egui::{self, Align, Key, Layout, Margin, Modifiers, RichText, Vec2};
 
 use crate::i18n::{tr, trf};
-use crate::trip::{read_capture, TripQuery, AddPreview, DayFilter, DaySource, DaySuggestion, MemberQuery, Review, Story, StoryFilter, Trip, TripDay, TripDraft, TripImpact};
+use crate::trip::{read_capture, shift_cameras, suggest_trips, Shot, TripCandidate, TripQuery, AddPreview, DayFilter, DaySource, DaySuggestion, MemberQuery, Review, Story, StoryFilter, Trip, TripDay, TripDraft, TripImpact};
 use crate::types::{format_day, Nav};
 
 use super::story::{story_name, Group};
@@ -28,6 +28,42 @@ pub(super) struct TripDialog {
     photos: Vec<i64>,
     preview: AddPreview,
     error: String,
+}
+
+/// Library photos grouped by when they were taken, each group offered as a
+/// new Trip through the usual New trip dialog.
+pub(super) struct SuggestDialog {
+    shots: Vec<Shot>,
+    /// Days with no photo that start a new Trip.
+    gap_days: u32,
+    min_photos: usize,
+    skip_in_trip: bool,
+    /// With `ranged`, only photos taken on these days or between them; an
+    /// empty one sets no limit on its side.
+    ranged: bool,
+    from: String,
+    to: String,
+    /// Each camera with its photo count and the hours its clock is moved
+    /// for grouping; the photos themselves are never changed.
+    cameras: Vec<(String, usize, i32)>,
+    found: Vec<TripCandidate>,
+}
+
+impl SuggestDialog {
+    fn regroup(&mut self) {
+        let from = parse_day(&self.from).flatten().filter(|_| self.ranged);
+        let to = parse_day(&self.to).flatten().filter(|_| self.ranged);
+        let day = |at: i64| Local.timestamp_opt(at, 0).single().map(|at| at.date_naive());
+        let within = |shot: &&Shot| match day(shot.taken_at) {
+            Some(taken) => from.is_none_or(|from| taken >= from) && to.is_none_or(|to| taken <= to),
+            None => from.is_none() && to.is_none(),
+        };
+        let shifts: std::collections::HashMap<String, i64> =
+            self.cameras.iter().filter(|(_, _, hours)| *hours != 0).map(|(name, _, hours)| (name.clone(), i64::from(*hours) * 3600)).collect();
+        let shifted = if shifts.is_empty() { self.shots.clone() } else { shift_cameras(&self.shots, &shifts) };
+        let shots: Vec<Shot> = if from.is_none() && to.is_none() { shifted } else { shifted.iter().filter(within).cloned().collect() };
+        self.found = suggest_trips(&shots, i64::from(self.gap_days) * 86_400, self.min_photos, self.skip_in_trip);
+    }
 }
 
 /// Adding the selected photos to a Trip, after showing what that does.
@@ -146,6 +182,10 @@ impl PicassoApp {
         ui.horizontal(|ui| {
             if ui.add(theme::primary_button(tr("New trip"))).clicked() {
                 self.open_new_trip(Vec::new());
+            }
+            let suggest = ui.button(tr("Suggest trips…"));
+            if suggest.on_hover_text(tr("Group the library's photos by when they were taken, and make a trip of a group")).clicked() {
+                self.open_suggest_trips();
             }
             let import = ui.button(tr("Import trip…"));
             if import.on_hover_text(tr("Add a trip package made in Picasso on another computer, with its days, photos, and stories")).clicked() {
@@ -1237,6 +1277,135 @@ impl PicassoApp {
         });
     }
 
+    fn open_suggest_trips(&mut self) {
+        let shots = self.db.trip_shots();
+        let mut cameras: Vec<(String, usize, i32)> = Vec::new();
+        for shot in shots.iter().filter(|shot| !shot.camera.is_empty()) {
+            match cameras.iter_mut().find(|(name, ..)| *name == shot.camera) {
+                Some((_, count, _)) => *count += 1,
+                None => cameras.push((shot.camera.clone(), 1, 0)),
+            }
+        }
+        cameras.sort_by_key(|(_, count, _)| std::cmp::Reverse(*count));
+        let mut dialog = SuggestDialog { shots, cameras, gap_days: 2, min_photos: 10, skip_in_trip: true, ranged: false, from: String::new(), to: String::new(), found: Vec::new() };
+        dialog.regroup();
+        self.modal = Modal::SuggestTrips(dialog);
+    }
+
+    pub(super) fn suggest_trips_modal(&mut self, ctx: &egui::Context) {
+        let Modal::SuggestTrips(dialog) = &mut self.modal else { return };
+        let mut close = false;
+        let mut create: Option<TripCandidate> = None;
+        let response = egui::Modal::new(egui::Id::unique("suggest-trips")).frame(about::dialog_frame()).show(ctx, |ui| {
+            ui.set_width(560.0);
+            ui.set_max_width(560.0);
+            about::title_bar(ui, &self.logo, tr("Suggest trips"), &mut close);
+            egui::Frame::new().inner_margin(Margin::symmetric(20, 14)).show(ui, |ui| {
+                ui.spacing_mut().item_spacing.y = 6.0;
+                let mut changed = false;
+                ui.horizontal(|ui| {
+                    ui.label(tr("New trip after"));
+                    changed |= ui.add(egui::DragValue::new(&mut dialog.gap_days).range(1..=30)).changed();
+                    ui.label(tr("days without photos"));
+                    ui.add_space(12.0);
+                    ui.label(tr("At least"));
+                    changed |= ui.add(egui::DragValue::new(&mut dialog.min_photos).range(1..=1000)).changed();
+                    ui.label(tr("photos"));
+                });
+                changed |= ui.radio_value(&mut dialog.ranged, false, tr("All dates")).changed();
+                ui.horizontal(|ui| {
+                    changed |= ui.radio_value(&mut dialog.ranged, true, tr("Taken from")).changed();
+                    let before = (dialog.from.clone(), dialog.to.clone());
+                    date_field(ui, "suggest-from", &mut dialog.from, "2025-07-01");
+                    ui.label(tr("to"));
+                    let start = parse_day(&dialog.from).flatten();
+                    date_field_from(ui, "suggest-to", &mut dialog.to, "2025-07-31", start);
+                    if (dialog.from.clone(), dialog.to.clone()) != before {
+                        // Typing a day chooses the range.
+                        dialog.ranged = true;
+                        changed = true;
+                    }
+                });
+                changed |= ui.checkbox(&mut dialog.skip_in_trip, tr("Leave out photos already in a trip")).changed();
+                egui::CollapsingHeader::new(tr("Camera clocks")).id_salt("suggest-clocks").show(ui, |ui| {
+                    ui.add(egui::Label::new(RichText::new(tr("Move a camera whose clock was off. This changes only how photos are grouped here, never the photos.")).color(theme::muted())).wrap());
+                    egui::ScrollArea::vertical().id_salt("suggest-clock-list").max_height(140.0).show(ui, |ui| {
+                        for (name, count, hours) in &mut dialog.cameras {
+                            ui.horizontal(|ui| {
+                                changed |= ui.add(egui::DragValue::new(hours).range(-72..=72).suffix(" h")).changed();
+                                ui.label(format!("{name}  ({count})"));
+                            });
+                        }
+                    });
+                });
+                if changed {
+                    dialog.regroup();
+                }
+                let untimed = dialog.shots.iter().filter(|shot| shot.taken_at == 0).count();
+                let mut note = tr("Times are as each camera recorded them, so a camera whose clock was off can split or join trips.").to_string();
+                if untimed > 0 {
+                    note = format!("{note} {}", trf("{} photos have no date and are in no group.", &[&untimed]));
+                }
+                ui.add(egui::Label::new(RichText::new(note).color(theme::muted())).wrap());
+                ui.separator();
+                if dialog.found.is_empty() {
+                    ui.label(RichText::new(tr("No groups. Try fewer days or photos.")).color(theme::muted()));
+                }
+                egui::ScrollArea::vertical().max_height(380.0).min_scrolled_height(260.0).auto_shrink([false, true]).show(ui, |ui| {
+                    for candidate in &dialog.found {
+                        ui.horizontal(|ui| {
+                            let width = ui.available_width() - 110.0;
+                            ui.vertical(|ui| {
+                                ui.set_width(width);
+                                let (first, last) = (format_day(candidate.first), format_day(candidate.last));
+                                let when = if first == last { first } else { format!("{first} – {last}") };
+                                ui.label(RichText::new(format!("{when}  ·  {}", trf("{} photos", &[&candidate.photos.len()]))).strong());
+                                let mut lines = vec![trf("Folders: {}", &[&few(&candidate.folders)])];
+                                if !candidate.cameras.is_empty() {
+                                    lines.push(trf("Cameras: {}", &[&few(&candidate.cameras)]));
+                                }
+                                lines.push(trf("{} with a location", &[&candidate.located]));
+                                let moved: Vec<String> = candidate
+                                    .cameras
+                                    .iter()
+                                    .filter_map(|camera| dialog.cameras.iter().find(|(name, _, hours)| name == camera && *hours != 0))
+                                    .map(|(name, _, hours)| format!("{name} {hours:+} h"))
+                                    .collect();
+                                if !moved.is_empty() {
+                                    lines.push(trf("Clocks moved: {}", &[&moved.join(", ")]));
+                                }
+                                if candidate.in_trip > 0 {
+                                    lines.push(trf("{} already in a trip", &[&candidate.in_trip]));
+                                }
+                                ui.add(egui::Label::new(RichText::new(lines.join("  ·  ")).color(theme::muted())).wrap());
+                            });
+                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                if ui.button(tr("Create trip…")).clicked() {
+                                    create = Some(candidate.clone());
+                                }
+                            });
+                        });
+                        ui.add_space(4.0);
+                    }
+                });
+            });
+        });
+        if let Some(candidate) = create {
+            self.open_new_trip(candidate.photos.clone());
+            // The group's dates and main folder start the dialog, to change there.
+            if let Modal::Trip(trip) = &mut self.modal {
+                let day = |at: i64| Local.timestamp_opt(at, 0).single().map(|at| at.date_naive().to_string()).unwrap_or_default();
+                trip.first_day = day(candidate.first);
+                trip.last_day = day(candidate.last);
+                trip.title = candidate.folders.first().cloned().unwrap_or_default();
+            }
+            return;
+        }
+        if close || response.should_close() {
+            self.modal = Modal::None;
+        }
+    }
+
     fn open_edit_trip(&mut self, trip_id: i64) {
         let Some(trip) = self.db.trip(trip_id) else { return };
         self.modal = Modal::Trip(TripDialog {
@@ -1486,6 +1655,15 @@ fn row_label(ui: &mut egui::Ui, text: &str) {
 }
 
 /// What adding photos to a Trip will do.
+/// The first two names, and how many more.
+fn few(names: &[String]) -> String {
+    let shown = names.iter().take(2).cloned().collect::<Vec<_>>().join(", ");
+    match names.len() {
+        0..=2 => shown,
+        more => format!("{shown} {}", trf("and {} more", &[&(more - 2)])),
+    }
+}
+
 fn preview_lines(ui: &mut egui::Ui, preview: &AddPreview) {
     ui.label(trf("{} photos and {} videos to add", &[&preview.photos, &preview.videos]));
     if let Some((first, last)) = preview.taken {

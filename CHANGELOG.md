@@ -7,6 +7,8 @@ section of this file as the release notes.
 
 ### Added
 
+- Suggest trips… on the Trips page groups the library's photos, or those taken between two dates, by the days they were taken,
+  with each group's folders, cameras and locations, and camera clocks that were off can be moved for the grouping, and makes a Trip of one through New trip.
 - Publish a Story to your own WordPress site from the Story's ⋯ menu. Connect sites in
   Settings → Publishing with an Application Password, kept in the system's password store.
   The dialog shows the site, the post, categories and tags read from the site, new ones added there from the dialog, the photo size

@@ -322,6 +322,87 @@ pub enum DayFilter {
     Review,
 }
 
+/// A library photo as Suggest trips sees it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Shot {
+    pub id: i64,
+    /// When it was taken, 0 when unknown.
+    pub taken_at: i64,
+    pub folder: String,
+    pub camera: String,
+    pub located: bool,
+    /// Already a member of some Trip.
+    pub in_trip: bool,
+}
+
+/// Photos taken close together, offered as a Trip.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct TripCandidate {
+    /// In the order taken.
+    pub photos: Vec<i64>,
+    pub first: i64,
+    pub last: i64,
+    /// Folders and cameras, the most used first.
+    pub folders: Vec<String>,
+    pub cameras: Vec<String>,
+    pub located: usize,
+    /// Of `photos`, those already in a Trip.
+    pub in_trip: usize,
+}
+
+/// The photos with each listed camera's clock moved by its seconds, as if
+/// it had been set right. Photos with no time stay without one.
+pub fn shift_cameras(shots: &[Shot], shifts: &std::collections::HashMap<String, i64>) -> Vec<Shot> {
+    shots
+        .iter()
+        .map(|shot| match shifts.get(&shot.camera) {
+            Some(by) if shot.taken_at != 0 => Shot { taken_at: shot.taken_at + by, ..shot.clone() },
+            _ => shot.clone(),
+        })
+        .collect()
+}
+
+/// Groups photos into Trips, a new one wherever `gap` seconds pass with no
+/// photo, keeping groups of at least `min` photos, the latest first. With
+/// `skip_in_trip`, photos already in a Trip are left out before grouping.
+/// Photos with no time can't be placed and are never in a group.
+pub fn suggest_trips(shots: &[Shot], gap: i64, min: usize, skip_in_trip: bool) -> Vec<TripCandidate> {
+    let mut timed: Vec<&Shot> = shots.iter().filter(|shot| shot.taken_at != 0 && !(skip_in_trip && shot.in_trip)).collect();
+    timed.sort_by_key(|shot| (shot.taken_at, shot.id));
+    let mut groups: Vec<Vec<&Shot>> = Vec::new();
+    for shot in timed {
+        match groups.last_mut() {
+            Some(group) if shot.taken_at - group.last().map_or(0, |last| last.taken_at) < gap => group.push(shot),
+            _ => groups.push(vec![shot]),
+        }
+    }
+    let ranked = |names: Vec<&str>| {
+        let mut counts: Vec<(String, usize)> = Vec::new();
+        for name in names.into_iter().filter(|name| !name.is_empty()) {
+            match counts.iter_mut().find(|(known, _)| known == name) {
+                Some((_, count)) => *count += 1,
+                None => counts.push((name.to_string(), 1)),
+            }
+        }
+        counts.sort_by_key(|(_, count)| std::cmp::Reverse(*count));
+        counts.into_iter().map(|(name, _)| name).collect::<Vec<_>>()
+    };
+    groups
+        .into_iter()
+        .rev()
+        .filter(|group| group.len() >= min.max(1))
+        .map(|group| TripCandidate {
+            photos: group.iter().map(|shot| shot.id).collect(),
+            first: group[0].taken_at,
+            last: group[group.len() - 1].taken_at,
+            folders: ranked(group.iter().map(|shot| shot.folder.as_str()).collect()),
+            cameras: ranked(group.iter().map(|shot| shot.camera.as_str()).collect()),
+            located: group.iter().filter(|shot| shot.located).count(),
+            in_trip: group.iter().filter(|shot| shot.in_trip).count(),
+        })
+        .collect()
+}
+
 /// What adding photos to a Trip would do, shown before it is done.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct AddPreview {
@@ -634,6 +715,35 @@ pub fn new_uid() -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn photos_far_apart_are_separate_trips_the_latest_first() {
+        const DAY: i64 = 86_400;
+        let shot = |id: i64, taken_at: i64, in_trip: bool| Shot { id, taken_at, folder: if id < 10 { "Kyoto".into() } else { "Oslo".into() }, camera: "X100".into(), located: id % 2 == 0, in_trip };
+        let shots = vec![
+            shot(2, 10 * DAY + 3600, false),
+            shot(1, 10 * DAY, false),
+            shot(3, 11 * DAY, true),
+            shot(11, 20 * DAY, false),
+            shot(12, 20 * DAY + 60, false),
+            shot(13, 0, false),
+            shot(14, 40 * DAY, false),
+        ];
+        let found = suggest_trips(&shots, 2 * DAY, 2, false);
+        assert_eq!(found.iter().map(|group| group.photos.clone()).collect::<Vec<_>>(), vec![vec![11, 12], vec![1, 2, 3]], "alone and timeless are left out");
+        assert_eq!((found[1].first, found[1].last, found[1].located, found[1].in_trip), (10 * DAY, 11 * DAY, 1, 1));
+        assert_eq!((found[0].folders.clone(), found[0].cameras.clone()), (vec!["Oslo".to_string()], vec!["X100".to_string()]));
+        let fresh = suggest_trips(&shots, 2 * DAY, 2, true);
+        assert_eq!(fresh[1].photos, vec![1, 2], "photos already in a trip are skipped");
+        assert_eq!(suggest_trips(&shots, DAY / 2, 2, false).len(), 2, "a shorter gap splits day 10 from day 11");
+        // A camera a day behind joins the next group once its clock is moved.
+        let mut late = shots.clone();
+        late.push(Shot { id: 20, taken_at: 19 * DAY - 7200, camera: "GoPro".into(), ..Shot::default() });
+        late.push(Shot { id: 21, taken_at: 0, camera: "GoPro".into(), ..Shot::default() });
+        let moved = shift_cameras(&late, &std::collections::HashMap::from([("GoPro".to_string(), DAY)]));
+        assert_eq!(suggest_trips(&moved, DAY / 2, 2, false)[0].photos, vec![20, 11, 12]);
+        assert_eq!(moved.iter().find(|shot| shot.id == 21).map(|shot| shot.taken_at), Some(0), "no time stays none");
+    }
+
     use super::*;
 
     #[test]

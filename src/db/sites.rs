@@ -452,10 +452,45 @@ impl Database {
 
     /// Records the main post of a Story on a site, the moment the site confirmed it.
     pub fn save_publication(&self, publication: &Publication) -> Result<(), String> {
+        self.save_output(publication, "main")
+    }
+
+    /// Story `story_id`'s posts on site `site_id` when published by Day,
+    /// by their key (the index, or a Day's heading), in no order.
+    pub fn day_posts(&self, story_id: i64, site_id: i64) -> Vec<(String, Publication)> {
+        self.map_rows(
+            "SELECT output_key, story_id, site_id, post_id, remote_status, size, revision, synced_at, fingerprint, changed_on_site FROM publications
+             WHERE story_id = ?1 AND site_id = ?2 AND output_key != 'main' AND edition = 1",
+            params![story_id, site_id],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    Publication {
+                        story_id: row.get(1)?,
+                        site_id: row.get(2)?,
+                        post_id: row.get(3)?,
+                        remote_status: row.get(4)?,
+                        size: row.get(5)?,
+                        revision: row.get(6)?,
+                        synced_at: row.get(7)?,
+                        fingerprint: row.get(8)?,
+                        changed_on_site: row.get(9)?,
+                    },
+                ))
+            },
+        )
+    }
+
+    /// Keeps one post of a Story published by Day under `key`.
+    pub fn save_day_post(&self, key: &str, publication: &Publication) -> Result<(), String> {
+        self.save_output(publication, key)
+    }
+
+    fn save_output(&self, publication: &Publication, key: &str) -> Result<(), String> {
         self.conn
             .execute(
-                "INSERT INTO publications(story_id, site_id, post_id, remote_status, size, revision, synced_at, fingerprint, changed_on_site)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+                "INSERT INTO publications(story_id, site_id, post_id, remote_status, size, revision, synced_at, fingerprint, changed_on_site, output_key)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
                  ON CONFLICT (story_id, site_id, output_key, edition) DO UPDATE SET
                  post_id = excluded.post_id, remote_status = excluded.remote_status, size = excluded.size,
                  revision = excluded.revision, synced_at = excluded.synced_at,
@@ -469,7 +504,8 @@ impl Database {
                     publication.revision,
                     publication.synced_at,
                     publication.fingerprint,
-                    publication.changed_on_site
+                    publication.changed_on_site,
+                    key
                 ],
             )
             .map(|_| ())

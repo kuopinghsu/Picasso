@@ -44,6 +44,12 @@ pub(super) struct PublishDialog {
     /// Make the post public once saved, which is confirmed first.
     publish: bool,
     confirming: bool,
+    /// Publish as an index post and one per Day, offered when the Story
+    /// has Days: its top-level headings.
+    by_day: bool,
+    days: usize,
+    /// Change Day posts edited on the site or already public; asked, never assumed.
+    day_replace: bool,
     /// Publish at a set time, typed as the site's date and time.
     at_time: bool,
     date: String,
@@ -116,6 +122,9 @@ impl PicassoApp {
             adopt: None,
             publish: false,
             confirming: false,
+            by_day: false,
+            day_replace: false,
+            days: job.blocks.iter().filter(|block| matches!(block.block, crate::trip::Block::Heading(_))).count(),
             at_time: false,
             date: String::new(),
             time: String::new(),
@@ -204,7 +213,9 @@ impl PicassoApp {
         let mut read_terms = false;
         let mut choose_terms = false;
         let response = egui::Modal::new(egui::Id::unique("publish-story")).frame(about::dialog_frame()).show(ctx, |ui| {
-            ui.set_width(460.0);
+            // Fixed, so a long row wraps instead of widening the dialog past its title bar.
+            ui.set_width(DIALOG_WIDTH);
+            ui.set_max_width(DIALOG_WIDTH);
             about::title_bar(ui, &self.logo, tr("Publish to WordPress"), &mut close);
             egui::Frame::new().inner_margin(Margin::symmetric(20, 14)).show(ui, |ui| {
                 ui.spacing_mut().item_spacing.y = 8.0;
@@ -218,6 +229,9 @@ impl PicassoApp {
                 }
                 let published = earlier.as_ref().is_some_and(|publication| publication.remote_status != "draft");
                 let changed = earlier.as_ref().is_some_and(|publication| publication.changed_on_site);
+                // Whether readers already see it: by Day, the Day posts' own state counts.
+                let day_public = site.as_ref().is_some_and(|site| self.db.day_posts(story_id, site.id).iter().any(|(_, post)| post.remote_status != "draft"));
+                let public = if dialog.by_day { day_public } else { published || changed };
                 // One row per choice; what each means is in its tooltip.
                 egui::Grid::new("publish-choices").num_columns(2).spacing([14.0, 10.0]).show(ui, |ui| {
                     ui.label(RichText::new(tr("Site")).color(theme::muted()));
@@ -326,8 +340,28 @@ impl PicassoApp {
                         }
                     }
 
+                    // A Story with Days can go out as an index and a post per Day.
+                    ui.label(RichText::new(tr("By Day")).color(theme::muted()));
+                    let tick = ui.add_enabled(dialog.days > 0, egui::Checkbox::new(&mut dialog.by_day, trf("An index and one post per Day ({} Days)", &[&dialog.days])));
+                    if dialog.days > 0 {
+                        tick.on_hover_text(tr("Each top-level heading starts a Day post titled after it. What comes before the first heading goes in the index, with the introduction and conclusion and links to the Days; each Day links back and to its neighbours."));
+                    } else {
+                        tick.on_disabled_hover_text(tr("This story has no Days: a top-level heading starts each."));
+                    }
+                    ui.end_row();
+                    if dialog.by_day {
+                        let known = site.as_ref().map(|site| self.db.day_posts(story_id, site.id)).unwrap_or_default();
+                        let touched = known.iter().filter(|(_, post)| post.changed_on_site || post.remote_status != "draft").count();
+                        if touched > 0 {
+                            ui.label("");
+                            ui.checkbox(&mut dialog.day_replace, trf("Change the {} posts edited on the site or already public", &[&touched]))
+                                .on_hover_text(tr("Without this, the job stops before sending anything. Public posts keep their status, and edits made on the site are replaced."));
+                            ui.end_row();
+                        }
+                    }
+
                     // A post already public stays so; a draft is made public only when asked.
-                    if !(published || changed) {
+                    if !public {
                         ui.label(RichText::new(tr("Readers")).color(theme::muted()));
                         let may = site.as_ref().is_some_and(|site| site.can_publish);
                         let tick = ui.add_enabled(may, egui::Checkbox::new(&mut dialog.publish, tr("Publish it once saved")));
@@ -447,16 +481,19 @@ impl PicassoApp {
                         let update = earlier.is_some() && (dialog.update != Some(false));
                         let title = if dialog.title.is_empty() { tr("(no title)").to_string() } else { dialog.title.clone() };
                         let mut lines = Vec::new();
+                        if dialog.by_day {
+                            lines.push(trf("An index post titled “{}” and {} Day posts titled after their headings, on {}; those made before are changed, the others made.", &[&title, &dialog.days, &site.label]));
+                        } else {
                         match earlier.as_ref().filter(|_| update) {
                             Some(publication) => lines.push(trf("Changes post {} on {}, titled “{}”; its address stays as it is.", &[&publication.post_id, &site.label, &title])),
                             None => lines.push(trf("Makes a new post on {}, titled “{}”, at about {} (WordPress adds a number if it is taken).", &[&site.label, &title, &address_of(&site.site_url, &dialog.title)])),
                         }
-                        let published = earlier.as_ref().is_some_and(|publication| publication.remote_status != "draft");
+                        }
                         let schedule = if dialog.at_time { schedule_of(&dialog.date, &dialog.time) } else { None };
-                        lines.push(match (dialog.publish && !published, schedule) {
+                        lines.push(match (dialog.publish && !public, schedule) {
                             (true, Some(at)) => trf("Readers: public from {} (the site's time).", &[&at.format("%Y-%m-%d %H:%M")]),
                             (true, None) => tr("Readers: public once saved.").to_string(),
-                            (false, _) if update && published => tr("Readers: it keeps its status on the site.").to_string(),
+                            (false, _) if public => tr("Readers: it keeps its status on the site.").to_string(),
                             _ => tr("Readers: none; it is a draft.").to_string(),
                         });
                         lines.push(trf("Photos: {}, uploaded and named like {}, or reused when already on the site.", &[&dialog.check.photos, &dialog.sample_name]));
@@ -492,11 +529,13 @@ impl PicassoApp {
                     ui.label(RichText::new(&dialog.error).color(theme::DANGER));
                 }
                 ui.horizontal(|ui| {
-                    let ready = site.as_ref().is_some_and(usable) && !blocked && (!(published || changed) || dialog.update.is_some()) && (found.is_none() || dialog.adopt.is_some()) && !(dialog.publish && dialog.at_time && schedule_of(&dialog.date, &dialog.time).is_none());
+                    let ready = site.as_ref().is_some_and(usable) && !blocked && (dialog.by_day || ((!(published || changed) || dialog.update.is_some()) && (found.is_none() || dialog.adopt.is_some()))) && !(dialog.publish && dialog.at_time && schedule_of(&dialog.date, &dialog.time).is_none());
                     let photos = dialog.check.photos;
                     let update = (published || changed) && dialog.update == Some(true);
-                    let publish = dialog.publish && !(published || changed);
+                    let publish = dialog.publish && !public;
                     let action = match (photos, update, publish) {
+                        _ if dialog.by_day && publish => trf("Upload {} photos and publish {} posts…", &[&photos, &(dialog.days + 1)]),
+                        _ if dialog.by_day => trf("Upload {} photos and save {} posts", &[&photos, &(dialog.days + 1)]),
                         (0, _, true) => tr("Publish…").to_string(),
                         (_, _, true) => trf("Upload {} photos and publish…", &[&photos]),
                         (0, true, _) => tr("Update post").to_string(),
@@ -530,8 +569,12 @@ impl PicassoApp {
             }
         }
         // Making it public names what readers will see, and waits for a yes.
-        let publish = dialog.publish && !earlier.as_ref().is_some_and(|publication| publication.remote_status != "draft" || publication.changed_on_site);
+        let day_public = dialog.by_day && site.as_ref().is_some_and(|site| self.db.day_posts(story_id, site.id).iter().any(|(_, post)| post.remote_status != "draft"));
+        let public = if dialog.by_day { day_public } else { earlier.as_ref().is_some_and(|publication| publication.remote_status != "draft" || publication.changed_on_site) };
+        let publish = dialog.publish && !public;
         let schedule = if publish && dialog.at_time { schedule_of(&dialog.date, &dialog.time) } else { None };
+        let by_day = dialog.by_day && dialog.days > 0;
+        let day_replace = by_day && dialog.day_replace;
         if start && publish && !dialog.confirming {
             dialog.confirming = true;
             start = false;
@@ -629,7 +672,7 @@ impl PicassoApp {
             Some(post_id) => (Some(Publication { story_id, site_id: site.id, post_id, remote_status: "publish".into(), size: size.code().into(), revision: 0, synced_at: 0, fingerprint: String::new(), changed_on_site: false }), true),
             None => (earlier, update),
         };
-        match self.start_publishing(ctx, &site, size, exif, terms, earlier, update, publish, schedule, allow_new) {
+        match self.start_publishing(ctx, &site, size, exif, terms, earlier, if by_day { day_replace } else { update }, publish, schedule, allow_new, by_day) {
             Ok(()) => {
                 self.modal = Modal::None;
                 self.publish_found = None;
@@ -646,7 +689,7 @@ impl PicassoApp {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn start_publishing(&mut self, ctx: &egui::Context, site: &Site, size: UploadSize, exif: bool, terms: PostTerms, earlier: Option<Publication>, update: bool, publish: bool, schedule: Option<chrono::NaiveDateTime>, allow_new: bool) -> Result<(), String> {
+    fn start_publishing(&mut self, ctx: &egui::Context, site: &Site, size: UploadSize, exif: bool, terms: PostTerms, earlier: Option<Publication>, update: bool, publish: bool, schedule: Option<chrono::NaiveDateTime>, allow_new: bool, by_day: bool) -> Result<(), String> {
         let (api, credentials, policy) = connection(&self.vault, site)?;
         if !self.save_story() {
             return Err(tr("The story couldn't be saved").into());
@@ -654,6 +697,10 @@ impl PicassoApp {
         let Some(page) = self.story_job() else { return Err(tr("The story couldn't be saved").into()) };
         self.db.save_post_terms(page.story.id, site.id, &terms)?;
         let pending_since = if earlier.is_none() { self.db.pending_draft(page.story.id, site.id) } else { None };
+        let days = by_day.then(|| {
+            let known = self.db.day_posts(page.story.id, site.id);
+            known.into_iter().map(|(key, publication)| (key, publish::DayPost { post_id: publication.post_id, status: publication.remote_status, fingerprint: publication.fingerprint, changed_on_site: publication.changed_on_site })).collect()
+        });
         let job = Job {
             api,
             credentials,
@@ -666,14 +713,15 @@ impl PicassoApp {
             uploads: self.db.uploads(site.id),
             post_id: earlier.as_ref().map(|publication| publication.post_id),
             fingerprint: earlier.as_ref().map(|publication| publication.fingerprint.clone()).unwrap_or_default(),
-            overwrite: update && earlier.as_ref().is_some_and(|publication| publication.changed_on_site),
+            overwrite: update && (by_day || earlier.as_ref().is_some_and(|publication| publication.changed_on_site)),
             pending_since,
             publish,
             schedule,
+            days,
             allow_new,
             map: Some(page.map),
             profiles: page.profiles,
-            update_published: update && earlier.as_ref().is_some_and(|publication| publication.remote_status != "draft"),
+            update_published: update && (by_day || earlier.as_ref().is_some_and(|publication| publication.remote_status != "draft")),
             terms,
         };
         let progress = self.start_story_job();
@@ -683,7 +731,8 @@ impl PicassoApp {
         let _ = std::thread::Builder::new().name("picasso-publish".into()).spawn(move || {
             let started_at = unix_now();
             let network = Network::new();
-            let outcome = publish::run(&network, &job, &progress, &mut |event| {
+            let run = if job.days.is_some() { publish::run_days } else { publish::run };
+            let outcome = run(&network, &job, &progress, &mut |event| {
                 let _ = events.send(UiEvent::PublishProgress(site_id, event));
                 ctx.request_repaint();
             });
@@ -700,6 +749,20 @@ impl PicassoApp {
             Event::Uploaded { hash, size, media_id, url, details } => self.db.record_upload(site_id, &hash, size.code(), media_id, &url, &details),
             Event::Gone { hash } => self.db.forget_upload(site_id, &hash),
             Event::Creating { story_id, since } => self.db.set_pending_draft(story_id, site_id, since),
+            Event::Part { story_id, revision, key, post } => {
+                let publication = Publication {
+                    story_id,
+                    site_id,
+                    post_id: post.post_id,
+                    remote_status: post.status,
+                    size: String::new(),
+                    revision,
+                    synced_at: unix_now(),
+                    fingerprint: post.fingerprint,
+                    changed_on_site: post.changed_on_site,
+                };
+                self.db.save_day_post(&key, &publication)
+            }
             Event::Prepared { photos, bytes } => {
                 self.activity = trf("{} photos ready, {} in all; sending those not on the site yet…", &[&photos, &format_bytes(bytes)]);
                 Ok(())
@@ -728,6 +791,17 @@ impl PicassoApp {
         };
         let _ = self.db.record_publish_job(&logged);
         self.activity = match outcome {
+            // Each post was recorded as it was saved; the index opens.
+            Ok(saved) if saved.days > 0 => {
+                let _ = open::that(&saved.edit_link);
+                if saved.published && saved.status == "future" {
+                    trf("Scheduled on {}: the index and {} Day posts go public at the time chosen. {} photos uploaded, {} already there.", &[&site, &saved.days, &saved.uploaded, &saved.reused])
+                } else if saved.published {
+                    trf("Published on {}: the index and {} Day posts. {} photos uploaded, {} already there.", &[&site, &saved.days, &saved.uploaded, &saved.reused])
+                } else {
+                    trf("Saved on {}: the index and {} Day posts. {} photos uploaded, {} already there.", &[&site, &saved.days, &saved.uploaded, &saved.reused])
+                }
+            }
             Ok(saved) => {
                 let _ = self.db.clear_pending_draft(story_id, site_id);
                 let _ = self.db.save_publication_media(story_id, site_id, &saved.media);
@@ -804,6 +878,9 @@ impl PicassoApp {
         };
     }
 }
+
+/// The dialog's width in points: room for the label column and the photo preview.
+const DIALOG_WIDTH: f32 = 500.0;
 
 /// Photos shown as the dialog's preview, and their longest side in points.
 const PREVIEW_SHOWN: usize = 8;

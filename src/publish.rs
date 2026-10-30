@@ -18,6 +18,7 @@ use crate::upload::{self, UploadSize};
 use crate::wordpress::{edit_link, DraftPost, Api, Client, Credentials, Failure, Http, Policy};
 
 /// Everything the job needs, read on the UI thread before it starts.
+#[derive(Clone)]
 pub struct Job {
     pub api: Api,
     pub credentials: Credentials,
@@ -47,6 +48,9 @@ pub struct Job {
     /// With `publish`, when the post goes public instead of at once, in the
     /// site's own time.
     pub schedule: Option<chrono::NaiveDateTime>,
+    /// Publish as an index post and a post per Day, with the posts already
+    /// made for it by key ([`INDEX`] or [`day_key`]); `None` makes one post.
+    pub days: Option<HashMap<String, DayPost>>,
     /// The person chose to make a new post although the site has one with
     /// the same title, which the library has no record of.
     pub allow_new: bool,
@@ -75,6 +79,49 @@ pub enum Event {
     /// A draft is about to be made for the Story; until it is confirmed, one
     /// made after `since` (Unix seconds) is looked for before another is made.
     Creating { story_id: i64, since: i64 },
+    /// A post of a Story published by Day, as the site has it now: made
+    /// (still empty), saved, or found edited there or no longer a draft.
+    Part { story_id: i64, revision: i64, key: String, post: DayPost },
+}
+
+/// One post of a Story published by Day, as the library keeps it.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct DayPost {
+    pub post_id: i64,
+    pub status: String,
+    /// See `wordpress::fingerprint`; empty until saved with content.
+    pub fingerprint: String,
+    pub changed_on_site: bool,
+}
+
+/// The key of the index post of a Story published by Day.
+pub const INDEX: &str = "index";
+
+/// The key of the post for the Day that starts at heading block `uid`: the
+/// block's own id, so renaming or moving the Day keeps its post.
+pub fn day_key(uid: &str) -> String {
+    format!("day:{uid}")
+}
+
+/// A Story cut into posts by Day: each top-level heading starts a Day, and
+/// what comes before the first goes in the index, with the introduction and
+/// conclusion. The headings themselves become the Day posts' titles.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DayPart {
+    pub key: String,
+    pub heading: String,
+    pub blocks: Vec<StoryBlock>,
+}
+
+pub fn split_days(blocks: &[StoryBlock]) -> Vec<DayPart> {
+    let mut parts = vec![DayPart { key: INDEX.into(), heading: String::new(), blocks: Vec::new() }];
+    for block in blocks {
+        match &block.block {
+            Block::Heading(text) => parts.push(DayPart { key: day_key(&block.uid), heading: text.trim().to_string(), blocks: Vec::new() }),
+            _ => parts.last_mut().expect("the index is first").blocks.push(block.clone()),
+        }
+    }
+    parts
 }
 
 /// A draft saved.
@@ -93,6 +140,9 @@ pub struct Saved {
     pub published: bool,
     /// It was asked to go public at a set time.
     pub scheduled: bool,
+    /// Published by Day: how many Day posts besides the index, which is
+    /// the post named here; 0 for one post.
+    pub days: usize,
     /// The site's media the post uses, photos and route maps, by id.
     pub media: Vec<i64>,
 }
@@ -176,6 +226,8 @@ pub fn sync_state(publication: Option<&crate::db::Publication>, revision: i64, p
 pub fn outcome_code(outcome: &Result<Saved, Stopped>) -> String {
     match outcome {
         Ok(saved) if saved.published && saved.status == "future" => "scheduled".into(),
+        Ok(saved) if saved.days > 0 && saved.published => format!("published: {} posts", saved.days + 1),
+        Ok(saved) if saved.days > 0 => format!("saved: {} posts", saved.days + 1),
         Ok(saved) if saved.published => "published".into(),
         Ok(saved) if saved.status == "draft" => "saved".into(),
         Ok(_) => "updated".into(),
@@ -343,7 +395,147 @@ pub fn run(http: &dyn Http, job: &Job, progress: &Progress, report: &mut dyn FnM
     if job.publish {
         status = if saved.status.is_empty() { "publish".to_string() } else { saved.status.clone() };
     }
-    Ok(Saved { post_id: saved.id, edit_link: edit_link(&job.api, saved.id), uploaded, reused, status, fingerprint: saved.fingerprint, published: job.publish, scheduled: job.publish && job.schedule.is_some(), media: used(&by_hash) })
+    Ok(Saved { post_id: saved.id, edit_link: edit_link(&job.api, saved.id), uploaded, reused, status, fingerprint: saved.fingerprint, published: job.publish, scheduled: job.publish && job.schedule.is_some(), days: 0, media: used(&by_hash) })
+}
+
+/// Publishes the Story as an index post and a post per Day. Every post
+/// already made is checked first, so one edited on the site or no longer a
+/// draft stops the job before anything is sent, unless that was chosen.
+/// Each part without a post then gets an empty draft, so every post has an
+/// id to link to; the index lists the Days, and each Day links to the
+/// index and its neighbours. Each part is then saved as one post is, and
+/// reported as it is, so a job that stops resumes where it was.
+pub fn run_days(http: &dyn Http, job: &Job, progress: &Progress, report: &mut dyn FnMut(Event)) -> Result<Saved, Stopped> {
+    let client = Client::new(http, job.policy).cancelled_by(&progress.cancel);
+    let site = |failure: Failure| Stopped::Site { failure, uploaded: 0 };
+    let parts = split_days(&job.blocks);
+    let mut posts = job.days.clone().unwrap_or_default();
+    for part in &parts {
+        let Some(known) = posts.get(&part.key).cloned() else { continue };
+        let Some(found) = client.post_state(&job.api, &job.credentials, known.post_id).map_err(site)? else {
+            // Gone: made again below.
+            posts.remove(&part.key);
+            continue;
+        };
+        let changed = known.fingerprint.starts_with(crate::wordpress::FINGERPRINT) && found.fingerprint != known.fingerprint;
+        let post = DayPost { status: found.status.clone(), changed_on_site: changed, ..known };
+        report(Event::Part { story_id: job.story.id, revision: job.story.revision, key: part.key.clone(), post: post.clone() });
+        if found.status == "trash" {
+            return Err(Stopped::NotDraft(found.status));
+        }
+        if changed && !job.overwrite {
+            return Err(Stopped::ChangedOnSite);
+        }
+        if found.status != "draft" && !job.update_published {
+            return Err(Stopped::NotDraft(found.status));
+        }
+        posts.insert(part.key.clone(), post);
+    }
+    let title = |part: &DayPart| match part.heading.as_str() {
+        "" => job.story.title.trim().to_string(),
+        heading => format!("{} – {heading}", job.story.title.trim()),
+    };
+    for part in &parts {
+        if posts.contains_key(&part.key) {
+            continue;
+        }
+        let since = crate::types::unix_now() - CLOCK_SLACK;
+        let empty = DraftPost { title: title(part), ..DraftPost::default() };
+        let made = match client.save_draft(&job.api, &job.credentials, None, &empty) {
+            Ok(made) => made.id,
+            // Made but not answered: found by its title, never made twice.
+            Err(failure) if failure.outcome_unknown() => match client.find_drafts(&job.api, &job.credentials, &empty.title, since).map_err(site)?.as_slice() {
+                [id] => *id,
+                [] => return Err(site(failure)),
+                found => return Err(Stopped::Uncertain { drafts: found.len() }),
+            },
+            Err(failure) => return Err(site(failure)),
+        };
+        let post = DayPost { post_id: made, status: "draft".into(), ..DayPost::default() };
+        report(Event::Part { story_id: job.story.id, revision: job.story.revision, key: part.key.clone(), post: post.clone() });
+        posts.insert(part.key.clone(), post);
+    }
+    let link = |key: &str| format!("{}/?p={}", job.api.site.to_url().trim_end_matches('/'), posts[key].post_id);
+    let mut uploads = job.uploads.clone();
+    let (mut uploaded, mut reused) = (0, 0);
+    let mut index = None;
+    for (at, part) in parts.iter().enumerate() {
+        let mut blocks = part.blocks.clone();
+        let mut story = job.story.clone();
+        if part.key == INDEX {
+            let days: Vec<String> = parts[1..].iter().map(|day| format!("[{}]({})", escape_marks(&day.heading), link(&day.key))).collect();
+            if !days.is_empty() {
+                blocks.push(StoryBlock::new(Block::List { ordered: false, items: days }));
+            }
+        } else {
+            story = Story { title: title(part), subtitle: String::new(), introduction: String::new(), conclusion: String::new(), cover: None, ..story };
+            let mut links = vec![format!("[{}]({})", escape_marks(job.story.title.trim()), link(INDEX))];
+            if at > 1 {
+                links.insert(0, format!("← [{}]({})", escape_marks(&parts[at - 1].heading), link(&parts[at - 1].key)));
+            }
+            if let Some(next) = parts.get(at + 1) {
+                links.push(format!("[{}]({}) →", escape_marks(&next.heading), link(&next.key)));
+            }
+            blocks.push(StoryBlock::new(Block::Separator));
+            blocks.push(StoryBlock::new(Block::Paragraph(links.join(" · "))));
+        }
+        let wanted: std::collections::HashSet<i64> = blocks.iter().flat_map(|block| block.block.media()).map(|item| item.media_id).chain(story.cover).collect();
+        let sources = job.sources.iter().filter(|(id, _)| wanted.contains(id)).map(|(id, source)| (*id, source.clone())).collect();
+        let post = &posts[&part.key];
+        let one = Job {
+            story,
+            blocks,
+            sources,
+            uploads: uploads.clone(),
+            post_id: Some(post.post_id),
+            fingerprint: post.fingerprint.clone(),
+            // Already checked above, for every post at once.
+            overwrite: true,
+            update_published: true,
+            pending_since: None,
+            allow_new: true,
+            days: None,
+            ..job.clone()
+        };
+        let saved = run(http, &one, progress, &mut |event| {
+            if let Event::Uploaded { hash, media_id, url, .. } = &event {
+                uploads.insert(hash.clone(), (*media_id, url.clone()));
+            }
+            report(event);
+        })
+        .map_err(|stopped| match stopped {
+            Stopped::Cancelled { uploaded: now } => Stopped::Cancelled { uploaded: uploaded + now },
+            Stopped::Site { failure, uploaded: now } => Stopped::Site { failure, uploaded: uploaded + now },
+            Stopped::Photo { media_id, uploaded: now } => Stopped::Photo { media_id, uploaded: uploaded + now },
+            other => other,
+        })?;
+        uploaded += saved.uploaded;
+        reused += saved.reused;
+        report(Event::Part { story_id: job.story.id, revision: job.story.revision, key: part.key.clone(), post: DayPost { post_id: saved.post_id, status: saved.status.clone(), fingerprint: saved.fingerprint.clone(), changed_on_site: false } });
+        if part.key == INDEX {
+            index = Some(saved);
+        }
+    }
+    let index = index.expect("the index is saved first");
+    Ok(Saved { uploaded, reused, days: parts.len() - 1, ..index })
+}
+
+/// `text` as a link's words: square brackets, which would end the link,
+/// made round, and the marks of inline styles taken as letters.
+fn escape_marks(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for ch in text.chars() {
+        match ch {
+            '[' => out.push('('),
+            ']' => out.push(')'),
+            '\\' | '*' | '~' | '`' => {
+                out.push('\\');
+                out.push(ch);
+            }
+            _ => out.push(ch),
+        }
+    }
+    out
 }
 
 /// A folder for one job's rendered photos, removed when the job ends.
@@ -516,6 +708,7 @@ mod tests {
             pending_since: None,
             publish: false,
             schedule: None,
+            days: None,
             allow_new: true,
             map: None,
             profiles: HashMap::new(),
@@ -558,6 +751,55 @@ mod tests {
         let post: serde_json::Value = serde_json::from_slice(&fake.bodies.borrow().last().unwrap().1).unwrap();
         assert_eq!(post["categories"], serde_json::json!([5]));
         assert!(post.get("tags").is_none());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_story_splits_at_its_headings_into_an_index_and_days() {
+        let blocks = [Block::Paragraph("Why".into()), Block::Heading(" Granada ".into()), Block::Photo(MediaUse::new(11)), Block::Subheading("Evening".into()), Block::Heading("Toledo".into())];
+        let blocks: Vec<StoryBlock> = blocks.into_iter().map(StoryBlock::new).collect();
+        let parts = split_days(&blocks);
+        let shape: Vec<(&str, usize)> = parts.iter().map(|part| (part.heading.as_str(), part.blocks.len())).collect();
+        assert_eq!(shape, [("", 1), ("Granada", 2), ("Toledo", 0)], "a subheading stays in its Day");
+        assert_eq!((parts[0].key.as_str(), parts[1].key.clone()), (INDEX, day_key(&blocks[1].uid)), "a Day is keyed by its heading, not its place");
+    }
+
+    #[test]
+    fn a_story_by_day_makes_each_post_once_and_links_them() {
+        let dir = temp_dir("days");
+        let blocks = vec![
+            StoryBlock::new(Block::Paragraph("Why we went".into())),
+            StoryBlock::new(Block::Heading("Granada [old]".into())),
+            StoryBlock::new(Block::Photo(MediaUse::new(11))),
+            StoryBlock::new(Block::Heading("Toledo".into())),
+            StoryBlock::new(Block::Paragraph("Rain".into())),
+        ];
+        let known = HashMap::from([(INDEX.to_string(), DayPost { post_id: 5, status: "draft".into(), ..DayPost::default() })]);
+        let job = Job { blocks, days: Some(known), ..job(&dir, None, HashMap::new()) };
+        let fake = Fake::default()
+            .answer("https://example.com/blog/wp-json/wp/v2/posts/5?context=edit&_fields=id,status,title,excerpt,content,featured_media", 200, &[], r#"{"id":5,"status":"draft"}"#)
+            .answer_to("POST", MEDIA, 201, &[], r#"{"id":41,"source_url":"https://example.com/blog/a.jpg"}"#)
+            .answer_to("POST", POSTS, 201, &[], r#"{"id":8,"status":"draft"}"#)
+            .answer_to("GET", &format!("{POSTS}/8*"), 200, &[], r#"{"id":8,"status":"draft"}"#)
+            .answer_to("GET", &format!("{POSTS}/5*"), 200, &[], r#"{"id":5,"status":"draft"}"#)
+            .answer_to("POST", &format!("{POSTS}/8"), 200, &[], r#"{"id":8,"status":"draft"}"#)
+            .answer_to("POST", &format!("{POSTS}/5"), 200, &[], r#"{"id":5,"status":"draft"}"#)
+            .answer_to("GET", &format!("{MEDIA}/41*"), 200, &[], r#"{"id":41}"#);
+        let mut events = Vec::new();
+        let saved = run_days(&fake, &job, &Progress::default(), &mut |event| events.push(event)).unwrap();
+        assert_eq!((saved.post_id, saved.days, saved.uploaded, saved.reused), (5, 2, 1, 1), "the index is the post named; the cover, also in a Day, is sent once");
+        let bodies = fake.bodies.borrow();
+        let made: Vec<serde_json::Value> = bodies.iter().filter(|(key, _)| *key == format!("POST {POSTS}")).map(|(_, body)| serde_json::from_slice(body).unwrap()).collect();
+        let titles: Vec<&str> = made.iter().map(|post| post["title"].as_str().unwrap()).collect();
+        assert_eq!(titles, ["Spain – Granada [old]", "Spain – Toledo"], "only the Days without a post get one, empty");
+        let index: serde_json::Value = serde_json::from_slice(&bodies.iter().find(|(key, _)| *key == format!("POST {POSTS}/5")).unwrap().1).unwrap();
+        let content = index["content"].as_str().unwrap();
+        assert!(content.contains("Why we went") && content.contains(r#"<a href="https://example.com/blog/?p=8">Granada (old)</a>"#), "{content}");
+        let day: serde_json::Value = serde_json::from_slice(&bodies.iter().find(|(key, _)| *key == format!("POST {POSTS}/8")).unwrap().1).unwrap();
+        assert!(day["content"].as_str().unwrap().contains(r#"<a href="https://example.com/blog/?p=5">Spain</a>"#), "a Day links back to the index");
+        drop(bodies);
+        let parts = events.iter().filter(|event| matches!(event, Event::Part { .. })).count();
+        assert_eq!(parts, 1 + 2 + 3, "the index checked, two posts made, three saved: each kept as it happens");
         let _ = std::fs::remove_dir_all(dir);
     }
 

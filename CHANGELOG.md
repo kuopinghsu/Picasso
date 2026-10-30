@@ -13,7 +13,7 @@ section of this file as the release notes.
   (Standard web or Low resolution), whether to keep camera details, a photo preview and the
   post's state. Photos never carry their location; each new upload carries its description and is named for the Story and the photo's file.
 - A Story is saved as a draft unless you choose to publish it; publishing first confirms what
-  readers will see, at once or at a date and time in the site's time zone. Later saves update the same post. A post edited on the site is never
+  readers will see, at once or at a date and time in the site's time zone. A Summary in the dialog lists what saving will change on the site. A Story with Days can go out as an index post and one post per Day, linked to each other. Later saves update the same post. A post edited on the site is never
   overwritten without your choice, and a post Picasso has no record of is found before another
   is made.
 - Uploads of the same bytes are reused, interrupted or lost requests are recovered without

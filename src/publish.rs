@@ -15,7 +15,7 @@ use crate::gutenberg::{self, RouteMap, Unsupported, Uploaded};
 use crate::story_html::{MapTiles, Progress, Source};
 use crate::trip::{Block, Story, StoryBlock};
 use crate::upload::{self, UploadSize};
-use crate::wordpress::{edit_link, DraftPost, Api, Client, Credentials, Failure, Http, Policy};
+use crate::wordpress::{edit_link, DraftPost, Api, Client, Credentials, Failure, Http, Media, Policy};
 
 /// Everything the job needs, read on the UI thread before it starts.
 #[derive(Clone)]
@@ -323,6 +323,12 @@ pub fn run(http: &dyn Http, job: &Job, progress: &Progress, report: &mut dyn FnM
             alts.entry(item.media_id).or_insert(item.alt.trim());
         }
     }
+    // Uploads already on the site are checked together, a hundred to a
+    // request; one the answer leaves out, or a failed read, is checked alone.
+    let mut ids: Vec<i64> = rendered.iter().filter_map(|(_, hash)| job.uploads.get(hash).map(|(id, _)| *id)).collect();
+    ids.sort_unstable();
+    ids.dedup();
+    let known = if ids.is_empty() { HashMap::new() } else { client.media_many(&job.api, &job.credentials, &ids).unwrap_or_default() };
     let mut media: HashMap<i64, Uploaded> = HashMap::new();
     let mut by_hash: HashMap<String, Uploaded> = HashMap::new();
     for (media_id, hash) in rendered {
@@ -339,7 +345,7 @@ pub fn run(http: &dyn Http, job: &Job, progress: &Progress, report: &mut dyn FnM
         let alt = alts.get(&media_id).copied().unwrap_or_default();
         let file = job.sources.get(&media_id).cloned().flatten().and_then(|(path, ..)| path.file_stem().map(|stem| stem.to_string_lossy().into_owned()));
         let stem = upload_name(&job.story.title, file.as_deref().unwrap_or_default(), &hash);
-        let item = place(&client, job, &bytes, &hash, &stem, alt, &mut uploaded, &mut reused, report)?;
+        let item = place(&client, job, &bytes, &hash, &stem, alt, &known, &mut uploaded, &mut reused, report)?;
         by_hash.insert(hash, item.clone());
         media.insert(media_id, item);
         progress.done.fetch_add(1, Ordering::Relaxed);
@@ -358,7 +364,7 @@ pub fn run(http: &dyn Http, job: &Job, progress: &Progress, report: &mut dyn FnM
             let hash = upload::hash(&bytes);
             let item = match by_hash.get(&hash) {
                 Some(same) => same.clone(),
-                None => place(&client, job, &bytes, &hash, &upload_name(&job.story.title, "route", &hash), "", &mut uploaded, &mut reused, report)?,
+                None => place(&client, job, &bytes, &hash, &upload_name(&job.story.title, "route", &hash), "", &known, &mut uploaded, &mut reused, report)?,
             };
             by_hash.insert(hash, item.clone());
             maps.insert(block.uid.clone(), RouteMap { uploaded: item, credit: tiles.source.attribution() });
@@ -628,11 +634,20 @@ pub fn upload_name(title: &str, file: &str, hash: &str) -> String {
 /// given `alt`: one already on the site may be in other posts. `stem` names
 /// it, and must be the same for the same bytes, as a lost upload is found by it.
 #[allow(clippy::too_many_arguments)]
-fn place(client: &Client, job: &Job, bytes: &[u8], hash: &str, stem: &str, alt: &str, uploaded: &mut usize, reused: &mut usize, report: &mut dyn FnMut(Event)) -> Result<Uploaded, Stopped> {
+fn place(client: &Client, job: &Job, bytes: &[u8], hash: &str, stem: &str, alt: &str, known: &HashMap<i64, Media>, uploaded: &mut usize, reused: &mut usize, report: &mut dyn FnMut(Event)) -> Result<Uploaded, Stopped> {
     let site = |failure: Failure, uploaded: usize| Stopped::Site { failure, uploaded };
     if let Some((id, url)) = job.uploads.get(hash) {
-        if client.media_exists(&job.api, &job.credentials, *id).map_err(|failure| site(failure, *uploaded))? {
+        let now = match known.get(id) {
+            Some(now) => Some(Some(now.clone())),
+            None => client.media_now(&job.api, &job.credentials, *id).map_err(|failure| site(failure, *uploaded))?,
+        };
+        if let Some(now) = now {
             *reused += 1;
+            // An address the site has changed since, as after a move, is the one used and kept.
+            if let Some(now) = now.filter(|now| now.url != *url) {
+                report(Event::Uploaded { hash: hash.to_string(), size: job.size, media_id: now.id, url: now.url.clone(), details: now.details });
+                return Ok(Uploaded { id: now.id, url: now.url });
+            }
             return Ok(Uploaded { id: *id, url: url.clone() });
         }
         report(Event::Gone { hash: hash.to_string() });
@@ -870,11 +885,31 @@ mod tests {
         let again = job(&dir, Some(7), known.clone());
         let fake = Fake::default()
             .answer(&format!("{POSTS}/7?context=edit"), 200, &[], r#"{"status":"draft"}"#)
-            .answer(&format!("{MEDIA}/41?context=edit"), 200, &[], r#"{"id":41}"#)
+            .answer(&format!("{MEDIA}/41?context=edit&_fields=id,source_url,mime_type,media_details"), 200, &[], r#"{"id":41}"#)
             .answer_to("POST", &format!("{POSTS}/7"), 200, &[], r#"{"id":7}"#);
         let saved = run(&fake, &again, &Progress::default(), &mut |_| {}).unwrap();
         assert_eq!((saved.post_id, saved.uploaded, saved.reused), (7, 0, 1));
         assert!(!fake.bodies.borrow().iter().any(|(key, _)| key.starts_with("POST") && key.ends_with("/media")));
+
+        // Moved on the site meanwhile: its address today is used and kept.
+        let fake = Fake::default()
+            .answer(&format!("{POSTS}/7?context=edit"), 200, &[], r#"{"status":"draft"}"#)
+            .answer(&format!("{MEDIA}/41?context=edit&_fields=id,source_url,mime_type,media_details"), 200, &[], r#"{"id":41,"source_url":"https://new.example.com/a.jpg"}"#)
+            .answer_to("POST", &format!("{POSTS}/7"), 200, &[], r#"{"id":7}"#);
+        let mut events = Vec::new();
+        let saved = run(&fake, &again, &Progress::default(), &mut |event| events.push(event)).unwrap();
+        assert_eq!((saved.uploaded, saved.reused), (0, 1));
+        assert!(events.iter().any(|event| matches!(event, Event::Uploaded { url, .. } if url == "https://new.example.com/a.jpg")), "{events:?}");
+        assert!(fake.bodies.borrow().iter().any(|(key, body)| key.starts_with("POST") && String::from_utf8_lossy(body).contains("new.example.com/a.jpg")));
+
+        // Checked with the others in one read, with no read of its own.
+        let fake = Fake::default()
+            .answer(&format!("{POSTS}/7?context=edit"), 200, &[], r#"{"status":"draft"}"#)
+            .answer(&format!("{MEDIA}?include=41&per_page=100&context=edit&_fields=id,source_url,mime_type,media_details"), 200, &[], r#"[{"id":41,"source_url":"https://example.com/blog/a.jpg"}]"#)
+            .answer_to("POST", &format!("{POSTS}/7"), 200, &[], r#"{"id":7}"#);
+        let saved = run(&fake, &again, &Progress::default(), &mut |_| {}).unwrap();
+        assert_eq!((saved.uploaded, saved.reused), (0, 1));
+        assert!(!fake.asked.borrow().iter().any(|(url, _)| url.contains("/media/41")));
 
         // Removed from the site meanwhile: forgotten and sent again.
         let fake = Fake::default()

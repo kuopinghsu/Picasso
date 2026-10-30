@@ -10,6 +10,7 @@
 //! Publishing to a site uses it; until then only its tests do.
 #![cfg_attr(not(test), allow(dead_code))]
 
+use std::collections::HashMap;
 use std::time::Duration;
 
 use base64::engine::general_purpose::STANDARD;
@@ -531,13 +532,36 @@ impl Client<'_> {
 
     /// Whether the upload `id` is still in the site's media library.
     pub fn media_exists(&self, api: &Api, credentials: &Credentials, id: i64) -> Result<bool, Failure> {
-        let url = api.route(&format!("/wp/v2/media/{id}"), "context=edit");
+        Ok(self.media_now(api, credentials, id)?.is_some())
+    }
+
+    /// Upload `id` as the site has it now: `None` when it was removed, and
+    /// its address as the site gives it today, or `None` when the answer
+    /// doesn't say, as after the site moved or its media folder changed.
+    pub fn media_now(&self, api: &Api, credentials: &Credentials, id: i64) -> Result<Option<Option<Media>>, Failure> {
+        let url = api.route(&format!("/wp/v2/media/{id}"), "context=edit&_fields=id,source_url,mime_type,media_details");
         let (_, reply) = self.get(&url, Some(credentials))?;
         if reply.status == 404 || reply.status == 410 {
-            return Ok(false);
+            return Ok(None);
         }
         checked(&reply)?;
-        Ok(true)
+        Ok(Some(reply.json().and_then(|json| media_of(&json).ok())))
+    }
+
+    /// The uploads among `ids` still in the site's media library, as the site
+    /// has them now, read up to a hundred at a time. An id missing from the
+    /// answer isn't proof it was removed, so it is asked about on its own.
+    pub fn media_many(&self, api: &Api, credentials: &Credentials, ids: &[i64]) -> Result<HashMap<i64, Media>, Failure> {
+        let mut found = HashMap::new();
+        for chunk in ids.chunks(100) {
+            let include = chunk.iter().map(i64::to_string).collect::<Vec<_>>().join(",");
+            let query = format!("include={include}&per_page=100&context=edit&_fields=id,source_url,mime_type,media_details");
+            let (_, reply) = self.get(&api.route("/wp/v2/media", &query), Some(credentials))?;
+            checked(&reply)?;
+            let list = reply.json().and_then(|json| json.as_array().cloned()).ok_or(Failure::BadReply)?;
+            found.extend(list.iter().filter_map(|item| media_of(item).ok()).map(|media| (media.id, media)));
+        }
+        Ok(found)
     }
 
     /// Post `id` as the site has it now, or `None` when the site has no such post.
@@ -1253,7 +1277,7 @@ pub(crate) mod tests {
             .answer_to("POST", "https://example.com/blog/wp-json/wp/v2/posts", 201, &[], r#"{"id":7,"status":"draft"}"#)
             .answer_to("POST", "https://example.com/blog/wp-json/wp/v2/posts/7", 200, &[], r#"{"id":7,"status":"draft","title":{"raw":"Spain"},"content":{"raw":"<p>y</p>"}}"#)
             .answer("https://example.com/blog/wp-json/wp/v2/posts/7?context=edit", 200, &[], r#"{"id":7,"status":"draft","title":{"raw":"Spain","rendered":"Spain"},"content":{"raw":"<p>y</p>"},"featured_media":0}"#)
-            .answer("https://example.com/blog/wp-json/wp/v2/media/41?context=edit", 200, &[], r#"{"id":41}"#);
+            .answer("https://example.com/blog/wp-json/wp/v2/media/41?context=edit&_fields=id,source_url,mime_type,media_details", 200, &[], r#"{"id":41}"#);
         let client = Client::new(&fake, Policy::default());
         let media = client.upload_media(&api, &credentials, b"jpeg", "picasso-ab12.jpg").unwrap();
         assert_eq!((media.id, media.url.as_str()), (41, "https://example.com/blog/wp-content/uploads/a.jpg"));

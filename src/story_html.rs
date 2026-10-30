@@ -55,6 +55,8 @@ pub struct Words {
     pub lang: &'static str,
     pub untitled: String,
     pub unavailable: String,
+    /// The heading of a Travel Guide's list of sections.
+    pub contents: String,
 }
 
 /// Where a Story photo comes from: its file, edit, and catalog rotation,
@@ -69,6 +71,10 @@ pub struct MapTiles {
     pub key: String,
     pub cache: PathBuf,
 }
+
+/// Photos with a shorter long side than this, before any crop, may look
+/// soft across a page.
+pub const LOW_RES_EDGE: u32 = 1200;
 
 /// Everything a page of a Story is made from.
 pub struct Page<'a> {
@@ -108,9 +114,14 @@ pub struct Preflight {
     pub no_alt: usize,
     /// Blocks from a newer Picasso, which can't be exported.
     pub unknown: usize,
+    /// Photos smaller than [`LOW_RES_EDGE`] on their long side, which may
+    /// look soft at the page's width. Only a warning.
+    pub low_res: usize,
+    /// The Story has no cover. Only a warning: the page starts with its title.
+    pub no_cover: bool,
     /// The first block with each of those, to show it: missing, no
-    /// description, newer, unreadable.
-    pub first: [Option<usize>; 4],
+    /// description, newer, unreadable, low resolution.
+    pub first: [Option<usize>; 5],
     /// Photos that will be rendered, for the size of the export.
     pub photos: usize,
 }
@@ -125,14 +136,22 @@ impl Preflight {
 /// Checks a Story before it is exported. Reads whether files exist and
 /// the head of each, not the whole photo.
 pub fn preflight(page: &Page) -> Preflight {
-    let mut check = Preflight { empty: page.blocks.is_empty(), ..Preflight::default() };
-    // Some(true) readable, Some(false) there but unreadable, None missing.
+    let mut check = Preflight { empty: page.blocks.is_empty(), no_cover: page.story.cover.is_none(), ..Preflight::default() };
+    // Some(true) readable, Some(false) there but unreadable, None missing;
+    // with the long side of the readable ones.
+    let mut long_side: HashMap<i64, u32> = HashMap::new();
     let state: HashMap<i64, Option<bool>> = page
         .sources
         .iter()
         .map(|(&media_id, source)| {
             let state = match source {
-                Some((path, _, _)) if path.is_file() => Some(crate::image_io::probe(path, 0).is_ok()),
+                Some((path, _, _)) if path.is_file() => match crate::image_io::probe(path, 0) {
+                    Ok(probe) => {
+                        long_side.insert(media_id, probe.width.max(probe.height));
+                        Some(true)
+                    }
+                    Err(_) => Some(false),
+                },
                 _ => None,
             };
             (media_id, state)
@@ -159,9 +178,15 @@ pub fn preflight(page: &Page) -> Preflight {
             } else if readable == Some(false) {
                 check.unreadable += 1;
                 check.first[3].get_or_insert(index);
-            } else if media.alt.trim().is_empty() {
-                check.no_alt += 1;
-                check.first[1].get_or_insert(index);
+            } else {
+                if media.alt.trim().is_empty() {
+                    check.no_alt += 1;
+                    check.first[1].get_or_insert(index);
+                }
+                if long_side.get(&media.media_id).is_some_and(|&side| side > 0 && side < LOW_RES_EDGE) {
+                    check.low_res += 1;
+                    check.first[4].get_or_insert(index);
+                }
             }
         }
     }
@@ -378,6 +403,14 @@ pub fn markdown(
     if let Some(cover) = story.cover {
         out.push_str(&md_image(&MediaUse::new(cover), images, words, &mut outcome));
     }
+    let sections = headings(blocks);
+    if crate::trip::template_code(&story.template) == "guide" && !sections.is_empty() {
+        let _ = write!(out, "**{}**\n\n", md(&words.contents));
+        for (n, text) in sections.iter().enumerate() {
+            let _ = writeln!(out, "{}. {}", n + 1, inline::to_markdown(text));
+        }
+        out.push('\n');
+    }
     md_paragraphs(&mut out, &story.introduction);
     for block in blocks {
         match &block.block {
@@ -388,6 +421,33 @@ pub fn markdown(
                 let _ = write!(out, "### {}\n\n", inline::to_markdown(text.trim()));
             }
             Block::Paragraph(text) | Block::Credits(text) => md_paragraphs(&mut out, text),
+            Block::Info { title, items } => {
+                let items: Vec<&(String, String)> = items.iter().filter(|(label, value)| !label.trim().is_empty() || !value.trim().is_empty()).collect();
+                if !title.trim().is_empty() {
+                    let _ = write!(out, "**{}**\n\n", md(title.trim()));
+                }
+                for (label, value) in &items {
+                    match (label.trim(), value.trim()) {
+                        ("", value) => { let _ = writeln!(out, "- {}", inline::to_markdown(value)); }
+                        (label, value) => { let _ = writeln!(out, "- **{}:** {}", md(label), inline::to_markdown(value)); }
+                    }
+                }
+                if !items.is_empty() {
+                    out.push('\n');
+                }
+            }
+            Block::Link { url, title, note } => {
+                let shown = if title.trim().is_empty() { url.trim() } else { title.trim() };
+                let line = match crate::trip::web_address(url) {
+                    Some(url) => format!("[{}](<{}>)", md(shown), url.replace('>', "%3E")),
+                    None => md(shown),
+                };
+                match note.trim() {
+                    "" if line.is_empty() => {}
+                    "" => { let _ = write!(out, "{line}\n\n"); }
+                    note => { let _ = write!(out, "{line} — {}\n\n", inline::to_markdown(note)); }
+                }
+            }
             Block::List { ordered, items } => {
                 for (n, item) in items.iter().map(|item| item.trim()).filter(|item| !item.is_empty()).enumerate() {
                     let bullet = if *ordered { format!("{}.", n + 1) } else { "-".into() };
@@ -509,12 +569,14 @@ pub fn page(
 ) -> (String, Outcome) {
     let mut outcome = Outcome::default();
     let title = if story.title.trim().is_empty() { words.untitled.as_str() } else { story.title.trim() };
+    let template = crate::trip::template_code(&story.template);
     let mut html = String::new();
     let _ = write!(
         html,
-        "<!doctype html>\n<html lang=\"{}\">\n<head>\n<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<title>{}</title>\n<style>{STYLE}</style>\n</head>\n<body>\n<article>\n<header>\n",
+        "<!doctype html>\n<html lang=\"{}\">\n<head>\n<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<title>{}</title>\n<style>{STYLE}{}</style>\n</head>\n<body class=\"{template}\">\n<article>\n<header>\n",
         esc(words.lang),
-        esc(title)
+        esc(title),
+        template_style(template)
     );
     if let Some(cover) = story.cover {
         html.push_str(&figure(&MediaUse::new(cover), images, words, "cover", &mut outcome));
@@ -528,14 +590,25 @@ pub fn page(
         let _ = writeln!(html, "<p class=\"byline\">{}</p>", esc(&byline.join(" · ")));
     }
     html.push_str("</header>\n");
+    let sections = headings(blocks);
+    if template == "guide" && !sections.is_empty() {
+        let _ = write!(html, "<nav class=\"contents\" aria-labelledby=\"contents\">\n<h2 id=\"contents\">{}</h2>\n<ol>\n", esc(&words.contents));
+        for (n, text) in sections.iter().enumerate() {
+            let _ = writeln!(html, "<li><a href=\"#section-{}\">{}</a></li>", n + 1, inline::to_html(text));
+        }
+        html.push_str("</ol>\n</nav>\n");
+    }
     if !story.introduction.trim().is_empty() {
         let _ = write!(html, "<section class=\"introduction\">\n{}</section>\n", paragraphs(&story.introduction));
     }
+    let mut section = 0;
     for block in blocks {
         match &block.block {
-            Block::Heading(text) => {
-                let _ = writeln!(html, "<h2>{}</h2>", inline::to_html(text.trim()));
+            Block::Heading(text) if !text.trim().is_empty() => {
+                section += 1;
+                let _ = writeln!(html, "<h2 id=\"section-{section}\">{}</h2>", inline::to_html(text.trim()));
             }
+            Block::Heading(_) => {}
             Block::Subheading(text) => {
                 let _ = writeln!(html, "<h3>{}</h3>", inline::to_html(text.trim()));
             }
@@ -598,6 +671,8 @@ pub fn page(
             Block::Credits(text) => {
                 let _ = write!(html, "<footer class=\"credits\">\n{}</footer>\n", paragraphs(text));
             }
+            Block::Info { title, items } => html.push_str(&info_html(title, items)),
+            Block::Link { url, title, note } => html.push_str(&link_html(url, title, note)),
             Block::Unknown { .. } => outcome.unknown += 1,
         }
     }
@@ -792,8 +867,123 @@ pub fn esc(text: &str) -> String {
     out
 }
 
+/// A Practical info block: its title and a list of label and value lines.
+/// Lines with neither are left out, and an empty block draws nothing.
+pub fn info_html(title: &str, items: &[(String, String)]) -> String {
+    let items: Vec<&(String, String)> = items.iter().filter(|(label, value)| !label.trim().is_empty() || !value.trim().is_empty()).collect();
+    if title.trim().is_empty() && items.is_empty() {
+        return String::new();
+    }
+    let mut html = String::from("<aside class=\"info\">\n");
+    if !title.trim().is_empty() {
+        let _ = writeln!(html, "<h3>{}</h3>", esc(title.trim()));
+    }
+    if !items.is_empty() {
+        html.push_str("<dl>\n");
+        for (label, value) in items {
+            let _ = writeln!(html, "<dt>{}</dt><dd>{}</dd>", esc(label.trim()), inline::to_html(value.trim()));
+        }
+        html.push_str("</dl>\n");
+    }
+    html.push_str("</aside>\n");
+    html
+}
+
+/// A Link block: its title linked to its address, with the note below.
+/// An address that isn't a web page is shown as text, not followed.
+pub fn link_html(url: &str, title: &str, note: &str) -> String {
+    let shown = if title.trim().is_empty() { url.trim() } else { title.trim() };
+    if shown.is_empty() && note.trim().is_empty() {
+        return String::new();
+    }
+    let link = match crate::trip::web_address(url) {
+        Some(url) => format!("<a href=\"{}\" rel=\"noopener\">{}</a>", esc(url), esc(shown)),
+        None => esc(shown),
+    };
+    let note = if note.trim().is_empty() { String::new() } else { format!("<br><span class=\"note\">{}</span>", inline::to_html(note.trim())) };
+    format!("<p class=\"link\">{link}{note}</p>\n")
+}
+
+/// The Story's section headings, in order, for a Travel Guide's contents.
+fn headings(blocks: &[StoryBlock]) -> Vec<&str> {
+    blocks
+        .iter()
+        .filter_map(|block| match &block.block {
+            Block::Heading(text) => Some(text.trim()).filter(|text| !text.is_empty()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// What a template adds to [`STYLE`], the Photography Journal.
+fn template_style(template: &str) -> &'static str {
+    match template {
+        "diary" => DIARY,
+        "guide" => GUIDE,
+        "essay" => ESSAY,
+        _ => "",
+    }
+}
+
+/// Travel Diary: a notebook page. Warm paper, a narrower column, photos
+/// as prints with a white border, a handwritten-looking byline.
+const DIARY: &str = "
+body.diary{--bg:#f6efe1;--text:#2b2620;--muted:#7a6d5c;--rule:#d9cbb2;--accent:#9a4a2b;font-size:19px}
+@media (prefers-color-scheme:dark){body.diary{--bg:#221d17;--text:#efe6d6;--muted:#b3a58f;--rule:#4a3f31;--accent:#e08a62}}
+.diary article{max-width:38rem}
+.diary h1,.diary h2{font-family:Georgia,'Iowan Old Style','Noto Serif',serif;font-style:italic;font-weight:normal}
+.diary h2{border-bottom:1px dashed var(--rule);padding-bottom:.3rem}
+.diary .byline{font-family:'Bradley Hand','Segoe Print','Comic Neue',cursive;font-size:1.1rem}
+.diary figure.photo,.diary figure.cover{margin-left:0;margin-right:0}
+.diary figure.photo img,.diary .gallery img{background:#fff;padding:.6rem .6rem 1.8rem;border-radius:2px;box-shadow:0 2px 8px rgba(0,0,0,.18)}
+.diary figure.photo:nth-of-type(odd){transform:rotate(-.8deg)}
+.diary figure.photo:nth-of-type(even){transform:rotate(.8deg)}
+.diary figcaption{font-family:'Bradley Hand','Segoe Print','Comic Neue',cursive;font-size:1rem;text-align:center}
+.diary hr{border-top-style:dashed}
+@media (min-width:52rem){.diary figure.photo,.diary figure.cover,.diary figure.grid,.diary figure.route{margin-left:0;margin-right:0}}
+@media (prefers-reduced-motion:reduce){.diary figure.photo{transform:none}}
+";
+
+/// Travel Guide: something to use on the way. Sans-serif, numbered
+/// sections listed at the top, quotes as boxed tips, smaller photos.
+const GUIDE: &str = "
+body.guide{--bg:#ffffff;--text:#1c2430;--muted:#5d6878;--rule:#dfe4ea;--accent:#1d5fa8;font:17px/1.6 system-ui,-apple-system,'Segoe UI',sans-serif;counter-reset:section}
+@media (prefers-color-scheme:dark){body.guide{--bg:#12161c;--text:#e6ebf1;--muted:#9aa5b4;--rule:#2b333d;--accent:#7fb2ee}}
+.guide article{max-width:50rem}
+.guide h1{font-size:2.2rem}
+.guide article>h2{counter-increment:section;border-top:2px solid var(--accent);padding-top:.8rem}
+.guide article>h2::before{content:counter(section) '. ';color:var(--muted)}
+.guide .contents{background:var(--rule);border-radius:6px;padding:1rem 1.25rem;margin:0 0 2.5rem}
+.guide .contents h2{margin:0 0 .5rem;font-size:1rem;color:var(--text);text-transform:uppercase;letter-spacing:.06em}
+.guide .contents ol{margin:0;padding-left:1.4rem}
+.guide .contents a{color:var(--accent)}
+.guide blockquote{font-style:normal;border-left:0;background:color-mix(in srgb,var(--accent) 10%,var(--bg));border-radius:6px;padding:1rem 1.25rem}
+.guide figure.photo,.guide figure.cover{margin-left:0;margin-right:0}
+.guide .gallery{grid-template-columns:repeat(auto-fill,minmax(10rem,1fr))}
+@media (min-width:52rem){.guide figure.photo,.guide figure.grid,.guide figure.route{margin-left:0;margin-right:0}}
+";
+
+/// Photo Essay: the photos lead. Dark page, photos edge to edge, one per
+/// row, short text in a narrow centered column.
+const ESSAY: &str = "
+body.essay{--bg:#0e0e0e;--text:#e9e9e9;--muted:#9a9a9a;--rule:#2a2a2a;--accent:#d8c49a;color-scheme:dark}
+.essay article{max-width:none;padding:0 0 5rem}
+.essay article>*{max-width:36rem;margin-left:auto;margin-right:auto;padding-left:1.25rem;padding-right:1.25rem}
+.essay header{max-width:none;padding:0;text-align:center}
+.essay header>*:not(figure){max-width:40rem;margin-left:auto;margin-right:auto;padding:0 1.25rem}
+.essay h1{font:300 3rem/1.1 Georgia,'Iowan Old Style','Noto Serif',serif;letter-spacing:.02em;margin-top:2.5rem}
+.essay h2{font:300 1.6rem/1.3 Georgia,'Iowan Old Style','Noto Serif',serif;color:var(--text);text-align:center}
+.essay article>figure.photo,.essay article>figure.grid,.essay article>figure.route,.essay header figure.cover,.essay article>.gallery{max-width:none;margin:3.5rem 0;padding:0}
+.essay img{border-radius:0}
+.essay figcaption{text-align:center;font-style:italic}
+.essay .gallery{display:block}
+.essay .gallery figure{margin:0 0 3.5rem}
+.essay hr{width:3rem;border-top-color:var(--accent)}
+@media (min-width:52rem){.essay figure.photo,.essay figure.cover,.essay figure.grid,.essay figure.route{margin-left:0;margin-right:0}}
+";
+
 /// Photography Journal: one wide column, large photos, quiet type. System
-/// fonts only, so the page needs no network.
+/// fonts only, so the page needs no network. The other templates add to it.
 const STYLE: &str = "
 :root{color-scheme:light dark;--bg:#fbfaf7;--text:#1f1f1f;--muted:#6b6b6b;--rule:#ddd8cf;--accent:#1f7a7a}
 @media (prefers-color-scheme:dark){:root{--bg:#161616;--text:#ececec;--muted:#a0a0a0;--rule:#333;--accent:#5cc2c2}}
@@ -830,6 +1020,14 @@ figure.route svg{display:block;width:100%;height:auto;background:var(--rule);bor
 .route .end{fill:var(--bg)}
 figure.route img{border-radius:4px}
 .route .credit{display:block;font-size:.75rem}
+.info{margin:2rem 0;padding:1rem 1.25rem;border:1px solid var(--rule);border-radius:6px;font:.95rem/1.5 system-ui,-apple-system,'Segoe UI',sans-serif}
+.info h3{margin:0 0 .6rem;font-size:1rem}
+.info dl{margin:0;display:grid;grid-template-columns:minmax(6rem,max-content) 1fr;gap:.35rem 1rem}
+.info dt{font-weight:600}
+.info dd{margin:0}
+.link{padding-left:1rem;border-left:3px solid var(--accent)}
+.link a{color:var(--accent);font-weight:600}
+.link .note{color:var(--muted);font-size:.95rem}
 .credits{margin-top:3rem;padding-top:1.5rem;border-top:1px solid var(--rule);font-size:.9rem;color:var(--muted)}
 @media (min-width:52rem){figure.photo,figure.cover,figure.grid,figure.route{margin-left:-4rem;margin-right:-4rem}}
 ";
@@ -858,7 +1056,76 @@ mod tests {
     }
 
     fn words() -> Words {
-        Words { lang: "en", untitled: "Untitled story".into(), unavailable: "Photo unavailable".into() }
+        Words { lang: "en", untitled: "Untitled story".into(), unavailable: "Photo unavailable".into(), contents: "Contents".into() }
+    }
+
+    #[test]
+    fn practical_info_and_links_are_escaped_and_only_web_addresses_followed() {
+        let blocks = vec![
+            StoryBlock::new(Block::Info { title: "Getting <there>".into(), items: vec![("Train".into(), "2 h, *book ahead*".into()), (" ".into(), " ".into())] }),
+            StoryBlock::new(Block::Info { title: " ".into(), items: vec![(String::new(), String::new())] }),
+            StoryBlock::new(Block::Link { url: "https://example.com/?a=1&b=2".into(), title: "Ferry \"times\"".into(), note: "Summer only".into() }),
+            StoryBlock::new(Block::Link { url: "javascript:alert(1)".into(), title: "Trick".into(), note: String::new() }),
+        ];
+        let (html, _) = page(&story(), None, &blocks, &HashMap::new(), &HashMap::new(), &words());
+        assert!(html.contains("<aside class=\"info\">\n<h3>Getting &lt;there&gt;</h3>\n<dl>\n<dt>Train</dt><dd>2 h, <em>book ahead</em></dd>\n</dl>\n</aside>"), "{html}");
+        assert_eq!(html.matches("<aside").count(), 1, "an empty block draws nothing");
+        assert!(html.contains("<p class=\"link\"><a href=\"https://example.com/?a=1&amp;b=2\" rel=\"noopener\">Ferry &quot;times&quot;</a><br><span class=\"note\">Summer only</span></p>"));
+        assert!(html.contains("<p class=\"link\">Trick</p>") && !html.contains("javascript:"));
+        let (md, _) = markdown(&story(), None, &blocks, &HashMap::new(), &HashMap::new(), &words());
+        assert!(md.contains("**Getting &lt;there&gt;**\n\n- **Train:** 2 h, *book ahead*\n\n"), "{md}");
+        assert!(md.contains("[Ferry \"times\"](<https://example.com/?a=1&b=2>) — Summer only") && md.contains("Trick\n\n") && !md.contains("javascript:"), "{md}");
+    }
+
+    #[test]
+    fn small_photos_and_a_missing_cover_are_only_warnings() {
+        let folder = std::env::temp_dir().join(format!("picasso-small-{}", std::process::id()));
+        std::fs::create_dir_all(&folder).unwrap();
+        let small = folder.join("small.jpg");
+        image::RgbImage::from_pixel(800, 600, image::Rgb([90, 120, 150])).save(&small).unwrap();
+        let large = Path::new(env!("CARGO_MANIFEST_DIR")).join("images/banner.jpg");
+        let sources = HashMap::from([(1, Some((small, Settings::default(), 0))), (2, Some((large, Settings::default(), 0)))]);
+        let mut first = MediaUse::new(2);
+        first.alt = "Harbor".into();
+        let mut second = MediaUse::new(1);
+        second.alt = "Boats".into();
+        let blocks = [StoryBlock::new(Block::Photo(first)), StoryBlock::new(Block::Photo(second))];
+        let mut story = story();
+        let words = words();
+        let check = preflight(&Page { story: &story, dates: None, blocks: &blocks, sources: &sources, words: &words, map: None, profiles: &HashMap::new() });
+        assert_eq!((check.low_res, check.first[4], check.no_cover), (1, Some(1), true));
+        assert!(!check.blocked(false), "neither stops an export");
+        story.cover = Some(2);
+        let check = preflight(&Page { story: &story, dates: None, blocks: &blocks, sources: &sources, words: &words, map: None, profiles: &HashMap::new() });
+        assert!(!check.no_cover);
+        let _ = std::fs::remove_dir_all(&folder);
+    }
+
+    #[test]
+    fn each_template_changes_the_page_but_not_its_blocks() {
+        let blocks = vec![
+            StoryBlock::new(Block::Heading("Getting there".into())),
+            StoryBlock::new(Block::Paragraph("Take the early train.".into())),
+            StoryBlock::new(Block::Heading("Where to eat".into())),
+        ];
+        let render = |template: &str| {
+            let story = Story { template: template.into(), ..story() };
+            page(&story, None, &blocks, &HashMap::new(), &HashMap::new(), &words()).0
+        };
+        let pages: Vec<String> = crate::trip::TEMPLATES.iter().map(|code| render(code)).collect();
+        for (n, html) in pages.iter().enumerate() {
+            assert!(html.contains(&format!("<body class=\"{}\">", crate::trip::TEMPLATES[n])));
+            assert!(html.contains("<h2 id=\"section-2\">Where to eat</h2>") && html.contains("Take the early train."));
+            assert!(pages.iter().enumerate().all(|(m, other)| m == n || other != html), "every template looks different");
+        }
+        let guide = &pages[2];
+        assert!(guide.contains("<nav class=\"contents\"") && guide.contains("<a href=\"#section-1\">Getting there</a>"));
+        assert!(!pages[0].contains("<nav"), "only the guide lists its sections");
+        assert_eq!(render("unknown"), pages[0], "an unknown template reads as the journal");
+
+        let guide_story = Story { template: "guide".into(), ..story() };
+        let (md, _) = markdown(&guide_story, None, &blocks, &HashMap::new(), &HashMap::new(), &words());
+        assert!(md.contains("**Contents**\n\n1. Getting there\n2. Where to eat\n"));
     }
 
     #[test]
@@ -884,7 +1151,7 @@ mod tests {
         ];
         let (html, _) = page(&story(), Some("1 – 3 March"), &blocks, &HashMap::new(), &HashMap::new(), &words());
         assert!(html.contains("<title>Kyoto &lt;in&gt; spring</title>"));
-        assert!(html.contains("<h2>Day 1 &amp; 2</h2>"));
+        assert!(html.contains("<h2 id=\"section-1\">Day 1 &amp; 2</h2>"));
         assert!(html.contains("<p>First &quot;line&quot;<br>\nsecond</p>"));
         assert!(html.contains("<p>&lt;script&gt;x&lt;/script&gt;</p>"));
         assert!(!html.contains("<script>"));
@@ -899,7 +1166,7 @@ mod tests {
         let blocks = [StoryBlock::new(Block::Heading("Day 1".into()))];
         let (html, _) = page(&story, None, &blocks, &HashMap::new(), &HashMap::new(), &words());
         let at = |text: &str| html.find(text).unwrap();
-        assert!(at("</header>") < at("Why we went") && at("Why we went") < at("<h2>Day 1</h2>") && at("<h2>Day 1</h2>") < at("We&#39;ll be back"));
+        assert!(at("</header>") < at("Why we went") && at("Why we went") < at("<h2 id=\"section-1\">Day 1</h2>") && at("<h2 id=\"section-1\">Day 1</h2>") < at("We&#39;ll be back"));
         let (text, _) = markdown(&story, None, &blocks, &HashMap::new(), &HashMap::new(), &words());
         assert!(text.find("Why we went").unwrap() < text.find("## Day 1").unwrap() && text.find("## Day 1").unwrap() < text.find("We'll be back").unwrap());
         let (plain, _) = page(&self::story(), None, &blocks, &HashMap::new(), &HashMap::new(), &words());
@@ -935,7 +1202,7 @@ mod tests {
         let (story, words) = (story(), words());
         let page = Page { story: &story, dates: None, blocks: &blocks, sources: &sources, words: &words, map: None, profiles: &HashMap::new() };
         let check = preflight(&page);
-        assert_eq!(check, Preflight { missing: 1, no_alt: 1, first: [Some(1), Some(0), None, None], photos: 1, ..Preflight::default() });
+        assert_eq!(check, Preflight { missing: 1, no_alt: 1, no_cover: true, first: [Some(1), Some(0), None, None, None], photos: 1, ..Preflight::default() });
         assert!(check.blocked(false) && !check.blocked(true), "missing photos wait for the user");
         let (index, outcome) = write_story(&folder, Format::Html, Profile::default(), &page, &Progress::default()).unwrap();
         assert_eq!(outcome.missing, 1);

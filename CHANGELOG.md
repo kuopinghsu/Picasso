@@ -22,6 +22,11 @@ section of this file as the release notes.
   photos in no Trip with is:notrip, or in one with is:intrip.
 - Search finds photos by Trip, Day, Place and Story with trip:, day:, place: and story:, and
   those whose Trip time needs review with is:review.
+- Stories can be shown as a Photography Journal, Travel Diary, Travel Guide (with a list of
+  sections) or Photo Essay, picked in the Story's header; the preview and export follow it.
+- Practical info and Link blocks in Stories, in exports and WordPress posts; a Link can be filled
+  from the Trip's links that may be published. Export and publishing warn about small photos,
+  and export about a Story without a cover.
 - Adding photos to a Trip first says how many have a location, are in another Trip, have no
   date, or may be copies of another.
 - Publish a Story to your own WordPress site from the Story's ⋯ menu. Connect sites in

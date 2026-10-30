@@ -676,6 +676,25 @@ pub struct Story {
 /// The layout a new Story starts with.
 pub const DEFAULT_TEMPLATE: &str = "journal";
 
+/// The layouts a Story can be shown in, by code. Each draws the same
+/// blocks; only the page around them changes.
+pub const TEMPLATES: [&str; 4] = [DEFAULT_TEMPLATE, "diary", "guide", "essay"];
+
+/// A template's code as stored, with an unknown one read as the default.
+pub fn template_code(code: &str) -> &'static str {
+    TEMPLATES.into_iter().find(|known| *known == code).unwrap_or(DEFAULT_TEMPLATE)
+}
+
+/// A template's name, to translate.
+pub fn template_name(code: &str) -> &'static str {
+    match template_code(code) {
+        "diary" => "Travel Diary",
+        "guide" => "Travel Guide",
+        "essay" => "Photo Essay",
+        _ => "Photography Journal",
+    }
+}
+
 /// A photo as used in one block, with this Story's own words for it.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct MediaUse {
@@ -716,6 +735,11 @@ pub enum Block {
     /// when chosen so the Story keeps it wherever it goes. `source` names
     /// the track chosen, or is empty for all of the Trip's.
     Route { caption: String, source: String, route: Vec<Vec<[i32; 2]>> },
+    /// Practical information under a title, as label and value lines, such
+    /// as "Getting there" and "Train from Lisbon, 2 h".
+    Info { title: String, items: Vec<(String, String)> },
+    /// A web page to read more, with its title and a note.
+    Link { url: String, title: String, note: String },
     /// A kind or version this build doesn't know, kept as it was read.
     Unknown { kind: String, version: i64, payload: String, media: Vec<MediaUse> },
 }
@@ -729,6 +753,8 @@ impl Block {
             Block::List { .. } => "list",
             Block::Quote { .. } => "quote",
             Block::Route { .. } => "route",
+            Block::Info { .. } => "info",
+            Block::Link { .. } => "link",
             Block::Paragraph(_) => "paragraph",
             Block::Photo(_) => "photo",
             Block::Gallery(_) => "gallery",
@@ -755,6 +781,8 @@ impl Block {
             Block::Quote { text, citation } => json!({ "text": text, "citation": citation }).to_string(),
             Block::Grid { columns, rows, caption, .. } => json!({ "columns": columns, "rows": rows, "caption": caption }).to_string(),
             Block::Route { caption, source, route } => json!({ "caption": caption, "source": source, "route": route }).to_string(),
+            Block::Info { title, items } => json!({ "title": title, "items": items }).to_string(),
+            Block::Link { url, title, note } => json!({ "url": url, "title": title, "note": note }).to_string(),
             Block::Photo(_) | Block::Gallery(_) | Block::Separator => "{}".into(),
             Block::Unknown { payload, .. } => payload.clone(),
         }
@@ -793,6 +821,19 @@ impl Block {
                 _ => unknown(media),
             };
         }
+        if kind == "info" {
+            let items = serde_json::from_value::<Vec<(String, String)>>(value["items"].clone()).ok();
+            return match (value["title"].as_str(), items) {
+                (Some(title), Some(items)) if media.is_empty() => Block::Info { title: title.into(), items },
+                _ => unknown(media),
+            };
+        }
+        if kind == "link" {
+            return match (value["url"].as_str(), value["title"].as_str(), value["note"].as_str()) {
+                (Some(url), Some(title), Some(note)) if media.is_empty() => Block::Link { url: url.into(), title: title.into(), note: note.into() },
+                _ => unknown(media),
+            };
+        }
         match (kind, text, media.len()) {
             ("heading", Some(text), 0) => Block::Heading(text),
             ("subheading", Some(text), 0) => Block::Subheading(text),
@@ -815,6 +856,16 @@ impl Block {
             _ => unknown(media),
         }
     }
+}
+
+/// A Link block's address when it can be followed: http or https only, so
+/// a page never links to a file or a script.
+pub fn web_address(url: &str) -> Option<&str> {
+    let url = url.trim();
+    let lower = url.to_ascii_lowercase();
+    let web = lower.starts_with("https://") || lower.starts_with("http://");
+    let host = url.split_once("://").is_some_and(|(_, rest)| !rest.is_empty());
+    (web && host && !url.contains(char::is_whitespace)).then_some(url)
 }
 
 /// Most places across or down a grid.
@@ -1071,6 +1122,15 @@ mod tests {
     }
 
     #[test]
+    fn only_web_addresses_are_followed() {
+        assert_eq!(web_address(" https://example.com/a "), Some("https://example.com/a"));
+        assert_eq!(web_address("HTTP://example.com"), Some("HTTP://example.com"));
+        for bad in ["javascript:alert(1)", "file:///etc/passwd", "example.com", "https://", "https://a b.com", ""] {
+            assert_eq!(web_address(bad), None, "{bad}");
+        }
+    }
+
+    #[test]
     fn blocks_read_back_what_they_store() {
         let photo = MediaUse { media_id: 3, caption: "Gion at dusk".into(), alt: "Lanterns on a street".into() };
         let blocks = [
@@ -1082,6 +1142,8 @@ mod tests {
             Block::Grid { columns: 3, rows: 2, caption: "Market \"day\"".into(), media: vec![photo.clone(), MediaUse::new(5)] },
             Block::Separator,
             Block::Credits("Photos: me".into()),
+            Block::Info { title: "Getting there".into(), items: vec![("Train".into(), "2 h from Lisbon".into()), (String::new(), "No \"booking\" needed".into())] },
+            Block::Link { url: "https://example.com/ferry?a=1&b=2".into(), title: "Ferry times".into(), note: "Summer only".into() },
         ];
         for block in blocks {
             let read = Block::read(block.kind(), block.version(), &block.payload(), block.media().to_vec());

@@ -606,6 +606,7 @@ impl PicassoApp {
             lang: crate::i18n::current().code(),
             untitled: tr("Untitled story").into(),
             unavailable: tr("Photo unavailable").into(),
+            contents: tr("Contents").into(),
         };
         let map = story_html::MapTiles { source: self.map_source, key: self.carto_key.clone(), cache: self.cache_dir.clone() };
         let mut profiles = HashMap::new();
@@ -744,6 +745,15 @@ impl PicassoApp {
                 if check.unknown > 0 {
                     ui.label(RichText::new(trf("{} blocks from a newer Picasso can't be exported.", &[&check.unknown])).color(theme::muted()));
                     show_link(ui, check.first[2], &mut show);
+                }
+                if check.low_res > 0 {
+                    ui.label(
+                        RichText::new(trf("{} photos are small and may look soft across the page.", &[&check.low_res])).color(theme::muted()),
+                    );
+                    show_link(ui, check.first[4], &mut show);
+                }
+                if check.no_cover && !check.empty {
+                    ui.label(RichText::new(tr("The story has no cover; it starts with its title. Right-click a photo in the story to make it the cover.")).color(theme::muted()));
                 }
                 if !dialog.error.is_empty() {
                     ui.label(RichText::new(&dialog.error).color(theme::DANGER));
@@ -900,6 +910,16 @@ impl PicassoApp {
             ui.checkbox(&mut story.show_date, tr("Show the trip's dates"));
             ui.label(RichText::new("·").color(theme::muted()));
             ui.checkbox(&mut story.finished, tr("Finished")).on_hover_text(tr("A story is a draft until you mark it finished."));
+            ui.label(RichText::new("·").color(theme::muted()));
+            egui::ComboBox::from_id_salt("story-template")
+                .selected_text(tr(crate::trip::template_name(&story.template)))
+                .show_ui(ui, |ui| {
+                    for code in crate::trip::TEMPLATES {
+                        ui.selectable_value(&mut story.template, code.to_string(), tr(crate::trip::template_name(code)));
+                    }
+                })
+                .response
+                .on_hover_text(tr("How the preview and export look. The blocks stay the same."));
         });
         ui.add_space(8.0);
         ui.separator();
@@ -1126,6 +1146,16 @@ impl PicassoApp {
                 chosen = self.route_chooser(ui, uid, &source, route.is_empty());
             }
         }
+        // Only the Trip's links allowed to be published are offered.
+        let shareable: Vec<crate::trip::TripResource> = match self.story.as_ref() {
+            Some(editor) if matches!(editor.blocks[index].block, Block::Link { .. }) => self
+                .db
+                .trip_resources(editor.story.trip_id)
+                .into_iter()
+                .filter(|resource| resource.kind == crate::trip::ResourceKind::Link && resource.publish)
+                .collect(),
+            _ => Vec::new(),
+        };
         let Some(editor) = &mut self.story else { return };
         // Empty captions show on the chosen block only, so pointing at
         // blocks doesn't make the page below jump.
@@ -1139,6 +1169,8 @@ impl PicassoApp {
             Block::Credits(text) => text_block(ui, text, TextKind::Credits, &uid, index, ctl, actions, typed),
             Block::List { ordered, items } => list_block(ui, *ordered, items, &uid, index, ctl, actions, typed),
             Block::Quote { text, citation } => quote_block(ui, text, citation, &uid, ctl, typed),
+            Block::Info { title, items } => info_block(ui, title, items, &uid, typed),
+            Block::Link { url, title, note } => link_block(ui, url, title, note, &shareable, &uid, typed),
             Block::Photo(media) => media_words(ui, media, &uid, 0, open, typed),
             Block::Grid { columns, rows, caption, media } => {
                 let places = usize::from(*columns) * usize::from(*rows);
@@ -1723,6 +1755,8 @@ fn block_icon(block: &Block) -> &'static str {
         Block::Separator => "—",
         Block::Credits(_) => "©",
         Block::Route { .. } => "🗺",
+        Block::Info { .. } => "i",
+        Block::Link { .. } => "🔗",
         _ => "▦",
     }
 }
@@ -1739,6 +1773,8 @@ fn block_hint(block: &Block) -> &'static str {
         Block::Separator => "A line between parts",
         Block::Credits(_) => "Small print, such as photo credits",
         Block::Route { .. } => "A GPS track of the trip, drawn as a line",
+        Block::Info { .. } => "Facts to plan with: how to get there, prices, hours",
+        Block::Link { .. } => "A web page to read more, with a note",
         _ => "Photos in rows and columns",
     }
 }
@@ -1908,6 +1944,84 @@ fn quote_block(ui: &mut egui::Ui, text: &mut String, citation: &mut String, uid:
     });
     let rect = shown.response.rect;
     ui.painter().vline(rect.left() + 2.0, rect.y_range(), egui::Stroke::new(3.0, theme::muted().gamma_multiply(0.5)));
+}
+
+/// A Practical info block: its title, and label and value lines that can
+/// be added and removed.
+fn info_block(ui: &mut egui::Ui, title: &mut String, items: &mut Vec<(String, String)>, uid: &str, typed: &mut Option<(String, u8)>) {
+    let frame = egui::Frame::new().stroke(egui::Stroke::new(1.0, theme::hairline())).corner_radius(6).inner_margin(Margin::symmetric(12, 10));
+    frame.show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        let edit = egui::TextEdit::singleline(title).hint_text(tr("Practical info")).font(egui::FontId::proportional(16.0)).frame(egui::Frame::NONE).desired_width(f32::INFINITY);
+        if ui.add(edit).changed() {
+            *typed = Some((uid.to_string(), 0));
+        }
+        let mut remove = None;
+        for (n, (label, value)) in items.iter_mut().enumerate() {
+            ui.horizontal(|ui| {
+                let field = n as u8 * 2 + 1;
+                if ui.add(egui::TextEdit::singleline(label).hint_text(tr("Label, such as Getting there")).desired_width(170.0)).changed() {
+                    *typed = Some((uid.to_string(), field));
+                }
+                let width = ui.available_width() - 30.0;
+                if ui.add(egui::TextEdit::singleline(value).hint_text(tr("Details")).desired_width(width)).changed() {
+                    *typed = Some((uid.to_string(), field + 1));
+                }
+                if theme::named(ui.small_button("×"), tr("Remove this line")).clicked() {
+                    remove = Some(n);
+                }
+            });
+        }
+        if let Some(n) = remove {
+            items.remove(n);
+            *typed = Some((String::new(), 0));
+        }
+        if ui.small_button(tr("Add a line")).clicked() {
+            items.push((String::new(), String::new()));
+            *typed = Some((String::new(), 0));
+        }
+    });
+}
+
+/// A Link block: the title shown, the web address, and a note. A link
+/// the Trip keeps and allows to be published can fill it in.
+fn link_block(ui: &mut egui::Ui, url: &mut String, title: &mut String, note: &mut String, shareable: &[crate::trip::TripResource], uid: &str, typed: &mut Option<(String, u8)>) {
+    let frame = egui::Frame::new().inner_margin(Margin { left: 14, ..Margin::ZERO });
+    let shown = frame.show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        let edit = egui::TextEdit::singleline(title).hint_text(tr("Link title")).font(egui::FontId::proportional(16.0)).frame(egui::Frame::NONE).desired_width(f32::INFINITY);
+        if ui.add(edit).changed() {
+            *typed = Some((uid.to_string(), 0));
+        }
+        ui.horizontal(|ui| {
+            let width = ui.available_width() - if shareable.is_empty() { 0.0 } else { 150.0 };
+            if ui.add(egui::TextEdit::singleline(url).hint_text("https://").desired_width(width)).changed() {
+                *typed = Some((uid.to_string(), 1));
+            }
+            if !shareable.is_empty() {
+                let button = ui.button(tr("From the trip…")).on_hover_text(tr("Links kept with the trip that may be published"));
+                egui::Popup::menu(&button).show(|ui| {
+                    for resource in shareable {
+                        if ui.button(resource.shown_name()).on_hover_text(&resource.reference).clicked() {
+                            *url = resource.reference.clone();
+                            *title = resource.title.clone();
+                            *note = resource.notes.clone();
+                            *typed = Some((String::new(), 0));
+                        }
+                    }
+                });
+            }
+        });
+        if !url.trim().is_empty() && crate::trip::web_address(url).is_none() {
+            ui.label(RichText::new(tr("Type a web address starting with https://")).size(12.0).color(theme::DANGER));
+        }
+        let edit = egui::TextEdit::multiline(note).hint_text(tr("What it is for (optional)")).text_color(theme::muted()).frame(egui::Frame::NONE).desired_rows(1).desired_width(f32::INFINITY);
+        if ui.add(edit).changed() {
+            *typed = Some((uid.to_string(), 2));
+        }
+    });
+    let rect = shown.response.rect;
+    ui.painter().vline(rect.left() + 2.0, rect.y_range(), egui::Stroke::new(3.0, theme::ACCENT));
 }
 
 /// The format buttons of a text block: styles for the selection, the
@@ -2316,7 +2430,7 @@ fn grid_menu(ui: &mut egui::Ui, at: usize, actions: &mut Vec<Action>) {
 }
 
 /// The blocks that can be added as text, with their names.
-fn new_blocks() -> [(&'static str, Block); 9] {
+fn new_blocks() -> [(&'static str, Block); 11] {
     [
         ("Heading", Block::Heading(String::new())),
         ("Subheading", Block::Subheading(String::new())),
@@ -2327,6 +2441,8 @@ fn new_blocks() -> [(&'static str, Block); 9] {
         ("Separator", Block::Separator),
         ("Credits", Block::Credits(String::new())),
         ("Route map", Block::Route { caption: String::new(), source: String::new(), route: Vec::new() }),
+        ("Practical info", Block::Info { title: String::new(), items: vec![(String::new(), String::new())] }),
+        ("Link", Block::Link { url: String::new(), title: String::new(), note: String::new() }),
     ]
 }
 
@@ -2348,6 +2464,8 @@ fn block_label(block: &Block) -> &'static str {
         Block::Separator => "Separator",
         Block::Credits(_) => "Credits",
         Block::Route { .. } => "Route map",
+        Block::Info { .. } => "Practical info",
+        Block::Link { .. } => "Link",
         Block::Unknown { .. } => "Unknown block",
     }
 }
@@ -2362,6 +2480,8 @@ fn story_words(editor: &StoryEditor) -> usize {
             Block::Heading(text) | Block::Subheading(text) | Block::Paragraph(text) | Block::Credits(text) => texts.push(text),
             Block::List { items, .. } => texts.extend(items.iter().map(String::as_str)),
             Block::Quote { text, citation } => texts.extend([text.as_str(), citation.as_str()]),
+            Block::Info { title, items } => texts.extend(std::iter::once(title.as_str()).chain(items.iter().flat_map(|(label, value)| [label.as_str(), value.as_str()]))),
+            Block::Link { title, note, .. } => texts.extend([title.as_str(), note.as_str()]),
             _ => {}
         }
     }

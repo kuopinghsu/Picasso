@@ -481,6 +481,9 @@ impl PicassoApp {
                     blocked = true;
                     ui.label(RichText::new(trf("{} blocks from a newer Picasso can't be published.", &[&check.unknown])).color(theme::DANGER));
                 }
+                if check.low_res > 0 {
+                    ui.label(RichText::new(trf("{} photos are small and may look soft across the page.", &[&check.low_res])).color(theme::muted()));
+                }
 
                 // What saving changes on the site, folded away: read only, nothing is sent.
                 if let Some(site) = &site {

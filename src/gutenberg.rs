@@ -92,6 +92,38 @@ pub fn post(story: &Story, blocks: &[StoryBlock], media: &dyn Fn(i64) -> Option<
                 let cite = if citation.trim().is_empty() { String::new() } else { format!("<cite>{}</cite>", inline::to_html(citation.trim())) };
                 let _ = write!(out, "<!-- wp:quote -->\n<blockquote class=\"wp-block-quote\">{}{cite}</blockquote>\n<!-- /wp:quote -->\n\n", inner.trim_end());
             }
+            Block::Info { title, items } => {
+                let items: Vec<String> = items
+                    .iter()
+                    .map(|(label, value)| (label.trim(), value.trim()))
+                    .filter(|(label, value)| !label.is_empty() || !value.is_empty())
+                    .map(|(label, value)| {
+                        let label = if label.is_empty() { String::new() } else { format!("<strong>{}:</strong> ", esc(label)) };
+                        format!("<!-- wp:list-item -->\n<li>{label}{}</li>\n<!-- /wp:list-item -->", inline::to_html(value))
+                    })
+                    .collect();
+                if !title.trim().is_empty() || !items.is_empty() {
+                    out.push_str("<!-- wp:group {\"className\":\"picasso-info\",\"layout\":{\"type\":\"constrained\"}} -->\n<div class=\"wp-block-group picasso-info\">");
+                    if !title.trim().is_empty() {
+                        let _ = write!(out, "<!-- wp:heading {{\"level\":3}} -->\n<h3 class=\"wp-block-heading\">{}</h3>\n<!-- /wp:heading -->\n\n", esc(title.trim()));
+                    }
+                    if !items.is_empty() {
+                        let _ = write!(out, "<!-- wp:list -->\n<ul class=\"wp-block-list\">{}</ul>\n<!-- /wp:list -->", items.join("\n\n"));
+                    }
+                    out.push_str("</div>\n<!-- /wp:group -->\n\n");
+                }
+            }
+            Block::Link { url, title, note } => {
+                let shown = if title.trim().is_empty() { url.trim() } else { title.trim() };
+                if !shown.is_empty() || !note.trim().is_empty() {
+                    let link = match crate::trip::web_address(url) {
+                        Some(url) => format!("<a href=\"{}\" rel=\"noopener\">{}</a>", esc(url), esc(shown)),
+                        None => esc(shown),
+                    };
+                    let note = if note.trim().is_empty() { String::new() } else { format!("<br>{}", inline::to_html(note.trim())) };
+                    let _ = write!(out, "<!-- wp:paragraph {{\"className\":\"picasso-link\"}} -->\n<p class=\"picasso-link\">{link}{note}</p>\n<!-- /wp:paragraph -->\n\n");
+                }
+            }
             Block::Paragraph(text) => paragraphs(&mut out, text, None),
             Block::Credits(text) => paragraphs(&mut out, text, Some("picasso-credits")),
             Block::Photo(item) => {
@@ -296,6 +328,20 @@ mod tests {
         assert_eq!(post(&story(), &[StoryBlock::new(Block::Separator), unknown], &uploads, &|_| None), Err(Unsupported::Unknown(1)));
         let missing = StoryBlock::new(Block::Photo(MediaUse::new(42)));
         assert_eq!(post(&story(), &[missing], &uploads, &|_| None), Err(Unsupported::Photo(42)));
+    }
+
+    #[test]
+    fn practical_info_is_a_group_and_a_link_a_paragraph() {
+        let blocks = [
+            StoryBlock::new(Block::Info { title: "Getting there".into(), items: vec![("Train".into(), "2 h".into()), (String::new(), "Book <ahead>".into())] }),
+            StoryBlock::new(Block::Link { url: "https://example.com/?a=1&b=2".into(), title: String::new(), note: "Timetable".into() }),
+            StoryBlock::new(Block::Link { url: "javascript:alert(1)".into(), title: "Trick".into(), note: String::new() }),
+        ];
+        let content = post(&story(), &blocks, &uploads, &|_| None).unwrap().content;
+        assert!(content.contains("<!-- wp:group {\"className\":\"picasso-info\",\"layout\":{\"type\":\"constrained\"}} -->"), "{content}");
+        assert!(content.contains("<h3 class=\"wp-block-heading\">Getting there</h3>") && content.contains("<li><strong>Train:</strong> 2 h</li>") && content.contains("<li>Book &lt;ahead&gt;</li>"), "{content}");
+        assert!(content.contains("<a href=\"https://example.com/?a=1&amp;b=2\" rel=\"noopener\">https://example.com/?a=1&amp;b=2</a><br>Timetable"), "{content}");
+        assert!(content.contains("<p class=\"picasso-link\">Trick</p>") && !content.contains("javascript:"), "{content}");
     }
 
     #[test]

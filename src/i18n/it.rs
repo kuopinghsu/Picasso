@@ -1491,6 +1491,7 @@ pub(super) const TABLE: &[(&str, &str)] = &[
     ("Give the note a title or some text", "Dai alla nota un titolo o del testo"),
     ("No caption", "Senza didascalia"),
     ("Photos without a caption, to add one where you want it", "Foto senza didascalia, per aggiungerla dove vuoi"),
+    ("For Trips, trip:, day:, place:, and story: find photos by part of a name, is:review those whose time needs review, and is:notrip those in no Trip. While searching, the Trip's own filters wait.", "Per i viaggi, trip:, day:, place: e story: trovano le foto da parte di un nome, is:review quelle con l’ora da verificare e is:notrip quelle in nessun viaggio. Durante la ricerca, i filtri del viaggio restano in attesa."),
     ("Save as a new draft", "Salva come nuova bozza"),
     ("The post stays as it is; a new draft is made beside it.", "L’articolo resta com’è; accanto viene creata una nuova bozza."),
     ("Upload {} photos and update the post", "Carica {} foto e aggiorna l'articolo"),

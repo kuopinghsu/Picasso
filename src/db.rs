@@ -1345,6 +1345,16 @@ enum Term {
     Starred(bool),
     /// Photos in any Trip, or in none when `false`.
     InTrip(bool),
+    /// Photos in a Trip whose title or destination has the text.
+    Trip(String),
+    /// Photos in a Trip Day whose title has the text.
+    Day(String),
+    /// Photos at a Trip Place whose name or local name has the text.
+    Place(String),
+    /// Photos used by a Story whose title has the text.
+    Story(String),
+    /// Photos whose time in a Trip needs review.
+    Review,
     Camera(String),
     Lens(String),
     /// Focal lengths from the first to the second, in millimeters.
@@ -1357,7 +1367,8 @@ enum Term {
 
 /// The words of a search. A year, month, or day such as `2019`, `2019-05`,
 /// or `2019/5/17` stands for the photos taken then, in local time.
-/// `type:`, `gps:`, `is:` (`is:notrip` for photos in no Trip), `camera:`, `lens:`, `focal:`, and `mp:` narrow by
+/// `type:`, `gps:`, `is:` (`is:notrip` for photos in no Trip), `trip:`,
+/// `day:`, `place:`, `story:`, `camera:`, `lens:`, `focal:`, and `mp:` narrow by
 /// what they name (see [`search_word`]); any other word is looked for in the
 /// file and subfolder names, the caption, the camera, the lens, and the names
 /// of the photo's albums. A word starting with `-`, such as `-beach` or
@@ -1391,6 +1402,10 @@ fn negated(term: Term) -> Term {
         term => Term::Not(Box::new(term)),
     }
 }
+
+/// The start of a condition on a photo's Trip memberships, `tm`, to which
+/// a term adds its own test and the closing parenthesis.
+const IN_TRIP: &str = "EXISTS (SELECT 1 FROM media_refs mr JOIN trip_media tm ON tm.media_id = mr.id WHERE mr.photo_id = p.id";
 
 /// The SQL condition for `term`, adding its parameters to `values`.
 fn term_sql(term: Term, values: &mut Vec<rusqlite::types::Value>) -> String {
@@ -1426,9 +1441,32 @@ fn term_sql(term: Term, values: &mut Vec<rusqlite::types::Value>) -> String {
         Term::Edited(true) => "EXISTS (SELECT 1 FROM edits e WHERE e.photo_id = p.id AND e.applied > 0)".into(),
         Term::Edited(false) => "1".into(),
         Term::Starred(starred) => format!("p.starred = {}", i32::from(starred)),
+        Term::Trip(text) => {
+            values.push(like_pattern(&text).into());
+            format!("{IN_TRIP} AND EXISTS (SELECT 1 FROM trips t WHERE t.id = tm.trip_id AND (t.title LIKE ?{at} ESCAPE '\\' OR t.destination LIKE ?{at} ESCAPE '\\')))")
+        }
+        Term::Day(text) => {
+            values.push(like_pattern(&text).into());
+            format!("{IN_TRIP} AND EXISTS (SELECT 1 FROM trip_days d WHERE d.id = tm.day_id AND d.title LIKE ?{at} ESCAPE '\\'))")
+        }
+        Term::Place(text) => {
+            values.push(like_pattern(&text).into());
+            format!(
+                "{IN_TRIP} AND EXISTS (SELECT 1 FROM trip_places pl WHERE pl.id = tm.place_id
+                  AND (pl.name LIKE ?{at} ESCAPE '\\' OR pl.local_name LIKE ?{at} ESCAPE '\\')))"
+            )
+        }
+        Term::Story(text) => {
+            values.push(like_pattern(&text).into());
+            format!(
+                "EXISTS (SELECT 1 FROM media_refs mr JOIN story_media sm ON sm.media_id = mr.id
+                  JOIN story_blocks sb ON sb.id = sm.block_id JOIN stories s ON s.id = sb.story_id
+                  WHERE mr.photo_id = p.id AND s.title LIKE ?{at} ESCAPE '\\')"
+            )
+        }
+        Term::Review => format!("{IN_TRIP} AND tm.review != 0)"),
         Term::InTrip(in_trip) => {
-            let any = "EXISTS (SELECT 1 FROM media_refs mr JOIN trip_media tm ON tm.media_id = mr.id WHERE mr.photo_id = p.id)";
-            if in_trip { any.into() } else { format!("NOT {any}") }
+            if in_trip { format!("{IN_TRIP})") } else { format!("NOT {IN_TRIP})") }
         }
         Term::Camera(text) => {
             values.push(like_pattern(&text).into());
@@ -1503,9 +1541,14 @@ fn search_word(word: &str) -> Option<Term> {
             "unstarred" => Some(Term::Starred(false)),
             "intrip" => Some(Term::InTrip(true)),
             "notrip" => Some(Term::InTrip(false)),
+            "review" => Some(Term::Review),
             "geotagged" | "located" => Some(Term::Located(true)),
             _ => None,
         },
+        "trip" if !value.is_empty() => Some(Term::Trip(value)),
+        "day" if !value.is_empty() => Some(Term::Day(value)),
+        "place" if !value.is_empty() => Some(Term::Place(value)),
+        "story" if !value.is_empty() => Some(Term::Story(value)),
         "camera" if !value.is_empty() => Some(Term::Camera(value)),
         "lens" if !value.is_empty() => Some(Term::Lens(value)),
         "focal" => number_range(&value, "mm").map(|(low, high)| Term::Focal(low, high)),

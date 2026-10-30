@@ -159,7 +159,8 @@ Search words narrow the results further:
 * `type:video`, `type:photo`, or `type:raw`, or one format such as `type:jpg` or `type:nef`
 * `gps:yes` or `gps:no`, for photos with or without a place on the map
 * `is:edited` or `is:starred`
-* `is:notrip` or `is:intrip`, for photos in no Trip or in one
+* `is:notrip` or `is:intrip`, for photos in no Trip or in one, and `is:review` for Trip photos whose time needs review
+* `trip:`, `day:`, `place:`, or `story:` with part of a Trip's title or destination, a Day's title, a Place's name or local name, or a Story's title, such as `place:alfama`
 * `camera:` or `lens:` with part of the name, such as `lens:50mm`
 * `focal:35`, or a range such as `focal:24-70` or `focal:200-`, in millimeters
 * `mp:12`, or a range such as `mp:20-` or `mp:-8`, in megapixels

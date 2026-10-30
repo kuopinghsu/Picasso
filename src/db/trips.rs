@@ -1686,10 +1686,10 @@ mod tests {
     use crate::track::{Point, Track};
 
     #[test]
-    fn review_filters_find_missing_captions_and_photos_in_no_trip() {
+    fn review_filters_and_search_words_find_trip_photos() {
         let (db, _, _, ids) = photos("review", &["a.jpg", "b.jpg", "c.jpg"]);
         let trip_id = trip(&db, "Coast");
-        db.add_to_trip(trip_id, &ids[..2]).unwrap();
+        let refs = db.add_to_trip(trip_id, &ids[..2]).unwrap();
         db.set_caption(ids[0], "Harbor at dawn");
         db.set_caption(ids[1], "  ");
         let no_caption = MemberQuery { no_caption: true, ..MemberQuery::default() };
@@ -1703,6 +1703,21 @@ mod tests {
         assert_eq!(found("is:notrip"), vec![ids[2]]);
         assert_eq!(found("is:intrip"), ids[..2].to_vec());
         assert_eq!(found("-is:intrip"), vec![ids[2]]);
+
+        let day = db.add_trip_day(trip_id, None, "Harbor day").unwrap();
+        db.move_to_day(trip_id, Some(day), &refs[..1], DaySource::User).unwrap();
+        db.conn.execute("INSERT INTO trip_places (id, trip_id, position, name, local_name, lat, lon) VALUES (7, ?1, 0, 'Old town', 'Alfama', 38.7, -9.1)", [trip_id]).unwrap();
+        db.conn.execute("UPDATE trip_media SET place_id = 7, review = 1 WHERE media_id = ?1", [refs[1]]).unwrap();
+        let story = db.create_story(trip_id, "Lisbon walk").unwrap();
+        db.save_story_blocks(story, 1, &[StoryBlock::new(Block::Photo(MediaUse::new(refs[1])))]).unwrap();
+        assert_eq!(found("trip:coa"), ids[..2].to_vec());
+        assert!(found("trip:alps").is_empty());
+        assert_eq!(found("day:harbor"), vec![ids[0]]);
+        assert_eq!(found("place:alfama"), vec![ids[1]]);
+        assert_eq!(found("place:old"), vec![ids[1]]);
+        assert_eq!(found("story:lisbon"), vec![ids[1]]);
+        assert_eq!(found("-story:lisbon"), vec![ids[0], ids[2]]);
+        assert_eq!(found("is:review"), vec![ids[1]]);
     }
 
     #[test]

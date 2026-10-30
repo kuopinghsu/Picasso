@@ -1491,6 +1491,7 @@ pub(super) const TABLE: &[(&str, &str)] = &[
     ("Give the note a title or some text", "메모에 제목이나 내용을 입력하세요"),
     ("No caption", "캡션 없음"),
     ("Photos without a caption, to add one where you want it", "캡션이 없는 사진. 원하는 곳에 추가하세요"),
+    ("For Trips, trip:, day:, place:, and story: find photos by part of a name, is:review those whose time needs review, and is:notrip those in no Trip. While searching, the Trip's own filters wait.", "여행에서는 trip:, day:, place:, story: 로 이름 일부로 사진을 찾고, is:review 로 시간 확인이 필요한 사진을, is:notrip 으로 어떤 여행에도 없는 사진을 찾습니다. 검색하는 동안 여행의 필터는 적용되지 않습니다."),
     ("Save as a new draft", "새 초안으로 저장"),
     ("The post stays as it is; a new draft is made beside it.", "게시물은 그대로 두고 새 초안을 따로 만듭니다."),
     ("Upload {} photos and update the post", "사진 {}장 업로드 후 글 업데이트"),

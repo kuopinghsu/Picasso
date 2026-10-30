@@ -67,6 +67,9 @@ type PhotoInfo = (crate::photo_info::Histogram, Vec<(&'static str, String)>);
 const PANEL_HOLD: Duration = Duration::from_millis(600);
 const SEARCH_HINT: &str =
     "Finds every word in file and folder names, captions, cameras, lenses, and albums. Add a date such as 2019, 2019-05, or 2019-05-17, or narrow with type:video, type:raw, gps:no, is:edited, is:starred, camera:, lens:, focal:24-70, or mp:20-. A word starting with - leaves out what it finds, as in -beach.";
+/// The search words for Trips, a second paragraph of [`SEARCH_HINT`].
+const SEARCH_TRIP_HINT: &str =
+    "For Trips, trip:, day:, place:, and story: find photos by part of a name, is:review those whose time needs review, and is:notrip those in no Trip. While searching, the Trip's own filters wait.";
 
 #[derive(Clone, Copy, PartialEq)]
 enum Mode {
@@ -1517,7 +1520,7 @@ impl PicassoApp {
                     .margin(egui::Margin::symmetric(12, 6))
                     .desired_width(search_w),
             );
-            let response = response.on_hover_text(tr(SEARCH_HINT));
+            let response = response.on_hover_text(format!("{}\n\n{}", tr(SEARCH_HINT), tr(SEARCH_TRIP_HINT)));
             if std::mem::take(&mut self.focus_search) {
                 response.request_focus();
                 let all = egui::text::CCursorRange::two(egui::text::CCursor::new(0), egui::text::CCursor::new(self.search.chars().count()));

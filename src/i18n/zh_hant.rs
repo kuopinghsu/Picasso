@@ -1491,6 +1491,7 @@ pub(super) const TABLE: &[(&str, &str)] = &[
     ("Give the note a title or some text", "請給筆記一個標題或一些文字"),
     ("No caption", "無說明"),
     ("Photos without a caption, to add one where you want it", "沒有說明的相片，可在需要的地方補上"),
+    ("For Trips, trip:, day:, place:, and story: find photos by part of a name, is:review those whose time needs review, and is:notrip those in no Trip. While searching, the Trip's own filters wait.", "對於旅程，trip:、day:、place: 和 story: 依名稱的一部分尋找相片，is:review 尋找時間需要複核的相片，is:notrip 尋找不在任何旅程中的相片。搜尋時，旅程自己的篩選暫不生效。"),
     ("Save as a new draft", "另存為新草稿"),
     ("The post stays as it is; a new draft is made beside it.", "文章保持不變;在旁邊新增一份草稿。"),
     ("Upload {} photos and update the post", "上傳 {} 張相片並更新文章"),

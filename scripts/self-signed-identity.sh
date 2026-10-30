@@ -16,9 +16,10 @@ set -euo pipefail
 # OpenSSL needs -legacy for that.
 openssl=/usr/bin/openssl
 [ -x "$openssl" ] || openssl=openssl
-legacy=()
+# Not an array: the bash 3.2 macOS ships calls an empty one unset under -u.
+legacy=
 if "$openssl" version | grep -q '^OpenSSL [3-9]'; then
-  legacy=(-legacy)
+  legacy=-legacy
 fi
 
 work=$(mktemp -d)
@@ -57,7 +58,7 @@ EOF
 "$openssl" req -x509 -newkey rsa:2048 -nodes -days 3650 -config "$work/cert.conf" \
   -keyout "$work/key.pem" -out "$work/cert.pem" 2>/dev/null
 p12_password=$(uuidgen)
-"$openssl" pkcs12 -export "${legacy[@]}" -name "$name" -inkey "$work/key.pem" -in "$work/cert.pem" \
+"$openssl" pkcs12 -export $legacy -name "$name" -inkey "$work/key.pem" -in "$work/cert.pem" \
   -out "$work/identity.p12" -passout "pass:$p12_password"
 import "$work/identity.p12" "$p12_password" "$keychain" "$keychain_password"
 echo "Made the code-signing identity \"$name\" in $keychain"

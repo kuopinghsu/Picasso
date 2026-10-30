@@ -20,6 +20,8 @@ section of this file as the release notes.
   Trip, and locate a file that moved. Each stays private unless you allow it to be published.
 - A Trip's photos can be narrowed to those without a caption, and the Library search finds
   photos in no Trip with is:notrip, or in one with is:intrip.
+- Search finds photos by Trip, Day, Place and Story with trip:, day:, place: and story:, and
+  those whose Trip time needs review with is:review.
 - Adding photos to a Trip first says how many have a location, are in another Trip, have no
   date, or may be copies of another.
 - Publish a Story to your own WordPress site from the Story's ⋯ menu. Connect sites in

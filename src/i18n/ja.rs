@@ -1491,6 +1491,7 @@ pub(super) const TABLE: &[(&str, &str)] = &[
     ("Give the note a title or some text", "メモにタイトルか本文を入力してください"),
     ("No caption", "キャプションなし"),
     ("Photos without a caption, to add one where you want it", "キャプションのない写真。必要なところに追加できます"),
+    ("For Trips, trip:, day:, place:, and story: find photos by part of a name, is:review those whose time needs review, and is:notrip those in no Trip. While searching, the Trip's own filters wait.", "旅行では、trip:、day:、place:、story: で名前の一部から写真を探し、is:review で時刻の確認が必要な写真を、is:notrip でどの旅行にも入っていない写真を探せます。検索中は旅行のフィルタは使われません。"),
     ("Save as a new draft", "新しい下書きとして保存"),
     ("The post stays as it is; a new draft is made beside it.", "投稿はそのままで、別に新しい下書きを作成します。"),
     ("Upload {} photos and update the post", "写真 {} 枚をアップロードして投稿を更新"),

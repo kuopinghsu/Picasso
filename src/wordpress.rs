@@ -237,6 +237,14 @@ pub enum Failure {
     BadReply,
 }
 
+impl Failure {
+    /// Whether a write that failed this way may still have been done: the
+    /// request may have reached the site before the answer was lost.
+    pub fn outcome_unknown(&self) -> bool {
+        matches!(self, Failure::Timeout | Failure::Unreachable | Failure::BadReply) || matches!(self, Failure::Status(status) if *status >= 500)
+    }
+}
+
 /// One request to the site.
 #[derive(Clone, Debug)]
 pub struct Request<'b> {
@@ -312,11 +320,65 @@ pub struct Account {
 pub struct Client<'a> {
     http: &'a dyn Http,
     policy: Policy,
+    /// How long it has waited before trying a request again, in all.
+    waited: std::cell::Cell<Duration>,
+    /// Set when the person cancels; a wait before trying again ends at once.
+    cancel: Option<&'a std::sync::atomic::AtomicBool>,
 }
+
+/// Tries of one request, the first included.
+const MAX_TRIES: u32 = 3;
+/// The longest wait before trying again; a site asking for longer is left
+/// to the person to try later.
+const MAX_WAIT: Duration = Duration::from_secs(30);
 
 impl<'a> Client<'a> {
     pub fn new(http: &'a dyn Http, policy: Policy) -> Self {
-        Client { http, policy }
+        Client { http, policy, waited: std::cell::Cell::new(Duration::ZERO), cancel: None }
+    }
+
+    /// Lets `cancel` end a wait before a request is tried again.
+    pub fn cancelled_by(self, cancel: &'a std::sync::atomic::AtomicBool) -> Self {
+        Client { cancel: Some(cancel), ..self }
+    }
+
+    fn is_cancelled(&self) -> bool {
+        self.cancel.is_some_and(|cancel| cancel.load(std::sync::atomic::Ordering::Relaxed))
+    }
+
+    /// Sends `request`, trying again after a pause when that is safe: a
+    /// read after a timeout, a lost connection or a server error, and any
+    /// request the site turned away for coming too often, which it didn't
+    /// do. A write whose answer was lost is never sent again here; the
+    /// caller looks for what it made instead.
+    fn send(&self, request: &Request) -> Result<Reply, Failure> {
+        let read = request.method == "GET";
+        let mut tries = 1;
+        loop {
+            let result = self.http.send(request);
+            let asked = |reply: &Reply| reply.header("retry-after").next().and_then(|value| value.trim().parse().ok()).map(Duration::from_secs);
+            let wait = match &result {
+                Ok(reply) if reply.status == 429 => Some(asked(reply).unwrap_or_else(|| backoff(tries))),
+                Ok(reply) if read && matches!(reply.status, 500 | 502 | 503 | 504) => Some(asked(reply).unwrap_or_else(|| backoff(tries))),
+                Err(Failure::Timeout | Failure::Unreachable) if read => Some(backoff(tries)),
+                _ => None,
+            };
+            match wait {
+                Some(wait) if tries < MAX_TRIES && wait <= MAX_WAIT && !self.is_cancelled() => {
+                    self.waited.set(self.waited.get() + wait);
+                    // In short steps, so a cancel isn't kept waiting.
+                    let until = std::time::Instant::now() + wait;
+                    while !cfg!(test) && !self.is_cancelled() && std::time::Instant::now() < until {
+                        std::thread::sleep(Duration::from_millis(100).min(until - std::time::Instant::now()));
+                    }
+                    if self.is_cancelled() {
+                        return result;
+                    }
+                    tries += 1;
+                }
+                _ => return result,
+            }
+        }
     }
 
     /// GET `url`, following redirects within its origin. `auth` goes only
@@ -328,7 +390,7 @@ impl<'a> Client<'a> {
         let mut url = url.clone();
         for _ in 0..=MAX_REDIRECTS {
             let request = Request { method: "GET", url: url.clone(), auth: header.clone(), headers: Vec::new(), body: None };
-            let reply = self.http.send(&request)?;
+            let reply = self.send(&request)?;
             if !matches!(reply.status, 301 | 302 | 303 | 307 | 308) {
                 return Ok((url, reply));
             }
@@ -414,7 +476,7 @@ impl Client<'_> {
     fn post(&self, url: &SiteUrl, credentials: &Credentials, headers: Vec<(&'static str, String)>, body: &[u8]) -> Result<Reply, Failure> {
         self.policy.check(url)?;
         let request = Request { method: "POST", url: url.clone(), auth: Some(credentials.header()), headers, body: Some(body) };
-        let reply = self.http.send(&request)?;
+        let reply = self.send(&request)?;
         if (300..400).contains(&reply.status) {
             return Err(Failure::Status(reply.status));
         }
@@ -429,6 +491,42 @@ impl Client<'_> {
         let reply = self.post(&url, credentials, headers, bytes)?;
         checked(&reply)?;
         media_of(&reply.json().ok_or(Failure::BadReply)?)
+    }
+
+    /// Sets the upload `id`'s description in the site's media library, which
+    /// WordPress offers again when the photo is put in another post.
+    pub fn set_media_alt(&self, api: &Api, credentials: &Credentials, id: i64, alt: &str) -> Result<(), Failure> {
+        let url = api.route(&format!("/wp/v2/media/{id}"), "");
+        let bytes = serde_json::to_vec(&serde_json::json!({ "alt_text": alt })).map_err(|_| Failure::BadReply)?;
+        checked(&self.post(&url, credentials, vec![("Content-Type", "application/json".to_string())], &bytes)?)?;
+        Ok(())
+    }
+
+    /// The uploads in the site's media library named `name` (without its
+    /// extension, as WordPress titles an upload), oldest first: how an upload
+    /// whose answer was lost is found.
+    pub fn find_media(&self, api: &Api, credentials: &Credentials, name: &str) -> Result<Vec<Media>, Failure> {
+        let query = format!("search={}&per_page=20&orderby=id&order=asc&context=edit&_fields=id,source_url,title,mime_type,media_details", query_value(name));
+        let (_, reply) = self.get(&api.route("/wp/v2/media", &query), Some(credentials))?;
+        checked(&reply)?;
+        let list = reply.json().and_then(|json| json.as_array().cloned()).ok_or(Failure::BadReply)?;
+        list.iter().filter(|item| raw_title(item) == name).map(media_of).collect()
+    }
+
+    /// The ids of the drafts and published posts titled exactly `title`
+    /// changed on the site since `since` (Unix seconds), oldest first: how a
+    /// post whose answer was lost is found.
+    pub fn find_drafts(&self, api: &Api, credentials: &Credentials, title: &str, since: i64) -> Result<Vec<i64>, Failure> {
+        let after = chrono::DateTime::from_timestamp(since, 0).ok_or(Failure::BadReply)?.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let query = format!(
+            "search={}&status=draft,publish&modified_after={}&per_page=20&orderby=id&order=asc&context=edit&_fields=id,title",
+            query_value(title),
+            query_value(&after)
+        );
+        let (_, reply) = self.get(&api.route("/wp/v2/posts", &query), Some(credentials))?;
+        checked(&reply)?;
+        let list = reply.json().and_then(|json| json.as_array().cloned()).ok_or(Failure::BadReply)?;
+        Ok(list.iter().filter(|post| raw_title(post) == title).filter_map(|post| post.get("id").and_then(Value::as_i64)).collect())
     }
 
     /// Whether the upload `id` is still in the site's media library.
@@ -482,14 +580,33 @@ impl Client<'_> {
         Ok(terms)
     }
 
+    /// Makes the term `name` in `taxonomy` on the site, at the top level, or
+    /// returns the one already there by that name, so a retry after a lost
+    /// answer never makes a second. Needs the account to be allowed to make
+    /// terms; a refusal comes back as [`Failure::Forbidden`].
+    pub fn create_term(&self, api: &Api, credentials: &Credentials, taxonomy: Taxonomy, name: &str) -> Result<Term, Failure> {
+        let url = api.route(taxonomy.route(), "");
+        let bytes = serde_json::to_vec(&serde_json::json!({ "name": name })).map_err(|_| Failure::BadReply)?;
+        let reply = self.post(&url, credentials, vec![("Content-Type", "application/json".to_string())], &bytes)?;
+        if reply.error_code().as_deref() == Some("term_exists") {
+            let id = reply.json().and_then(|json| json.get("data")?.get("term_id")?.as_i64()).ok_or(Failure::BadReply)?;
+            return Ok(Term { id, name: name.to_string(), parent: 0 });
+        }
+        checked(&reply)?;
+        let term = reply.json().ok_or(Failure::BadReply)?;
+        let id = term.get("id").and_then(Value::as_i64).ok_or(Failure::BadReply)?;
+        let made = term.get("name").and_then(Value::as_str).map_or_else(|| name.to_string(), decode_entities);
+        Ok(Term { id, name: made, parent: term.get("parent").and_then(Value::as_i64).unwrap_or(0) })
+    }
+
     /// Creates a draft with `title`, `content`, and `featured` media, or,
     /// with `id`, changes those of that post and leaves its status as it is.
     /// `terms` sets its categories and tags, each only when given, so the
     /// post keeps the ones it has on the site otherwise. Returns the post as
     /// the site keeps it.
     pub fn save_draft(&self, api: &Api, credentials: &Credentials, id: Option<i64>, post: &DraftPost) -> Result<PostSaved, Failure> {
-        let DraftPost { title, content, featured, categories, tags } = post;
-        let mut body = serde_json::json!({ "title": title, "content": content, "featured_media": featured.unwrap_or(0) });
+        let DraftPost { title, excerpt, content, featured, categories, tags, publish, schedule } = post;
+        let mut body = serde_json::json!({ "title": title, "excerpt": excerpt, "content": content, "featured_media": featured.unwrap_or(0) });
         if let Some(categories) = categories {
             body["categories"] = Value::from(categories.clone());
         }
@@ -503,13 +620,41 @@ impl Client<'_> {
                 "/wp/v2/posts".to_string()
             }
         };
+        match (publish, schedule) {
+            // The site's own time: WordPress turns it into UTC by its time
+            // zone, summer time included.
+            (true, Some(at)) => {
+                body["status"] = Value::from("future");
+                body["date"] = Value::from(at.format("%Y-%m-%dT%H:%M:00").to_string());
+            }
+            (true, None) => body["status"] = Value::from("publish"),
+            _ => {}
+        }
         let url = api.route(&route, "");
         let bytes = serde_json::to_vec(&body).map_err(|_| Failure::BadReply)?;
         let reply = self.post(&url, credentials, vec![("Content-Type", "application/json".to_string())], &bytes)?;
         checked(&reply)?;
         let post = reply.json().ok_or(Failure::BadReply)?;
         let id = post.get("id").and_then(Value::as_i64).ok_or(Failure::BadReply)?;
-        Ok(PostSaved { id, fingerprint: fingerprint(&post) })
+        let status = post.get("status").and_then(Value::as_str).unwrap_or_default().to_string();
+        Ok(PostSaved { id, fingerprint: fingerprint(&post), status })
+    }
+
+    /// The time now on the site's clock, in its time zone, read from the
+    /// API's index and the time its answer was sent.
+    pub fn site_now(&self, api: &Api) -> Result<chrono::NaiveDateTime, Failure> {
+        let (_, reply) = self.get(&api.root, None)?;
+        checked(&reply)?;
+        let index = reply.json().ok_or(Failure::BadReply)?;
+        // Hours, given as a number or as text, and not always whole.
+        let hours = match index.get("gmt_offset") {
+            Some(Value::Number(n)) => n.as_f64(),
+            Some(Value::String(text)) => text.parse().ok(),
+            _ => None,
+        }
+        .ok_or(Failure::BadReply)?;
+        let sent = reply.header("date").next().and_then(|date| chrono::DateTime::parse_from_rfc2822(date).ok()).map_or_else(chrono::Utc::now, |date| date.with_timezone(&chrono::Utc));
+        Ok(sent.naive_utc() + chrono::Duration::minutes((hours * 60.0).round() as i64))
     }
 }
 
@@ -528,17 +673,26 @@ pub struct PostSaved {
     pub id: i64,
     /// See [`fingerprint`].
     pub fingerprint: String,
+    /// As the site gave it, such as "draft" or "future".
+    pub status: String,
 }
 
 /// What a post is saved with.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct DraftPost {
     pub title: String,
+    /// Sent always, so a subtitle taken off takes the excerpt off too.
+    pub excerpt: String,
     pub content: String,
     pub featured: Option<i64>,
     /// Term ids; `None` leaves the post's own on the site as they are.
     pub categories: Option<Vec<i64>>,
     pub tags: Option<Vec<i64>>,
+    /// Make it public; otherwise a new post is a draft and an earlier one
+    /// keeps its status.
+    pub publish: bool,
+    /// With `publish`, when it goes public instead, in the site's own time.
+    pub schedule: Option<chrono::NaiveDateTime>,
 }
 
 /// The two kinds of term a post is filed under.
@@ -578,10 +732,23 @@ pub struct Media {
     pub id: i64,
     /// The address of the file as uploaded.
     pub url: String,
+    /// What the site made of it, as compact JSON: its width, height and
+    /// type, and the address of each smaller size it made, by name. Empty
+    /// when the site didn't say.
+    pub details: String,
 }
 
 fn media_of(json: &Value) -> Result<Media, Failure> {
+    let details = json.get("media_details").map(|info| {
+        let sizes: serde_json::Map<String, Value> = info
+            .get("sizes")
+            .and_then(Value::as_object)
+            .map(|sizes| sizes.iter().filter_map(|(name, size)| Some((name.clone(), size.get("source_url")?.clone()))).collect())
+            .unwrap_or_default();
+        serde_json::json!({ "width": info.get("width"), "height": info.get("height"), "mime": json.get("mime_type"), "sizes": sizes }).to_string()
+    });
     Ok(Media {
+        details: details.unwrap_or_default(),
         id: json.get("id").and_then(Value::as_i64).ok_or(Failure::BadReply)?,
         url: json.get("source_url").and_then(Value::as_str).ok_or(Failure::BadReply)?.to_string(),
     })
@@ -590,14 +757,44 @@ fn media_of(json: &Value) -> Result<Media, Failure> {
 /// The address of post `id` in the site's editor, which needs the person
 /// signed in, as a draft's own address may not show it.
 /// A digest of what Picasso writes in a post, as the site keeps it: its
-/// title, content and featured photo. Kept after a save and compared before
+/// title, excerpt, content and featured photo, after [`FINGERPRINT`]. Kept after a save and compared before
 /// the next, it tells whether the post was edited on the site in between;
 /// its status, terms and the rest are left out, as Picasso leaves them alone.
 fn fingerprint(post: &Value) -> String {
     let raw = |field: &str| post.get(field).and_then(|value| value.get("raw").or(Some(value))).and_then(Value::as_str).unwrap_or_default().to_string();
     let featured = post.get("featured_media").and_then(Value::as_i64).unwrap_or(0);
-    let managed = serde_json::json!([raw("title"), raw("content"), featured]);
-    crate::upload::hash(managed.to_string().as_bytes())
+    let managed = serde_json::json!([raw("title"), raw("excerpt"), raw("content"), featured]);
+    format!("{FINGERPRINT}{}", crate::upload::hash(managed.to_string().as_bytes()))
+}
+
+/// The pause before try `tries + 1`: a second, then two, each with up to a
+/// quarter more so many waiting clients don't all come back at once.
+fn backoff(tries: u32) -> Duration {
+    let base = Duration::from_secs(1 << (tries - 1).min(4));
+    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |now| now.subsec_nanos());
+    base + base.mul_f64(f64::from(nanos % 1000) / 4000.0)
+}
+
+/// What starts a digest made the way [`fingerprint`] makes it now; one
+/// made otherwise, by an earlier Picasso, can't be compared.
+pub const FINGERPRINT: &str = "2:";
+
+/// A post's or upload's title as typed, in the edit context.
+fn raw_title(item: &Value) -> &str {
+    item.get("title").and_then(|title| title.get("raw")).and_then(Value::as_str).unwrap_or_default()
+}
+
+/// `text` as one value of a query string.
+fn query_value(text: &str) -> String {
+    let mut out = String::new();
+    for byte in text.bytes() {
+        if byte.is_ascii_alphanumeric() || b"-._~".contains(&byte) {
+            out.push(byte as char);
+        } else {
+            out.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    out
 }
 
 pub fn edit_link(api: &Api, id: i64) -> String {
@@ -681,6 +878,8 @@ fn api_links(header: &str) -> Vec<String> {
 fn checked(reply: &Reply) -> Result<(), Failure> {
     match reply.status {
         200..=299 => Ok(()),
+        // WordPress and PHP refuse a large upload with their own words, often as 400 or 500.
+        400..=599 if too_large(reply) => Err(Failure::TooLarge),
         // Signed out despite the credentials: WordPress never read them.
         401 if reply.error_code().as_deref() == Some("rest_not_logged_in") => Err(Failure::CredentialsIgnored),
         401 => Err(Failure::Unauthorized),
@@ -690,6 +889,14 @@ fn checked(reply: &Reply) -> Result<(), Failure> {
         429 => Err(Failure::RateLimited(reply.header("retry-after").next().and_then(|value| value.trim().parse().ok()))),
         status => Err(Failure::Status(status)),
     }
+}
+
+/// Whether the site's error says an upload was over its size limit.
+fn too_large(reply: &Reply) -> bool {
+    let Some(json) = reply.json() else { return false };
+    let code = json.get("code").and_then(Value::as_str).unwrap_or_default();
+    let message = json.get("message").and_then(Value::as_str).unwrap_or_default().to_ascii_lowercase();
+    matches!(code, "rest_upload_file_too_big" | "rest_upload_limited_space") || message.contains("upload_max_filesize") || message.contains("post_max_size")
 }
 
 /// [`Http`] over the network.
@@ -797,7 +1004,9 @@ pub(crate) mod tests {
             if let Some(body) = request.body {
                 self.bodies.borrow_mut().push((key.clone(), body.to_vec()));
             }
-            Ok(self.replies.get(&key).cloned().unwrap_or(Reply { status: 404, ..Reply::default() }))
+            // A reply kept under an address ending in "*" answers any address starting so.
+            let found = self.replies.get(&key).or_else(|| self.replies.iter().find(|(known, _)| known.strip_suffix('*').is_some_and(|start| key.starts_with(start))).map(|(_, reply)| reply));
+            Ok(found.cloned().unwrap_or(Reply { status: 404, ..Reply::default() }))
         }
     }
 
@@ -911,6 +1120,23 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn an_upload_over_the_sites_limit_is_named_so_and_not_sent_again() {
+        let api = local_api();
+        let credentials = Credentials { user: "ana".into(), password: "abcd efgh".into() };
+        let media = "https://example.com/blog/wp-json/wp/v2/media";
+        for (status, body) in [
+            (500, r#"{"code":"rest_upload_unknown_error","message":"The uploaded file exceeds the upload_max_filesize directive in php.ini."}"#),
+            (400, r#"{"code":"rest_upload_file_too_big","message":"This file is too big."}"#),
+            (413, ""),
+        ] {
+            let fake = Fake::default().answer_to("POST", media, status, &[], body);
+            assert_eq!(Client::new(&fake, Policy::default()).upload_media(&api, &credentials, b"jpeg", "a.jpg"), Err(Failure::TooLarge), "{status}");
+            assert_eq!(fake.bodies.borrow().len(), 1);
+        }
+        assert!(!Failure::TooLarge.outcome_unknown(), "refused, so known not to be done");
+    }
+
+    #[test]
     fn network_errors_become_failures_a_person_can_act_on() {
         let _ = Network::new();
         assert_eq!(network_failure(&ureq::Error::HostNotFound), Failure::Unreachable);
@@ -935,6 +1161,80 @@ pub(crate) mod tests {
         assert_eq!(Client::new(&wrong, dev).account(&api, &credentials), Err(Failure::Unauthorized));
     }
 
+    #[test]
+    fn reads_and_turned_away_requests_are_tried_again_and_lost_writes_never() {
+        let api = local_api();
+        let credentials = Credentials { user: "ana".into(), password: "abcd efgh".into() };
+        let busy = Fake::default().answer("https://example.com/blog/wp-json/wp/v2/posts/7?context=edit", 503, &[], "");
+        let client = Client::new(&busy, Policy::default());
+        assert_eq!(client.post_state(&api, &credentials, 7), Err(Failure::Status(503)));
+        assert_eq!(busy.asked.borrow().len(), MAX_TRIES as usize);
+        let waited = client.waited.get();
+        assert!(waited >= Duration::from_secs(3) && waited <= Duration::from_millis(3750), "a second, then two, each a little more: {waited:?}");
+
+        let posts = "https://example.com/blog/wp-json/wp/v2/posts";
+        let lost = Fake::default().answer_to("POST", posts, 504, &[], "");
+        assert!(Client::new(&lost, Policy::default()).save_draft(&api, &credentials, None, &draft("t", "c", None)).is_err());
+        assert_eq!(lost.bodies.borrow().len(), 1, "a write that may have been done is sent once");
+
+        let limited = Fake::default().answer_to("POST", posts, 429, &[("retry-after", "5")], "");
+        let client = Client::new(&limited, Policy::default());
+        assert_eq!(client.save_draft(&api, &credentials, None, &draft("t", "c", None)), Err(Failure::RateLimited(Some(5))));
+        assert_eq!((limited.bodies.borrow().len(), client.waited.get()), (3, Duration::from_secs(10)), "turned away, so not done: sent again when asked");
+
+        let cancel = std::sync::atomic::AtomicBool::new(true);
+        let cancelled = Fake::default().answer("https://example.com/blog/wp-json/wp/v2/posts/7?context=edit", 503, &[], "");
+        assert!(Client::new(&cancelled, Policy::default()).cancelled_by(&cancel).post_state(&api, &credentials, 7).is_err());
+        assert_eq!(cancelled.asked.borrow().len(), 1, "cancelled: not tried again");
+
+        let later = Fake::default().answer_to("POST", posts, 429, &[("retry-after", "600")], "");
+        let client = Client::new(&later, Policy::default());
+        assert!(client.save_draft(&api, &credentials, None, &draft("t", "c", None)).is_err());
+        assert_eq!((later.bodies.borrow().len(), client.waited.get()), (1, Duration::ZERO), "too long a wait is left to the person");
+    }
+
+    #[test]
+    fn a_term_is_made_once_and_one_already_there_is_used() {
+        let api = local_api();
+        let credentials = Credentials { user: "ana".into(), password: "abcd efgh".into() };
+        let tags = "https://example.com/blog/wp-json/wp/v2/tags";
+        let made = Fake::default().answer_to("POST", tags, 201, &[], r#"{"id":12,"name":"Tea &amp; Tapas","parent":0}"#);
+        assert_eq!(Client::new(&made, Policy::default()).create_term(&api, &credentials, Taxonomy::Tags, "Tea & Tapas").unwrap(), Term { id: 12, name: "Tea & Tapas".into(), parent: 0 });
+        let sent: Value = serde_json::from_slice(&made.bodies.borrow()[0].1).unwrap();
+        assert_eq!(sent, serde_json::json!({ "name": "Tea & Tapas" }));
+
+        let there = Fake::default().answer_to("POST", tags, 400, &[], r#"{"code":"term_exists","data":{"status":400,"term_id":8}}"#);
+        assert_eq!(Client::new(&there, Policy::default()).create_term(&api, &credentials, Taxonomy::Tags, "Granada").unwrap().id, 8, "already there: used, not made again");
+
+        let categories = "https://example.com/blog/wp-json/wp/v2/categories";
+        let refused = Fake::default().answer_to("POST", categories, 403, &[], r#"{"code":"rest_cannot_create"}"#);
+        assert_eq!(Client::new(&refused, Policy::default()).create_term(&api, &credentials, Taxonomy::Categories, "Spain"), Err(Failure::Forbidden));
+    }
+
+    #[test]
+    fn a_lost_upload_or_draft_is_found_by_its_exact_name() {
+        let api = local_api();
+        let credentials = Credentials { user: "ana".into(), password: "abcd efgh".into() };
+        let fake = Fake::default()
+            .answer(
+                "https://example.com/blog/wp-json/wp/v2/media?search=picasso-ab12&per_page=20&orderby=id&order=asc&context=edit&_fields=id,source_url,title,mime_type,media_details",
+                200,
+                &[],
+                r#"[{"id":40,"source_url":"https://example.com/x.jpg","title":{"raw":"picasso-ab12-2"}},{"id":41,"source_url":"https://example.com/a.jpg","title":{"raw":"picasso-ab12"}}]"#,
+            )
+            .answer(
+                "https://example.com/blog/wp-json/wp/v2/posts?search=Caf%C3%A9%20Sevilla&status=draft,publish&modified_after=2026-10-29T10%3A00%3A00Z*",
+                200,
+                &[],
+                r#"[{"id":7,"title":{"raw":"Café Sevilla"}},{"id":8,"title":{"raw":"Café Sevilla 2"}}]"#,
+            );
+        let client = Client::new(&fake, Policy::default());
+        assert_eq!(client.find_media(&api, &credentials, "picasso-ab12").unwrap(), vec![Media { id: 41, url: "https://example.com/a.jpg".into(), details: String::new() }]);
+        assert_eq!(client.find_drafts(&api, &credentials, "Café Sevilla", 1_793_268_000).unwrap(), vec![7]);
+        assert!(Failure::Timeout.outcome_unknown() && Failure::Status(502).outcome_unknown());
+        assert!(!Failure::Forbidden.outcome_unknown() && !Failure::Status(400).outcome_unknown(), "a refusal is known not to be done");
+    }
+
     pub(crate) fn local_api() -> Api {
         Api {
             site: SiteUrl::parse("https://example.com/blog").unwrap(),
@@ -949,14 +1249,17 @@ pub(crate) mod tests {
         let api = local_api();
         let credentials = Credentials { user: "ana".into(), password: "abcd efgh".into() };
         let fake = Fake::default()
-            .answer_to("POST", "https://example.com/blog/wp-json/wp/v2/media", 201, &[], r#"{"id":41,"source_url":"https://example.com/blog/wp-content/uploads/a.jpg"}"#)
+            .answer_to("POST", "https://example.com/blog/wp-json/wp/v2/media", 201, &[], r#"{"id":41,"source_url":"https://example.com/blog/wp-content/uploads/a.jpg","mime_type":"image/jpeg","media_details":{"width":2048,"height":1365,"sizes":{"medium":{"source_url":"https://example.com/blog/wp-content/uploads/a-300x200.jpg","width":300}}}}"#)
             .answer_to("POST", "https://example.com/blog/wp-json/wp/v2/posts", 201, &[], r#"{"id":7,"status":"draft"}"#)
             .answer_to("POST", "https://example.com/blog/wp-json/wp/v2/posts/7", 200, &[], r#"{"id":7,"status":"draft","title":{"raw":"Spain"},"content":{"raw":"<p>y</p>"}}"#)
             .answer("https://example.com/blog/wp-json/wp/v2/posts/7?context=edit", 200, &[], r#"{"id":7,"status":"draft","title":{"raw":"Spain","rendered":"Spain"},"content":{"raw":"<p>y</p>"},"featured_media":0}"#)
             .answer("https://example.com/blog/wp-json/wp/v2/media/41?context=edit", 200, &[], r#"{"id":41}"#);
         let client = Client::new(&fake, Policy::default());
         let media = client.upload_media(&api, &credentials, b"jpeg", "picasso-ab12.jpg").unwrap();
-        assert_eq!(media, Media { id: 41, url: "https://example.com/blog/wp-content/uploads/a.jpg".into() });
+        assert_eq!((media.id, media.url.as_str()), (41, "https://example.com/blog/wp-content/uploads/a.jpg"));
+        let details: Value = serde_json::from_str(&media.details).unwrap();
+        assert_eq!((details["width"].as_i64(), details["mime"].as_str()), (Some(2048), Some("image/jpeg")));
+        assert_eq!(details["sizes"]["medium"], "https://example.com/blog/wp-content/uploads/a-300x200.jpg", "the sizes the site made are kept");
         assert!(client.media_exists(&api, &credentials, 41).unwrap());
         assert!(!client.media_exists(&api, &credentials, 42).unwrap(), "a 404 is a removed upload");
 
@@ -977,6 +1280,31 @@ pub(crate) mod tests {
         assert_eq!(json(2)["featured_media"], 0);
         assert!(json(2).get("categories").is_none() && json(2).get("tags").is_none(), "terms not chosen are left as they are");
         assert_eq!(edit_link(&api, 7), "https://example.com/blog/wp-admin/post.php?post=7&action=edit");
+    }
+
+    #[test]
+    fn a_post_is_scheduled_in_the_sites_own_time_read_from_its_clock() {
+        let api = local_api();
+        let credentials = Credentials { user: "ana".into(), password: "abcd efgh".into() };
+        let at = chrono::NaiveDate::from_ymd_opt(2026, 11, 1).unwrap().and_hms_opt(9, 0, 0).unwrap();
+        let posts = "https://example.com/blog/wp-json/wp/v2/posts";
+        let fake = Fake::default().answer_to("POST", posts, 201, &[], r#"{"id":7,"status":"future"}"#);
+        let post = DraftPost { publish: true, schedule: Some(at), ..draft("Spain", "c", None) };
+        let saved = Client::new(&fake, Policy::default()).save_draft(&api, &credentials, None, &post).unwrap();
+        assert_eq!(saved.status, "future");
+        let sent: Value = serde_json::from_slice(&fake.bodies.borrow()[0].1).unwrap();
+        assert_eq!((&sent["status"], &sent["date"]), (&Value::from("future"), &Value::from("2026-11-01T09:00:00")));
+        assert!(sent.get("date_gmt").is_none(), "WordPress turns the site's time into UTC itself");
+
+        // The site's clock: when its answer was sent, in its time zone.
+        let root = "https://example.com/blog/wp-json/";
+        for offset in ["5.5", r#""-3""#] {
+            let index = format!(r#"{{"namespaces":["wp/v2"],"gmt_offset":{offset}}}"#);
+            let fake = Fake::default().answer(root, 200, &[("date", "Sun, 01 Nov 2026 08:00:00 GMT")], &index);
+            let now = Client::new(&fake, Policy::default()).site_now(&api).unwrap();
+            let expected = if offset == "5.5" { "2026-11-01 13:30" } else { "2026-11-01 05:00" };
+            assert_eq!(now.format("%Y-%m-%d %H:%M").to_string(), expected);
+        }
     }
 
     #[test]

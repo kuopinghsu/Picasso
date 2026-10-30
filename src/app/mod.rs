@@ -377,6 +377,9 @@ pub struct PicassoApp {
     events_tx: Sender<UiEvent>,
     slideshow: Option<Slideshow>,
     activity: String,
+    /// A post with a Story's title found on a site that has no record of it
+    /// here: (Story, site, post). The publish dialog asks what to do with it.
+    publish_found: Option<(i64, i64, i64)>,
     /// When the latest Move to trash ran, and the path and folder of each
     /// file in it, for Undo.
     last_trashed: Option<(Instant, Vec<(String, i64)>)>,
@@ -667,6 +670,7 @@ impl PicassoApp {
             track_recovery,
             track_keeper,
             activity: String::new(),
+            publish_found: None,
             last_trashed: None,
             unreadable: HashMap::new(),
             export_run: None,

@@ -326,7 +326,7 @@ pub(super) fn failure_text(failure: &Failure) -> String {
         Failure::Unauthorized => tr("The user name or Application Password was refused. Check both, or make a new Application Password.").to_string(),
         Failure::CredentialsIgnored => tr("The site ignored the Application Password. WordPress accepts them only over HTTPS, or on a site whose environment type is \"local\"; it also ignores them until one has been made on the site, and some servers drop the sign-in. For a development site, add define( 'WP_ENVIRONMENT_TYPE', 'local' ); to its wp-config.php.").to_string(),
         Failure::Forbidden => tr("This account isn't allowed to do that on the site.").to_string(),
-        Failure::TooLarge => tr("The site refused something too large.").to_string(),
+        Failure::TooLarge => tr("The site refused a photo as larger than it accepts. Choose Low resolution, or raise the site's upload limit.").to_string(),
         Failure::RateLimited(Some(seconds)) => trf("The site asked Picasso to slow down. Try again in {} seconds.", &[seconds]),
         Failure::RateLimited(None) => tr("The site asked Picasso to slow down. Try again later.").to_string(),
         Failure::Status(status) => trf("The site answered with an error ({}). Try again later.", &[status]),

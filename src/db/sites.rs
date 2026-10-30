@@ -53,6 +53,38 @@ CREATE TABLE IF NOT EXISTS publications (
     UNIQUE (site_id, post_id)
 );
 CREATE INDEX IF NOT EXISTS idx_publications_story ON publications(story_id);
+-- The site's media a Story's post uses, as of its last confirmed save, so
+-- what a post depends on is known; nothing is deleted on the site.
+CREATE TABLE IF NOT EXISTS publication_media (
+    story_id INTEGER NOT NULL,
+    site_id INTEGER NOT NULL,
+    media_id INTEGER NOT NULL,
+    PRIMARY KEY (story_id, site_id, media_id)
+);
+-- Each publishing job as it ended, for looking back: nothing secret, only
+-- what happened. The newest PUBLISH_LOG_KEPT are kept.
+CREATE TABLE IF NOT EXISTS publish_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    story_id INTEGER NOT NULL,
+    site_id INTEGER NOT NULL,
+    started_at INTEGER NOT NULL,
+    ended_at INTEGER NOT NULL,
+    outcome TEXT NOT NULL,
+    post_id INTEGER,
+    uploaded INTEGER NOT NULL,
+    reused INTEGER NOT NULL,
+    size TEXT NOT NULL,
+    revision INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_publish_log_story ON publish_log(story_id, site_id);
+-- A draft about to be made for a Story on a site whose making the site
+-- hasn't confirmed: one made since `since` is looked for before another is.
+CREATE TABLE IF NOT EXISTS publish_pending (
+    story_id INTEGER NOT NULL,
+    site_id INTEGER NOT NULL,
+    since INTEGER NOT NULL,
+    PRIMARY KEY (story_id, site_id)
+);
 -- The site's categories and tags chosen for a Story's post, with their names
 -- as the site gave them. None chosen leaves the post's own as they are.
 CREATE TABLE IF NOT EXISTS publication_terms (
@@ -70,7 +102,30 @@ pub(super) fn upgrade(db: &Database) -> Result<(), String> {
     // What Picasso wrote in the post as the site kept it, and whether it was
     // found edited there since.
     db.ensure_column("publications", "fingerprint", "TEXT NOT NULL DEFAULT ''")?;
-    db.ensure_column("publications", "changed_on_site", "INTEGER NOT NULL DEFAULT 0")
+    db.ensure_column("publications", "changed_on_site", "INTEGER NOT NULL DEFAULT 0")?;
+    // What the site made of an upload: its size, type and the smaller sizes it made.
+    db.ensure_column("publish_media", "details", "TEXT NOT NULL DEFAULT ''")
+}
+
+/// Publishing jobs kept in `publish_log`; older ones are dropped.
+const PUBLISH_LOG_KEPT: i64 = 1000;
+
+/// One publishing job as it ended.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PublishJob {
+    pub story_id: i64,
+    pub site_id: i64,
+    pub started_at: i64,
+    pub ended_at: i64,
+    /// How it ended, such as "saved", "published" or "cancelled"
+    /// (`publish::outcome_code`).
+    pub outcome: String,
+    pub post_id: Option<i64>,
+    pub uploaded: usize,
+    pub reused: usize,
+    /// The upload size's code.
+    pub size: String,
+    pub revision: i64,
 }
 
 /// A connected site, as the library keeps it.
@@ -230,11 +285,11 @@ impl Database {
     }
 
     /// Records an upload the site confirmed, the moment it did.
-    pub fn record_upload(&self, site_id: i64, hash: &str, size: &str, media_id: i64, url: &str) -> Result<(), String> {
+    pub fn record_upload(&self, site_id: i64, hash: &str, size: &str, media_id: i64, url: &str, details: &str) -> Result<(), String> {
         self.conn
             .execute(
-                "INSERT OR REPLACE INTO publish_media(site_id, hash, size, media_id, url, uploaded_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                params![site_id, hash, size, media_id, url, unix_now()],
+                "INSERT OR REPLACE INTO publish_media(site_id, hash, size, media_id, url, uploaded_at, details) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![site_id, hash, size, media_id, url, unix_now(), details],
             )
             .map(|_| ())
             .map_err(|err| err.to_string())
@@ -277,6 +332,87 @@ impl Database {
             .execute("DELETE FROM publications WHERE story_id = ?1 AND site_id = ?2 AND output_key = 'main' AND edition = 1", params![story_id, site_id])
             .map(|_| ())
             .map_err(|err| err.to_string())
+    }
+
+    /// The site's media the Story's post used at its last confirmed save.
+    pub fn publication_media(&self, story_id: i64, site_id: i64) -> Vec<i64> {
+        self.map_rows("SELECT media_id FROM publication_media WHERE story_id = ?1 AND site_id = ?2 ORDER BY media_id", params![story_id, site_id], |row| row.get(0))
+    }
+
+    /// Replaces the media the Story's post uses, after a confirmed save.
+    pub fn save_publication_media(&self, story_id: i64, site_id: i64, media: &[i64]) -> Result<(), String> {
+        let tx = self.conn.unchecked_transaction().map_err(|err| err.to_string())?;
+        tx.execute("DELETE FROM publication_media WHERE story_id = ?1 AND site_id = ?2", params![story_id, site_id]).map_err(|err| err.to_string())?;
+        for id in media {
+            tx.execute("INSERT OR IGNORE INTO publication_media(story_id, site_id, media_id) VALUES (?1, ?2, ?3)", params![story_id, site_id, id]).map_err(|err| err.to_string())?;
+        }
+        tx.commit().map_err(|err| err.to_string())
+    }
+
+    /// Keeps how a publishing job ended, dropping the oldest beyond [`PUBLISH_LOG_KEPT`].
+    pub fn record_publish_job(&self, job: &PublishJob) -> Result<(), String> {
+        let tx = self.conn.unchecked_transaction().map_err(|err| err.to_string())?;
+        tx.execute(
+            "INSERT INTO publish_log(story_id, site_id, started_at, ended_at, outcome, post_id, uploaded, reused, size, revision)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            params![job.story_id, job.site_id, job.started_at, job.ended_at, job.outcome, job.post_id, job.uploaded as i64, job.reused as i64, job.size, job.revision],
+        )
+        .map_err(|err| err.to_string())?;
+        tx.execute("DELETE FROM publish_log WHERE id <= (SELECT MAX(id) FROM publish_log) - ?1", [PUBLISH_LOG_KEPT]).map_err(|err| err.to_string())?;
+        tx.commit().map_err(|err| err.to_string())
+    }
+
+    /// The Story's publishing jobs on the site, newest first.
+    pub fn publish_jobs(&self, story_id: i64, site_id: i64) -> Vec<PublishJob> {
+        let Ok(mut statement) = self.conn.prepare(
+            "SELECT story_id, site_id, started_at, ended_at, outcome, post_id, uploaded, reused, size, revision
+             FROM publish_log WHERE story_id = ?1 AND site_id = ?2 ORDER BY id DESC",
+        ) else {
+            return Vec::new();
+        };
+        let rows = statement.query_map(params![story_id, site_id], |row| {
+            Ok(PublishJob {
+                story_id: row.get(0)?,
+                site_id: row.get(1)?,
+                started_at: row.get(2)?,
+                ended_at: row.get(3)?,
+                outcome: row.get(4)?,
+                post_id: row.get(5)?,
+                uploaded: row.get::<_, i64>(6)? as usize,
+                reused: row.get::<_, i64>(7)? as usize,
+                size: row.get(8)?,
+                revision: row.get(9)?,
+            })
+        });
+        rows.into_iter().flatten().flatten().collect()
+    }
+
+    /// When a draft was about to be made for the Story on the site without
+    /// the site confirming it.
+    pub fn pending_draft(&self, story_id: i64, site_id: i64) -> Option<i64> {
+        self.conn
+            .query_row("SELECT since FROM publish_pending WHERE story_id = ?1 AND site_id = ?2", params![story_id, site_id], |row| row.get(0))
+            .optional()
+            .ok()
+            .flatten()
+    }
+
+    /// Keeps that a draft is about to be made, before it is, the earliest
+    /// moment kept when one is already.
+    pub fn set_pending_draft(&self, story_id: i64, site_id: i64, since: i64) -> Result<(), String> {
+        self.conn
+            .execute(
+                "INSERT INTO publish_pending(story_id, site_id, since) VALUES (?1, ?2, ?3)
+                 ON CONFLICT (story_id, site_id) DO UPDATE SET since = MIN(since, excluded.since)",
+                params![story_id, site_id, since],
+            )
+            .map(|_| ())
+            .map_err(|err| err.to_string())
+    }
+
+    /// Forgets it once the site confirmed the draft.
+    pub fn clear_pending_draft(&self, story_id: i64, site_id: i64) -> Result<(), String> {
+        self.conn.execute("DELETE FROM publish_pending WHERE story_id = ?1 AND site_id = ?2", params![story_id, site_id]).map(|_| ()).map_err(|err| err.to_string())
     }
 
     /// The categories and tags chosen for the Story's post on the site.
@@ -395,10 +531,35 @@ mod tests {
     }
 
     #[test]
+    fn a_posts_record_outlives_its_story_and_never_passes_to_another() {
+        let (db, _, _) = library("publication-identity");
+        let site_id = db.save_site(&site("https://example.com", "ana")).unwrap();
+        let trip = db.create_trip(&crate::trip::TripDraft::new("Spain", "Europe/Madrid")).unwrap();
+        let story = db.create_story(trip, "Granada").unwrap();
+        let publication = Publication { story_id: story, site_id, post_id: 7, remote_status: "publish".into(), size: "standard".into(), revision: 1, synced_at: 1, fingerprint: String::new(), changed_on_site: false };
+        db.save_publication(&publication).unwrap();
+        db.save_publication_media(story, site_id, &[41]).unwrap();
+
+        // Archived: still the same post.
+        db.set_story_archived(story, true);
+        assert_eq!(db.publication(story, site_id).map(|found| found.post_id), Some(7));
+        // Deleted: the record stays, as the post stays on the site, and a
+        // new Story never takes it up, as Story ids aren't reused.
+        db.delete_story(story).unwrap();
+        assert_eq!(db.publication(story, site_id).map(|found| found.post_id), Some(7));
+        let next = db.create_story(trip, "Granada").unwrap();
+        assert_ne!(next, story);
+        assert_eq!(db.publication(next, site_id), None);
+        assert!(db.publication_media(next, site_id).is_empty());
+    }
+
+    #[test]
     fn uploads_and_posts_are_remembered_per_site() {
         let (db, _, _) = library("publications");
         let site_id = db.save_site(&site("https://example.com", "ana")).unwrap();
-        db.record_upload(site_id, "abc", "low", 41, "https://example.com/a.jpg").unwrap();
+        db.record_upload(site_id, "abc", "low", 41, "https://example.com/a.jpg", r#"{"width":1280}"#).unwrap();
+        let details: String = db.conn.query_row("SELECT details FROM publish_media WHERE hash = 'abc'", [], |row| row.get(0)).unwrap();
+        assert_eq!(details, r#"{"width":1280}"#);
         assert_eq!(db.uploads(site_id).get("abc"), Some(&(41, "https://example.com/a.jpg".to_string())));
         assert!(db.uploads(site_id + 1).is_empty(), "another site has its own uploads");
         db.forget_upload(site_id, "abc").unwrap();
@@ -413,6 +574,26 @@ mod tests {
         assert_eq!(db.publication(3, site_id + 1), None);
         // Another Story can't claim the same post.
         assert!(db.save_publication(&Publication { story_id: 4, ..publication }).is_err());
+
+        // The media the post uses, replaced as a whole.
+        db.save_publication_media(3, site_id, &[41, 9]).unwrap();
+        db.save_publication_media(3, site_id, &[41, 12]).unwrap();
+        assert_eq!(db.publication_media(3, site_id), [12, 41]);
+
+        // Each job is kept as it ended, newest first.
+        let job = PublishJob { story_id: 3, site_id, started_at: 10, ended_at: 20, outcome: "cancelled".into(), post_id: None, uploaded: 2, reused: 0, size: "low".into(), revision: 4 };
+        db.record_publish_job(&job).unwrap();
+        db.record_publish_job(&PublishJob { outcome: "saved".into(), post_id: Some(7), ..job.clone() }).unwrap();
+        let jobs = db.publish_jobs(3, site_id);
+        assert_eq!((jobs.len(), jobs[0].outcome.as_str(), jobs[1].clone()), (2, "saved", job));
+
+        // A draft about to be made, kept from its earliest moment until confirmed.
+        assert_eq!(db.pending_draft(3, site_id), None);
+        db.set_pending_draft(3, site_id, 200).unwrap();
+        db.set_pending_draft(3, site_id, 300).unwrap();
+        assert_eq!(db.pending_draft(3, site_id), Some(200));
+        db.clear_pending_draft(3, site_id).unwrap();
+        assert_eq!(db.pending_draft(3, site_id), None);
 
         // Its categories and tags, kept per Story and site and replaced as a whole.
         assert_eq!(db.post_terms(3, site_id), PostTerms::default());

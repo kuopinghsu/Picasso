@@ -5,6 +5,20 @@ section of this file as the release notes.
 
 ## [0.9.6] - Unreleased
 
+### Added
+
+- Publish a Story to your own WordPress site from the Story's ⋯ menu. Connect sites in
+  Settings → Publishing with an Application Password, kept in the system's password store.
+  The dialog shows the site, the post, categories and tags read from the site, new ones added there from the dialog, the photo size
+  (Standard web or Low resolution), whether to keep camera details, a photo preview and the
+  post's state. Photos never carry their location; each new upload carries its description and is named for the Story and the photo's file.
+- A Story is saved as a draft unless you choose to publish it; publishing first confirms what
+  readers will see, at once or at a date and time in the site's time zone. Later saves update the same post. A post edited on the site is never
+  overwritten without your choice, and a post Picasso has no record of is found before another
+  is made.
+- Uploads of the same bytes are reused, interrupted or lost requests are recovered without
+  duplicates, safe requests are retried with backoff, and each job is kept under History.
+
 ### Changed
 
 - Reorganized the English and Traditional Chinese READMEs around the project overview,

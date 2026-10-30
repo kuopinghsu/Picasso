@@ -179,6 +179,20 @@ fn with_exif(jpeg: Vec<u8>, exif: &exif::Exif) -> Vec<u8> {
     out
 }
 
+/// Whether the file at `path` can hold transparent pixels, read from its
+/// header alone: only formats that keep transparency are looked at.
+pub fn has_transparency(path: &Path) -> bool {
+    let kind = path.extension().and_then(|ext| ext.to_str()).map(str::to_ascii_lowercase).unwrap_or_default();
+    if !matches!(kind.as_str(), "png" | "webp" | "gif" | "tif" | "tiff") {
+        return false;
+    }
+    image::ImageReader::open(path)
+        .ok()
+        .and_then(|reader| reader.with_guessed_format().ok())
+        .and_then(|reader| reader.into_decoder().ok())
+        .is_some_and(|decoder| image::ImageDecoder::color_type(&decoder).has_alpha())
+}
+
 /// Lays transparent pixels on [`BACKGROUND`], as the page would show them.
 fn flatten(rgba: &mut RgbaImage) {
     for Rgba(pixel) in rgba.pixels_mut() {
@@ -204,6 +218,21 @@ fn hex(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn only_a_format_with_transparency_is_said_to_have_it() {
+        let dir = std::env::temp_dir().join(format!("picasso-alpha-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let clear = dir.join("clear.png");
+        image::RgbaImage::from_pixel(4, 4, image::Rgba([0, 0, 0, 0])).save(&clear).unwrap();
+        let solid = dir.join("solid.png");
+        image::RgbImage::from_pixel(4, 4, image::Rgb([9, 9, 9])).save(&solid).unwrap();
+        let jpeg = dir.join("photo.jpg");
+        image::RgbImage::from_pixel(4, 4, image::Rgb([9, 9, 9])).save(&jpeg).unwrap();
+        assert!(super::has_transparency(&clear));
+        assert!(!super::has_transparency(&solid) && !super::has_transparency(&jpeg));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     use super::*;
 
     fn temp_dir(tag: &str) -> std::path::PathBuf {

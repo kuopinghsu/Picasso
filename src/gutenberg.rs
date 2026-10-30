@@ -45,13 +45,15 @@ pub struct RouteMap {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Post {
     pub title: String,
+    /// The subtitle, as the post's excerpt.
+    pub excerpt: String,
     pub content: String,
     pub featured: Option<i64>,
 }
 
 /// The Story as a post. The introduction comes before the blocks and the
-/// conclusion after them, as paragraphs; the title, subtitle, and byline
-/// are the post's own. `maps` gives each Route block's map picture by the
+/// conclusion after them, as paragraphs; the title and the subtitle, as
+/// its excerpt, are the post's own, and the byline is the site's author. `maps` gives each Route block's map picture by the
 /// block's uid; a route without one is drawn on its own.
 pub fn post(story: &Story, blocks: &[StoryBlock], media: &dyn Fn(i64) -> Option<Uploaded>, maps: &dyn Fn(&str) -> Option<RouteMap>) -> Result<Post, Unsupported> {
     let mut out = String::new();
@@ -128,7 +130,7 @@ pub fn post(story: &Story, blocks: &[StoryBlock], media: &dyn Fn(i64) -> Option<
         Some(cover) => Some(media(cover).ok_or(Unsupported::Photo(cover))?.id),
         None => None,
     };
-    Ok(Post { title: story.title.trim().to_string(), content: out.trim_end().to_string(), featured })
+    Ok(Post { title: story.title.trim().to_string(), excerpt: story.subtitle.trim().to_string(), content: out.trim_end().to_string(), featured })
 }
 
 /// Each part between blank lines as its own paragraph block, its lines

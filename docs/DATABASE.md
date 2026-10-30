@@ -40,6 +40,7 @@ Picasso also reads the `.picasa.ini` files Picasa left in photo folders, for sta
 | `trip_days` | Day of a Trip | `position` orders them; `day` is an optional date, and several Days may share one. A Day never moves to another Trip. |
 | `trip_media` | Photo or video in a Trip | `position` is the order they joined; `day_id` is a Day of the same Trip, which triggers enforce, with `day_position` its order there and `day_source` who chose it (0 none, 1 suggested, 2 the user). `review` says why Suggest days couldn't place it (0 nothing to review), until the user does. `place_id` is a Place of the same Trip with `place_source` who chose it (0 none, 1 suggested, 2 the user). |
 | `trip_places` | Place of a Trip | `position` orders them; `name`, `local_name` (the name in the local language) and `notes` are the user's; `lat` and `lon` are checked to lie on Earth. `kept` is 1 once the user named or moved one, and Suggest places then leaves it and its members. Deleting a Place leaves its members in the Trip at no Place.
+| `trip_resources` | Document, link, note, or track file kept with a Trip | `kind` is `document`, `link`, `note`, or `track`; `reference` is the file's path or the web address (empty for a note); `title` and `notes` are the user's. `publish` is 0 until the user allows that one resource to be published; nothing else sets it. Files are referred to, never copied. Deleted with their Trip.
 | `trip_tracks` | GPS track linked to a Trip | `track_id` while the track is in the library; the path and name stay when it goes. |
 | `publish_sites` | WordPress site connected in Settings → Publishing | Its label, address, API root, user name, the account's display name, whether it may upload, edit posts, and publish, and when it was last checked. The Application Password is never here: `secret_ref` names where it is kept in the system's credential store. One row per site address and user name. |
 | `publish_media` | Photo uploaded to a site | The site, the SHA-256 of the uploaded bytes, the upload size, and the media ID and URL WordPress gave it, so the same bytes are not sent twice. A row is removed when the site no longer has the upload.. Also what the site made of each upload: its width, height and type, and the address of each smaller size it made. |
@@ -60,7 +61,7 @@ Indexes cover the orders and lookups the window uses: by folder, by date taken a
 | --- | --- | --- |
 | 0 | up to 0.9.4 | Libraries made before the version was kept. They are recognized by their tables and columns and upgraded in place. |
 | 1 | 0.9.5 | The version is kept. |
-| 2 | 0.9.6 | Trips and Stories: `media_refs`, `trips`, `trip_days`, `trip_media`, `trip_tracks`, `trip_places`, `stories`, `story_blocks`, `story_media` ([TRAVEL.md](TRAVEL.md)); WordPress: `publish_sites`, `publish_media`, `publications`, `publication_terms`, `publish_pending`, `publish_log`, `publication_media`. |
+| 2 | 0.9.6 | Trips and Stories: `media_refs`, `trips`, `trip_days`, `trip_media`, `trip_tracks`, `trip_places`, `trip_resources`, `stories`, `story_blocks`, `story_media` ([TRAVEL.md](TRAVEL.md)); WordPress: `publish_sites`, `publish_media`, `publications`, `publication_terms`, `publish_pending`, `publish_log`, `publication_media`. |
 
 ## How a library is upgraded
 

@@ -18,8 +18,8 @@ use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use super::{order_sql, path_text, read_photo, Database, PHOTO_COLS};
 use crate::i18n::tr;
 use crate::trip::{
-    capture_day, cluster_places, valid_position, AddPreview, Capture, Located, Shot, TripPlace, DaySuggestion, Review, TripZone, Block, DayAssignment, DayFilter, DaySource, MediaUse, Member, MemberQuery, Story, StoryBlock, StoryFilter, Trip, TripDay,
-    TripDraft, TripImpact, TripQuery, TripTrack, DEFAULT_TEMPLATE,
+    capture_day, capture_instant, cluster_places, PlaceSuggestion, valid_position, AddPreview, Capture, Located, Shot, TripPlace, DaySuggestion, Review, TripZone, Block, DayAssignment, DayFilter, DaySource, MediaUse, Member, MemberQuery, Story, StoryBlock, StoryFilter, Trip, TripDay,
+    TripDraft, TripImpact, ResourceKind, TripResource, TripQuery, TripTrack, DEFAULT_TEMPLATE,
 };
 use crate::types::{is_video_path, unix_now, Photo, Sort};
 
@@ -126,6 +126,19 @@ CREATE TABLE IF NOT EXISTS trip_places (
     kept INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_trip_places_trip ON trip_places(trip_id, position);
+-- Documents, links, notes, and track files kept with a Trip. Private
+-- unless `publish` is 1, which only the user sets, one resource at a time.
+CREATE TABLE IF NOT EXISTS trip_resources (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    trip_id INTEGER NOT NULL REFERENCES trips(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL CHECK (kind IN ('document', 'link', 'note', 'track')),
+    reference TEXT NOT NULL DEFAULT '',
+    title TEXT NOT NULL DEFAULT '',
+    notes TEXT NOT NULL DEFAULT '',
+    publish INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_trip_resources_trip ON trip_resources(trip_id);
 CREATE TABLE IF NOT EXISTS stories (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     trip_id INTEGER NOT NULL REFERENCES trips(id) ON DELETE CASCADE,
@@ -339,6 +352,9 @@ fn member_filter(query: &MemberQuery) -> String {
     }
     if query.unavailable {
         filter.push_str(" AND p.id IS NULL");
+    }
+    if query.no_caption {
+        filter.push_str(" AND p.id IS NOT NULL AND trim(p.caption) = ''");
     }
     let used = "EXISTS (SELECT 1 FROM story_media sm JOIN story_blocks sb ON sb.id = sm.block_id \
                 JOIN stories s ON s.id = sb.story_id WHERE sm.media_id = tm.media_id AND s.trip_id = tm.trip_id";
@@ -753,6 +769,71 @@ impl Database {
     }
 
     /// Removes a Place; its members stay in the Trip, at no Place.
+    /// The Trip's resources, oldest first.
+    pub fn trip_resources(&self, trip_id: i64) -> Vec<TripResource> {
+        self.map_rows(
+            "SELECT id, kind, reference, title, notes, publish FROM trip_resources WHERE trip_id = ?1 ORDER BY created_at, id",
+            [trip_id],
+            |row| {
+                Ok(TripResource {
+                    id: row.get(0)?,
+                    kind: ResourceKind::from_code(&row.get::<_, String>(1)?),
+                    reference: row.get(2)?,
+                    title: row.get(3)?,
+                    notes: row.get(4)?,
+                    publish: row.get(5)?,
+                })
+            },
+        )
+    }
+
+    /// Adds `resource` to the Trip, or changes it when it has an id.
+    /// Returns its id.
+    pub fn save_trip_resource(&self, trip_id: i64, resource: &TripResource) -> Result<i64, String> {
+        if let Some(problem) = resource.problem() {
+            return Err(tr(problem).into());
+        }
+        let tx = self.conn.unchecked_transaction().map_err(sql_err)?;
+        let id = if resource.id == 0 {
+            tx.execute(
+                "INSERT INTO trip_resources (trip_id, kind, reference, title, notes, publish, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![trip_id, resource.kind.code(), resource.reference.trim(), resource.title.trim(), resource.notes, resource.publish, unix_now()],
+            )
+            .map_err(sql_err)?;
+            tx.last_insert_rowid()
+        } else {
+            let changed = tx
+                .execute(
+                    "UPDATE trip_resources SET kind = ?2, reference = ?3, title = ?4, notes = ?5, publish = ?6 WHERE trip_id = ?1 AND id = ?7",
+                    params![trip_id, resource.kind.code(), resource.reference.trim(), resource.title.trim(), resource.notes, resource.publish, resource.id],
+                )
+                .map_err(sql_err)?;
+            if changed == 0 {
+                return Err(format!("resource {} is gone", resource.id));
+            }
+            resource.id
+        };
+        touch_trip(&tx, trip_id)?;
+        tx.commit().map_err(sql_err)?;
+        Ok(id)
+    }
+
+    /// Points a document or track file resource at where its file is now.
+    pub fn locate_trip_resource(&self, id: i64, path: &std::path::Path) -> Result<(), String> {
+        let changed = self
+            .conn
+            .execute("UPDATE trip_resources SET reference = ?2 WHERE id = ?1 AND kind IN ('document', 'track')", params![id, path_text(path)])
+            .map_err(sql_err)?;
+        if changed == 0 {
+            return Err(format!("resource {id} is gone"));
+        }
+        Ok(())
+    }
+
+    pub fn delete_trip_resource(&self, id: i64) -> Result<(), String> {
+        self.conn.execute("DELETE FROM trip_resources WHERE id = ?1", [id]).map_err(sql_err).map(|_| ())
+    }
+
     pub fn delete_trip_place(&self, id: i64) -> Result<(), String> {
         let tx = self.conn.unchecked_transaction().map_err(sql_err)?;
         let trip_id: Option<i64> =
@@ -771,11 +852,21 @@ impl Database {
     /// [`cluster_places`] does. Places the user changed stay, with their
     /// members, and take in new groups within `distance` of them; the other
     /// suggestions are made again, after the kept ones in the order first
-    /// visited. Camera GPS and pins are read, never changed. Returns how many
-    /// Places the Trip has.
-    pub fn suggest_places(&self, trip_id: i64, distance: f64, gap: i64) -> Result<usize, String> {
+    /// visited. A member without camera GPS or a pin takes where one of the
+    /// Trip's tracks was when it was taken, its time read in the Trip's zone
+    /// as Suggest days reads it; that position is used here only, never
+    /// stored as a pin. Camera GPS and pins are read, never changed.
+    pub fn suggest_places(&self, trip_id: i64, distance: f64, gap: i64) -> Result<PlaceSuggestion, String> {
+        let trip = self.trip(trip_id).ok_or_else(|| format!("trip {trip_id} is gone"))?;
+        let zone = TripZone::parse(&trip.zone);
+        let timelines: Vec<crate::geotag::Timeline> = self
+            .trip_tracks(trip_id)
+            .iter()
+            .filter_map(|link| link.track_id)
+            .filter_map(|id| self.track(id))
+            .filter_map(|track| crate::geotag::Timeline::new(&track))
+            .collect();
         let tx = self.conn.unchecked_transaction().map_err(sql_err)?;
-        check_trip(&tx, trip_id)?;
         tx.execute("UPDATE trip_media SET place_id = NULL, place_source = 0 WHERE trip_id = ?1 AND place_source = 1", [trip_id])
             .map_err(sql_err)?;
         tx.execute(
@@ -784,19 +875,40 @@ impl Database {
             [trip_id],
         )
         .map_err(sql_err)?;
-        let points: Vec<Located> = {
+        type Row = (i64, i64, Capture, i64, Option<f64>, Option<f64>);
+        let rows: Vec<Row> = {
             let mut stmt = tx
                 .prepare(
-                    "SELECT tm.media_id, p.taken_at, coalesce(p.pin_lat, p.gps_lat), coalesce(p.pin_lon, p.gps_lon)
+                    "SELECT tm.media_id, p.taken_at, m.clock_kind, m.clock, m.clock_offset, m.clock_utc,
+                            coalesce(p.taken_at - p.file_taken_at, 0), coalesce(p.pin_lat, p.gps_lat), coalesce(p.pin_lon, p.gps_lon)
                      FROM trip_media tm JOIN media_refs m ON m.id = tm.media_id JOIN photos p ON p.id = m.photo_id
-                     WHERE tm.trip_id = ?1 AND tm.place_id IS NULL AND coalesce(p.pin_lat, p.gps_lat) IS NOT NULL",
+                     WHERE tm.trip_id = ?1 AND tm.place_id IS NULL",
                 )
                 .map_err(sql_err)?;
             let rows = stmt
-                .query_map([trip_id], |row| Ok(Located { media_id: row.get(0)?, at: row.get(1)?, lat: row.get(2)?, lon: row.get(3)? }))
+                .query_map([trip_id], |row| {
+                    let capture = read_capture_row(row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?);
+                    Ok((row.get(0)?, row.get(1)?, capture, row.get(6)?, row.get(7)?, row.get(8)?))
+                })
                 .map_err(sql_err)?;
             rows.collect::<Result<_, _>>().map_err(sql_err)?
         };
+        let mut from_tracks = 0;
+        let mut points: Vec<Located> = Vec::new();
+        for (media_id, taken_at, capture, shift, lat, lon) in rows {
+            let instant = zone.as_ref().and_then(|zone| capture_instant(capture, zone, trip.trip_time).ok()).map(|at| at + shift);
+            let at = instant.unwrap_or(taken_at);
+            match (lat, lon) {
+                (Some(lat), Some(lon)) => points.push(Located { media_id, at, lat, lon }),
+                _ => {
+                    let Some(instant) = instant else { continue };
+                    if let Some((lat, lon)) = timelines.iter().find_map(|line| line.locate(instant)) {
+                        from_tracks += 1;
+                        points.push(Located { media_id, at, lat, lon });
+                    }
+                }
+            }
+        }
         let kept: Vec<(i64, f64, f64)> = {
             let mut stmt = tx.prepare("SELECT id, lat, lon FROM trip_places WHERE trip_id = ?1").map_err(sql_err)?;
             let rows = stmt.query_map([trip_id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))).map_err(sql_err)?;
@@ -835,7 +947,7 @@ impl Database {
         let count: i64 = tx.query_row("SELECT COUNT(*) FROM trip_places WHERE trip_id = ?1", [trip_id], |row| row.get(0)).map_err(sql_err)?;
         touch_trip(&tx, trip_id)?;
         tx.commit().map_err(sql_err)?;
-        Ok(count as usize)
+        Ok(PlaceSuggestion { places: count as usize, from_tracks })
     }
 
     pub fn delete_trip_day(&self, id: i64) -> Result<(), String> {
@@ -1574,12 +1686,58 @@ mod tests {
     use crate::track::{Point, Track};
 
     #[test]
+    fn review_filters_find_missing_captions_and_photos_in_no_trip() {
+        let (db, _, _, ids) = photos("review", &["a.jpg", "b.jpg", "c.jpg"]);
+        let trip_id = trip(&db, "Coast");
+        db.add_to_trip(trip_id, &ids[..2]).unwrap();
+        db.set_caption(ids[0], "Harbor at dawn");
+        db.set_caption(ids[1], "  ");
+        let no_caption = MemberQuery { no_caption: true, ..MemberQuery::default() };
+        assert_eq!(db.count_trip_members(trip_id, &no_caption), 1);
+
+        let found = |query: &str| -> Vec<i64> {
+            let mut found: Vec<i64> = db.search(query, Sort::Name, false).iter().map(|photo| photo.id).collect();
+            found.sort();
+            found
+        };
+        assert_eq!(found("is:notrip"), vec![ids[2]]);
+        assert_eq!(found("is:intrip"), ids[..2].to_vec());
+        assert_eq!(found("-is:intrip"), vec![ids[2]]);
+    }
+
+    #[test]
+    fn trip_resources_stay_private_until_allowed() {
+        let (db, _, _, _) = photos("resources", &[]);
+        let trip_id = trip(&db, "Coast");
+        let link = TripResource { kind: ResourceKind::Link, reference: "https://example.com/ferry".into(), title: "Ferry".into(), ..Default::default() };
+        let id = db.save_trip_resource(trip_id, &link).unwrap();
+        assert!(db.save_trip_resource(trip_id, &TripResource { kind: ResourceKind::Link, reference: "ferry".into(), ..Default::default() }).is_err());
+        let saved = db.trip_resources(trip_id);
+        assert_eq!(saved, vec![TripResource { id, ..link.clone() }]);
+        assert!(!saved[0].publish, "private unless allowed");
+
+        db.save_trip_resource(trip_id, &TripResource { id, publish: true, ..link }).unwrap();
+        assert!(db.trip_resources(trip_id)[0].publish);
+
+        let doc = TripResource { kind: ResourceKind::Document, reference: "/gone/tickets.pdf".into(), ..Default::default() };
+        let doc_id = db.save_trip_resource(trip_id, &doc).unwrap();
+        db.locate_trip_resource(doc_id, std::path::Path::new("/found/tickets.pdf")).unwrap();
+        assert!(db.locate_trip_resource(id, std::path::Path::new("/x")).is_err(), "a link has no file to locate");
+        assert_eq!(db.trip_resources(trip_id)[1].reference, "/found/tickets.pdf");
+
+        db.delete_trip_resource(doc_id).unwrap();
+        assert_eq!(db.trip_resources(trip_id).len(), 1);
+        db.delete_trip(trip_id).unwrap();
+        assert!(db.trip_resources(trip_id).is_empty(), "they go with their trip");
+    }
+
+    #[test]
     fn suggested_places_keep_the_ones_the_user_named() {
         let (db, _, _, ids) = photos("places", &["a.jpg", "b.jpg", "c.jpg", "d.jpg"]);
         let trip_id = trip(&db, "Coast");
         db.add_to_trip(trip_id, &ids).unwrap();
         db.set_pins(&ids[2..], 38.0, 140.0);
-        assert_eq!(db.suggest_places(trip_id, 300.0, 3 * 3600).unwrap(), 2);
+        assert_eq!(db.suggest_places(trip_id, 300.0, 3 * 3600).unwrap().places, 2);
         let places = db.trip_places(trip_id);
         assert_eq!(places.iter().map(|place| place.members).collect::<Vec<_>>(), vec![2, 2]);
         let near = places.iter().find(|place| place.lat == 38.0).unwrap().id;
@@ -1603,6 +1761,36 @@ mod tests {
         assert_eq!(db.count_trip_members(trip_id, &MemberQuery::default()), 4, "its photos stay in the trip");
         assert!(db.update_trip_place(near, "Gone", "", "").is_err());
         assert!(db.reorder_trip_places(trip_id, &[near]).is_err());
+    }
+
+    #[test]
+    fn a_photo_without_gps_is_placed_by_the_trips_track_in_its_zone() {
+        let (db, folder_id, folder) = library("places-track");
+        let mut bare = record(folder_id, &folder, "a.jpg", 1);
+        (bare.photo.gps_lat, bare.photo.gps_lon) = (None, None);
+        let ids = db.write_batch(&[bare]).unwrap().ids;
+        let mut draft = TripDraft::new("Madrid", "Europe/Madrid");
+        draft.trip_time = true;
+        let trip_id = db.create_trip(&draft).unwrap();
+        let refs = db.add_to_trip(trip_id, &ids).unwrap();
+        // Just after the clocks went forward: 03:30 in Madrid is 01:30 UTC.
+        let clock = NaiveDateTime::parse_from_str("2025-03-30 03:30:00", CLOCK_FORMAT).unwrap();
+        db.store_capture(refs[0], Capture::Clock { clock, offset: None }, 1);
+        let utc = |text: &str| NaiveDateTime::parse_from_str(text, CLOCK_FORMAT).unwrap().and_utc().timestamp();
+        let points = vec![
+            Point { lat: 40.0, lon: -3.0, time: Some(utc("2025-03-30 01:20:00")) },
+            Point { lat: 40.1, lon: -3.0, time: Some(utc("2025-03-30 01:40:00")) },
+        ];
+        let path = folder_path(&folder, "walk.gpx");
+        db.store_track(folder_id, &path, 1, 1, &Track { name: "Walk".into(), segments: vec![points] }).unwrap();
+        db.link_trip_track(trip_id, db.tracks()[0].0, None).unwrap();
+
+        let done = db.suggest_places(trip_id, 300.0, 3600).unwrap();
+        assert_eq!((done.places, done.from_tracks), (1, 1));
+        let place = &db.trip_places(trip_id)[0];
+        assert!((place.lat - 40.05).abs() < 1e-6, "halfway along the track, not an hour off: {}", place.lat);
+        let photo = db.photo(ids[0]).unwrap();
+        assert_eq!((photo.gps_lat, photo.pin_lat), (None, None), "the track's position is not stored as a pin");
     }
 
     #[test]

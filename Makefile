@@ -23,18 +23,23 @@ else
 endif
 
 # On macOS, a build signed ad hoc is a new app to the Keychain each time,
-# which asks again for each saved password, twice. A code-signing identity
-# of this name, made once in Keychain Access, signs every build the same
-# way, so "Always Allow" lasts (README.md). Without it nothing changes.
+# which asks again for each saved password, twice. A self-signed
+# code-signing identity of this name, made once with `make sign-identity`,
+# signs every build the same way, so "Always Allow" lasts (README.md).
+# Without it, builds keep cargo's ad-hoc signature. The identity is
+# self-signed, so `find-identity` is asked without -v, which lists trusted
+# ones only.
 SIGN_IDENTITY ?= Picasso Development
-sign = if [ "$(PLATFORM)" = darwin ] && security find-identity -v -p codesigning 2>/dev/null | grep -q '"$(SIGN_IDENTITY)"'; then \
-	codesign --force --sign "$(SIGN_IDENTITY)" --identifier app.Picasso.picasso $(1); fi
+has_identity = security find-identity -p codesigning 2>/dev/null | grep -q '"$(SIGN_IDENTITY)"'
+sign = if [ "$(PLATFORM)" = darwin ]; then \
+	if $(has_identity); then codesign --force --sign "$(SIGN_IDENTITY)" --identifier app.Picasso.picasso $(1); \
+	else echo "Not signed with \"$(SIGN_IDENTITY)\": run make sign-identity once to keep Keychain approvals across builds"; fi; fi
 
 # `make` alone builds the release binary; `make help` lists every target.
 .DEFAULT_GOAL := release
 
 .PHONY: help release debug run run-stats version check lint test corpus bench bench-check check-docs deny ci \
-	notices release-notes guide guide-pdf appimage install uninstall world-map clean
+	sign-identity notices release-notes guide guide-pdf appimage install uninstall world-map clean
 
 # Each target's `##` text is what `make help` prints; `##@` starts a section.
 help: ## List the targets and the variables they take
@@ -57,6 +62,12 @@ help: ## List the targets and the variables they take
 release: ## Build target/release/picasso (the default)
 	$(CARGO) build --release
 	@$(call sign,target/release/picasso)
+
+# Once per Mac. codesign asks for the login keychain the first time it signs.
+sign-identity: ## Make the self-signed macOS code-signing identity builds are signed with
+	@if [ "$(PLATFORM)" != darwin ]; then echo "Only macOS signs builds"; \
+	elif $(has_identity); then echo "\"$(SIGN_IDENTITY)\" is already in the keychain"; \
+	else bash scripts/self-signed-identity.sh "$(SIGN_IDENTITY)"; fi
 
 # Compiles faster than release, but scanning, thumbnails, and editing are much slower.
 debug: ## Build target/debug/picasso, quicker to compile

@@ -11,7 +11,15 @@ section of this file as the release notes.
   with each group's folders, cameras and locations, and camera clocks that were off can be moved for the grouping, and makes a Trip of one through New trip.
 - Places in a Trip: Suggest places groups its located photos by distance and time, and each
   Place can be named, in the local language too, given notes, reordered, and shown on its own;
-  named Places stay when suggesting again.
+  named Places stay when suggesting again. Photos without GPS are placed by the Trip's tracks,
+  in its time zone, without pinning them.
+- Edit place can look up a Place's name online, once Look up place names online is turned on in
+  Settings → Map. Only the position, rounded to about 100 m, is sent to OpenStreetMap Nominatim,
+  only when you press Look up name, and answers are kept on this computer.
+- Resources in a Trip: keep documents, links, notes and track files with it, open them from the
+  Trip, and locate a file that moved. Each stays private unless you allow it to be published.
+- A Trip's photos can be narrowed to those without a caption, and the Library search finds
+  photos in no Trip with is:notrip, or in one with is:intrip.
 - Adding photos to a Trip first says how many have a location, are in another Trip, have no
   date, or may be copies of another.
 - Publish a Story to your own WordPress site from the Story's ⋯ menu. Connect sites in
@@ -28,6 +36,8 @@ section of this file as the release notes.
 
 ### Changed
 
+- macOS builds are signed with a self-signed `Picasso Development` certificate: `make sign-identity`
+  makes it once, and CI releases without a Developer ID use it instead of an ad-hoc signature.
 - Reorganized the English and Traditional Chinese READMEs around the project overview,
   features, installation, common workflows, data storage and development. Simplified the
   English wording for readers who use English as an additional language.

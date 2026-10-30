@@ -7,7 +7,7 @@ use chrono::{Local, NaiveDate, TimeZone};
 use eframe::egui::{self, Align, Key, Layout, Margin, Modifiers, RichText, Vec2};
 
 use crate::i18n::{tr, trf};
-use crate::trip::{read_capture, shift_cameras, suggest_trips, Shot, TripCandidate, TripQuery, AddPreview, DayFilter, DaySource, DaySuggestion, MemberQuery, Review, Story, StoryFilter, Trip, TripDay, TripDraft, TripImpact, TripPlace};
+use crate::trip::{read_capture, shift_cameras, PlaceSuggestion, suggest_trips, Shot, TripCandidate, TripQuery, AddPreview, DayFilter, DaySource, DaySuggestion, MemberQuery, Review, Story, StoryFilter, Trip, TripDay, TripDraft, TripImpact, TripPlace, ResourceKind, TripResource};
 use crate::types::{format_day, Nav};
 
 use super::story::{story_name, Group};
@@ -91,6 +91,15 @@ pub(super) struct PlaceDialog {
     notes: String,
     /// Where it is, shown but not changed here.
     position: (f64, f64),
+    /// Waiting for names looked up online.
+    looking_up: bool,
+    error: String,
+}
+
+/// Adding or changing a Trip resource.
+pub(super) struct ResourceDialog {
+    trip_id: i64,
+    resource: TripResource,
     error: String,
 }
 
@@ -475,6 +484,10 @@ impl PicassoApp {
             if no_location.on_hover_text(tr("Photos without GPS from the camera or a place set by hand")).clicked() {
                 filter.no_location = !filter.no_location;
             }
+            let no_caption = ui.selectable_label(filter.no_caption, tr("No caption"));
+            if no_caption.on_hover_text(tr("Photos without a caption, to add one where you want it")).clicked() {
+                filter.no_caption = !filter.no_caption;
+            }
             let unavailable = ui.selectable_label(filter.unavailable, tr("Unavailable"));
             if unavailable.on_hover_text(tr("Photos that are no longer in the library. They stay in the trip.")).clicked() {
                 filter.unavailable = !filter.unavailable;
@@ -652,6 +665,7 @@ impl PicassoApp {
         }
         self.places_row(ui, trip_id, &mut filter);
         self.tracks_row(ui, trip_id, &days);
+        self.resources_row(ui, trip_id);
         self.stories_line(ui, trip_id, &days);
         if filter != self.trip_filter {
             self.trip_filter = filter;
@@ -1055,6 +1069,55 @@ impl PicassoApp {
         });
     }
 
+    /// Reads the capture times the Trip's photos lack, as Suggest days
+    /// does, then suggests their Places, on a thread of its own.
+    fn suggest_places(&mut self, ctx: &egui::Context, trip_id: i64, distance: f64, gap: i64) {
+        self.suggesting = Some(trip_id);
+        let db_path = self.data_dir.join("picasso.db");
+        let events = self.events_tx.clone();
+        let ctx = ctx.clone();
+        let _ = std::thread::Builder::new().name("picasso-places".into()).spawn(move || {
+            let outcome = crate::db::Database::open(&db_path).and_then(|db| {
+                for (media_id, path, modified_at) in db.captures_to_read(trip_id) {
+                    db.store_capture(media_id, read_capture(std::path::Path::new(&path), modified_at), modified_at);
+                }
+                db.suggest_places(trip_id, distance, gap)
+            });
+            let _ = events.send(UiEvent::PlacesSuggested { trip_id, outcome });
+            ctx.request_repaint();
+        });
+    }
+
+    pub(super) fn on_places_suggested(&mut self, trip_id: i64, outcome: Result<PlaceSuggestion, String>) {
+        if self.suggesting == Some(trip_id) {
+            self.suggesting = None;
+        }
+        self.activity = match outcome {
+            Ok(done) if done.from_tracks > 0 => format!("{}  ·  {}", trf("{} places", &[&done.places]), trf("{} placed by a track", &[&done.from_tracks])),
+            Ok(done) => trf("{} places", &[&done.places]),
+            Err(err) => err,
+        };
+        self.reload();
+    }
+
+    /// Fills the open Place dialog with the names looked up, leaving the
+    /// saving to the person editing it.
+    pub(super) fn on_place_named(&mut self, place_id: i64, outcome: Result<crate::geocode::PlaceNames, String>) {
+        let Modal::PlaceDetails(dialog) = &mut self.modal else { return };
+        if dialog.place_id != place_id {
+            return;
+        }
+        dialog.looking_up = false;
+        match outcome {
+            Ok(names) if names.name.is_empty() => dialog.error = tr("No name was found for this position").into(),
+            Ok(names) => {
+                dialog.name = names.name;
+                dialog.local_name = names.local_name;
+            }
+            Err(err) => dialog.error = err,
+        }
+    }
+
     pub(super) fn on_days_suggested(&mut self, trip_id: i64, outcome: Result<DaySuggestion, String>) {
         if self.suggesting == Some(trip_id) {
             self.suggesting = None;
@@ -1264,7 +1327,8 @@ impl PicassoApp {
                     egui::Popup::menu(&more).show(|ui| actions(ui, index));
                 }
             }
-            let button = ui.button(tr("Suggest places"));
+            let busy = self.suggesting.is_some();
+            let button = ui.add_enabled(!busy, egui::Button::new(tr("Suggest places")));
             if button
                 .on_hover_text(tr("Group photos with a location into places: photos within the distance, with no longer gap between them. Places you named or moved stay as they are."))
                 .clicked()
@@ -1283,6 +1347,7 @@ impl PicassoApp {
                 local_name: place.local_name,
                 notes: place.notes,
                 position: (place.lat, place.lon),
+                looking_up: false,
                 error: String::new(),
             });
         }
@@ -1300,30 +1365,131 @@ impl PicassoApp {
             }
         }
         if suggest {
-            match self.db.suggest_places(trip_id, f64::from(distance), i64::from(hours) * 3600) {
-                Ok(count) => self.activity = trf("{} places", &[&count]),
-                Err(err) => self.activity = err,
-            }
-            self.reload();
+            self.suggest_places(ui.ctx(), trip_id, f64::from(distance), i64::from(hours) * 3600);
         }
     }
 
-    pub(super) fn place_modal(&mut self, ctx: &egui::Context) {
-        let Modal::PlaceDetails(dialog) = &mut self.modal else { return };
+    /// The Trip's documents, links, notes, and track files: each opens on a
+    /// click, and its menu edits, locates, or deletes it.
+    fn resources_row(&mut self, ui: &mut egui::Ui, trip_id: i64) {
+        let resources = self.db.trip_resources(trip_id);
+        let mut edit: Option<TripResource> = None;
+        let mut locate: Option<i64> = None;
+        let mut delete: Option<i64> = None;
+        labelled_row(ui, tr("Resources"), |ui| {
+            for resource in &resources {
+                let missing = resource.missing();
+                let mut label = resource.shown_name();
+                if missing {
+                    label = trf("{} (missing)", &[&label]);
+                }
+                let chip = ui.selectable_label(false, label).on_hover_text(resource_details(resource, missing));
+                if chip.clicked() {
+                    match resource.kind {
+                        ResourceKind::Note => edit = Some(resource.clone()),
+                        _ if missing => locate = Some(resource.id),
+                        _ => {
+                            let _ = open::that(&resource.reference);
+                        }
+                    }
+                }
+                chip.context_menu(|ui| {
+                    if resource.kind != ResourceKind::Note && ui.add_enabled(!missing, egui::Button::new(tr("Open"))).clicked() {
+                        let _ = open::that(&resource.reference);
+                        ui.close();
+                    }
+                    if ui.button(tr("Edit resource…")).clicked() {
+                        edit = Some(resource.clone());
+                        ui.close();
+                    }
+                    if resource.kind.is_file() && ui.button(tr("Locate…")).on_hover_text(tr("Choose where its file is now")).clicked() {
+                        locate = Some(resource.id);
+                        ui.close();
+                    }
+                    if ui.button(tr("Delete resource")).on_hover_text(tr("Its file, if any, stays where it is")).clicked() {
+                        delete = Some(resource.id);
+                        ui.close();
+                    }
+                });
+            }
+            if ui.button(tr("Add resource…")).on_hover_text(tr("Keep a document, link, note, or track file with the trip. It stays private unless you allow it to be published.")).clicked() {
+                edit = Some(TripResource::default());
+            }
+        });
+        if let Some(resource) = edit {
+            self.modal = Modal::Resource(ResourceDialog { trip_id, resource, error: String::new() });
+        }
+        if let Some(id) = locate {
+            if let Some(path) = rfd::FileDialog::new().set_title(tr("Locate the file")).pick_file() {
+                if let Err(err) = self.db.locate_trip_resource(id, &path) {
+                    self.activity = err;
+                }
+            }
+        }
+        if let Some(id) = delete {
+            if let Err(err) = self.db.delete_trip_resource(id) {
+                self.activity = err;
+            }
+        }
+    }
+
+    pub(super) fn resource_modal(&mut self, ctx: &egui::Context) {
+        let Modal::Resource(dialog) = &mut self.modal else { return };
         let mut close = false;
         let mut save = false;
-        let response = egui::Modal::new(egui::Id::unique("trip-place")).frame(about::dialog_frame()).show(ctx, |ui| {
-            ui.set_width(400.0);
-            about::title_bar(ui, &self.logo, tr("Edit place"), &mut close);
+        let title = if dialog.resource.id == 0 { tr("Add resource") } else { tr("Edit resource") };
+        let response = egui::Modal::new(egui::Id::unique("trip-resource")).frame(about::dialog_frame()).show(ctx, |ui| {
+            ui.set_width(440.0);
+            about::title_bar(ui, &self.logo, title, &mut close);
             egui::Frame::new().inner_margin(Margin::symmetric(20, 14)).show(ui, |ui| {
                 ui.spacing_mut().item_spacing.y = 6.0;
-                ui.label(tr("Name"));
-                ui.add(egui::TextEdit::singleline(&mut dialog.name).hint_text(tr("Optional")).desired_width(f32::INFINITY));
-                ui.label(tr("Local name"));
-                ui.add(egui::TextEdit::singleline(&mut dialog.local_name).hint_text(tr("In the local language, if different")).desired_width(f32::INFINITY));
+                let resource = &mut dialog.resource;
+                ui.horizontal(|ui| {
+                    for kind in ResourceKind::ALL {
+                        if ui.selectable_label(resource.kind == kind, tr(kind.label())).clicked() && resource.kind != kind {
+                            if resource.kind.is_file() != kind.is_file() || kind == ResourceKind::Note {
+                                resource.reference.clear();
+                            }
+                            resource.kind = kind;
+                        }
+                    }
+                });
+                ui.label(tr("Title"));
+                ui.add(egui::TextEdit::singleline(&mut resource.title).hint_text(tr("Optional")).desired_width(f32::INFINITY));
+                match resource.kind {
+                    ResourceKind::Link => {
+                        ui.label(tr("Web address"));
+                        ui.add(egui::TextEdit::singleline(&mut resource.reference).hint_text("https://").desired_width(f32::INFINITY));
+                    }
+                    ResourceKind::Note => {}
+                    _ => {
+                        ui.label(tr("File"));
+                        ui.horizontal(|ui| {
+                            if ui.button(tr("Choose…")).clicked() {
+                                let mut picker = rfd::FileDialog::new();
+                                if resource.kind == ResourceKind::Track {
+                                    picker = picker.add_filter(tr("Tracks"), &["gpx", "kml", "kmz", "json", "geojson"]);
+                                }
+                                if let Some(path) = picker.pick_file() {
+                                    resource.reference = path.to_string_lossy().into_owned();
+                                }
+                            }
+                            let shown = if resource.reference.is_empty() { tr("No file chosen").to_string() } else { resource.reference.clone() };
+                            ui.add(egui::Label::new(RichText::new(shown).color(theme::muted())).truncate());
+                        });
+                        ui.label(RichText::new(tr("Picasso keeps where the file is, not a copy.")).size(12.5).color(theme::muted()));
+                    }
+                }
                 ui.label(tr("Notes"));
-                ui.add(egui::TextEdit::multiline(&mut dialog.notes).desired_rows(3).desired_width(f32::INFINITY));
-                ui.label(RichText::new(format!("{:.5}, {:.5}", dialog.position.0, dialog.position.1)).color(theme::muted()));
+                ui.add(egui::TextEdit::multiline(&mut resource.notes).desired_rows(3).desired_width(f32::INFINITY));
+                ui.add_space(4.0);
+                ui.checkbox(&mut resource.publish, tr("May be published"));
+                let privacy = if resource.publish {
+                    tr("Allowed: a Story or post you publish may show its title, notes, and link. Files are never uploaded.")
+                } else {
+                    tr("Private: it never goes into anything you publish or export.")
+                };
+                ui.label(RichText::new(privacy).size(12.5).color(theme::muted()));
                 if !dialog.error.is_empty() {
                     ui.label(RichText::new(&dialog.error).color(theme::DANGER));
                 }
@@ -1338,6 +1504,80 @@ impl PicassoApp {
                 });
             });
         });
+        if save {
+            match self.db.save_trip_resource(dialog.trip_id, &dialog.resource) {
+                Ok(_) => self.modal = Modal::None,
+                Err(err) => dialog.error = err,
+            }
+            return;
+        }
+        if close || response.should_close() {
+            self.modal = Modal::None;
+        }
+    }
+
+    pub(super) fn place_modal(&mut self, ctx: &egui::Context) {
+        let Modal::PlaceDetails(dialog) = &mut self.modal else { return };
+        let mut close = false;
+        let mut save = false;
+        let mut look_up = false;
+        let allowed = self.config.flag("place_lookup").unwrap_or(false);
+        let response = egui::Modal::new(egui::Id::unique("trip-place")).frame(about::dialog_frame()).show(ctx, |ui| {
+            ui.set_width(400.0);
+            about::title_bar(ui, &self.logo, tr("Edit place"), &mut close);
+            egui::Frame::new().inner_margin(Margin::symmetric(20, 14)).show(ui, |ui| {
+                ui.spacing_mut().item_spacing.y = 6.0;
+                ui.label(tr("Name"));
+                ui.add(egui::TextEdit::singleline(&mut dialog.name).hint_text(tr("Optional")).desired_width(f32::INFINITY));
+                ui.label(tr("Local name"));
+                ui.add(egui::TextEdit::singleline(&mut dialog.local_name).hint_text(tr("In the local language, if different")).desired_width(f32::INFINITY));
+                ui.label(tr("Notes"));
+                ui.add(egui::TextEdit::multiline(&mut dialog.notes).desired_rows(3).desired_width(f32::INFINITY));
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(format!("{:.5}, {:.5}", dialog.position.0, dialog.position.1)).color(theme::muted()));
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if dialog.looking_up {
+                            ui.spinner();
+                        }
+                        let hint = if allowed {
+                            tr("Sends this position, rounded to about 100 m, to OpenStreetMap Nominatim and fills in the names. Answers are kept on this computer.")
+                        } else {
+                            tr("Turn on looking up place names in Settings › Map first")
+                        };
+                        let button = ui.add_enabled(allowed && !dialog.looking_up, egui::Button::new(tr("Look up name")));
+                        if button.on_hover_text(hint).on_disabled_hover_text(hint).clicked() {
+                            look_up = true;
+                        }
+                    });
+                });
+                if !dialog.error.is_empty() {
+                    ui.label(RichText::new(&dialog.error).color(theme::DANGER));
+                }
+                ui.add_space(6.0);
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if ui.add(theme::primary_button(tr("Save"))).clicked() {
+                        save = true;
+                    }
+                    if ui.button(tr("Cancel")).clicked() {
+                        close = true;
+                    }
+                });
+            });
+        });
+        if look_up {
+            dialog.looking_up = true;
+            dialog.error.clear();
+            let (place_id, (lat, lon)) = (dialog.place_id, dialog.position);
+            let dir = self.cache_dir.join("places");
+            let lang = crate::i18n::current().code();
+            let events = self.events_tx.clone();
+            let ctx = ctx.clone();
+            let _ = std::thread::Builder::new().name("picasso-place-name".into()).spawn(move || {
+                let outcome = crate::geocode::reverse(&dir, lat, lon, lang);
+                let _ = events.send(UiEvent::PlaceNamed { place_id, outcome });
+                ctx.request_repaint();
+            });
+        }
         if save {
             match self.db.update_trip_place(dialog.place_id, &dialog.name, &dialog.local_name, &dialog.notes) {
                 Ok(()) => {
@@ -1824,6 +2064,22 @@ fn place_name(place: &TripPlace, index: usize) -> String {
         return place.local_name.clone();
     }
     trf("Place {}", &[&(index + 1)])
+}
+
+/// What a resource is, where, its notes, and whether it may be published.
+fn resource_details(resource: &TripResource, missing: bool) -> String {
+    let mut lines = vec![tr(resource.kind.label()).to_string()];
+    if !resource.reference.is_empty() {
+        lines.push(resource.reference.clone());
+    }
+    if missing {
+        lines.push(tr("Its file is no longer there. Click to locate it.").into());
+    }
+    if !resource.notes.is_empty() && resource.kind != ResourceKind::Note {
+        lines.push(resource.notes.clone());
+    }
+    lines.push(if resource.publish { tr("May be published") } else { tr("Private") }.into());
+    lines.join("\n")
 }
 
 /// The local name, position, and notes, for a Place's tooltip.

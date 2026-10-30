@@ -119,6 +119,7 @@ Picasso 支援 JPEG、PNG、GIF、WebP、BMP、TIFF、HEIC／HEIF 與相機 RAW 
 * `type:video`、`type:photo` 或 `type:raw`，或 `type:jpg`、`type:nef` 這類單一格式
 * `gps:yes` 或 `gps:no`，找出有或沒有地圖位置的相片
 * `is:edited` 或 `is:starred`
+* `is:notrip` 或 `is:intrip`，找出不在任何旅行中或已在旅行中的相片
 * `camera:` 或 `lens:` 加上部分名稱，例如 `lens:50mm`
 * `focal:35`，或 `focal:24-70`、`focal:200-` 這類範圍，單位為公釐
 * `mp:12`，或 `mp:20-`、`mp:-8` 這類範圍，單位為百萬像素

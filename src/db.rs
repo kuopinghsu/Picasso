@@ -1343,6 +1343,8 @@ enum Term {
     Located(bool),
     Edited(bool),
     Starred(bool),
+    /// Photos in any Trip, or in none when `false`.
+    InTrip(bool),
     Camera(String),
     Lens(String),
     /// Focal lengths from the first to the second, in millimeters.
@@ -1355,7 +1357,7 @@ enum Term {
 
 /// The words of a search. A year, month, or day such as `2019`, `2019-05`,
 /// or `2019/5/17` stands for the photos taken then, in local time.
-/// `type:`, `gps:`, `is:`, `camera:`, `lens:`, `focal:`, and `mp:` narrow by
+/// `type:`, `gps:`, `is:` (`is:notrip` for photos in no Trip), `camera:`, `lens:`, `focal:`, and `mp:` narrow by
 /// what they name (see [`search_word`]); any other word is looked for in the
 /// file and subfolder names, the caption, the camera, the lens, and the names
 /// of the photo's albums. A word starting with `-`, such as `-beach` or
@@ -1385,6 +1387,7 @@ fn negated(term: Term) -> Term {
         Term::Located(located) => Term::Located(!located),
         Term::Edited(edited) => Term::Edited(!edited),
         Term::Starred(starred) => Term::Starred(!starred),
+        Term::InTrip(in_trip) => Term::InTrip(!in_trip),
         term => Term::Not(Box::new(term)),
     }
 }
@@ -1423,6 +1426,10 @@ fn term_sql(term: Term, values: &mut Vec<rusqlite::types::Value>) -> String {
         Term::Edited(true) => "EXISTS (SELECT 1 FROM edits e WHERE e.photo_id = p.id AND e.applied > 0)".into(),
         Term::Edited(false) => "1".into(),
         Term::Starred(starred) => format!("p.starred = {}", i32::from(starred)),
+        Term::InTrip(in_trip) => {
+            let any = "EXISTS (SELECT 1 FROM media_refs mr JOIN trip_media tm ON tm.media_id = mr.id WHERE mr.photo_id = p.id)";
+            if in_trip { any.into() } else { format!("NOT {any}") }
+        }
         Term::Camera(text) => {
             values.push(like_pattern(&text).into());
             format!("p.camera LIKE ?{at} ESCAPE '\\'")
@@ -1494,6 +1501,8 @@ fn search_word(word: &str) -> Option<Term> {
             "unedited" => Some(Term::Edited(false)),
             "starred" => Some(Term::Starred(true)),
             "unstarred" => Some(Term::Starred(false)),
+            "intrip" => Some(Term::InTrip(true)),
+            "notrip" => Some(Term::InTrip(false)),
             "geotagged" | "located" => Some(Term::Located(true)),
             _ => None,
         },

@@ -143,15 +143,22 @@ pub struct DaySuggestion {
 /// recorded offset were set to Trip time. The computer's own time zone is
 /// never used, so the same inputs give the same day anywhere.
 pub fn capture_day(capture: Capture, shift: i64, zone: &TripZone, trip_time: bool) -> Result<NaiveDate, Review> {
-    let instant = match capture {
+    let instant = capture_instant(capture, zone, trip_time)?;
+    zone.day_of(instant + shift).ok_or(Review::NoTime)
+}
+
+/// The instant, in Unix seconds, a member was taken, read as
+/// [`capture_day`] reads it: a clock without an offset is taken in the
+/// Trip's zone, daylight saving included, only when `trip_time` says so.
+pub fn capture_instant(capture: Capture, zone: &TripZone, trip_time: bool) -> Result<i64, Review> {
+    Ok(match capture {
         Capture::Unread => return Err(Review::Unread),
         Capture::Missing => return Err(Review::NoTime),
         Capture::Utc(instant) => instant,
         Capture::Clock { clock, offset: Some(offset) } => clock.and_utc().timestamp() - i64::from(offset),
         Capture::Clock { offset: None, .. } if !trip_time => return Err(Review::NoOffset),
         Capture::Clock { clock, offset: None } => zone.instant_of(clock).ok_or(Review::Ambiguous)?,
-    };
-    zone.day_of(instant + shift).ok_or(Review::NoTime)
+    })
 }
 
 /// What the user enters to create or change a Trip.
@@ -269,6 +276,16 @@ pub struct Located {
     pub at: i64,
     pub lat: f64,
     pub lon: f64,
+}
+
+/// What Suggest places did.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PlaceSuggestion {
+    /// Places the Trip has now.
+    pub places: usize,
+    /// Members without GPS or a pin placed by where a linked track was
+    /// when they were taken; their photos stay without a position.
+    pub from_tracks: usize,
 }
 
 /// Members taken close together, in the order first visited.
@@ -394,6 +411,8 @@ pub struct MemberQuery {
     pub no_location: bool,
     /// Members whose photo is not in the library now.
     pub unavailable: bool,
+    /// Members whose photo has no caption. Not an error; only a filter.
+    pub no_caption: bool,
     pub story: StoryFilter,
     /// Members at this Place.
     pub place: Option<i64>,
@@ -539,6 +558,96 @@ pub struct TripTrack {
     pub track_id: Option<i64>,
     pub path: String,
     pub name: String,
+}
+
+/// What a Trip resource refers to.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ResourceKind {
+    #[default]
+    Document,
+    Link,
+    Note,
+    Track,
+}
+
+impl ResourceKind {
+    pub const ALL: [ResourceKind; 4] = [ResourceKind::Document, ResourceKind::Link, ResourceKind::Note, ResourceKind::Track];
+
+    pub fn code(self) -> &'static str {
+        match self {
+            ResourceKind::Document => "document",
+            ResourceKind::Link => "link",
+            ResourceKind::Note => "note",
+            ResourceKind::Track => "track",
+        }
+    }
+
+    pub fn from_code(code: &str) -> ResourceKind {
+        ResourceKind::ALL.into_iter().find(|kind| kind.code() == code).unwrap_or_default()
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            ResourceKind::Document => "Document",
+            ResourceKind::Link => "Link",
+            ResourceKind::Note => "Note",
+            ResourceKind::Track => "Track file",
+        }
+    }
+
+    /// Whether its reference is a file on this computer.
+    pub fn is_file(self) -> bool {
+        matches!(self, ResourceKind::Document | ResourceKind::Track)
+    }
+}
+
+/// A document, link, note, or track file kept with a Trip for reference.
+/// Private unless `publish` was approved for it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct TripResource {
+    pub id: i64,
+    pub kind: ResourceKind,
+    /// A file path, a web address, or nothing for a note.
+    pub reference: String,
+    pub title: String,
+    pub notes: String,
+    pub publish: bool,
+}
+
+impl TripResource {
+    /// Why it can't be saved as it is, if it can't.
+    pub fn problem(&self) -> Option<&'static str> {
+        let reference = self.reference.trim();
+        match self.kind {
+            ResourceKind::Link if !(reference.starts_with("https://") || reference.starts_with("http://")) => {
+                Some("Type a web address starting with https://")
+            }
+            kind if kind.is_file() && reference.is_empty() => Some("Choose a file"),
+            ResourceKind::Note if self.title.trim().is_empty() && self.notes.trim().is_empty() => Some("Give the note a title or some text"),
+            _ => None,
+        }
+    }
+
+    /// Whether its file is no longer where it was.
+    pub fn missing(&self) -> bool {
+        self.kind.is_file() && !std::path::Path::new(&self.reference).exists()
+    }
+
+    /// Its title, else the file's name or the address.
+    pub fn shown_name(&self) -> String {
+        if !self.title.trim().is_empty() {
+            return self.title.trim().to_string();
+        }
+        if self.kind.is_file() {
+            if let Some(name) = std::path::Path::new(&self.reference).file_name() {
+                return name.to_string_lossy().into_owned();
+            }
+        }
+        if self.kind == ResourceKind::Note {
+            return self.notes.lines().next().unwrap_or_default().chars().take(40).collect();
+        }
+        self.reference.clone()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1010,5 +1119,30 @@ mod tests {
         let ids: std::collections::HashSet<String> = (0..1000).map(|_| new_uid()).collect();
         assert_eq!(ids.len(), 1000);
         assert!(ids.iter().all(|id| id.len() == 16));
+    }
+}
+
+#[cfg(test)]
+mod resource_tests {
+    use super::*;
+
+    #[test]
+    fn resources_say_what_they_lack() {
+        let link = TripResource { kind: ResourceKind::Link, reference: "example.com".into(), ..Default::default() };
+        assert!(link.problem().is_some());
+        assert!(TripResource { reference: "https://example.com".into(), ..link }.problem().is_none());
+        assert!(TripResource { kind: ResourceKind::Document, ..Default::default() }.problem().is_some());
+        let note = TripResource { kind: ResourceKind::Note, ..Default::default() };
+        assert!(note.problem().is_some());
+        assert!(TripResource { notes: "Ferry at 9".into(), ..note }.problem().is_none());
+    }
+
+    #[test]
+    fn a_resource_is_named_by_its_title_else_its_file() {
+        let doc = TripResource { kind: ResourceKind::Document, reference: "/trips/spain/tickets.pdf".into(), ..Default::default() };
+        assert_eq!(doc.shown_name(), "tickets.pdf");
+        assert!(doc.missing());
+        assert_eq!(TripResource { title: "Train".into(), ..doc }.shown_name(), "Train");
+        assert!(!TripResource { kind: ResourceKind::Link, ..Default::default() }.missing());
     }
 }

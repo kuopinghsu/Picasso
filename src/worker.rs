@@ -173,6 +173,16 @@ pub enum UiEvent {
         trip_id: i64,
         outcome: Result<crate::trip::DaySuggestion, String>,
     },
+    /// Places suggested for a Trip from its photos' positions and tracks, or why not.
+    PlacesSuggested {
+        trip_id: i64,
+        outcome: Result<crate::trip::PlaceSuggestion, String>,
+    },
+    /// Names looked up for a Place being edited, or why not.
+    PlaceNamed {
+        place_id: i64,
+        outcome: Result<crate::geocode::PlaceNames, String>,
+    },
     /// A Story's preview was written and opened, or why not.
     StoryPreviewed(i64, Result<crate::story_html::Outcome, String>),
     /// A Story was exported to a new folder, or why not.

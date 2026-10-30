@@ -227,7 +227,9 @@ cargo test --release --locked
 
 The executable is `target/release/picasso` on macOS and Linux, or `target/release/picasso.exe` on Windows. Release builds provide better scanning, thumbnail and editing performance than debug builds.
 
-On macOS, each build is signed ad hoc and is a new app to the Keychain, which then asks twice for every saved WordPress password and forgets **Always Allow** at the next build. To sign every build the same way, make a code-signing certificate once: in Keychain Access, choose **Certificate Assistant → Create a Certificate…**, name it `Picasso Development`, set **Certificate Type** to **Code Signing**, and create it. From then on, `make` and `make run` sign `target/release/picasso` with it (another name can be given with `SIGN_IDENTITY=...`); after the first **Always Allow**, later builds are not asked again. Builds made with `cargo` directly are not signed this way.
+On macOS, a build signed ad hoc is a new app to the Keychain, which then asks twice for every saved WordPress password and forgets **Always Allow** at the next build. To sign every build the same way, run `make sign-identity` once: it makes a self-signed code-signing certificate named `Picasso Development` in your login keychain. From then on, `make` and `make run` sign `target/release/picasso` with it (another name can be given with `SIGN_IDENTITY=...`); the first signing asks to use the keychain, and after the first **Always Allow** later builds are not asked again. Builds made with `cargo` directly are not signed this way.
+
+Releases built by CI without a Developer ID are signed with a self-signed `Picasso Development` too. To sign every release with the same one, export it from Keychain Access (**My Certificates**, right-click it, **Export…**, as a `.p12` with a password) and add two repository secrets: `MACOS_SELF_SIGNED_CERTIFICATE`, from `base64 -i Picasso.p12`, and `MACOS_SELF_SIGNED_CERTIFICATE_PASSWORD`. Without them, each run makes a new one.
 
 OpenGL is the default renderer. Set `PICASSO_RENDERER=wgpu` to select the alternative wgpu renderer.
 

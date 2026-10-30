@@ -462,6 +462,13 @@ impl PicassoApp {
             ui.add_space(4.0);
         }
         note(ui, self.map_source.attribution());
+
+        heading(ui, tr("Place names"));
+        note(ui, tr("Edit place can look up a name for a Place's position. Picasso sends only that position, rounded to about 100 m, to OpenStreetMap Nominatim, and only when you press Look up name. Answers are kept on this computer."));
+        let mut allowed = self.config.flag("place_lookup").unwrap_or(false);
+        if ui.checkbox(&mut allowed, tr("Look up place names online")).changed() {
+            self.config.set("place_lookup", allowed);
+        }
     }
 
     fn tracks_page(&mut self, ui: &mut egui::Ui) {

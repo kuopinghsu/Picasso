@@ -13,6 +13,7 @@ mod corpus;
 mod db;
 mod edit;
 mod geo;
+mod geocode;
 mod geotag;
 mod gutenberg;
 mod wordpress;

@@ -227,7 +227,9 @@ cargo test --release --locked
 
 macOS 與 Linux 的執行檔為 `target/release/picasso`，Windows 則為 `target/release/picasso.exe`。Release 建置的掃描、縮圖與編輯效能優於除錯建置。
 
-在 macOS 上，每次建置都以臨時（ad hoc）方式簽署，對鑰匙圈而言都是新的 App，因此每個已儲存的 WordPress 密碼都會詢問兩次，下次建置時也會忘記**永遠允許**。若要讓每次建置都以相同方式簽署，請先建立一次程式碼簽署憑證：在「鑰匙圈存取」中選擇**憑證輔助程式 → 製作憑證…**，名稱設為 `Picasso Development`，**憑證類型**選**程式碼簽署**，然後建立。之後 `make` 與 `make run` 會用它簽署 `target/release/picasso`（可用 `SIGN_IDENTITY=...` 指定其他名稱）；第一次選擇**永遠允許**後，之後的建置就不會再詢問。直接用 `cargo` 建置的版本不會以此方式簽署。
+在 macOS 上，以臨時（ad hoc）方式簽署的建置對鑰匙圈而言都是新的 App，因此每個已儲存的 WordPress 密碼都會詢問兩次，下次建置時也會忘記**永遠允許**。若要讓每次建置都以相同方式簽署，請執行一次 `make sign-identity`：它會在登入鑰匙圈中建立名為 `Picasso Development` 的自簽程式碼簽署憑證。之後 `make` 與 `make run` 會用它簽署 `target/release/picasso`（可用 `SIGN_IDENTITY=...` 指定其他名稱）；第一次簽署時會詢問是否使用鑰匙圈，選擇**永遠允許**後，之後的建置就不會再詢問。直接用 `cargo` 建置的版本不會以此方式簽署。
+
+CI 在沒有 Developer ID 時建置的版本，同樣以自簽的 `Picasso Development` 簽署。若要讓每個版本都用同一張憑證，請從「鑰匙圈存取」匯出它（**我的憑證**，按右鍵，**輸出…**，存成有密碼的 `.p12`），並新增兩個儲存庫密鑰：`MACOS_SELF_SIGNED_CERTIFICATE`（`base64 -i Picasso.p12` 的結果）與 `MACOS_SELF_SIGNED_CERTIFICATE_PASSWORD`。沒有設定時，每次執行都會建立新的憑證。
 
 預設使用 OpenGL 繪圖。設定 `PICASSO_RENDERER=wgpu` 可改用 wgpu 繪圖後端。
 

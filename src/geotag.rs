@@ -112,12 +112,12 @@ pub struct Report {
 }
 
 /// The track's timed points, per segment and in time order.
-struct Timeline {
+pub(crate) struct Timeline {
     segments: Vec<Vec<(i64, f64, f64)>>,
 }
 
 impl Timeline {
-    fn new(track: &Track) -> Option<Timeline> {
+    pub(crate) fn new(track: &Track) -> Option<Timeline> {
         let segments: Vec<Vec<(i64, f64, f64)>> = track
             .segments
             .iter()
@@ -141,7 +141,7 @@ impl Timeline {
     /// Where the track was at `time`: along the line between the points
     /// around it when they are at most [`MAX_GAP`] apart, otherwise at the
     /// nearest point within [`NEAR`].
-    fn locate(&self, time: i64) -> Option<(f64, f64)> {
+    pub(crate) fn locate(&self, time: i64) -> Option<(f64, f64)> {
         let mut nearest: Option<(i64, f64, f64)> = None;
         for segment in &self.segments {
             let (first, last) = (segment[0].0, segment[segment.len() - 1].0);

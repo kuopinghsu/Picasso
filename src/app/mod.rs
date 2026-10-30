@@ -129,6 +129,7 @@ enum Modal {
     DeleteTrip(trips::DeleteDialog),
     Unavailable(trips::UnavailableDialog),
     DayDetails(trips::DayDialog),
+    PlaceDetails(trips::PlaceDialog),
     /// Delete Story (id, name)?
     DeleteStory(i64, String),
     ExportStory(story::ExportDialog),
@@ -1994,6 +1995,7 @@ impl PicassoApp {
             Modal::DeleteTrip(_) => self.delete_trip_modal(ctx),
             Modal::Unavailable(_) => self.unavailable_modal(ctx),
             Modal::DayDetails(_) => self.day_modal(ctx),
+            Modal::PlaceDetails(_) => self.place_modal(ctx),
             Modal::DeleteStory(..) => self.delete_story_modal(ctx),
             Modal::ExportStory(_) => self.export_story_modal(ctx),
             Modal::PublishStory(_) => self.publish_story_modal(ctx),

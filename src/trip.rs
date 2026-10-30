@@ -238,6 +238,102 @@ pub struct TripDay {
     pub members: i64,
 }
 
+/// A spot in a Trip that its photos were taken at, suggested from their
+/// positions or kept as the user named it.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct TripPlace {
+    pub id: i64,
+    pub trip_id: i64,
+    pub position: i64,
+    pub name: String,
+    /// The name in the local language or script, when it differs.
+    pub local_name: String,
+    pub lat: f64,
+    pub lon: f64,
+    pub notes: String,
+    /// Changed by the user, so suggesting Places again keeps it.
+    pub kept: bool,
+    pub members: i64,
+}
+
+/// A position on Earth, as a Place must have.
+pub fn valid_position(lat: f64, lon: f64) -> bool {
+    lat.is_finite() && lon.is_finite() && (-90.0..=90.0).contains(&lat) && (-180.0..=180.0).contains(&lon)
+}
+
+/// A member with a position, as Suggest places sees it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Located {
+    pub media_id: i64,
+    /// When it was taken, in Unix seconds.
+    pub at: i64,
+    pub lat: f64,
+    pub lon: f64,
+}
+
+/// Members taken close together, in the order first visited.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PlaceCluster {
+    pub lat: f64,
+    pub lon: f64,
+    pub first: i64,
+    pub members: Vec<i64>,
+}
+
+/// Groups members into Places. In time order, a visit goes on while each
+/// photo is within `distance` meters of the visit so far and `gap` seconds
+/// of the one before; visits within `distance` of each other are one Place,
+/// so coming back to a spot doesn't make another.
+pub fn cluster_places(points: &[Located], distance: f64, gap: i64) -> Vec<PlaceCluster> {
+    let mut sorted: Vec<&Located> = points.iter().filter(|point| valid_position(point.lat, point.lon)).collect();
+    sorted.sort_by_key(|point| (point.at, point.media_id));
+    let near = |a: (f64, f64), b: (f64, f64)| {
+        let point = |(lat, lon): (f64, f64)| crate::track::Point { lat, lon, time: None };
+        crate::track::distance_m(&point(a), &point(b)) <= distance
+    };
+    // Each visit: the sum of its positions, its members, and its last time.
+    let mut visits: Vec<(f64, f64, Vec<i64>, i64, i64)> = Vec::new();
+    for point in sorted {
+        let joins = visits.last().is_some_and(|(lat, lon, members, _, last)| {
+            let n = members.len() as f64;
+            point.at - last <= gap && near((lat / n, lon / n), (point.lat, point.lon))
+        });
+        match visits.last_mut() {
+            Some((lat, lon, members, _, last)) if joins => {
+                *lat += point.lat;
+                *lon += point.lon;
+                members.push(point.media_id);
+                *last = point.at;
+            }
+            _ => visits.push((point.lat, point.lon, vec![point.media_id], point.at, point.at)),
+        }
+    }
+    let mut places: Vec<(f64, f64, Vec<i64>, i64)> = Vec::new();
+    for (lat, lon, members, first, _) in visits {
+        let centre = (lat / members.len() as f64, lon / members.len() as f64);
+        let same = places.iter().position(|(plat, plon, pmembers, _)| {
+            let n = pmembers.len() as f64;
+            near((plat / n, plon / n), centre)
+        });
+        match same {
+            Some(index) => {
+                let place = &mut places[index];
+                place.0 += lat;
+                place.1 += lon;
+                place.2.extend(members);
+            }
+            None => places.push((lat, lon, members, first)),
+        }
+    }
+    places
+        .into_iter()
+        .map(|(lat, lon, members, first)| {
+            let n = members.len() as f64;
+            PlaceCluster { lat: lat / n, lon: lon / n, first, members }
+        })
+        .collect()
+}
+
 /// Who put a member in its Day. Suggesting Days again only replaces suggestions.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DaySource {
@@ -299,6 +395,8 @@ pub struct MemberQuery {
     /// Members whose photo is not in the library now.
     pub unavailable: bool,
     pub story: StoryFilter,
+    /// Members at this Place.
+    pub place: Option<i64>,
 }
 
 /// Members used by the Trip's Stories.
@@ -723,6 +821,28 @@ pub fn new_uid() -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn photos_taken_close_together_are_one_place_and_a_return_joins_it() {
+        // About 111 m per 0.001 degree of latitude.
+        let at = |media_id: i64, at: i64, lat: f64| Located { media_id, at, lat, lon: 2.0 };
+        let points = vec![
+            at(1, 0, 41.000),
+            at(2, 600, 41.0005),
+            at(3, 1200, 41.020),
+            at(4, 1800, 41.0201),
+            at(5, 9000, 41.0003),
+            at(6, 9100, 99.0),
+        ];
+        let places = cluster_places(&points, 200.0, 3600);
+        assert_eq!(places.iter().map(|place| place.members.clone()).collect::<Vec<_>>(), vec![vec![1, 2, 5], vec![3, 4]], "a bad position is left out");
+        assert_eq!(places[0].first, 0);
+        assert!((places[0].lat - 41.000_266).abs() < 1e-5);
+        // A long gap starts a new visit, which still joins the same place.
+        assert_eq!(cluster_places(&points, 200.0, 60).len(), 2);
+        assert_eq!(cluster_places(&points, 5_000.0, 3600).len(), 1, "a wider distance makes one place");
+        assert!(!valid_position(91.0, 0.0) && !valid_position(0.0, f64::NAN) && valid_position(-90.0, 180.0));
+    }
+
     #[test]
     fn photos_far_apart_are_separate_trips_the_latest_first() {
         const DAY: i64 = 86_400;

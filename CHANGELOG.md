@@ -9,6 +9,9 @@ section of this file as the release notes.
 
 - Suggest trips… on the Trips page groups the library's photos, or those taken between two dates, by the days they were taken,
   with each group's folders, cameras and locations, and camera clocks that were off can be moved for the grouping, and makes a Trip of one through New trip.
+- Places in a Trip: Suggest places groups its located photos by distance and time, and each
+  Place can be named, in the local language too, given notes, reordered, and shown on its own;
+  named Places stay when suggesting again.
 - Adding photos to a Trip first says how many have a location, are in another Trip, have no
   date, or may be copies of another.
 - Publish a Story to your own WordPress site from the Story's ⋯ menu. Connect sites in

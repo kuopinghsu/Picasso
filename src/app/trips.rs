@@ -7,7 +7,7 @@ use chrono::{Local, NaiveDate, TimeZone};
 use eframe::egui::{self, Align, Key, Layout, Margin, Modifiers, RichText, Vec2};
 
 use crate::i18n::{tr, trf};
-use crate::trip::{read_capture, shift_cameras, suggest_trips, Shot, TripCandidate, TripQuery, AddPreview, DayFilter, DaySource, DaySuggestion, MemberQuery, Review, Story, StoryFilter, Trip, TripDay, TripDraft, TripImpact};
+use crate::trip::{read_capture, shift_cameras, suggest_trips, Shot, TripCandidate, TripQuery, AddPreview, DayFilter, DaySource, DaySuggestion, MemberQuery, Review, Story, StoryFilter, Trip, TripDay, TripDraft, TripImpact, TripPlace};
 use crate::types::{format_day, Nav};
 
 use super::story::{story_name, Group};
@@ -80,6 +80,17 @@ pub(super) struct DayDialog {
     title: String,
     date: String,
     notes: String,
+    error: String,
+}
+
+/// Naming a Place, with its name in the local language and notes.
+pub(super) struct PlaceDialog {
+    place_id: i64,
+    name: String,
+    local_name: String,
+    notes: String,
+    /// Where it is, shown but not changed here.
+    position: (f64, f64),
     error: String,
 }
 
@@ -639,6 +650,7 @@ impl PicassoApp {
         if suggest {
             self.suggest_days(ui.ctx(), trip_id);
         }
+        self.places_row(ui, trip_id, &mut filter);
         self.tracks_row(ui, trip_id, &days);
         self.stories_line(ui, trip_id, &days);
         if filter != self.trip_filter {
@@ -1193,6 +1205,154 @@ impl PicassoApp {
         self.reload();
     }
 
+    /// The Trip's Places as chips that show their photos, and Suggest
+    /// places with how far apart and how long between photos a Place spans.
+    fn places_row(&mut self, ui: &mut egui::Ui, trip_id: i64, filter: &mut MemberQuery) {
+        let places = self.db.trip_places(trip_id);
+        if filter.place.is_some_and(|id| !places.iter().any(|place| place.id == id)) {
+            filter.place = None;
+        }
+        let settings_id = egui::Id::unique("suggest-places-settings");
+        let (mut distance, mut hours) = ui.data(|data| data.get_temp::<(u32, u32)>(settings_id)).unwrap_or((300, 2));
+        let mut edit: Option<TripPlace> = None;
+        let mut delete: Option<i64> = None;
+        let mut moved: Option<(usize, usize)> = None;
+        let mut suggest = false;
+        labelled_row(ui, tr("Places"), |ui| {
+            if !places.is_empty() && ui.selectable_label(filter.place.is_none(), tr("All")).clicked() {
+                filter.place = None;
+            }
+            let mut actions = |ui: &mut egui::Ui, index: usize| {
+                if ui.button(tr("Edit place…")).clicked() {
+                    edit = Some(places[index].clone());
+                    ui.close();
+                }
+                if ui.add_enabled(index > 0, egui::Button::new(tr("Move earlier"))).clicked() {
+                    moved = Some((index, index - 1));
+                    ui.close();
+                }
+                if ui.add_enabled(index + 1 < places.len(), egui::Button::new(tr("Move later"))).clicked() {
+                    moved = Some((index, index + 1));
+                    ui.close();
+                }
+                if ui.button(tr("Delete place")).on_hover_text(tr("Its photos stay in the trip, at no place")).clicked() {
+                    delete = Some(places[index].id);
+                    ui.close();
+                }
+            };
+            let label = |index: usize| format!("{} ({})", place_name(&places[index], index), places[index].members);
+            if places.len() <= DAY_CHIPS {
+                for (index, place) in places.iter().enumerate() {
+                    let chip = ui.selectable_label(filter.place == Some(place.id), label(index)).on_hover_text(place_details(place));
+                    if chip.clicked() {
+                        filter.place = Some(place.id);
+                    }
+                    chip.context_menu(|ui| actions(ui, index));
+                }
+            } else {
+                let current = places.iter().position(|place| filter.place == Some(place.id));
+                let shown = current.map_or_else(|| trf("{} places", &[&places.len()]), label);
+                egui::ComboBox::from_id_salt(("trip-place", trip_id)).selected_text(shown).height(360.0).show_ui(ui, |ui| {
+                    for (index, place) in places.iter().enumerate() {
+                        if ui.selectable_label(current == Some(index), format!("{}  {}", index + 1, label(index))).clicked() {
+                            filter.place = Some(place.id);
+                        }
+                    }
+                });
+                if let Some(index) = current {
+                    let more = theme::named(ui.button("⋯"), tr("Edit, move, or delete this place"));
+                    egui::Popup::menu(&more).show(|ui| actions(ui, index));
+                }
+            }
+            let button = ui.button(tr("Suggest places"));
+            if button
+                .on_hover_text(tr("Group photos with a location into places: photos within the distance, with no longer gap between them. Places you named or moved stay as they are."))
+                .clicked()
+            {
+                suggest = true;
+            }
+            ui.add(egui::DragValue::new(&mut distance).range(25..=5000).speed(5).suffix(" m"))
+                .on_hover_text(tr("How far apart photos at one place can be"));
+            ui.add(egui::DragValue::new(&mut hours).range(1..=48).suffix(" h")).on_hover_text(tr("The longest gap between photos of one visit"));
+        });
+        ui.data_mut(|data| data.insert_temp(settings_id, (distance, hours)));
+        if let Some(place) = edit {
+            self.modal = Modal::PlaceDetails(PlaceDialog {
+                place_id: place.id,
+                name: place.name,
+                local_name: place.local_name,
+                notes: place.notes,
+                position: (place.lat, place.lon),
+                error: String::new(),
+            });
+        }
+        if let Some(id) = delete {
+            if let Err(err) = self.db.delete_trip_place(id) {
+                self.activity = err;
+            }
+            self.reload();
+        }
+        if let Some((from, to)) = moved {
+            let mut order: Vec<i64> = places.iter().map(|place| place.id).collect();
+            order.swap(from, to);
+            if let Err(err) = self.db.reorder_trip_places(trip_id, &order) {
+                self.activity = err;
+            }
+        }
+        if suggest {
+            match self.db.suggest_places(trip_id, f64::from(distance), i64::from(hours) * 3600) {
+                Ok(count) => self.activity = trf("{} places", &[&count]),
+                Err(err) => self.activity = err,
+            }
+            self.reload();
+        }
+    }
+
+    pub(super) fn place_modal(&mut self, ctx: &egui::Context) {
+        let Modal::PlaceDetails(dialog) = &mut self.modal else { return };
+        let mut close = false;
+        let mut save = false;
+        let response = egui::Modal::new(egui::Id::unique("trip-place")).frame(about::dialog_frame()).show(ctx, |ui| {
+            ui.set_width(400.0);
+            about::title_bar(ui, &self.logo, tr("Edit place"), &mut close);
+            egui::Frame::new().inner_margin(Margin::symmetric(20, 14)).show(ui, |ui| {
+                ui.spacing_mut().item_spacing.y = 6.0;
+                ui.label(tr("Name"));
+                ui.add(egui::TextEdit::singleline(&mut dialog.name).hint_text(tr("Optional")).desired_width(f32::INFINITY));
+                ui.label(tr("Local name"));
+                ui.add(egui::TextEdit::singleline(&mut dialog.local_name).hint_text(tr("In the local language, if different")).desired_width(f32::INFINITY));
+                ui.label(tr("Notes"));
+                ui.add(egui::TextEdit::multiline(&mut dialog.notes).desired_rows(3).desired_width(f32::INFINITY));
+                ui.label(RichText::new(format!("{:.5}, {:.5}", dialog.position.0, dialog.position.1)).color(theme::muted()));
+                if !dialog.error.is_empty() {
+                    ui.label(RichText::new(&dialog.error).color(theme::DANGER));
+                }
+                ui.add_space(6.0);
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if ui.add(theme::primary_button(tr("Save"))).clicked() {
+                        save = true;
+                    }
+                    if ui.button(tr("Cancel")).clicked() {
+                        close = true;
+                    }
+                });
+            });
+        });
+        if save {
+            match self.db.update_trip_place(dialog.place_id, &dialog.name, &dialog.local_name, &dialog.notes) {
+                Ok(()) => {
+                    self.modal = Modal::None;
+                    self.reload();
+                }
+                Err(err) => dialog.error = err,
+            }
+            return;
+        }
+        if close || response.should_close() {
+            self.modal = Modal::None;
+        }
+    }
+
     pub(super) fn day_modal(&mut self, ctx: &egui::Context) {
         let Modal::DayDetails(dialog) = &mut self.modal else { return };
         let mut close = false;
@@ -1655,6 +1815,30 @@ fn row_label(ui: &mut egui::Ui, text: &str) {
 }
 
 /// What adding photos to a Trip will do.
+/// A Place's name, else its local name, else its number in the Trip.
+fn place_name(place: &TripPlace, index: usize) -> String {
+    if !place.name.is_empty() {
+        return place.name.clone();
+    }
+    if !place.local_name.is_empty() {
+        return place.local_name.clone();
+    }
+    trf("Place {}", &[&(index + 1)])
+}
+
+/// The local name, position, and notes, for a Place's tooltip.
+fn place_details(place: &TripPlace) -> String {
+    let mut lines = Vec::new();
+    if !place.local_name.is_empty() && !place.name.is_empty() {
+        lines.push(place.local_name.clone());
+    }
+    lines.push(format!("{:.5}, {:.5}", place.lat, place.lon));
+    if !place.notes.is_empty() {
+        lines.push(place.notes.clone());
+    }
+    lines.join("\n")
+}
+
 /// The first two names, and how many more.
 fn few(names: &[String]) -> String {
     let shown = names.iter().take(2).cloned().collect::<Vec<_>>().join(", ");

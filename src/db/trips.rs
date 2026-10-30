@@ -18,7 +18,7 @@ use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use super::{order_sql, path_text, read_photo, Database, PHOTO_COLS};
 use crate::i18n::tr;
 use crate::trip::{
-    capture_day, AddPreview, Capture, Shot, DaySuggestion, Review, TripZone, Block, DayAssignment, DayFilter, DaySource, MediaUse, Member, MemberQuery, Story, StoryBlock, StoryFilter, Trip, TripDay,
+    capture_day, cluster_places, valid_position, AddPreview, Capture, Located, Shot, TripPlace, DaySuggestion, Review, TripZone, Block, DayAssignment, DayFilter, DaySource, MediaUse, Member, MemberQuery, Story, StoryBlock, StoryFilter, Trip, TripDay,
     TripDraft, TripImpact, TripQuery, TripTrack, DEFAULT_TEMPLATE,
 };
 use crate::types::{is_video_path, unix_now, Photo, Sort};
@@ -112,6 +112,20 @@ CREATE TRIGGER IF NOT EXISTS trip_tracks_day BEFORE UPDATE OF trip_id, day_id ON
 WHEN NEW.day_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM trip_days WHERE id = NEW.day_id AND trip_id = NEW.trip_id) BEGIN
     SELECT RAISE(ABORT, 'a track can only be in a day of its own trip');
 END;
+-- Places of a Trip, in `position` order. `kept` is 1 once the user changed
+-- one, so suggesting Places again leaves it and its members.
+CREATE TABLE IF NOT EXISTS trip_places (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    trip_id INTEGER NOT NULL REFERENCES trips(id) ON DELETE CASCADE,
+    position INTEGER NOT NULL,
+    name TEXT NOT NULL DEFAULT '',
+    local_name TEXT NOT NULL DEFAULT '',
+    lat REAL NOT NULL CHECK (lat BETWEEN -90 AND 90),
+    lon REAL NOT NULL CHECK (lon BETWEEN -180 AND 180),
+    notes TEXT NOT NULL DEFAULT '',
+    kept INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_trip_places_trip ON trip_places(trip_id, position);
 CREATE TABLE IF NOT EXISTS stories (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     trip_id INTEGER NOT NULL REFERENCES trips(id) ON DELETE CASCADE,
@@ -172,6 +186,10 @@ pub(super) fn upgrade(db: &Database) -> Result<(), String> {
     // Why Suggest days left a member without a Day (`Review::code`), until
     // the user places it; 0 when nothing is to review.
     db.ensure_column("trip_media", "review", "INTEGER NOT NULL DEFAULT 0")?;
+    // The member's Place: `place_source` is 0 without one, 1 suggested, 2
+    // chosen by the user, as `day_source` is for Days.
+    db.ensure_column("trip_media", "place_id", "INTEGER REFERENCES trip_places(id) ON DELETE SET NULL")?;
+    db.ensure_column("trip_media", "place_source", "INTEGER NOT NULL DEFAULT 0")?;
     // 1 once the author marks the Story finished; a draft until then.
     db.ensure_column("stories", "finished", "INTEGER NOT NULL DEFAULT 0")?;
     // Optional text before and after the Story's blocks.
@@ -285,6 +303,18 @@ fn touch_trip(tx: &Connection, trip_id: i64) -> Result<(), String> {
     tx.execute("UPDATE trips SET updated_at = ?2 WHERE id = ?1", params![trip_id, unix_now()]).map(|_| ()).map_err(sql_err)
 }
 
+/// Numbers the Trip's Places 0, 1, … in their order.
+fn renumber_places(tx: &Connection, trip_id: i64) -> Result<(), String> {
+    tx.execute(
+        "UPDATE trip_places SET position = (SELECT COUNT(*) FROM trip_places pl WHERE pl.trip_id = trip_places.trip_id
+            AND (pl.position < trip_places.position OR (pl.position = trip_places.position AND pl.id < trip_places.id)))
+         WHERE trip_id = ?1",
+        [trip_id],
+    )
+    .map_err(sql_err)?;
+    Ok(())
+}
+
 fn check_trip(tx: &Connection, trip_id: i64) -> Result<(), String> {
     let found: Option<i64> = tx.query_row("SELECT id FROM trips WHERE id = ?1", [trip_id], |row| row.get(0)).optional().map_err(sql_err)?;
     found.map(|_| ()).ok_or_else(|| format!("trip {trip_id} is gone"))
@@ -312,6 +342,9 @@ fn member_filter(query: &MemberQuery) -> String {
     }
     let used = "EXISTS (SELECT 1 FROM story_media sm JOIN story_blocks sb ON sb.id = sm.block_id \
                 JOIN stories s ON s.id = sb.story_id WHERE sm.media_id = tm.media_id AND s.trip_id = tm.trip_id";
+    if let Some(place) = query.place {
+        filter.push_str(&format!(" AND tm.place_id = {place}"));
+    }
     match query.story {
         StoryFilter::Any => {}
         StoryFilter::AnyStory => filter.push_str(&format!(" AND {used})")),
@@ -654,6 +687,157 @@ impl Database {
     }
 
     /// Deletes a Day. Its members stay in the Trip, without a Day.
+    /// The Trip's Places in order, each with how many members are at it.
+    pub fn trip_places(&self, trip_id: i64) -> Vec<TripPlace> {
+        self.map_rows(
+            "SELECT pl.id, pl.trip_id, pl.position, pl.name, pl.local_name, pl.lat, pl.lon, pl.notes, pl.kept,
+                    (SELECT COUNT(*) FROM trip_media tm WHERE tm.place_id = pl.id)
+             FROM trip_places pl WHERE pl.trip_id = ?1 ORDER BY pl.position, pl.id",
+            [trip_id],
+            |row| {
+                Ok(TripPlace {
+                    id: row.get(0)?,
+                    trip_id: row.get(1)?,
+                    position: row.get(2)?,
+                    name: row.get(3)?,
+                    local_name: row.get(4)?,
+                    lat: row.get(5)?,
+                    lon: row.get(6)?,
+                    notes: row.get(7)?,
+                    kept: row.get(8)?,
+                    members: row.get(9)?,
+                })
+            },
+        )
+    }
+
+    /// Names a Place and keeps it, with its members, when Places are suggested again.
+    pub fn update_trip_place(&self, id: i64, name: &str, local_name: &str, notes: &str) -> Result<(), String> {
+        let tx = self.conn.unchecked_transaction().map_err(sql_err)?;
+        let changed = tx
+            .execute(
+                "UPDATE trip_places SET name = ?2, local_name = ?3, notes = ?4, kept = 1 WHERE id = ?1",
+                params![id, name.trim(), local_name.trim(), notes],
+            )
+            .map_err(sql_err)?;
+        if changed == 0 {
+            return Err(format!("place {id} is gone"));
+        }
+        tx.execute("UPDATE trip_media SET place_source = 2 WHERE place_id = ?1", [id]).map_err(sql_err)?;
+        let trip_id: i64 = tx.query_row("SELECT trip_id FROM trip_places WHERE id = ?1", [id], |row| row.get(0)).map_err(sql_err)?;
+        touch_trip(&tx, trip_id)?;
+        tx.commit().map_err(sql_err)
+    }
+
+    /// Puts the Trip's Places in the order of `place_ids`, which must name
+    /// each of them once; the order is kept, as a change by the user.
+    pub fn reorder_trip_places(&self, trip_id: i64, place_ids: &[i64]) -> Result<(), String> {
+        let tx = self.conn.unchecked_transaction().map_err(sql_err)?;
+        let mut current: Vec<i64> = {
+            let mut stmt = tx.prepare("SELECT id FROM trip_places WHERE trip_id = ?1").map_err(sql_err)?;
+            let rows = stmt.query_map([trip_id], |row| row.get(0)).map_err(sql_err)?;
+            rows.collect::<Result<_, _>>().map_err(sql_err)?
+        };
+        let mut wanted = place_ids.to_vec();
+        current.sort_unstable();
+        wanted.sort_unstable();
+        if current != wanted {
+            return Err("the places changed meanwhile".into());
+        }
+        for (position, id) in place_ids.iter().enumerate() {
+            tx.execute("UPDATE trip_places SET position = ?2, kept = 1 WHERE id = ?1", params![id, position as i64]).map_err(sql_err)?;
+        }
+        tx.execute("UPDATE trip_media SET place_source = 2 WHERE trip_id = ?1 AND place_id IS NOT NULL", [trip_id]).map_err(sql_err)?;
+        touch_trip(&tx, trip_id)?;
+        tx.commit().map_err(sql_err)
+    }
+
+    /// Removes a Place; its members stay in the Trip, at no Place.
+    pub fn delete_trip_place(&self, id: i64) -> Result<(), String> {
+        let tx = self.conn.unchecked_transaction().map_err(sql_err)?;
+        let trip_id: Option<i64> =
+            tx.query_row("SELECT trip_id FROM trip_places WHERE id = ?1", [id], |row| row.get(0)).optional().map_err(sql_err)?;
+        let Some(trip_id) = trip_id else {
+            return Ok(());
+        };
+        tx.execute("UPDATE trip_media SET place_id = NULL, place_source = 0 WHERE place_id = ?1", [id]).map_err(sql_err)?;
+        tx.execute("DELETE FROM trip_places WHERE id = ?1", [id]).map_err(sql_err)?;
+        renumber_places(&tx, trip_id)?;
+        touch_trip(&tx, trip_id)?;
+        tx.commit().map_err(sql_err)
+    }
+
+    /// Puts the Trip's members with a position at Places, grouping them as
+    /// [`cluster_places`] does. Places the user changed stay, with their
+    /// members, and take in new groups within `distance` of them; the other
+    /// suggestions are made again, after the kept ones in the order first
+    /// visited. Camera GPS and pins are read, never changed. Returns how many
+    /// Places the Trip has.
+    pub fn suggest_places(&self, trip_id: i64, distance: f64, gap: i64) -> Result<usize, String> {
+        let tx = self.conn.unchecked_transaction().map_err(sql_err)?;
+        check_trip(&tx, trip_id)?;
+        tx.execute("UPDATE trip_media SET place_id = NULL, place_source = 0 WHERE trip_id = ?1 AND place_source = 1", [trip_id])
+            .map_err(sql_err)?;
+        tx.execute(
+            "DELETE FROM trip_places WHERE trip_id = ?1 AND kept = 0
+               AND NOT EXISTS (SELECT 1 FROM trip_media tm WHERE tm.place_id = trip_places.id)",
+            [trip_id],
+        )
+        .map_err(sql_err)?;
+        let points: Vec<Located> = {
+            let mut stmt = tx
+                .prepare(
+                    "SELECT tm.media_id, p.taken_at, coalesce(p.pin_lat, p.gps_lat), coalesce(p.pin_lon, p.gps_lon)
+                     FROM trip_media tm JOIN media_refs m ON m.id = tm.media_id JOIN photos p ON p.id = m.photo_id
+                     WHERE tm.trip_id = ?1 AND tm.place_id IS NULL AND coalesce(p.pin_lat, p.gps_lat) IS NOT NULL",
+                )
+                .map_err(sql_err)?;
+            let rows = stmt
+                .query_map([trip_id], |row| Ok(Located { media_id: row.get(0)?, at: row.get(1)?, lat: row.get(2)?, lon: row.get(3)? }))
+                .map_err(sql_err)?;
+            rows.collect::<Result<_, _>>().map_err(sql_err)?
+        };
+        let kept: Vec<(i64, f64, f64)> = {
+            let mut stmt = tx.prepare("SELECT id, lat, lon FROM trip_places WHERE trip_id = ?1").map_err(sql_err)?;
+            let rows = stmt.query_map([trip_id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))).map_err(sql_err)?;
+            rows.collect::<Result<_, _>>().map_err(sql_err)?
+        };
+        let mut next: i64 = tx
+            .query_row("SELECT coalesce(max(position) + 1, 0) FROM trip_places WHERE trip_id = ?1", [trip_id], |row| row.get(0))
+            .map_err(sql_err)?;
+        let mut clusters = cluster_places(&points, distance, gap);
+        clusters.sort_by_key(|cluster| cluster.first);
+        for cluster in clusters {
+            let at = crate::track::Point { lat: cluster.lat, lon: cluster.lon, time: None };
+            let near = kept.iter().find(|(_, lat, lon)| crate::track::distance_m(&at, &crate::track::Point { lat: *lat, lon: *lon, time: None }) <= distance);
+            let place_id = match near {
+                Some((id, ..)) => *id,
+                None if valid_position(cluster.lat, cluster.lon) => {
+                    tx.execute(
+                        "INSERT INTO trip_places(trip_id, position, lat, lon) VALUES(?1, ?2, ?3, ?4)",
+                        params![trip_id, next, cluster.lat, cluster.lon],
+                    )
+                    .map_err(sql_err)?;
+                    next += 1;
+                    tx.last_insert_rowid()
+                }
+                None => continue,
+            };
+            for media_id in &cluster.members {
+                tx.execute(
+                    "UPDATE trip_media SET place_id = ?3, place_source = 1 WHERE trip_id = ?1 AND media_id = ?2",
+                    params![trip_id, media_id, place_id],
+                )
+                .map_err(sql_err)?;
+            }
+        }
+        renumber_places(&tx, trip_id)?;
+        let count: i64 = tx.query_row("SELECT COUNT(*) FROM trip_places WHERE trip_id = ?1", [trip_id], |row| row.get(0)).map_err(sql_err)?;
+        touch_trip(&tx, trip_id)?;
+        tx.commit().map_err(sql_err)?;
+        Ok(count as usize)
+    }
+
     pub fn delete_trip_day(&self, id: i64) -> Result<(), String> {
         let tx = self.conn.unchecked_transaction().map_err(sql_err)?;
         let trip_id: Option<i64> =
@@ -1388,6 +1572,38 @@ mod tests {
     use super::super::SCHEMA_VERSION;
     use super::*;
     use crate::track::{Point, Track};
+
+    #[test]
+    fn suggested_places_keep_the_ones_the_user_named() {
+        let (db, _, _, ids) = photos("places", &["a.jpg", "b.jpg", "c.jpg", "d.jpg"]);
+        let trip_id = trip(&db, "Coast");
+        db.add_to_trip(trip_id, &ids).unwrap();
+        db.set_pins(&ids[2..], 38.0, 140.0);
+        assert_eq!(db.suggest_places(trip_id, 300.0, 3 * 3600).unwrap(), 2);
+        let places = db.trip_places(trip_id);
+        assert_eq!(places.iter().map(|place| place.members).collect::<Vec<_>>(), vec![2, 2]);
+        let near = places.iter().find(|place| place.lat == 38.0).unwrap().id;
+        let filtered = MemberQuery { place: Some(near), ..MemberQuery::default() };
+        assert_eq!(db.count_trip_members(trip_id, &filtered), 2);
+
+        db.update_trip_place(near, "Matsushima", "松島", "Boat at noon").unwrap();
+        let order: Vec<i64> = db.trip_places(trip_id).iter().rev().map(|place| place.id).collect();
+        db.reorder_trip_places(trip_id, &order).unwrap();
+        // Suggesting again, even with a narrower distance, leaves the named one as it was.
+        db.suggest_places(trip_id, 50.0, 3600).unwrap();
+        let again = db.trip_places(trip_id);
+        let named = again.iter().find(|place| place.id == near).unwrap();
+        assert_eq!((named.name.as_str(), named.local_name.as_str(), named.notes.as_str(), named.members, named.kept), ("Matsushima", "松島", "Boat at noon", 2, true));
+        assert_eq!(again.len(), 2);
+        let photo = db.photo(ids[2]).unwrap();
+        assert_eq!((photo.pin_lat, photo.pin_lon), (Some(38.0), Some(140.0)), "positions are never changed");
+
+        db.delete_trip_place(near).unwrap();
+        assert_eq!(db.trip_places(trip_id).len(), 1);
+        assert_eq!(db.count_trip_members(trip_id, &MemberQuery::default()), 4, "its photos stay in the trip");
+        assert!(db.update_trip_place(near, "Gone", "", "").is_err());
+        assert!(db.reorder_trip_places(trip_id, &[near]).is_err());
+    }
 
     #[test]
     fn library_photos_say_whether_a_trip_has_them() {

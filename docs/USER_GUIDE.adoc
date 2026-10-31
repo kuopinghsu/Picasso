@@ -14,7 +14,7 @@ Picasso is a free, open-source photo library, viewer and editor for Windows, mac
 It organizes photos in your existing folders and lets you edit them without changing the original files.
 No cloud account is required, and photos and videos are not uploaded.
 
-This guide covers installation, everyday tasks, editing, maps and library recovery.
+This guide covers installation, everyday tasks, editing, maps, trips and stories, and library recovery.
 For a first session, follow <<install>> and <<first-start>>, then try <<editing>> and <<exporting>>.
 To build Picasso from source, see the https://github.com/kuopinghsu/picasso/blob/main/README.md[README].
 
@@ -266,6 +266,7 @@ Each renaming is listed in a `.picasso-renames.json` file in the folder, with ev
 *Undo* puts back the names from before the newest renaming in the list, also after Picasso was closed, and clicking it again goes back one more.
 A file whose earlier name another file has now, such as a new `DSC0001.JPG` from the camera, keeps its name and stays in the list for later.
 
+[#duplicates]
 == Finding duplicates
 
 *Duplicates* in the sidebar finds files whose content is identical, byte for byte, even under other names or in other folders.
@@ -560,6 +561,133 @@ A deeper color means more photos.
 
 Travel Map is based on photo locations. It does not provide manual visited-country markers.
 It works offline.
+
+[#trips]
+== Trips and Stories
+
+A Trip gathers the photos of one journey, sorts them into Days and Places, and keeps the tracks, documents and links that go with it.
+A Story turns a Trip into a page to read: text and photos you can preview, export as a web page or Markdown, or publish to your own WordPress site.
+
+Trips never change your photos.
+Stars, captions, dates, edits, locations, Albums and files stay as they are, and a photo can be in several Trips.
+Everything except publishing works offline.
+
+=== Making a Trip
+
+* Select photos in the library and choose *Add to Trip* to put them in a new or existing Trip.
+* *New trip…* on the *Trips* page makes an empty Trip with a title, destination, dates and timezone.
+* *Suggest trips…* groups the whole library by when photos were taken, starting a new group after a gap of days with no photos. Pick a group and *Create trip…*. Under *Camera clocks*, shift a camera whose clock was wrong by whole hours; this changes only the grouping, never the photos.
+
+Before photos are added, Picasso shows what will happen: how many photos and videos, their dates, how many are already in this or another Trip, how many have no date, and how many may be copies.
+Nothing is written until you confirm.
+
+*All trips* shows each Trip as a card with its cover, dates and counts.
+Open one to see its photos; the *Photos* and *Stories* tabs switch between its photos and its Stories, and *Edit trip…* changes its title, dates, timezone and cover.
+
+=== Days and reviewing times
+
+*Suggest days* puts each photo in a Day of the Trip, using the time the camera recorded and the Trip's timezone, and makes a Day for each date that has none.
+It reads only the photos' own times and never changes them.
+Photos whose time is uncertain, such as those without a recorded time zone or taken around a daylight saving change, go to *Needs review* with the reason.
+
+* Choose a Day to see its photos, or *Not in a day* and *Needs review* to settle the rest.
+* Select photos and use *Move to Day*, or press kbd:[Alt+1] to kbd:[Alt+9] for a Day and kbd:[Alt+0] for none.
+* *Arrange*, or kbd:[Alt+↑] and kbd:[Alt+↓], changes the order within a Day. kbd:[Ctrl+Z] undoes a move.
+
+Suggesting days again changes only suggestions; Days you assigned, named or reordered stay as you left them.
+
+=== Places
+
+*Suggest places* groups the Trip's photos that have a location into Places: photos taken near each other and close in time are one visit, and coming back to the same spot joins the same Place.
+Photos without a location can be placed by a GPS track linked to the Trip; this only groups them and never writes a location to the photo.
+
+Click a Place to see its photos.
+*Edit place* gives it a name, a name in the local language and notes.
+*Look up name* fills the names from OpenStreetMap; it works only after *Look up place names online* is turned on in *Settings › Map*, and sends only the position rounded to about 100 m.
+
+=== Tracks and resources
+
+*Tracks* links GPS tracks already in the library to the whole Trip or one Day; the track file stays where it is.
+
+*Resources* keeps documents, track files, web links and notes with the Trip: tickets, bookings, maps or anything else for reference.
+*Add resource…* records where a file is without copying it; a moved file is marked missing, and *Locate…* finds it again.
+Every resource is private.
+Tick *May be published* on a link before a Story's *Link* block may use it; files are never uploaded.
+
+=== Finding photos in a Trip
+
+The *Show* row narrows the Trip's photos to the starred ones, those without a location or caption, those no longer in the library, or those used in a Story, together with a Day or Place.
+
+The search box searches the whole library in every view.
+These words find Trip photos anywhere:
+
+* `trip:` with part of a Trip's title or destination, such as `trip:spain`
+* `day:`, `place:` or `story:` with part of a Day's title, a Place's name or a Story's title
+* `is:intrip` or `is:notrip` for photos in a Trip or in none, and `is:review` for photos whose time needs review
+
+[#similar-photos]
+=== Similar photos
+
+*Similar photos…*, at the end of the *Show* row, finds photos in the Trip taken close together that look alike, such as a burst or several tries at the same shot.
+It is different from <<duplicates>>, which finds exact copies of files.
+
+The first time, Picasso looks at each photo, with a count and *Cancel*; afterwards only new photos are looked at.
+Then adjust the groups:
+
+* *Taken within* is the longest time between one photo of a group and the next, 10 seconds unless changed.
+* *Alike* runs from near copies on the left to more of a scene on the right.
+
+*Select* on a group selects its photos in the grid, to compare, star or add to a Story.
+Nothing is ever deleted, moved or starred for you.
+Videos and photos without a date are left out.
+
+=== Writing a Story
+
+*New story* starts a *Blank story*, one made from the selected photos, or one made *From the trip's days* or *From one day*, with a heading for each Day and its photos in order.
+The Story opens in place of the Trip's photos and is saved as you type.
+
+* Type in a paragraph; kbd:[Enter] starts a new one. Typing `/` in an empty paragraph lists the blocks, such as `/heading` or `/grid 3x2`.
+* Point between blocks and click *+* to add one there, or use the handle to drag a block.
+* Select photos in the grid and choose *Add to Story* to add them as single photos, a *Gallery* or a *Photo grid*. Each photo has its own caption and alt text in that Story.
+* Blocks include *Heading*, *Subheading*, *Paragraph*, *List*, *Quote*, *Separator*, *Credits*, *Practical info*, *Link* and *Route map*, which draws a linked GPS track on the map.
+* *Introduction* and *Conclusion* are optional text before and after the blocks.
+
+Select text and press kbd:[Ctrl+B], kbd:[Ctrl+I] or kbd:[Ctrl+K] for bold, italic or a link.
+A Story is a *Draft* until you mark it *Finished*.
+
+=== Templates, preview and export
+
+The Story's template changes how its page looks, never its content: *Photography Journal*, *Travel Diary*, *Travel Guide*, with a *Contents* list, or *Photo Essay*.
+
+*Preview* opens the page in your web browser.
+*Export…* writes the Story as a web page or Markdown, with its photos, into a new folder; choose the photo size and JPEG quality.
+Exported photos are rendered with your edits and carry no camera details or location.
+Before export, Picasso lists anything that needs attention, such as missing photos, missing alt text or low-resolution photos, with a link to each.
+
+=== Publishing to WordPress
+
+Connect a self-hosted WordPress site in *Settings › Publishing* with its address, your user name and an *Application Password* made in WordPress.
+The password is kept in the system's credential store, never in the library or its backups.
+
+*Publish to WordPress…*, in a Story's menu, saves the Story as a draft on the site.
+Choose the *Photo size* (*Standard web* or *Low resolution*), whether to *Keep camera details*, *Categories and tags*, and *By Day* to make an index post and one post per Day.
+The *Summary* lists what will change on the site before anything is sent.
+The post becomes public only with *Publish it once saved*, or *At a set time*, after a confirmation of what readers will see.
+Locations are never sent, and Picasso never takes a post down; do that in WordPress.
+
+Saving again updates the same draft.
+A post edited on the site since is not replaced unless you choose so, and an interrupted job resumes without uploading the same photos twice.
+*History* lists the last attempts.
+
+=== Moving, archiving and deleting Trips
+
+*Export trip package…* writes the Trip, its Days, Stories, photos and tracks into one `.picassotrip` file.
+*Import trip…* on another computer adds it as a new Trip, reusing photos already in that library.
+
+*Archive trip* puts a finished Trip away with everything in it; *Archived trips* shows it again.
+*Delete trip…* first lists what goes with it.
+Deleting a Trip or a Story never removes photo files or anything published.
+Library backups include Trips and Stories.
 
 == Settings
 

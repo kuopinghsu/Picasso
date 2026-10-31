@@ -7,6 +7,10 @@ section of this file as the release notes.
 
 ### Added
 
+- The user guide, in English and Traditional Chinese, has a Trips and Stories chapter:
+  making Trips, Days and reviewing times, Places, tracks and resources, Trip search
+  words, Similar photos, writing Stories, templates, preview and export, publishing to
+  WordPress, and moving, archiving and deleting Trips.
 - Suggest trips… on the Trips page groups the library's photos, or those taken between two dates, by the days they were taken,
   with each group's folders, cameras and locations, and camera clocks that were off can be moved for the grouping, and makes a Trip of one through New trip.
 - Places in a Trip: Suggest places groups its located photos by distance and time, and each

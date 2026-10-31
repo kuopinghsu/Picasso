@@ -64,7 +64,8 @@ section of this file as the release notes.
 ### Fixed
 
 - Renaming, deleting or moving a photo or a folder of photos on disk now shows in the library
-  and the folder list while Picasso is open: moved and renamed photos keep their stars, captions, albums, edits, Trips and Stories, and photos of a
+  and the folder list while Picasso is open, as soon as the scan lists the change and while it
+  goes on reading new photos: moved and renamed photos keep their stars, captions, albums, edits, Trips and Stories, and photos of a
   deleted folder leave the library. An added folder renamed in place is followed under its new
   name, and one deleted or moved away leaves the folder list. A folder on an unplugged drive
   still keeps its photos.

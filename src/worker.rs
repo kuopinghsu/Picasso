@@ -457,7 +457,11 @@ impl Indexer {
         let excluded: HashSet<PathBuf> = self.db.excluded_dirs().into_iter().map(|(dir, _)| PathBuf::from(dir)).collect();
         let cancel = Arc::new(AtomicBool::new(false));
         let checked = Arc::new(AtomicUsize::new(0));
-        let (job_tx, job_rx) = bounded::<ProbeJob>(512);
+        // The walk's files pass through here on their way to the probes, so
+        // a renamed or moved file takes its new path, and the folder tree
+        // follows, as soon as it is listed, while the probes read the rest.
+        let (list_tx, list_rx) = crossbeam_channel::unbounded::<ProbeJob>();
+        let (job_tx, job_rx) = crossbeam_channel::unbounded::<ProbeJob>();
         let (done_tx, done_rx) = bounded::<ProbeResult>(512);
 
         let walker = {
@@ -465,7 +469,7 @@ impl Indexer {
             let checked = checked.clone();
             std::thread::Builder::new()
                 .name("picasso-walk".into())
-                .spawn(move || walk_folder(&root, snapshot, known_tracks, remembered, excluded, job_tx, &cancel, &checked))
+                .spawn(move || walk_folder(&root, snapshot, known_tracks, remembered, excluded, list_tx, &cancel, &checked))
         };
         let walker = match walker {
             Ok(handle) => handle,
@@ -488,11 +492,15 @@ impl Indexer {
         let mut ini_cache: HashMap<PathBuf, (PicasaIni, Sidecar)> = HashMap::new();
         let mut claimed: HashSet<i64> = HashSet::new();
         let mut batch: Vec<ScanRecord> = Vec::with_capacity(BATCH_SIZE);
+        let mut moves = Vec::new();
         let mut unreadable = Vec::new();
         let mut indexed = 0usize;
         let mut again = false;
         let mut last_flush = Instant::now();
         let mut stopped = false;
+        let mut walker = Some(walker);
+        let mut job_tx = Some(job_tx);
+        let mut summary: Option<WalkSummary> = None;
 
         loop {
             loop {
@@ -509,19 +517,54 @@ impl Indexer {
             if stopped {
                 break;
             }
-            let finished = match done_rx.recv_timeout(BATCH_INTERVAL) {
-                Ok(result) => {
-                    match self.record(folder_id, result, &mut ini_cache, &mut claimed) {
+            let mut select = Select::new();
+            let listing = walker.as_ref().map(|_| select.recv(&list_rx));
+            let probed = select.recv(&done_rx);
+            let mut finished = false;
+            match select.select_timeout(BATCH_INTERVAL) {
+                Ok(op) if Some(op.index()) == listing => match op.recv(&list_rx) {
+                    Ok(job) => {
+                        let moved = if job.existing.is_none() {
+                            self.db.moved_photo(&job.path, job.bytes, job.modified_at, &claimed)
+                        } else {
+                            None
+                        };
+                        match moved {
+                            Some(id) => {
+                                claimed.insert(id);
+                                moves.push((id, job.path_text, job.filename, folder_id));
+                            }
+                            None => {
+                                if let Some(tx) = &job_tx {
+                                    let _ = tx.send(job);
+                                }
+                            }
+                        }
+                    }
+                    Err(_) => {
+                        // The listing is done: the probes get no more files,
+                        // and deleted files leave the library right away.
+                        job_tx = None;
+                        let walked = walker.take().map(|walker| join_walk(walker, &path)).unwrap_or_else(|| failed_walk(&path));
+                        self.apply_moves(&mut moves);
+                        if walked.complete && self.db.remove_missing(folder_id, &walked.seen) > 0 {
+                            self.notify(UiEvent::Library);
+                        }
+                        summary = Some(walked);
+                    }
+                },
+                Ok(op) if op.index() == probed => match op.recv(&done_rx) {
+                    Ok(result) => match self.record(folder_id, result, &mut ini_cache, &mut claimed) {
                         Ok(record) => batch.push(record),
                         Err(item) => unreadable.push(item),
-                    }
-                    false
-                }
-                Err(RecvTimeoutError::Timeout) => false,
-                Err(RecvTimeoutError::Disconnected) => true,
-            };
+                    },
+                    Err(_) => finished = true,
+                },
+                _ => {}
+            }
             let due = batch.len() >= BATCH_SIZE || last_flush.elapsed() >= BATCH_INTERVAL;
             if finished || due {
+                self.apply_moves(&mut moves);
                 indexed += self.flush(&mut batch);
                 last_flush = Instant::now();
                 self.notify(UiEvent::ScanProgress {
@@ -539,24 +582,14 @@ impl Indexer {
             // Keep what was probed so far; the folder stays pending and the
             // next launch continues from the files that are still missing.
             cancel.store(true, Ordering::Relaxed);
+            drop(job_tx);
             drop(done_rx);
+            self.apply_moves(&mut moves);
             self.flush(&mut batch);
             return Outcome::Stopped;
         }
 
-        let summary = walker.join().unwrap_or_else(|_| WalkSummary {
-            seen: Vec::new(),
-            unreadable: vec![Unreadable {
-                path: path.clone(),
-                reason: tr("The scan stopped unexpectedly").to_string(),
-                folder: true,
-                bytes: 0,
-                modified_at: 0,
-            }],
-            complete: false,
-            tracks: Vec::new(),
-            tracks_seen: Vec::new(),
-        });
+        let summary = summary.unwrap_or_else(|| walker.map(|walker| join_walk(walker, &path)).unwrap_or_else(|| failed_walk(&path)));
         let mut tracks_changed = self.read_tracks(folder_id, &summary.tracks, &mut unreadable);
         unreadable.extend(summary.unreadable);
         unreadable.sort_by(|a, b| a.path.cmp(&b.path));
@@ -580,6 +613,18 @@ impl Indexer {
             self.pending.push_front(folder_id);
         }
         Outcome::Finished
+    }
+
+    /// Gives the photos of renamed and moved files their new paths.
+    fn apply_moves(&self, moves: &mut Vec<(i64, String, String, i64)>) {
+        if moves.is_empty() {
+            return;
+        }
+        match self.db.move_photos(moves) {
+            Ok(()) => self.notify(UiEvent::Library),
+            Err(err) => eprintln!("picasso index: {err}"),
+        }
+        moves.clear();
     }
 
     /// The folder beside the missing `root` that holds its photos, if
@@ -699,6 +744,27 @@ impl Indexer {
         batch.clear();
         self.notify(UiEvent::Library);
         count
+    }
+}
+
+fn join_walk(walker: std::thread::JoinHandle<WalkSummary>, path: &str) -> WalkSummary {
+    walker.join().unwrap_or_else(|_| failed_walk(path))
+}
+
+/// The summary of a walk that broke off: nothing may be taken as deleted.
+fn failed_walk(path: &str) -> WalkSummary {
+    WalkSummary {
+        seen: Vec::new(),
+        unreadable: vec![Unreadable {
+            path: path.to_string(),
+            reason: tr("The scan stopped unexpectedly").to_string(),
+            folder: true,
+            bytes: 0,
+            modified_at: 0,
+        }],
+        complete: false,
+        tracks: Vec::new(),
+        tracks_seen: Vec::new(),
     }
 }
 
@@ -1321,6 +1387,7 @@ mod tests {
         dir: PathBuf,
         indexer: Indexer,
         _commands: Sender<Command>,
+        events: Receiver<UiEvent>,
     }
 
     impl Library {
@@ -1332,7 +1399,7 @@ mod tests {
             let db = Database::open(&dir.join("picasso.db")).unwrap();
             let (command_tx, commands) = crossbeam_channel::unbounded();
             let (thumbs, _) = crossbeam_channel::unbounded();
-            let (events, _) = crossbeam_channel::unbounded();
+            let (events, event_rx) = crossbeam_channel::unbounded();
             let cache = dir.join("cache");
             let indexer = Indexer {
                 db,
@@ -1347,7 +1414,7 @@ mod tests {
                 backfilled: true,
                 not_tracks: RefCell::new(HashMap::new()),
             };
-            Library { dir, indexer, _commands: command_tx }
+            Library { dir, indexer, _commands: command_tx, events: event_rx }
         }
 
         fn add(&self, folder: &str, photos: &[&str]) -> i64 {
@@ -1397,9 +1464,16 @@ mod tests {
         lib.indexer.db.set_caption(a, "beach");
 
         std::fs::rename(lib.dir.join("pics/trip"), lib.dir.join("pics/holiday")).unwrap();
+        image::RgbaImage::new(5, 5).save(lib.dir.join("pics/holiday/new.png")).unwrap();
+        lib.events.try_iter().for_each(drop);
         lib.scan(folder);
+        // The folder tree follows the rename before the new photo is read.
+        let first = lib.events.try_iter().find(|event| {
+            matches!(event, UiEvent::Library) || matches!(event, UiEvent::ScanProgress { indexed, .. } if *indexed > 0)
+        });
+        assert!(matches!(first, Some(UiEvent::Library)));
         let after = lib.photos();
-        assert_eq!(after.len(), 2);
+        assert_eq!(after.len(), 3);
         assert_eq!(after["pics/holiday/a.png"], a);
         assert_eq!(after["pics/holiday/b.png"], before["pics/trip/b.png"]);
         assert_eq!(lib.caption(a), "beach");

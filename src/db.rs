@@ -820,6 +820,24 @@ impl Database {
         }
     }
 
+    /// Gives photos whose files moved their new paths, names and added
+    /// folders, as (id, path, file name, folder id), keeping their rows.
+    pub fn move_photos(&self, moves: &[(i64, String, String, i64)]) -> Result<(), String> {
+        let tx = self.conn.unchecked_transaction().map_err(|err| err.to_string())?;
+        for (id, ..) in moves {
+            tx.execute("UPDATE photos SET path = ?2 WHERE id = ?1", params![id, format!("\u{1}moving {id}")])
+                .map_err(|err| err.to_string())?;
+        }
+        for (id, path, filename, folder_id) in moves {
+            tx.execute(
+                "UPDATE photos SET path = ?2, filename = ?3, folder_id = ?4 WHERE id = ?1",
+                params![id, path, filename, folder_id],
+            )
+            .map_err(|err| err.to_string())?;
+        }
+        tx.commit().map_err(|err| err.to_string())
+    }
+
     pub fn photo(&self, id: i64) -> Option<Photo> {
         let sql = format!("SELECT {PHOTO_COLS} FROM photos p WHERE p.id=?1");
         self.conn

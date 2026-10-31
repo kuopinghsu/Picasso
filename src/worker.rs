@@ -424,18 +424,25 @@ impl Indexer {
         let root = PathBuf::from(&path);
         if !root.is_dir() {
             // An unplugged drive keeps its photos and its pending flag. A
-            // deleted, renamed or moved folder loses them; their user data
-            // waits in the archive for the files to turn up again.
-            if crate::db::folder_gone(&root) {
-                self.db.remove_missing(folder_id, &[]);
-                if self.db.remove_missing_tracks(folder_id, &[]) > 0 {
-                    self.send_tracks();
-                }
-                self.db.relink_trip_media();
-                self.db.set_scan_pending(folder_id, false);
-                self.notify(UiEvent::ScanFinished { folder: folder_id, unreadable: Vec::new() });
-                self.notify(UiEvent::Library);
+            // folder renamed in place is followed; one deleted or moved away
+            // leaves the library, and its user data waits in the archive
+            // for the files to turn up again.
+            if !crate::db::folder_gone(&root) {
+                return Outcome::Finished;
             }
+            if let Some(renamed) = self.renamed_to(folder_id, &root) {
+                if self.db.move_folder(folder_id, &renamed).is_ok() {
+                    self.notify(UiEvent::Library);
+                    return self.scan_folder(folder_id);
+                }
+            }
+            if let Err(err) = self.db.remove_folder(folder_id) {
+                eprintln!("picasso index: {err}");
+                return Outcome::Finished;
+            }
+            self.db.relink_trip_media();
+            self.send_tracks();
+            self.notify(UiEvent::Library);
             return Outcome::Finished;
         }
         let label = folder_label(&path);
@@ -575,6 +582,31 @@ impl Indexer {
         Outcome::Finished
     }
 
+    /// The folder beside the missing `root` that holds its photos, if
+    /// exactly one does: the name `root` was renamed to.
+    fn renamed_to(&self, folder_id: i64, root: &Path) -> Option<PathBuf> {
+        let sample = self.db.folder_sample(folder_id, 20);
+        let parent = root.parent()?;
+        let added: HashSet<PathBuf> = self.db.folders().into_iter().map(|folder| PathBuf::from(folder.path)).collect();
+        let relative: Vec<(PathBuf, u64)> = sample
+            .iter()
+            .filter_map(|(path, bytes)| Some((Path::new(path).strip_prefix(root).ok()?.to_path_buf(), *bytes)))
+            .collect();
+        if relative.is_empty() {
+            return None;
+        }
+        let mut found = std::fs::read_dir(parent)
+            .ok()?
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .filter(|dir| dir.is_dir() && !added.contains(dir))
+            .filter(|dir| {
+                relative.iter().all(|(rel, bytes)| std::fs::metadata(dir.join(rel)).is_ok_and(|meta| meta.len() == *bytes))
+            });
+        let first = found.next()?;
+        found.next().is_none().then_some(first)
+    }
+
     fn record(
         &self,
         folder_id: i64,
@@ -583,9 +615,9 @@ impl Indexer {
         claimed: &mut HashSet<i64>,
     ) -> Result<ScanRecord, Unreadable> {
         let ProbeResult { mut job, probe } = result;
-        // A file of a renamed or moved folder keeps the row it had.
+        // A renamed or moved file keeps the row it had.
         if job.existing.is_none() {
-            job.existing = self.db.moved_photo(&job.filename, job.bytes, job.modified_at, claimed);
+            job.existing = self.db.moved_photo(&job.path, job.bytes, job.modified_at, claimed);
             claimed.extend(job.existing);
         }
         let probe = probe.map_err(|reason| Unreadable {
@@ -1320,6 +1352,7 @@ mod tests {
 
         fn add(&self, folder: &str, photos: &[&str]) -> i64 {
             let root = self.dir.join(folder);
+            std::fs::create_dir_all(&root).unwrap();
             for photo in photos {
                 let path = root.join(photo);
                 std::fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -1392,10 +1425,47 @@ mod tests {
         std::fs::remove_dir_all(lib.dir.join("more")).unwrap();
         lib.scan(other);
         assert_eq!(lib.photos().keys().collect::<Vec<_>>(), ["pics/keep.png"]);
+        assert!(lib.indexer.db.folder_path(other).is_none());
         assert!(crate::db::folder_gone(&lib.dir.join("more")));
         assert!(!crate::db::folder_gone(&lib.dir.join("missing-drive").join("pics")));
         assert!(!crate::db::folder_gone(Path::new("/Volumes/Card")));
         assert!(!crate::db::folder_gone(&lib.dir));
+    }
+
+    #[test]
+    fn renamed_added_folders_are_followed() {
+        let mut lib = Library::new("rename-added");
+        let folder = lib.add("pics", &["a.png", "sub/b.png"]);
+        lib.add("other", &[]);
+        lib.scan(folder);
+        let a = lib.photos()["pics/a.png"];
+        lib.indexer.db.set_caption(a, "home");
+
+        std::fs::rename(lib.dir.join("pics"), lib.dir.join("photos")).unwrap();
+        lib.scan(folder);
+        let photos = lib.photos();
+        assert_eq!(lib.indexer.db.folder_path(folder), Some(lib.dir.join("photos").to_string_lossy().into_owned()));
+        assert_eq!(photos.len(), 2);
+        assert_eq!(photos["photos/a.png"], a);
+        assert!(photos.contains_key("photos/sub/b.png"));
+        assert_eq!(lib.caption(a), "home");
+    }
+
+    #[test]
+    fn renamed_files_keep_their_photos() {
+        let mut lib = Library::new("rename-file");
+        let folder = lib.add("pics", &["a.png"]);
+        lib.scan(folder);
+        let a = lib.photos()["pics/a.png"];
+        lib.indexer.db.set_caption(a, "dog");
+
+        std::fs::rename(lib.dir.join("pics/a.png"), lib.dir.join("pics/rex.png")).unwrap();
+        lib.scan(folder);
+        let photos = lib.photos();
+        assert_eq!(photos.len(), 1);
+        assert_eq!(photos["pics/rex.png"], a);
+        assert_eq!(lib.indexer.db.photo(a).unwrap().filename, "rex.png");
+        assert_eq!(lib.caption(a), "dog");
     }
 
     #[test]

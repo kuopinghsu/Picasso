@@ -245,7 +245,7 @@ pub struct PicassoApp {
     display_gate: DisplayGate,
     watcher: Option<RecommendedWatcher>,
     watch_rx: Receiver<Result<Event, notify::Error>>,
-    watched: Vec<PathBuf>,
+    watched: Vec<(PathBuf, RecursiveMode)>,
     watch_deadline: HashMap<i64, Instant>,
 
     folders: Vec<crate::types::Folder>,
@@ -827,7 +827,18 @@ impl PicassoApp {
     fn pump_loads(&mut self) {
         while let Ok(loaded) = self.load_rx.try_recv() {
             if let Some(lists) = loaded.lists {
+                // A scan can follow a renamed folder or drop a deleted one.
+                let moved = self.folders.len() != lists.folders.len()
+                    || self.folders.iter().zip(&lists.folders).any(|(a, b)| a.id != b.id || a.path != b.path);
                 self.folders = lists.folders;
+                if moved {
+                    if let Nav::Folder(id) = self.nav {
+                        if !self.folders.iter().any(|folder| folder.id == id) {
+                            self.nav = Nav::Library;
+                        }
+                    }
+                    self.sync_watches();
+                }
                 self.folder_tree = lists.tree;
                 self.albums = lists.albums;
                 self.trips = lists.trips;
@@ -1164,21 +1175,33 @@ impl PicassoApp {
             .map(|folder| folder.id)
     }
 
+    /// Watches every added folder with everything in it, and the folder
+    /// each one is in, so renaming or deleting an added folder is seen too.
     fn sync_watches(&mut self) {
-        let desired: Vec<PathBuf> = self.folders.iter().map(|folder| PathBuf::from(&folder.path)).collect();
+        let roots: Vec<PathBuf> = self.folders.iter().map(|folder| PathBuf::from(&folder.path)).collect();
+        let mut desired: Vec<(PathBuf, RecursiveMode)> =
+            roots.iter().map(|path| (path.clone(), RecursiveMode::Recursive)).collect();
+        for parent in roots.iter().filter_map(|path| path.parent()) {
+            let covered = roots.iter().any(|root| parent.starts_with(root));
+            if !covered && !desired.iter().any(|(path, _)| path == parent) {
+                desired.push((parent.to_path_buf(), RecursiveMode::NonRecursive));
+            }
+        }
         let Some(watcher) = self.watcher.as_mut() else {
             self.watched = desired;
             return;
         };
         for old in &self.watched {
-            if !desired.iter().any(|path| path == old) {
-                let _ = watcher.unwatch(old);
+            if !desired.contains(old) {
+                let _ = watcher.unwatch(&old.0);
             }
         }
-        for path in &desired {
-            if !self.watched.iter().any(|old| old == path) && path.is_dir() {
-                if let Err(err) = watcher.watch(path, RecursiveMode::Recursive) {
-                    self.activity = trf("Can't watch {}: {}", &[&path.display(), &err]);
+        for (path, mode) in &desired {
+            if !self.watched.contains(&(path.clone(), *mode)) && path.is_dir() {
+                if let Err(err) = watcher.watch(path, *mode) {
+                    if *mode == RecursiveMode::Recursive {
+                        self.activity = trf("Can't watch {}: {}", &[&path.display(), &err]);
+                    }
                 }
             }
         }

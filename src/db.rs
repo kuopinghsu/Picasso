@@ -474,6 +474,41 @@ impl Database {
         tx.commit().map_err(|err| err.to_string())
     }
 
+    /// Gives an added folder that was renamed or moved its new path, and its
+    /// photos, tracks and subfolder lists theirs, keeping every row.
+    pub fn move_folder(&self, id: i64, to: &Path) -> Result<(), String> {
+        let from = self.folder_path(id).ok_or_else(|| "no such folder".to_string())?;
+        let to = path_text(to);
+        let (start, end) = under_dir(&from);
+        let tx = self.conn.unchecked_transaction().map_err(|err| err.to_string())?;
+        tx.execute("UPDATE folders SET path=?2 WHERE id=?1", params![id, to]).map_err(|err| err.to_string())?;
+        for table in ["photos", "tracks", "excluded", "unreadable"] {
+            tx.execute(
+                &format!(
+                    "UPDATE {table} SET path = ?2 || substr(path, ?3)
+                     WHERE folder_id=?1 AND (path = ?4 OR (path >= ?5 AND path < ?6))"
+                ),
+                params![id, to, from.chars().count() as i64 + 1, from, start, end],
+            )
+            .map_err(|err| err.to_string())?;
+        }
+        tx.execute(
+            "UPDATE media_refs SET path = p.path FROM photos p WHERE media_refs.photo_id = p.id AND p.folder_id = ?1",
+            [id],
+        )
+        .map_err(|err| err.to_string())?;
+        tx.commit().map_err(|err| err.to_string())
+    }
+
+    /// Up to `limit` photos of an added folder, as (path, size).
+    pub fn folder_sample(&self, id: i64, limit: usize) -> Vec<(String, u64)> {
+        self.map_rows(
+            "SELECT path, bytes FROM photos WHERE folder_id=?1 LIMIT ?2",
+            params![id, limit as i64],
+            |row| Ok((row.get(0)?, row.get::<_, i64>(1)? as u64)),
+        )
+    }
+
     /// Stops scanning `dir`, a folder below one of the added folders, and
     /// drops its photos from the library. Their stars, captions, and edits
     /// are archived, so they come back if the folder is included again.
@@ -756,23 +791,26 @@ impl Database {
         tx.commit().map_err(|err| err.to_string())
     }
 
-    /// The photo a moved file was known as: the one row with the same file
-    /// name, size and modification time whose file is gone and that is not
-    /// in `claimed`. Moving or renaming a folder then keeps the photo's row,
-    /// and with it its trips, stories, albums and edits.
-    pub fn moved_photo(&self, filename: &str, bytes: u64, modified_at: i64, claimed: &HashSet<i64>) -> Option<i64> {
+    /// The photo a moved or renamed file at `path` was known as: the one
+    /// row with the same size and modification time, and the same file name
+    /// or folder, whose file is gone and that is not in `claimed`. Moving or
+    /// renaming a file or folder then keeps the photo's row, and with it its
+    /// trips, stories, albums and edits.
+    pub fn moved_photo(&self, path: &Path, bytes: u64, modified_at: i64, claimed: &HashSet<i64>) -> Option<i64> {
+        let filename = path.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
         let rows: Vec<(i64, String, String)> = self.map_rows(
             "SELECT p.id, p.path, f.path FROM photos p JOIN folders f ON f.id = p.folder_id
-             WHERE p.bytes=?1 AND p.modified_at=?2 AND p.filename=?3",
-            params![bytes as i64, modified_at, filename],
+             WHERE p.bytes=?1 AND p.modified_at=?2",
+            params![bytes as i64, modified_at],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         );
         // A photo on an unplugged drive is not gone, only out of reach.
         let gone: Vec<i64> = rows
             .into_iter()
-            .filter(|(id, path, root)| {
-                let root = Path::new(root);
-                !claimed.contains(id) && !Path::new(path).exists() && (root.is_dir() || folder_gone(root))
+            .filter(|(id, old, root)| {
+                let (old, root) = (Path::new(old), Path::new(root));
+                let related = old.file_name() == Some(std::ffi::OsStr::new(&filename)) || old.parent() == path.parent();
+                related && !claimed.contains(id) && !old.exists() && (root.is_dir() || folder_gone(root))
             })
             .map(|(id, ..)| id)
             .collect();

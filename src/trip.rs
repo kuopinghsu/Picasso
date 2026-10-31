@@ -664,6 +664,8 @@ pub struct Story {
     pub conclusion: String,
     /// Media reference of the cover, picked for this Story alone.
     pub cover: Option<i64>,
+    /// The part of the cover shown, for this Story alone.
+    pub cover_crop: CoverCrop,
     pub template: String,
     pub archived: bool,
     /// The author marked it finished; until then it is a draft.
@@ -671,6 +673,75 @@ pub struct Story {
     /// Goes up with every saved change, so a stale editor can't overwrite.
     pub revision: i64,
     pub updated_at: i64,
+}
+
+/// The part of a Story's cover shown: the left, top, right, and bottom
+/// edges in ten-thousandths of the photo as edited. The photo, its edit,
+/// and its use elsewhere in the Story are left as they are.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CoverCrop(pub [u16; 4]);
+
+impl Default for CoverCrop {
+    fn default() -> Self {
+        Self::FULL
+    }
+}
+
+impl CoverCrop {
+    /// The whole photo.
+    pub const FULL: CoverCrop = CoverCrop([0, 0, 10_000, 10_000]);
+    /// Frame shapes offered, as width and height; `None` is the photo's own.
+    pub const SHAPES: [Option<(u32, u32)>; 5] = [None, Some((16, 9)), Some((3, 2)), Some((2, 1)), Some((1, 1))];
+
+    pub fn is_full(self) -> bool {
+        self == Self::FULL
+    }
+
+    /// The edges as fractions of the photo.
+    pub fn fractions(self) -> [f32; 4] {
+        self.0.map(|edge| f32::from(edge) / 10_000.0)
+    }
+
+    /// The largest frame of `shape` on a photo `photo_w` × `photo_h`,
+    /// scaled by `zoom` (1 is the largest, less is tighter), centred on
+    /// `centre` as fractions, kept on the photo.
+    pub fn framed(shape: Option<(u32, u32)>, photo_w: u32, photo_h: u32, zoom: f32, centre: [f32; 2]) -> CoverCrop {
+        let (pw, ph) = (photo_w.max(1) as f32, photo_h.max(1) as f32);
+        let ratio = shape.map_or(pw / ph, |(w, h)| w.max(1) as f32 / h.max(1) as f32);
+        // The frame's size as fractions of the photo's width and height.
+        let (mut w, mut h) = if ratio >= pw / ph { (1.0, pw / ratio / ph) } else { (ph * ratio / pw, 1.0) };
+        let zoom = zoom.clamp(0.2, 1.0);
+        (w, h) = (w * zoom, h * zoom);
+        let left = (centre[0] - w / 2.0).clamp(0.0, 1.0 - w);
+        let top = (centre[1] - h / 2.0).clamp(0.0, 1.0 - h);
+        let edge = |fraction: f32| (fraction.clamp(0.0, 1.0) * 10_000.0).round() as u16;
+        let crop = CoverCrop([edge(left), edge(top), edge(left + w), edge(top + h)]);
+        if crop.0[2] <= crop.0[0] || crop.0[3] <= crop.0[1] { Self::FULL } else { crop }
+    }
+
+    /// As stored: "left,top,right,bottom", or empty for the whole photo.
+    pub fn to_text(self) -> String {
+        if self.is_full() { String::new() } else { self.0.map(|edge| edge.to_string()).join(",") }
+    }
+
+    /// Read back from [`CoverCrop::to_text`]; anything unreadable or empty
+    /// is the whole photo.
+    pub fn from_text(text: &str) -> CoverCrop {
+        let edges: Vec<u16> = text.split(',').filter_map(|part| part.trim().parse().ok()).collect();
+        match edges[..] {
+            [left, top, right, bottom] if left < right && top < bottom && right <= 10_000 && bottom <= 10_000 => CoverCrop([left, top, right, bottom]),
+            _ => Self::FULL,
+        }
+    }
+}
+
+impl Story {
+    /// The key the cover is rendered under: its media reference, or its
+    /// negative when the Story crops it, so the photo uncropped in a block
+    /// and cropped as the cover are two pictures.
+    pub fn cover_key(&self) -> Option<i64> {
+        self.cover.map(|media| if self.cover_crop.is_full() { media } else { -media })
+    }
 }
 
 /// The layout a new Story starts with.
@@ -1181,6 +1252,55 @@ mod tests {
         let ids: std::collections::HashSet<String> = (0..1000).map(|_| new_uid()).collect();
         assert_eq!(ids.len(), 1000);
         assert!(ids.iter().all(|id| id.len() == 16));
+    }
+}
+
+#[cfg(test)]
+mod cover_tests {
+    use super::*;
+
+    #[test]
+    fn a_cover_frame_keeps_its_shape_on_the_photo_and_reads_back() {
+        // 16:9 on a 3:2 photo: full width, part of the height.
+        let wide = CoverCrop::framed(Some((16, 9)), 3000, 2000, 1.0, [0.5, 0.5]);
+        let [left, top, right, bottom] = wide.fractions();
+        assert_eq!((left, right), (0.0, 1.0));
+        assert!(((right - left) * 3000.0 / ((bottom - top) * 2000.0) - 16.0 / 9.0).abs() < 0.01);
+        // Pushed past the edge, it stays on the photo.
+        let low = CoverCrop::framed(Some((1, 1)), 3000, 2000, 0.5, [0.9, 1.0]);
+        assert_eq!((low.0[2], low.0[3]), (10_000, 10_000));
+        assert_eq!(CoverCrop::framed(None, 3000, 2000, 1.0, [0.5, 0.5]), CoverCrop::FULL);
+        assert_eq!(CoverCrop::from_text(&wide.to_text()), wide);
+        assert_eq!(CoverCrop::FULL.to_text(), "");
+        for bad in ["", "1,2,3", "5,5,4,9", "0,0,10001,10000", "a,b,c,d"] {
+            assert_eq!(CoverCrop::from_text(bad), CoverCrop::FULL, "{bad}");
+        }
+    }
+
+    #[test]
+    fn only_a_cropped_cover_has_a_key_of_its_own() {
+        let mut story = Story {
+            id: 1,
+            trip_id: 1,
+            title: String::new(),
+            subtitle: String::new(),
+            author: String::new(),
+            show_date: false,
+            introduction: String::new(),
+            conclusion: String::new(),
+            cover: Some(7),
+            cover_crop: CoverCrop::FULL,
+            template: DEFAULT_TEMPLATE.into(),
+            archived: false,
+            finished: false,
+            revision: 1,
+            updated_at: 0,
+        };
+        assert_eq!(story.cover_key(), Some(7));
+        story.cover_crop = CoverCrop([0, 0, 5_000, 5_000]);
+        assert_eq!(story.cover_key(), Some(-7));
+        story.cover = None;
+        assert_eq!(story.cover_key(), None);
     }
 }
 

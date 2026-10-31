@@ -651,6 +651,8 @@ The Story opens in place of the Trip's photos and is saved as you type.
 * Select photos in the grid and choose *Add to Story* to add them as single photos, a *Gallery* or a *Photo grid*. Each photo has its own caption and alt text in that Story.
 * Blocks include *Heading*, *Subheading*, *Paragraph*, *List*, *Quote*, *Separator*, *Credits*, *Practical info*, *Link* and *Route map*, which draws a linked GPS track on the map.
 * *Introduction* and *Conclusion* are optional text before and after the blocks.
+* Right-click a photo and choose *Use as cover*. *Frame cover…* on the cover chooses its shape and the part of the photo it shows, in this Story only.
+* *Add photos…* on a gallery or grid opens a strip of the Trip's photos; *Starred only* and *Not in the story yet* narrow it, and a dot marks photos already used.
 
 Select text and press kbd:[Ctrl+B], kbd:[Ctrl+I] or kbd:[Ctrl+K] for bold, italic or a link.
 A Story is a *Draft* until you mark it *Finished*.

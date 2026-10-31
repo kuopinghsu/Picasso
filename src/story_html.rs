@@ -209,11 +209,15 @@ pub fn write_story(folder: &Path, format: Format, profile: Profile, input: &Page
     let images_dir = folder.join("images");
     std::fs::create_dir_all(&images_dir).map_err(|err| err.to_string())?;
     let mut images = HashMap::new();
-    let mut order: Vec<_> = sources.iter().collect();
-    order.sort_by_key(|(id, _)| **id);
+    let mut order: Vec<(i64, &Source)> = sources.iter().map(|(id, source)| (*id, source)).collect();
+    // A cropped cover is a picture of its own, beside the photo uncropped.
+    if let (Some(key), Some(media)) = (story.cover_key().filter(|key| *key < 0), story.cover) {
+        order.push((key, sources.get(&media).unwrap_or(&None)));
+    }
+    order.sort_by_key(|(id, _)| *id);
     progress.total.store(order.len(), Ordering::Relaxed);
     let mut read = Vec::new();
-    for (&media_id, source) in order {
+    for (media_id, source) in order {
         if progress.cancel.load(Ordering::Relaxed) {
             return Err(CANCELLED.into());
         }
@@ -222,10 +226,13 @@ pub fn write_story(folder: &Path, format: Format, profile: Profile, input: &Page
         let before = stamp(path);
         // A photo that can't be read is shown as unavailable, never left out.
         let Ok(rgba) = crate::edit::render_edited(path, settings, *rotation, Some(profile.edge)) else { continue };
+        let rgba = if media_id < 0 { crop_cover(&rgba, story.cover_crop) } else { rgba };
         let bytes = crate::image_io::encode_jpeg(&rgba, profile.quality.clamp(1, 100))?;
         let file = format!("images/{}.jpg", key(&bytes));
         crate::image_io::write_whole(&folder.join(&file), &bytes)?;
-        read.push((media_id, path, before));
+        if media_id > 0 {
+            read.push((media_id, path, before));
+        }
         images.insert(media_id, WebImage { file, width: rgba.width(), height: rgba.height() });
     }
     // Each route on its map, as a picture like the photos.
@@ -400,7 +407,7 @@ pub fn markdown(
     if !byline.is_empty() {
         let _ = write!(out, "{}\n\n", md(&byline.join(" · ")));
     }
-    if let Some(cover) = story.cover {
+    if let Some(cover) = story.cover_key() {
         out.push_str(&md_image(&MediaUse::new(cover), images, words, &mut outcome));
     }
     let sections = headings(blocks);
@@ -578,7 +585,7 @@ pub fn page(
         esc(title),
         template_style(template)
     );
-    if let Some(cover) = story.cover {
+    if let Some(cover) = story.cover_key() {
         html.push_str(&figure(&MediaUse::new(cover), images, words, "cover", &mut outcome));
     }
     let _ = writeln!(html, "<h1>{}</h1>", esc(title));
@@ -841,6 +848,17 @@ fn figure(media: &MediaUse, images: &HashMap<i64, WebImage>, words: &Words, clas
     }
 }
 
+/// The part of a rendered cover the Story shows.
+pub fn crop_cover(rgba: &image::RgbaImage, crop: crate::trip::CoverCrop) -> image::RgbaImage {
+    let [left, top, right, bottom] = crop.fractions();
+    let (w, h) = (rgba.width() as f32, rgba.height() as f32);
+    let x = ((left * w).round() as u32).min(rgba.width().saturating_sub(1));
+    let y = ((top * h).round() as u32).min(rgba.height().saturating_sub(1));
+    let cw = (((right - left) * w).round() as u32).clamp(1, rgba.width() - x);
+    let ch = (((bottom - top) * h).round() as u32).clamp(1, rgba.height() - y);
+    image::imageops::crop_imm(rgba, x, y, cw, ch).to_image()
+}
+
 /// Text as paragraphs: a blank line starts a new one, a line break stays.
 fn paragraphs(text: &str) -> String {
     let mut html = String::new();
@@ -1047,6 +1065,7 @@ mod tests {
             author: "Ana".into(),
             show_date: true,
             cover: None,
+            cover_crop: crate::trip::CoverCrop::default(),
             template: crate::trip::DEFAULT_TEMPLATE.into(),
             archived: false,
             finished: false,
@@ -1218,6 +1237,37 @@ mod tests {
         assert_eq!(manifest["photos"].as_array().unwrap().len(), 1, "only photos that were rendered");
         assert_eq!(manifest["photos"][0]["file"].as_str(), Some(file));
         assert!(!text.contains("banner"), "no source paths or names");
+        let _ = std::fs::remove_dir_all(&folder);
+    }
+
+    #[test]
+    fn a_cropped_cover_is_a_picture_of_its_own_and_the_photo_stays_whole() {
+        let folder = std::env::temp_dir().join(format!("picasso-story-cover-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&folder);
+        let photo = Path::new(env!("CARGO_MANIFEST_DIR")).join("images/banner.jpg");
+        let sources = HashMap::from([(1, Some((photo, Settings::default(), 0)))]);
+        let blocks = [StoryBlock::new(Block::Photo(MediaUse::new(1)))];
+        let mut story = story();
+        story.cover = Some(1);
+        story.cover_crop = crate::trip::CoverCrop([2_500, 0, 7_500, 5_000]);
+        assert_eq!(story.cover_key(), Some(-1));
+        let words = words();
+        let page = Page { story: &story, dates: None, blocks: &blocks, sources: &sources, words: &words, map: None, profiles: &HashMap::new() };
+        let (index, outcome) = write_story(&folder, Format::Html, Profile::default(), &page, &Progress::default()).unwrap();
+        assert_eq!(outcome.missing, 0);
+        let html = std::fs::read_to_string(&index).unwrap();
+        let size = |class: &str| {
+            let at = html.find(&format!("<figure class=\"{class}\">")).unwrap();
+            let tag = &html[at..];
+            let number = |name: &str| tag.split(&format!("{name}=\"")).nth(1).unwrap().split('"').next().unwrap().parse::<u32>().unwrap();
+            (number("width"), number("height"))
+        };
+        let (cover, whole) = (size("cover"), size("photo"));
+        assert_eq!(cover.0, whole.0 / 2, "half the width");
+        assert_eq!(cover.1, whole.1 / 2, "half the height");
+        let text = std::fs::read_to_string(folder.join("manifest.json")).unwrap();
+        let manifest: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(manifest["photos"].as_array().unwrap().len(), 1, "the source is listed once");
         let _ = std::fs::remove_dir_all(&folder);
     }
 

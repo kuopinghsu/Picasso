@@ -158,8 +158,8 @@ pub fn post(story: &Story, blocks: &[StoryBlock], media: &dyn Fn(i64) -> Option<
         }
     }
     paragraphs(&mut out, &story.conclusion, None);
-    let featured = match story.cover.or_else(|| blocks.iter().find_map(|block| block.block.media().first().map(|first| first.media_id))) {
-        Some(cover) => Some(media(cover).ok_or(Unsupported::Photo(cover))?.id),
+    let featured = match story.cover_key().or_else(|| blocks.iter().find_map(|block| block.block.media().first().map(|first| first.media_id))) {
+        Some(cover) => Some(media(cover).ok_or(Unsupported::Photo(cover.abs()))?.id),
         None => None,
     };
     Ok(Post { title: story.title.trim().to_string(), excerpt: story.subtitle.trim().to_string(), content: out.trim_end().to_string(), featured })
@@ -254,6 +254,7 @@ mod tests {
             author: String::new(),
             show_date: false,
             cover: Some(3),
+            cover_crop: crate::trip::CoverCrop::default(),
             template: DEFAULT_TEMPLATE.into(),
             archived: false,
             finished: true,

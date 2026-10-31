@@ -293,6 +293,8 @@ pub fn run(http: &dyn Http, job: &Job, progress: &Progress, report: &mut dyn FnM
         }
     }
     let mut order: Vec<i64> = job.sources.keys().copied().collect();
+    // A cropped cover is a picture of its own, beside the photo uncropped.
+    order.extend(job.story.cover_key().filter(|key| *key < 0));
     order.sort_unstable();
     // Every photo is rendered before any is sent, to a folder of its own,
     // so the bytes to send are known first and none is held in memory.
@@ -304,10 +306,11 @@ pub fn run(http: &dyn Http, job: &Job, progress: &Progress, report: &mut dyn FnM
         if progress.cancel.load(Ordering::Relaxed) {
             return Err(Stopped::Cancelled { uploaded });
         }
-        let Some((path, settings, rotation)) = job.sources.get(&media_id).cloned().flatten() else {
-            return Err(Stopped::Photo { media_id, uploaded });
+        let Some((path, settings, rotation)) = job.sources.get(&media_id.abs()).cloned().flatten() else {
+            return Err(Stopped::Photo { media_id: media_id.abs(), uploaded });
         };
-        let photo = upload::render(&path, &settings, rotation, job.size, job.exif).map_err(|_| Stopped::Photo { media_id, uploaded })?;
+        let crop = (media_id < 0).then_some(job.story.cover_crop);
+        let photo = upload::render(&path, &settings, rotation, job.size, job.exif, crop).map_err(|_| Stopped::Photo { media_id: media_id.abs(), uploaded })?;
         if !sizes.contains_key(&photo.hash) {
             std::fs::write(staging.path(&photo.hash), &photo.bytes).map_err(|_| Stopped::Photo { media_id, uploaded })?;
             sizes.insert(photo.hash.clone(), photo.bytes.len() as u64);
@@ -699,6 +702,7 @@ mod tests {
             introduction: String::new(),
             conclusion: String::new(),
             cover: Some(11),
+            cover_crop: crate::trip::CoverCrop::default(),
             template: crate::trip::DEFAULT_TEMPLATE.into(),
             archived: false,
             finished: false,

@@ -226,6 +226,7 @@ fn header(package: &Package) -> Value {
             "title": story.title, "subtitle": story.subtitle, "author": story.author, "show_date": story.show_date,
             "introduction": story.introduction, "conclusion": story.conclusion,
             "template": story.template, "archived": story.archived, "finished": story.finished, "cover": story.cover,
+            "cover_crop": story.cover_crop.to_text(),
             "blocks": blocks.iter().map(|block| json!({
                 "uid": block.uid,
                 "kind": block.block.kind(),
@@ -371,6 +372,7 @@ fn parse(value: &Value) -> Option<Package> {
                     Value::Null => None,
                     cover => Some(cover.as_i64().filter(|key| keys.contains(key))?),
                 },
+                cover_crop: crate::trip::CoverCrop::from_text(item["cover_crop"].as_str().unwrap_or_default()),
                 template: text(&item["template"]).unwrap_or_else(|| DEFAULT_TEMPLATE.into()),
                 archived: item["archived"].as_bool()?,
                 finished: item["finished"].as_bool()?,
@@ -497,6 +499,7 @@ mod tests {
             author: "Ana".into(),
             show_date: true,
             cover: Some(11),
+            cover_crop: crate::trip::CoverCrop::default(),
             template: DEFAULT_TEMPLATE.into(),
             archived: false,
             finished: true,

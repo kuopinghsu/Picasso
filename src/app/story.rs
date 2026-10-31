@@ -10,7 +10,7 @@ use eframe::egui::{self, Align, Layout, Margin, Modifiers, Pos2, Rect, RichText,
 
 use crate::i18n::{tr, trf};
 use crate::inline::{self, Mark};
-use crate::trip::{grid_layout_for, Block, DayFilter, MediaUse, MemberQuery, Story, StoryBlock, GRID_LAYOUTS};
+use crate::trip::{grid_layout_for, Block, CoverCrop, DayFilter, MediaUse, MemberQuery, Story, StoryBlock, GRID_LAYOUTS};
 use crate::story_html;
 use crate::types::{Nav, Photo};
 
@@ -76,6 +76,46 @@ pub(super) struct StoryEditor {
     hovered: Option<String>,
     /// The caret and the format buttons of the text fields.
     text: TextCtl,
+    /// The cover's frame being chosen, until Done or Cancel.
+    framing: Option<Framing>,
+}
+
+/// A frame for the cover being chosen: its shape (an index of
+/// `CoverCrop::SHAPES`), how tight it is, and its centre on the photo.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Framing {
+    shape: usize,
+    zoom: f32,
+    centre: [f32; 2],
+}
+
+impl Framing {
+    /// The frame of `crop` on a photo `w` × `h`, read back as closely as the
+    /// offered shapes allow.
+    fn of(crop: CoverCrop, w: u32, h: u32) -> Framing {
+        let [left, top, right, bottom] = crop.fractions();
+        let ratio = (right - left) * w.max(1) as f32 / ((bottom - top) * h.max(1) as f32).max(0.0001);
+        let shape = if crop.is_full() {
+            0
+        } else {
+            CoverCrop::SHAPES
+                .iter()
+                .enumerate()
+                .skip(1)
+                .min_by(|(_, a), (_, b)| {
+                    let off = |shape: &Option<(u32, u32)>| shape.map_or(f32::MAX, |(sw, sh)| (sw as f32 / sh as f32 - ratio).abs());
+                    off(a).total_cmp(&off(b))
+                })
+                .map_or(0, |(index, _)| index)
+        };
+        let largest = CoverCrop::framed(CoverCrop::SHAPES[shape], w, h, 1.0, [0.5, 0.5]).fractions();
+        let zoom = ((right - left) / (largest[2] - largest[0]).max(0.0001)).clamp(0.2, 1.0);
+        Framing { shape, zoom, centre: [(left + right) / 2.0, (top + bottom) / 2.0] }
+    }
+
+    fn crop(self, w: u32, h: u32) -> CoverCrop {
+        CoverCrop::framed(CoverCrop::SHAPES[self.shape], w, h, self.zoom, self.centre)
+    }
 }
 
 /// A route's elevation in the bottom-right corner of its drawing, as the
@@ -114,6 +154,10 @@ struct Picker {
     /// The block's id, which stays while blocks move.
     uid: String,
     day: DayFilter,
+    /// Only the starred photos.
+    starred: bool,
+    /// Only photos not in the Story yet, besides this block's own.
+    unused: bool,
     /// The Trip's photos on show, as media references.
     choices: Vec<i64>,
 }
@@ -197,6 +241,8 @@ enum Action {
     Remove(usize),
     Insert(usize, Block),
     Cover(Option<i64>),
+    /// Shows this part of the cover.
+    CoverCrop(CoverCrop),
     /// Takes photo `n` out of the gallery or grid at `i`.
     RemoveFromGallery(usize, usize),
     /// Lays out the photo, gallery, or grid at `i` as `Shape`.
@@ -301,6 +347,7 @@ impl PicassoApp {
             active: None,
             hovered: None,
             text: TextCtl::default(),
+            framing: None,
         });
     }
 
@@ -863,11 +910,28 @@ impl PicassoApp {
         let cover = self.story.as_ref().and_then(|editor| editor.story.cover);
         let width = ui.available_width();
         match cover {
+            Some(media_id) if self.story.as_ref().is_some_and(|editor| editor.framing.is_some()) => self.frame_cover(ui, media_id, width, actions),
             Some(media_id) => {
-                let (rect, response) = ui.allocate_exact_size(Vec2::new(width, (width * 0.42).min(COVER_MAX_HEIGHT)), Sense::click());
-                self.paint_media(ui, media_id, rect, true);
+                let crop = self.story.as_ref().map_or(CoverCrop::FULL, |editor| editor.story.cover_crop);
+                let height = match (crop.is_full(), self.cover_size(media_id)) {
+                    (false, Some((w, h))) => {
+                        let [left, top, right, bottom] = crop.fractions();
+                        width * ((bottom - top) * h as f32) / ((right - left) * w as f32).max(1.0)
+                    }
+                    _ => width * 0.42,
+                };
+                let (rect, response) = ui.allocate_exact_size(Vec2::new(width, height.clamp(60.0, COVER_MAX_HEIGHT.max(width * 0.6))), Sense::click());
+                if crop.is_full() {
+                    self.paint_media(ui, media_id, rect, true);
+                } else {
+                    self.paint_cropped(ui, media_id, rect, crop);
+                }
                 photo_access(ui, &response, rect, tr("Cover"));
                 response.context_menu(|ui| {
+                    if ui.button(tr("Frame cover…")).on_hover_text(tr("Choose the part of the photo the cover shows, in this story only")).clicked() {
+                        self.start_framing(media_id);
+                        ui.close();
+                    }
                     if ui.button(tr("Remove cover")).clicked() {
                         actions.push(Action::Cover(None));
                         ui.close();
@@ -1335,6 +1399,7 @@ impl PicassoApp {
         let trip_id = editor.story.trip_id;
         let open = editor.picking.as_ref().is_some_and(|picker| picker.uid == uid);
         let mut day = editor.picking.as_ref().filter(|_| open).map_or(DayFilter::Any, |picker| picker.day);
+        let (mut starred, mut unused) = editor.picking.as_ref().filter(|_| open).map_or((false, false), |picker| (picker.starred, picker.unused));
         let mut toggle = start && !open;
         ui.horizontal(|ui| {
             let label = if open { tr("Done") } else { tr("Add photos…") };
@@ -1353,23 +1418,29 @@ impl PicassoApp {
                         ui.selectable_value(&mut day, DayFilter::Day(d.id), super::trips::day_name(d));
                     }
                 });
+                ui.checkbox(&mut starred, tr("Starred only")).on_hover_text(tr("Your stars are only read, never changed"));
+                ui.checkbox(&mut unused, tr("Not in the story yet")).on_hover_text(tr("Hide photos already used elsewhere in this story"));
                 ui.label(RichText::new(tr("Click a photo to add it, again to take it out.")).size(12.0).color(theme::muted()));
             }
         });
         let Some(editor) = &mut self.story else { return };
         if toggle {
-            editor.picking = if open { None } else { Some(Picker { uid: uid.into(), day: DayFilter::Any, choices: Vec::new() }) };
+            editor.picking = if open { None } else { Some(Picker { uid: uid.into(), day: DayFilter::Any, starred: false, unused: false, choices: Vec::new() }) };
             if let Some(picker) = &mut editor.picking {
-                picker.choices = trip_photos(&self.db, trip_id, picker.day);
+                picker.choices = trip_photos(&self.db, trip_id, picker.day, false);
             }
             return;
         }
         let Some(picker) = editor.picking.as_mut().filter(|picker| picker.uid == uid) else { return };
-        if picker.day != day {
-            picker.day = day;
-            picker.choices = trip_photos(&self.db, trip_id, day);
+        if (picker.day, picker.starred) != (day, starred) {
+            (picker.day, picker.starred) = (day, starred);
+            picker.choices = trip_photos(&self.db, trip_id, day, starred);
         }
-        let choices = picker.choices.clone();
+        picker.unused = unused;
+        // Photos used in other blocks, to leave out or to mark.
+        let elsewhere: std::collections::HashSet<i64> =
+            editor.blocks.iter().filter(|block| block.uid != uid).flat_map(|block| block.block.media().iter().map(|item| item.media_id)).collect();
+        let choices: Vec<i64> = picker.choices.iter().copied().filter(|id| !unused || !elsewhere.contains(id) || media.contains(id)).collect();
         if choices.is_empty() {
             ui.label(RichText::new(tr("No photos here.")).color(theme::muted()));
             return;
@@ -1389,8 +1460,17 @@ impl PicassoApp {
                         painter.rect_stroke(rect, 4, egui::Stroke::new(3.0, theme::ACCENT), egui::StrokeKind::Inside);
                         painter.circle_filled(rect.right_top() + Vec2::new(-11.0, 11.0), 8.0, theme::ACCENT);
                         painter.text(rect.right_top() + Vec2::new(-11.0, 11.0), egui::Align2::CENTER_CENTER, "✓", egui::FontId::proportional(11.0), egui::Color32::WHITE);
+                    } else if elsewhere.contains(&media_id) {
+                        // Already in the story: a quiet dot, so it isn't added twice by mistake.
+                        ui.painter().circle_filled(rect.left_bottom() + Vec2::new(9.0, -9.0), 5.0, theme::muted());
                     }
-                    let hint = if chosen { tr("In this block. Click to take it out.") } else { tr("Click to add") };
+                    let hint = if chosen {
+                        tr("In this block. Click to take it out.")
+                    } else if elsewhere.contains(&media_id) {
+                        tr("Already elsewhere in this story. Click to add it here too.")
+                    } else {
+                        tr("Click to add")
+                    };
                     if response.on_hover_text(hint).clicked() {
                         actions.push(Action::Toggle(index, media_id));
                     }
@@ -1413,6 +1493,110 @@ impl PicassoApp {
         let editor = self.story.as_mut()?;
         let db = &self.db;
         editor.photos.entry(media_id).or_insert_with(|| db.media_photo(media_id).and_then(|id| db.photo(id))).clone()
+    }
+
+    /// The cover photo's size as shown, turned as the catalog turns it, from
+    /// its thumbnail; `None` until the thumbnail is ready.
+    fn cover_size(&mut self, media_id: i64) -> Option<(u32, u32)> {
+        let photo = self.story_photo(media_id)?;
+        self.ensure_thumb(photo.id, &photo.path);
+        let (_, w, h) = self.thumb_texture(photo.id)?;
+        let (w, h) = (w as u32, h as u32);
+        Some(if photo.rotation.rem_euclid(180) == 90 { (h, w) } else { (w, h) })
+    }
+
+    fn start_framing(&mut self, media_id: i64) {
+        let size = self.cover_size(media_id).unwrap_or((3, 2));
+        if let Some(editor) = &mut self.story {
+            editor.framing = Some(Framing::of(editor.story.cover_crop, size.0, size.1));
+        }
+    }
+
+    /// Draws the part `crop` of a Story photo, as shown, in `rect`.
+    fn paint_cropped(&mut self, ui: &egui::Ui, media_id: i64, rect: Rect, crop: CoverCrop) {
+        let painter = ui.painter_at(rect);
+        painter.rect_filled(rect, 4, theme::placeholder());
+        let Some(photo) = self.story_photo(media_id) else { return };
+        self.ensure_thumb(photo.id, &photo.path);
+        if let Some((texture, _, _)) = self.thumb_texture(photo.id) {
+            theme::paint_image_rounded(&painter, &texture, rect, texture_uv(crop.fractions(), photo.rotation), photo.rotation, 4.0);
+        }
+    }
+
+    /// The whole cover with the frame over it, to drag, and its shape, how
+    /// tight it is, Reset, Cancel, and Done.
+    fn frame_cover(&mut self, ui: &mut egui::Ui, media_id: i64, width: f32, actions: &mut Vec<Action>) {
+        let Some((w, h)) = self.cover_size(media_id) else {
+            ui.spinner();
+            return;
+        };
+        let Some(mut framing) = self.story.as_ref().and_then(|editor| editor.framing) else { return };
+        let height = (width * h as f32 / w.max(1) as f32).min(COVER_MAX_HEIGHT * 1.6);
+        let shown = Vec2::new(height * w as f32 / h.max(1) as f32, height);
+        let (row, _) = ui.allocate_exact_size(Vec2::new(width, height), Sense::hover());
+        let rect = Rect::from_center_size(row.center(), shown);
+        self.paint_cropped(ui, media_id, rect, CoverCrop::FULL);
+        let [left, top, right, bottom] = framing.crop(w, h).fractions();
+        let frame = Rect::from_min_max(rect.lerp_inside(Vec2::new(left, top)), rect.lerp_inside(Vec2::new(right, bottom)));
+        let response = ui.interact(frame, ui.scope_id().with("cover-frame"), Sense::drag()).on_hover_cursor(egui::CursorIcon::Grab);
+        if response.dragged() {
+            let moved = response.drag_delta() / rect.size();
+            framing.centre = [(framing.centre[0] + moved.x).clamp(0.0, 1.0), (framing.centre[1] + moved.y).clamp(0.0, 1.0)];
+            // Kept to where the frame can go, so it moves at once on the way back.
+            let [left, top, right, bottom] = framing.crop(w, h).fractions();
+            framing.centre = [(left + right) / 2.0, (top + bottom) / 2.0];
+        }
+        let painter = ui.painter_at(rect);
+        let shade = egui::Color32::from_black_alpha(140);
+        for outside in [
+            Rect::from_min_max(rect.min, Pos2::new(rect.max.x, frame.min.y)),
+            Rect::from_min_max(Pos2::new(rect.min.x, frame.max.y), rect.max),
+            Rect::from_min_max(Pos2::new(rect.min.x, frame.min.y), Pos2::new(frame.min.x, frame.max.y)),
+            Rect::from_min_max(Pos2::new(frame.max.x, frame.min.y), Pos2::new(rect.max.x, frame.max.y)),
+        ] {
+            painter.rect_filled(outside, 0, shade);
+        }
+        painter.rect_stroke(frame, 2, egui::Stroke::new(2.0, egui::Color32::WHITE), egui::StrokeKind::Inside);
+        ui.add_space(6.0);
+        let mut done = false;
+        let mut cancel = false;
+        ui.horizontal_wrapped(|ui| {
+            ui.label(tr("Shape"));
+            let name = |index: usize| match CoverCrop::SHAPES[index] {
+                None => tr("Whole photo").to_string(),
+                Some((sw, sh)) => format!("{sw}:{sh}"),
+            };
+            egui::ComboBox::from_id_salt("cover-shape").selected_text(name(framing.shape)).show_ui(ui, |ui| {
+                for index in 0..CoverCrop::SHAPES.len() {
+                    ui.selectable_value(&mut framing.shape, index, name(index));
+                }
+            });
+            ui.add_space(8.0);
+            ui.label(tr("Size"));
+            ui.add(egui::Slider::new(&mut framing.zoom, 0.2..=1.0).show_value(false));
+            ui.add_space(8.0);
+            if ui.button(tr("Reset")).on_hover_text(tr("Show the whole photo")).clicked() {
+                framing = Framing { shape: 0, zoom: 1.0, centre: [0.5, 0.5] };
+            }
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                done = ui.add(theme::primary_button(tr("Done"))).clicked();
+                cancel = ui.button(tr("Cancel")).clicked();
+            });
+        });
+        ui.label(RichText::new(tr("Drag the frame to choose what the cover shows. Only this story's cover changes; the photo and its edits stay as they are.")).size(12.0).color(theme::muted()));
+        ui.add_space(12.0);
+        let Some(editor) = &mut self.story else { return };
+        if done {
+            let crop = framing.crop(w, h);
+            if crop != editor.story.cover_crop {
+                actions.push(Action::CoverCrop(crop));
+            }
+            editor.framing = None;
+        } else if cancel {
+            editor.framing = None;
+        } else {
+            editor.framing = Some(framing);
+        }
     }
 
     /// Draws a Story photo in `rect`, cropped to fill it when `fill`, or a
@@ -2128,6 +2312,18 @@ fn media_words(ui: &mut egui::Ui, media: &mut MediaUse, uid: &str, field: u8, op
     }
 }
 
+/// The part of a texture for the part `[left, top, right, bottom]` of the
+/// photo as shown, turned `rotation` degrees clockwise.
+fn texture_uv([left, top, right, bottom]: [f32; 4], rotation: i32) -> Rect {
+    let [u0, v0, u1, v1] = match rotation.rem_euclid(360) {
+        90 => [top, 1.0 - right, bottom, 1.0 - left],
+        180 => [1.0 - right, 1.0 - bottom, 1.0 - left, 1.0 - top],
+        270 => [1.0 - bottom, left, 1.0 - top, right],
+        _ => [left, top, right, bottom],
+    };
+    Rect::from_min_max(Pos2::new(u0, v0), Pos2::new(u1, v1))
+}
+
 fn apply(editor: &mut StoryEditor, action: Action) {
     let blocks = &mut editor.blocks;
     match action {
@@ -2249,7 +2445,14 @@ fn apply(editor: &mut StoryEditor, action: Action) {
                 blocks.insert(if to > from { to - 1 } else { to }.min(blocks.len()), block);
             }
         }
-        Action::Cover(media) => editor.story.cover = media,
+        Action::Cover(media) => {
+            // A new cover starts whole; the old one's frame wouldn't fit it.
+            if editor.story.cover != media {
+                editor.story.cover_crop = CoverCrop::FULL;
+            }
+            editor.story.cover = media;
+        }
+        Action::CoverCrop(crop) => editor.story.cover_crop = crop,
         Action::RemoveFromGallery(i, n) => match &mut blocks[i].block {
             Block::Gallery(items) => {
                 items.remove(n);
@@ -2378,8 +2581,8 @@ fn apply(editor: &mut StoryEditor, action: Action) {
 
 /// The Trip's photos, without videos, in one Day or all, as media
 /// references in the Trip's order.
-fn trip_photos(db: &crate::db::Database, trip_id: i64, day: DayFilter) -> Vec<i64> {
-    let query = MemberQuery { day, ..MemberQuery::default() };
+fn trip_photos(db: &crate::db::Database, trip_id: i64, day: DayFilter, starred: bool) -> Vec<i64> {
+    let query = MemberQuery { day, starred, ..MemberQuery::default() };
     db.trip_members(trip_id, &query, 0, PICK_LIMIT).into_iter().filter(|member| !member.is_video).map(|member| member.media_id).collect()
 }
 
@@ -2518,6 +2721,7 @@ mod tests {
             author: String::new(),
             show_date: true,
             cover: None,
+            cover_crop: crate::trip::CoverCrop::default(),
             template: crate::trip::DEFAULT_TEMPLATE.into(),
             archived: false,
             finished: false,
@@ -2541,6 +2745,7 @@ mod tests {
             active: None,
             hovered: None,
             text: TextCtl::default(),
+            framing: None,
         }
     }
 
@@ -2567,6 +2772,30 @@ mod tests {
         apply(&mut editor, Action::RemoveEmpty(3));
         assert_eq!(editor.blocks.len(), 3);
         assert_eq!(editor.text.focus.as_ref().map(|focus| (focus.0.as_str(), focus.2)), Some((editor.blocks[2].uid.as_str(), END)), "the caret goes to the end before");
+    }
+
+    #[test]
+    fn a_cover_frame_follows_the_photo_as_turned() {
+        let part = [0.1, 0.2, 0.6, 0.9];
+        assert_eq!(texture_uv(part, 0), Rect::from_min_max(Pos2::new(0.1, 0.2), Pos2::new(0.6, 0.9)));
+        let turned = texture_uv(part, 90);
+        assert!((turned.min.x - 0.2).abs() < 1e-6 && (turned.min.y - 0.4).abs() < 1e-6 && (turned.max.x - 0.9).abs() < 1e-6 && (turned.max.y - 0.9).abs() < 1e-6);
+        assert_eq!(texture_uv([0.0, 0.0, 1.0, 1.0], 270), Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)));
+        let framing = Framing::of(CoverCrop::framed(Some((16, 9)), 3000, 2000, 0.6, [0.4, 0.5]), 3000, 2000);
+        assert_eq!(framing.shape, 1, "read back as 16:9");
+        assert!((framing.zoom - 0.6).abs() < 0.01);
+    }
+
+    #[test]
+    fn a_new_cover_starts_whole() {
+        let mut editor = editor(vec![Block::Photo(MediaUse::new(1)), Block::Photo(MediaUse::new(2))]);
+        apply(&mut editor, Action::Cover(Some(1)));
+        apply(&mut editor, Action::CoverCrop(CoverCrop([0, 0, 5_000, 5_000])));
+        assert_eq!(editor.story.cover_key(), Some(-1));
+        apply(&mut editor, Action::Cover(Some(1)));
+        assert!(!editor.story.cover_crop.is_full(), "the same cover keeps its frame");
+        apply(&mut editor, Action::Cover(Some(2)));
+        assert!(editor.story.cover_crop.is_full());
     }
 
     #[test]

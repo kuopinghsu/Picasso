@@ -87,8 +87,12 @@ pub struct Rendered {
 
 /// `source` with its edit and catalog `rotation`, in `size`, with the
 /// [`KEPT`] EXIF fields when `exif`.
-pub fn render(source: &Path, settings: &Settings, rotation: i32, size: UploadSize, exif: bool) -> Result<Rendered, String> {
+/// `crop`, for a Story's cropped cover, is the part of the photo sent.
+pub fn render(source: &Path, settings: &Settings, rotation: i32, size: UploadSize, exif: bool, crop: Option<crate::trip::CoverCrop>) -> Result<Rendered, String> {
     let mut rgba = crate::edit::render_edited(source, settings, rotation, Some(size.edge()))?;
+    if let Some(crop) = crop {
+        rgba = crate::story_html::crop_cover(&rgba, crop);
+    }
     flatten(&mut rgba);
     let bytes = crate::image_io::encode_jpeg(&rgba, size.quality())?;
     let bytes = match crate::photo_info::read_exif(source).filter(|_| exif) {
@@ -268,17 +272,17 @@ mod tests {
         let small = photo(&dir, "small.png", 900, 600);
         let settings = Settings::default();
         for size in UploadSize::ALL {
-            let wide = render(&landscape, &settings, 0, size, true).unwrap();
+            let wide = render(&landscape, &settings, 0, size, true, None).unwrap();
             assert_eq!(wide.width, size.edge());
             assert_eq!((wide.width, wide.height), fitted(3000, 2000, size));
-            let tall = render(&portrait, &settings, 0, size, true).unwrap();
+            let tall = render(&portrait, &settings, 0, size, true, None).unwrap();
             assert_eq!(tall.height, size.edge());
             assert!(tall.width < tall.height);
-            let little = render(&small, &settings, 0, size, true).unwrap();
+            let little = render(&small, &settings, 0, size, true, None).unwrap();
             assert_eq!((little.width, little.height), (900, 600), "not enlarged");
         }
         // The catalog's rotation is applied before sending.
-        let turned = render(&landscape, &settings, 90, UploadSize::Low, true).unwrap();
+        let turned = render(&landscape, &settings, 90, UploadSize::Low, true, None).unwrap();
         assert_eq!((turned.width, turned.height), (853, 1280));
         let _ = std::fs::remove_dir_all(dir);
     }
@@ -287,14 +291,14 @@ mod tests {
     fn a_photo_without_exif_is_sent_without_it_and_is_named_by_its_bytes() {
         let dir = temp_dir("bytes");
         let source = photo(&dir, "a.png", 400, 300);
-        let rendered = render(&source, &Settings::default(), 0, UploadSize::Standard, true).unwrap();
+        let rendered = render(&source, &Settings::default(), 0, UploadSize::Standard, true, None).unwrap();
         assert_eq!(&rendered.bytes[..2], &[0xFF, 0xD8]);
         let has = |marker: &[u8]| rendered.bytes.windows(marker.len()).any(|window| window == marker);
         assert!(!has(b"Exif") && !has(b"http://ns.adobe.com/xap"), "no EXIF or XMP");
         assert_eq!(rendered.hash.len(), 64);
-        let again = render(&source, &Settings::default(), 0, UploadSize::Standard, true).unwrap();
+        let again = render(&source, &Settings::default(), 0, UploadSize::Standard, true, None).unwrap();
         assert_eq!(again.hash, rendered.hash);
-        let low = render(&source, &Settings::default(), 0, UploadSize::Low, true).unwrap();
+        let low = render(&source, &Settings::default(), 0, UploadSize::Low, true, None).unwrap();
         assert_ne!(low.hash, rendered.hash, "the quality is part of the bytes");
         let _ = std::fs::remove_dir_all(dir);
     }

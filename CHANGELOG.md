@@ -7,6 +7,12 @@ section of this file as the release notes.
 
 ### Added
 
+- Suggest days and Suggest places show how many photos' times they have read, with
+  Cancel; times already read are kept, so the next run reads only the rest.
+- Frame a Story's cover: choose a shape and the part of the photo it shows, for that
+  Story only. Preview, export and WordPress use the framed cover; the photo, its edits
+  and its other uses stay whole. The Story photo picker can show only starred photos
+  or those not in the story yet, and marks photos already used.
 - The user guide, in English and Traditional Chinese, has a Trips and Stories chapter:
   making Trips, Days and reviewing times, Places, tracks and resources, Trip search
   words, Similar photos, writing Stories, templates, preview and export, publishing to

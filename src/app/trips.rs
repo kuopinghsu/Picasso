@@ -3,11 +3,14 @@
 //! the line about a Trip above its photos. `docs/TRAVEL.md` describes the
 //! model; the library operations are in `src/db/trips.rs`.
 
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
+
 use chrono::{Local, NaiveDate, TimeZone};
 use eframe::egui::{self, Align, Key, Layout, Margin, Modifiers, RichText, Vec2};
 
 use crate::i18n::{tr, trf};
-use crate::trip::{read_capture, shift_cameras, PlaceSuggestion, suggest_trips, Shot, TripCandidate, TripQuery, AddPreview, DayFilter, DaySource, DaySuggestion, MemberQuery, Review, Story, StoryFilter, Trip, TripDay, TripDraft, TripImpact, TripPlace, ResourceKind, TripResource};
+use crate::trip::{shift_cameras, PlaceSuggestion, suggest_trips, Shot, TripCandidate, TripQuery, AddPreview, DayFilter, DaySource, DaySuggestion, MemberQuery, Review, Story, StoryFilter, Trip, TripDay, TripDraft, TripImpact, TripPlace, ResourceKind, TripResource};
 use crate::types::{format_day, Nav};
 
 use super::story::{story_name, Group};
@@ -634,7 +637,7 @@ impl PicassoApp {
                 suggest = true;
             }
             if busy {
-                ui.add(egui::Spinner::new().size(13.0));
+                self.suggesting_status(ui);
             }
             if let Some((undo_trip, _)) = &self.day_undo {
                 if *undo_trip == trip_id && ui.link(RichText::new(tr("Undo")).size(13.0)).clicked() {
@@ -1059,16 +1062,14 @@ impl PicassoApp {
     /// Reads the capture times the Trip's photos lack, then suggests their
     /// Days, on a thread of its own.
     fn suggest_days(&mut self, ctx: &egui::Context, trip_id: i64) {
-        self.suggesting = Some(trip_id);
         self.day_undo = None;
+        let progress = self.start_suggesting(trip_id);
         let db_path = self.data_dir.join("picasso.db");
         let events = self.events_tx.clone();
         let ctx = ctx.clone();
         let _ = std::thread::Builder::new().name("picasso-days".into()).spawn(move || {
             let outcome = crate::db::Database::open(&db_path).and_then(|db| {
-                for (media_id, path, modified_at) in db.captures_to_read(trip_id) {
-                    db.store_capture(media_id, read_capture(std::path::Path::new(&path), modified_at), modified_at);
-                }
+                read_captures(&db, trip_id, &progress, &ctx)?;
                 db.suggest_days(trip_id)
             });
             let _ = events.send(UiEvent::DaysSuggested { trip_id, outcome });
@@ -1079,15 +1080,13 @@ impl PicassoApp {
     /// Reads the capture times the Trip's photos lack, as Suggest days
     /// does, then suggests their Places, on a thread of its own.
     fn suggest_places(&mut self, ctx: &egui::Context, trip_id: i64, distance: f64, gap: i64) {
-        self.suggesting = Some(trip_id);
+        let progress = self.start_suggesting(trip_id);
         let db_path = self.data_dir.join("picasso.db");
         let events = self.events_tx.clone();
         let ctx = ctx.clone();
         let _ = std::thread::Builder::new().name("picasso-places".into()).spawn(move || {
             let outcome = crate::db::Database::open(&db_path).and_then(|db| {
-                for (media_id, path, modified_at) in db.captures_to_read(trip_id) {
-                    db.store_capture(media_id, read_capture(std::path::Path::new(&path), modified_at), modified_at);
-                }
+                read_captures(&db, trip_id, &progress, &ctx)?;
                 db.suggest_places(trip_id, distance, gap)
             });
             let _ = events.send(UiEvent::PlacesSuggested { trip_id, outcome });
@@ -1095,10 +1094,36 @@ impl PicassoApp {
         });
     }
 
-    pub(super) fn on_places_suggested(&mut self, trip_id: i64, outcome: Result<PlaceSuggestion, String>) {
+    fn start_suggesting(&mut self, trip_id: i64) -> Arc<crate::story_html::Progress> {
+        let progress = Arc::new(crate::story_html::Progress::default());
+        self.suggesting = Some(trip_id);
+        self.suggest_progress = Some(progress.clone());
+        progress
+    }
+
+    fn end_suggesting(&mut self, trip_id: i64) {
         if self.suggesting == Some(trip_id) {
             self.suggesting = None;
+            self.suggest_progress = None;
         }
+    }
+
+    /// While a suggestion runs: a spinner, how many photos' times it has
+    /// read, and Cancel.
+    fn suggesting_status(&self, ui: &mut egui::Ui) {
+        let Some(progress) = &self.suggest_progress else { return };
+        ui.add(egui::Spinner::new().size(13.0));
+        let (done, total) = (progress.done.load(Ordering::Relaxed), progress.total.load(Ordering::Relaxed));
+        if total > 0 && done < total {
+            ui.label(RichText::new(trf("Reading times: {} of {}", &[&done, &total])).size(12.0).color(theme::muted()));
+        }
+        if ui.link(RichText::new(tr("Cancel")).size(13.0)).on_hover_text(tr("Stop; the times read so far are kept for next time")).clicked() {
+            progress.cancel.store(true, Ordering::Relaxed);
+        }
+    }
+
+    pub(super) fn on_places_suggested(&mut self, trip_id: i64, outcome: Result<PlaceSuggestion, String>) {
+        self.end_suggesting(trip_id);
         self.activity = match outcome {
             Ok(done) if done.from_tracks > 0 => format!("{}  ·  {}", trf("{} places", &[&done.places]), trf("{} placed by a track", &[&done.from_tracks])),
             Ok(done) => trf("{} places", &[&done.places]),
@@ -1126,9 +1151,7 @@ impl PicassoApp {
     }
 
     pub(super) fn on_days_suggested(&mut self, trip_id: i64, outcome: Result<DaySuggestion, String>) {
-        if self.suggesting == Some(trip_id) {
-            self.suggesting = None;
-        }
+        self.end_suggesting(trip_id);
         self.activity = match outcome {
             Ok(outcome) => {
                 let mut text = trf("Suggested days for {} photos", &[&outcome.assigned]);
@@ -1345,6 +1368,9 @@ impl PicassoApp {
             ui.add(egui::DragValue::new(&mut distance).range(25..=5000).speed(5).suffix(" m"))
                 .on_hover_text(tr("How far apart photos at one place can be"));
             ui.add(egui::DragValue::new(&mut hours).range(1..=48).suffix(" h")).on_hover_text(tr("The longest gap between photos of one visit"));
+            if busy {
+                self.suggesting_status(ui);
+            }
         });
         ui.data_mut(|data| data.insert_temp(settings_id, (distance, hours)));
         if let Some(place) = edit {
@@ -2336,6 +2362,16 @@ fn day_label(day: NaiveDate) -> String {
     // Noon is on the same day in every time zone the computer may be in.
     let noon = day.and_hms_opt(12, 0, 0).and_then(|time| Local.from_local_datetime(&time).earliest());
     noon.map_or_else(|| day.to_string(), |time| format_day(time.timestamp()))
+}
+
+/// Reads the capture times the Trip's photos lack, repainting as the count
+/// goes up; a cancel stops it with what was read kept.
+fn read_captures(db: &crate::db::Database, trip_id: i64, progress: &crate::story_html::Progress, ctx: &egui::Context) -> Result<(), String> {
+    if db.read_captures(trip_id, progress, || ctx.request_repaint()) {
+        Ok(())
+    } else {
+        Err(tr("Cancelled. The times read so far are kept.").into())
+    }
 }
 
 #[cfg(test)]

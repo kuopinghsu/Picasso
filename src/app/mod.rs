@@ -269,8 +269,10 @@ pub struct PicassoApp {
     trip_stories: std::collections::HashSet<i64>,
     /// The grid's selection and anchor when the viewer opened, given back when it closes.
     browse_selection: Option<(HashSet<i64>, Option<i64>)>,
-    /// The Trip whose Days are being suggested in the background.
+    /// The Trip whose Days or Places are being suggested in the background.
     suggesting: Option<i64>,
+    /// How far that suggestion has read the photos' times, and a way to stop it.
+    suggest_progress: Option<Arc<crate::story_html::Progress>>,
     /// The last Move to Day, to undo: the Trip and where its photos were.
     day_undo: Option<(i64, Vec<crate::trip::DayAssignment>)>,
     photos: Vec<Photo>,
@@ -598,6 +600,7 @@ impl PicassoApp {
             trip_stories: std::collections::HashSet::new(),
             browse_selection: None,
             suggesting: None,
+            suggest_progress: None,
             day_undo: None,
             photos: Vec::new(),
             index_of: HashMap::new(),

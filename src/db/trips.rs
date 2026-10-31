@@ -207,7 +207,9 @@ pub(super) fn upgrade(db: &Database) -> Result<(), String> {
     db.ensure_column("stories", "finished", "INTEGER NOT NULL DEFAULT 0")?;
     // Optional text before and after the Story's blocks.
     db.ensure_column("stories", "introduction", "TEXT NOT NULL DEFAULT ''")?;
-    db.ensure_column("stories", "conclusion", "TEXT NOT NULL DEFAULT ''")
+    db.ensure_column("stories", "conclusion", "TEXT NOT NULL DEFAULT ''")?;
+    // The part of the cover shown; empty for the whole photo.
+    db.ensure_column("stories", "cover_crop", "TEXT NOT NULL DEFAULT ''")
 }
 
 const CLOCK_FORMAT: &str = "%Y-%m-%d %H:%M:%S";
@@ -236,7 +238,7 @@ t.created_at, t.updated_at, t.trip_time,
 (SELECT COUNT(*) FROM trip_days d WHERE d.trip_id = t.id),
 (SELECT COUNT(*) FROM stories s WHERE s.trip_id = t.id)";
 
-const STORY_COLS: &str = "id, trip_id, title, subtitle, author, show_date, cover_ref, template, archived, revision, updated_at, finished, introduction, conclusion";
+const STORY_COLS: &str = "id, trip_id, title, subtitle, author, show_date, cover_ref, template, archived, revision, updated_at, finished, introduction, conclusion, cover_crop";
 
 fn sql_err(err: rusqlite::Error) -> String {
     err.to_string()
@@ -280,6 +282,7 @@ fn read_story(row: &rusqlite::Row) -> rusqlite::Result<Story> {
         author: row.get(4)?,
         show_date: row.get(5)?,
         cover: row.get(6)?,
+        cover_crop: crate::trip::CoverCrop::from_text(&row.get::<_, String>(14)?),
         template: row.get(7)?,
         archived: row.get(8)?,
         revision: row.get(9)?,
@@ -1288,6 +1291,28 @@ impl Database {
         )
     }
 
+    /// Reads and keeps the capture times the Trip's photos lack, counting
+    /// them in `progress` and calling `report` every few photos. Returns
+    /// false when cancelled: it stops between photos, and what was read is
+    /// kept, so the next call reads only the rest.
+    pub fn read_captures(&self, trip_id: i64, progress: &crate::story_html::Progress, mut report: impl FnMut()) -> bool {
+        use std::sync::atomic::Ordering;
+        const REPORT_EVERY: usize = 25;
+        let captures = self.captures_to_read(trip_id);
+        progress.total.store(captures.len(), Ordering::Relaxed);
+        for (done, (media_id, path, modified_at)) in captures.into_iter().enumerate() {
+            if progress.cancel.load(Ordering::Relaxed) {
+                return false;
+            }
+            self.store_capture(media_id, crate::trip::read_capture(std::path::Path::new(&path), modified_at), modified_at);
+            progress.done.store(done + 1, Ordering::Relaxed);
+            if done % REPORT_EVERY == 0 {
+                report();
+            }
+        }
+        true
+    }
+
     /// Keeps what a file of modification time `read_for` says about when it was taken.
     pub fn store_capture(&self, media_id: i64, capture: Capture, read_for: i64) {
         let (kind, clock, offset, utc) = match capture {
@@ -1493,8 +1518,8 @@ impl Database {
             let story_id = insert_story(&tx, trip_id, &story.title)?;
             tx.execute(
                 "UPDATE stories SET subtitle = ?2, author = ?3, show_date = ?4, template = ?5, finished = ?6, cover_ref = ?7, archived = ?8,
-                    introduction = ?9, conclusion = ?10 WHERE id = ?1",
-                params![story_id, story.subtitle.trim(), story.author.trim(), story.show_date, story.template, story.finished, story.cover.and_then(|key| refs.get(&key)), story.archived, story.introduction.trim(), story.conclusion.trim()],
+                    introduction = ?9, conclusion = ?10, cover_crop = ?11 WHERE id = ?1",
+                params![story_id, story.subtitle.trim(), story.author.trim(), story.show_date, story.template, story.finished, story.cover.and_then(|key| refs.get(&key)), story.archived, story.introduction.trim(), story.conclusion.trim(), story.cover_crop.to_text()],
             )
             .map_err(sql_err)?;
             let mut blocks = blocks.clone();
@@ -1559,14 +1584,14 @@ impl Database {
     }
 
     /// Saves the Story's title, subtitle, author, date display, template,
-    /// introduction and conclusion, and whether it is finished.
+    /// introduction and conclusion, cover crop, and whether it is finished.
     /// Fails without a change if the Story was saved since `revision`.
     /// Returns its new revision.
     pub fn save_story_details(&self, story: &Story, revision: i64) -> Result<i64, String> {
         let tx = self.conn.unchecked_transaction().map_err(sql_err)?;
         let next = next_revision(&tx, story.id, revision)?;
         tx.execute(
-            "UPDATE stories SET title = ?2, subtitle = ?3, author = ?4, show_date = ?5, template = ?6, finished = ?7, introduction = ?8, conclusion = ?9 WHERE id = ?1",
+            "UPDATE stories SET title = ?2, subtitle = ?3, author = ?4, show_date = ?5, template = ?6, finished = ?7, introduction = ?8, conclusion = ?9, cover_crop = ?10 WHERE id = ?1",
             params![
                 story.id,
                 story.title.trim(),
@@ -1576,7 +1601,8 @@ impl Database {
                 story.template,
                 story.finished,
                 story.introduction.trim(),
-                story.conclusion.trim()
+                story.conclusion.trim(),
+                story.cover_crop.to_text()
             ],
         )
         .map_err(sql_err)?;
@@ -2461,6 +2487,25 @@ mod tests {
 
     fn at(text: &str) -> NaiveDateTime {
         NaiveDateTime::parse_from_str(text, CLOCK_FORMAT).unwrap()
+    }
+
+    #[test]
+    fn reading_times_can_be_cancelled_and_resumed_without_reading_twice() {
+        let (db, _, _, ids) = photos("trip-read-cancel", &["a.jpg", "b.jpg", "c.jpg"]);
+        let trip_id = trip(&db, "Lisbon");
+        db.add_to_trip(trip_id, &ids).unwrap();
+        let stopped = crate::story_html::Progress::default();
+        stopped.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+        assert!(!db.read_captures(trip_id, &stopped, || {}));
+        assert_eq!(db.captures_to_read(trip_id).len(), 3, "a cancel before the first photo reads none");
+        let progress = crate::story_html::Progress::default();
+        let mut reports = 0;
+        assert!(db.read_captures(trip_id, &progress, || reports += 1));
+        assert_eq!((progress.done.into_inner(), progress.total.into_inner(), reports), (3, 3, 1));
+        assert!(db.captures_to_read(trip_id).is_empty(), "kept, so the next suggestion reads nothing again");
+        let again = crate::story_html::Progress::default();
+        assert!(db.read_captures(trip_id, &again, || {}));
+        assert_eq!(again.total.into_inner(), 0);
     }
 
     #[test]

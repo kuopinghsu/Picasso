@@ -31,9 +31,17 @@ endif
 # ones only.
 SIGN_IDENTITY ?= Picasso Development
 has_identity = security find-identity -p codesigning 2>/dev/null | grep -q '"$(SIGN_IDENTITY)"'
-sign = if [ "$(PLATFORM)" = darwin ]; then \
-	if $(has_identity); then codesign --force --sign "$(SIGN_IDENTITY)" --identifier app.Picasso.picasso $(1); \
-	else echo "Not signed with \"$(SIGN_IDENTITY)\": run make sign-identity once to keep Keychain approvals across builds"; fi; fi
+# A plain shell `if` here would need a POSIX shell to parse it, which this
+# make.exe doesn't reliably pick on Windows (it runs recipes with cmd.exe,
+# regardless of a Makefile SHELL override); deciding in Make itself instead
+# of in the recipe's shell sidesteps that, and signing has nothing to do on
+# Windows anyway.
+ifeq ($(PLATFORM),darwin)
+sign = if $(has_identity); then codesign --force --sign "$(SIGN_IDENTITY)" --identifier app.Picasso.picasso $(1); \
+	else echo "Not signed with \"$(SIGN_IDENTITY)\": run make sign-identity once to keep Keychain approvals across builds"; fi
+else
+sign = true
+endif
 
 # `make` alone builds the release binary; `make help` lists every target.
 .DEFAULT_GOAL := release

@@ -74,10 +74,80 @@ pub(super) fn build(folders: &[Folder], dirs: &[(String, i64)]) -> Vec<FolderRoo
 }
 
 fn sort_nodes(nodes: &mut [DirNode]) {
-    nodes.sort_by_key(|node| node.name.to_lowercase());
+    nodes.sort_by(|a, b| natural_cmp(&a.name, &b.name));
     for node in nodes {
         sort_nodes(&mut node.children);
     }
+}
+
+/// A run of one kind of character: digits compared by value, letters and
+/// CJK text compared case-insensitively, and everything else (spaces,
+/// underscores, punctuation) ranked ahead of both — Explorer's own order,
+/// where "__folder" and "_folder" sort above "0 folder" and "01 folder".
+enum Chunk {
+    Symbol(String),
+    Number(u128),
+    Word(String),
+}
+
+fn kind(c: char) -> u8 {
+    if c.is_ascii_digit() {
+        1
+    } else if c.is_alphanumeric() {
+        2
+    } else {
+        0
+    }
+}
+
+fn chunks(name: &str) -> Vec<Chunk> {
+    let mut chunks = Vec::new();
+    let mut chars = name.chars().peekable();
+    while let Some(&first) = chars.peek() {
+        let this_kind = kind(first);
+        let mut part = String::new();
+        while let Some(&c) = chars.peek() {
+            if kind(c) != this_kind {
+                break;
+            }
+            part.push(c);
+            chars.next();
+        }
+        chunks.push(match this_kind {
+            1 => Chunk::Number(part.parse().unwrap_or(u128::MAX)),
+            2 => Chunk::Word(part.to_lowercase()),
+            _ => Chunk::Symbol(part),
+        });
+    }
+    chunks
+}
+
+fn rank(chunk: &Chunk) -> u8 {
+    match chunk {
+        Chunk::Symbol(_) => 0,
+        Chunk::Number(_) => 1,
+        Chunk::Word(_) => 2,
+    }
+}
+
+/// Orders names the way Explorer's "Name" sort does: symbols and punctuation
+/// first, then embedded numbers by value rather than digit by digit, then
+/// everything else by character — so "__folder" sorts above "0 folder",
+/// which sorts above "01 folder", which sorts above "img10".
+fn natural_cmp(a: &str, b: &str) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+    let (a, b) = (chunks(a), chunks(b));
+    let (len_a, len_b) = (a.len(), b.len());
+    a.into_iter()
+        .zip(b)
+        .map(|pair| match pair {
+            (Chunk::Number(a), Chunk::Number(b)) => a.cmp(&b),
+            (Chunk::Word(a), Chunk::Word(b)) => a.cmp(&b),
+            (Chunk::Symbol(a), Chunk::Symbol(b)) => a.cmp(&b),
+            (a, b) => rank(&a).cmp(&rank(&b)),
+        })
+        .find(|ord| *ord != Ordering::Equal)
+        .unwrap_or_else(|| len_a.cmp(&len_b))
 }
 
 /// One visible line of the tree.
@@ -264,5 +334,19 @@ mod tests {
         let names: Vec<(&str, i64)> = tree[0].children.iter().map(|node| (node.name.as_str(), node.count)).collect();
         assert_eq!(names, [("a", 4), ("b", 4)]);
         assert_eq!(tree[0].children[0].children[0].path, join(&[&root, "a", "x"]));
+    }
+
+    #[test]
+    fn orders_embedded_numbers_by_value() {
+        let mut names = ["35期", "2020", "2016", "img10", "img9", "_gsdata_", "Album"];
+        names.sort_by(|a, b| natural_cmp(a, b));
+        assert_eq!(names, ["_gsdata_", "35期", "2016", "2020", "Album", "img9", "img10"]);
+    }
+
+    #[test]
+    fn symbols_sort_above_numbers_above_words() {
+        let mut names = ["0 甲", "01 乙", "__資料夾", "_cache_"];
+        names.sort_by(|a, b| natural_cmp(a, b));
+        assert_eq!(names, ["_cache_", "__資料夾", "0 甲", "01 乙"]);
     }
 }

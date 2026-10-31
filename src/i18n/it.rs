@@ -1537,6 +1537,8 @@ pub(super) const TABLE: &[(&str, &str)] = &[
     ("Reading times: {} of {}", "Lettura degli orari: {} di {}"),
     ("Stop; the times read so far are kept for next time", "Ferma; gli orari letti finora restano per la prossima volta"),
     ("Cancelled. The times read so far are kept.", "Annullato. Gli orari letti finora vengono conservati."),
+    ("Drag the corners and edges to any shape", "Trascina angoli e bordi per qualsiasi forma"),
+    ("Cinema", "Cinema"),
     ("Save as a new draft", "Salva come nuova bozza"),
     ("The post stays as it is; a new draft is made beside it.", "L’articolo resta com’è; accanto viene creata una nuova bozza."),
     ("Upload {} photos and update the post", "Carica {} foto e aggiorna l'articolo"),

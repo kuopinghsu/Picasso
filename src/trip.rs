@@ -691,7 +691,32 @@ impl CoverCrop {
     /// The whole photo.
     pub const FULL: CoverCrop = CoverCrop([0, 0, 10_000, 10_000]);
     /// Frame shapes offered, as width and height; `None` is the photo's own.
-    pub const SHAPES: [Option<(u32, u32)>; 5] = [None, Some((16, 9)), Some((3, 2)), Some((2, 1)), Some((1, 1))];
+    /// Landscape from widest, square, then portrait. 65:24 is the Hasselblad
+    /// XPan's panorama, 2.39:1 (as 239:100) widescreen cinema.
+    pub const SHAPES: [Option<(u32, u32)>; 13] = [
+        None,
+        Some((65, 24)),
+        Some((239, 100)),
+        Some((2, 1)),
+        Some((16, 9)),
+        Some((3, 2)),
+        Some((4, 3)),
+        Some((5, 4)),
+        Some((1, 1)),
+        Some((4, 5)),
+        Some((3, 4)),
+        Some((2, 3)),
+        Some((9, 16)),
+    ];
+
+    /// A shape's name: its ratio, with the camera or format it comes from.
+    pub fn shape_name((w, h): (u32, u32)) -> String {
+        match (w, h) {
+            (65, 24) => "XPan 65:24".into(),
+            (239, 100) => format!("{} 2.39:1", crate::i18n::tr("Cinema")),
+            _ => format!("{w}:{h}"),
+        }
+    }
 
     pub fn is_full(self) -> bool {
         self == Self::FULL
@@ -717,6 +742,21 @@ impl CoverCrop {
         let edge = |fraction: f32| (fraction.clamp(0.0, 1.0) * 10_000.0).round() as u16;
         let crop = CoverCrop([edge(left), edge(top), edge(left + w), edge(top + h)]);
         if crop.0[2] <= crop.0[0] || crop.0[3] <= crop.0[1] { Self::FULL } else { crop }
+    }
+
+    /// The smallest a frame can be, as a fraction of the photo's side.
+    pub const SMALLEST: f32 = 0.05;
+
+    /// A frame of any shape from its edges as fractions, kept on the photo
+    /// and no smaller than [`CoverCrop::SMALLEST`] on a side.
+    pub fn from_fractions([left, top, right, bottom]: [f32; 4]) -> CoverCrop {
+        let side = |low: f32, high: f32| {
+            let (low, high) = (low.min(high).clamp(0.0, 1.0), high.max(low).clamp(0.0, 1.0));
+            if high - low >= Self::SMALLEST { (low, high) } else { let low = low.min(1.0 - Self::SMALLEST); (low, low + Self::SMALLEST) }
+        };
+        let ((left, right), (top, bottom)) = (side(left, right), side(top, bottom));
+        let edge = |fraction: f32| (fraction * 10_000.0).round() as u16;
+        CoverCrop([edge(left), edge(top), edge(right), edge(bottom)])
     }
 
     /// As stored: "left,top,right,bottom", or empty for the whole photo.
@@ -1272,6 +1312,11 @@ mod cover_tests {
         assert_eq!(CoverCrop::framed(None, 3000, 2000, 1.0, [0.5, 0.5]), CoverCrop::FULL);
         assert_eq!(CoverCrop::from_text(&wide.to_text()), wide);
         assert_eq!(CoverCrop::FULL.to_text(), "");
+        // Any shape, kept on the photo, never too thin, edges in either order.
+        assert_eq!(CoverCrop::from_fractions([0.1, 0.2, 0.7, 0.4]), CoverCrop([1_000, 2_000, 7_000, 4_000]));
+        assert_eq!(CoverCrop::from_fractions([0.7, 0.4, 0.1, 0.2]), CoverCrop([1_000, 2_000, 7_000, 4_000]));
+        assert_eq!(CoverCrop::from_fractions([-0.5, 0.0, 1.5, 1.0]), CoverCrop::FULL);
+        assert_eq!(CoverCrop::from_fractions([0.99, 0.5, 0.99, 0.5]), CoverCrop([9_500, 5_000, 10_000, 5_500]));
         for bad in ["", "1,2,3", "5,5,4,9", "0,0,10001,10000", "a,b,c,d"] {
             assert_eq!(CoverCrop::from_text(bad), CoverCrop::FULL, "{bad}");
         }

@@ -1537,6 +1537,8 @@ pub(super) const TABLE: &[(&str, &str)] = &[
     ("Reading times: {} of {}", "正在讀取拍攝時間：{}/{}"),
     ("Stop; the times read so far are kept for next time", "停止；已讀取的時間會保留到下次使用"),
     ("Cancelled. The times read so far are kept.", "已取消。已讀取的時間會保留。"),
+    ("Drag the corners and edges to any shape", "拖曳角和邊調整為任意形狀"),
+    ("Cinema", "電影"),
     ("Save as a new draft", "另存為新草稿"),
     ("The post stays as it is; a new draft is made beside it.", "文章保持不變;在旁邊新增一份草稿。"),
     ("Upload {} photos and update the post", "上傳 {} 張相片並更新文章"),

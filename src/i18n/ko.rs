@@ -1537,6 +1537,8 @@ pub(super) const TABLE: &[(&str, &str)] = &[
     ("Reading times: {} of {}", "촬영 시간 읽는 중: {} / {}"),
     ("Stop; the times read so far are kept for next time", "중지합니다. 지금까지 읽은 시간은 다음을 위해 보관됩니다"),
     ("Cancelled. The times read so far are kept.", "취소했습니다. 지금까지 읽은 시간은 보관됩니다."),
+    ("Drag the corners and edges to any shape", "모서리와 가장자리를 드래그해 원하는 모양으로"),
+    ("Cinema", "시네마"),
     ("Save as a new draft", "새 초안으로 저장"),
     ("The post stays as it is; a new draft is made beside it.", "게시물은 그대로 두고 새 초안을 따로 만듭니다."),
     ("Upload {} photos and update the post", "사진 {}장 업로드 후 글 업데이트"),

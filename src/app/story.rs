@@ -87,7 +87,12 @@ struct Framing {
     shape: usize,
     zoom: f32,
     centre: [f32; 2],
+    /// The frame's edges as fractions while its shape is free.
+    free: [f32; 4],
 }
+
+/// The shape index of a frame of any shape, after `CoverCrop::SHAPES`.
+const FREE_SHAPE: usize = CoverCrop::SHAPES.len();
 
 impl Framing {
     /// The frame of `crop` on a photo `w` × `h`, read back as closely as the
@@ -95,6 +100,7 @@ impl Framing {
     fn of(crop: CoverCrop, w: u32, h: u32) -> Framing {
         let [left, top, right, bottom] = crop.fractions();
         let ratio = (right - left) * w.max(1) as f32 / ((bottom - top) * h.max(1) as f32).max(0.0001);
+        let off = |shape: &Option<(u32, u32)>| shape.map_or(f32::MAX, |(sw, sh)| (sw as f32 / sh as f32 - ratio).abs() / ratio);
         let shape = if crop.is_full() {
             0
         } else {
@@ -102,19 +108,22 @@ impl Framing {
                 .iter()
                 .enumerate()
                 .skip(1)
-                .min_by(|(_, a), (_, b)| {
-                    let off = |shape: &Option<(u32, u32)>| shape.map_or(f32::MAX, |(sw, sh)| (sw as f32 / sh as f32 - ratio).abs());
-                    off(a).total_cmp(&off(b))
-                })
-                .map_or(0, |(index, _)| index)
+                .min_by(|(_, a), (_, b)| off(a).total_cmp(&off(b)))
+                // A frame no offered shape fits, within 1%, is free.
+                .filter(|(_, shape)| off(shape) < 0.01)
+                .map_or(FREE_SHAPE, |(index, _)| index)
         };
-        let largest = CoverCrop::framed(CoverCrop::SHAPES[shape], w, h, 1.0, [0.5, 0.5]).fractions();
+        let fixed = CoverCrop::SHAPES.get(shape).copied().flatten();
+        let largest = CoverCrop::framed(fixed, w, h, 1.0, [0.5, 0.5]).fractions();
         let zoom = ((right - left) / (largest[2] - largest[0]).max(0.0001)).clamp(0.2, 1.0);
-        Framing { shape, zoom, centre: [(left + right) / 2.0, (top + bottom) / 2.0] }
+        Framing { shape, zoom, centre: [(left + right) / 2.0, (top + bottom) / 2.0], free: [left, top, right, bottom] }
     }
 
     fn crop(self, w: u32, h: u32) -> CoverCrop {
-        CoverCrop::framed(CoverCrop::SHAPES[self.shape], w, h, self.zoom, self.centre)
+        match CoverCrop::SHAPES.get(self.shape) {
+            Some(shape) => CoverCrop::framed(*shape, w, h, self.zoom, self.centre),
+            None => CoverCrop::from_fractions(self.free),
+        }
     }
 }
 
@@ -1541,10 +1550,46 @@ impl PicassoApp {
         let response = ui.interact(frame, ui.scope_id().with("cover-frame"), Sense::drag()).on_hover_cursor(egui::CursorIcon::Grab);
         if response.dragged() {
             let moved = response.drag_delta() / rect.size();
-            framing.centre = [(framing.centre[0] + moved.x).clamp(0.0, 1.0), (framing.centre[1] + moved.y).clamp(0.0, 1.0)];
-            // Kept to where the frame can go, so it moves at once on the way back.
-            let [left, top, right, bottom] = framing.crop(w, h).fractions();
-            framing.centre = [(left + right) / 2.0, (top + bottom) / 2.0];
+            if framing.shape == FREE_SHAPE {
+                let [left, top, right, bottom] = framing.free;
+                let dx = moved.x.clamp(-left, 1.0 - right);
+                let dy = moved.y.clamp(-top, 1.0 - bottom);
+                framing.free = [left + dx, top + dy, right + dx, bottom + dy];
+            } else {
+                framing.centre = [(framing.centre[0] + moved.x).clamp(0.0, 1.0), (framing.centre[1] + moved.y).clamp(0.0, 1.0)];
+                // Kept to where the frame can go, so it moves at once on the way back.
+                let [left, top, right, bottom] = framing.crop(w, h).fractions();
+                framing.centre = [(left + right) / 2.0, (top + bottom) / 2.0];
+            }
+        }
+        if framing.shape == FREE_SHAPE {
+            // Handles on the corners and edges: which edges each one moves.
+            const GRIP: f32 = 14.0;
+            let handles: [(Pos2, [bool; 4], egui::CursorIcon); 8] = [
+                (frame.left_top(), [true, true, false, false], egui::CursorIcon::ResizeNwSe),
+                (frame.right_bottom(), [false, false, true, true], egui::CursorIcon::ResizeNwSe),
+                (frame.right_top(), [false, true, true, false], egui::CursorIcon::ResizeNeSw),
+                (frame.left_bottom(), [true, false, false, true], egui::CursorIcon::ResizeNeSw),
+                (frame.center_top(), [false, true, false, false], egui::CursorIcon::ResizeVertical),
+                (frame.center_bottom(), [false, false, false, true], egui::CursorIcon::ResizeVertical),
+                (frame.left_center(), [true, false, false, false], egui::CursorIcon::ResizeHorizontal),
+                (frame.right_center(), [false, false, true, false], egui::CursorIcon::ResizeHorizontal),
+            ];
+            for (n, (at, edges, cursor)) in handles.into_iter().enumerate() {
+                let grip = Rect::from_center_size(at, Vec2::splat(GRIP));
+                let handle = ui.interact(grip, ui.scope_id().with(("cover-grip", n)), Sense::drag()).on_hover_cursor(cursor);
+                if handle.dragged() {
+                    let moved = handle.drag_delta() / rect.size();
+                    let mut free = framing.free;
+                    for (side, moves) in edges.into_iter().enumerate() {
+                        if moves {
+                            free[side] += if side % 2 == 0 { moved.x } else { moved.y };
+                        }
+                    }
+                    framing.free = CoverCrop::from_fractions(free).fractions();
+                }
+                ui.painter().rect_filled(Rect::from_center_size(at, Vec2::splat(8.0)), 1, egui::Color32::WHITE);
+            }
         }
         let painter = ui.painter_at(rect);
         let shade = egui::Color32::from_black_alpha(140);
@@ -1562,21 +1607,33 @@ impl PicassoApp {
         let mut cancel = false;
         ui.horizontal_wrapped(|ui| {
             ui.label(tr("Shape"));
-            let name = |index: usize| match CoverCrop::SHAPES[index] {
-                None => tr("Whole photo").to_string(),
-                Some((sw, sh)) => format!("{sw}:{sh}"),
+            let name = |index: usize| match CoverCrop::SHAPES.get(index) {
+                Some(None) => tr("Whole photo").to_string(),
+                Some(Some(shape)) => CoverCrop::shape_name(*shape),
+                None => tr("Free").to_string(),
             };
-            egui::ComboBox::from_id_salt("cover-shape").selected_text(name(framing.shape)).show_ui(ui, |ui| {
-                for index in 0..CoverCrop::SHAPES.len() {
+            let before = framing.shape;
+            egui::ComboBox::from_id_salt("cover-shape").selected_text(name(framing.shape)).height(360.0).show_ui(ui, |ui| {
+                for index in 0..=FREE_SHAPE {
                     ui.selectable_value(&mut framing.shape, index, name(index));
                 }
             });
+            if framing.shape == FREE_SHAPE && before != FREE_SHAPE {
+                // Free starts from the frame as it was, to pull from there.
+                let mut was = framing;
+                was.shape = before;
+                framing.free = was.crop(w, h).fractions();
+            }
             ui.add_space(8.0);
-            ui.label(tr("Size"));
-            ui.add(egui::Slider::new(&mut framing.zoom, 0.2..=1.0).show_value(false));
+            if framing.shape == FREE_SHAPE {
+                ui.label(RichText::new(tr("Drag the corners and edges to any shape")).size(12.0).color(theme::muted()));
+            } else {
+                ui.label(tr("Size"));
+                ui.add(egui::Slider::new(&mut framing.zoom, 0.2..=1.0).show_value(false));
+            }
             ui.add_space(8.0);
             if ui.button(tr("Reset")).on_hover_text(tr("Show the whole photo")).clicked() {
-                framing = Framing { shape: 0, zoom: 1.0, centre: [0.5, 0.5] };
+                framing = Framing { shape: 0, zoom: 1.0, centre: [0.5, 0.5], free: CoverCrop::FULL.fractions() };
             }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 done = ui.add(theme::primary_button(tr("Done"))).clicked();
@@ -2782,8 +2839,16 @@ mod tests {
         assert!((turned.min.x - 0.2).abs() < 1e-6 && (turned.min.y - 0.4).abs() < 1e-6 && (turned.max.x - 0.9).abs() < 1e-6 && (turned.max.y - 0.9).abs() < 1e-6);
         assert_eq!(texture_uv([0.0, 0.0, 1.0, 1.0], 270), Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)));
         let framing = Framing::of(CoverCrop::framed(Some((16, 9)), 3000, 2000, 0.6, [0.4, 0.5]), 3000, 2000);
-        assert_eq!(framing.shape, 1, "read back as 16:9");
+        assert_eq!(CoverCrop::SHAPES[framing.shape], Some((16, 9)), "read back as 16:9");
+        let xpan = CoverCrop::framed(Some((65, 24)), 6000, 4000, 1.0, [0.5, 0.5]);
+        assert_eq!(CoverCrop::SHAPES[Framing::of(xpan, 6000, 4000).shape], Some((65, 24)), "the XPan panorama reads back as itself");
+        let [left, top, right, bottom] = xpan.fractions();
+        assert!(((right - left) * 6000.0 / ((bottom - top) * 4000.0) - 65.0 / 24.0).abs() < 0.01);
         assert!((framing.zoom - 0.6).abs() < 0.01);
+        let odd = CoverCrop::from_fractions([0.1, 0.1, 0.47, 0.9]);
+        let free = Framing::of(odd, 3000, 2000);
+        assert_eq!(free.shape, FREE_SHAPE, "a frame no shape fits is free");
+        assert_eq!(free.crop(3000, 2000), odd);
     }
 
     #[test]

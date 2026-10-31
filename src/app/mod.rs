@@ -19,6 +19,7 @@ mod recovery;
 mod renamer;
 mod settings;
 mod share;
+mod similar;
 mod side;
 mod stats;
 mod story;
@@ -126,6 +127,7 @@ enum Modal {
     /// The duplicate search; `confirm_all` while asking before moving every
     /// extra copy to the trash.
     Duplicates { confirm_all: bool },
+    Similar,
     Trip(trips::TripDialog),
     AddToTrip(trips::AddDialog),
     SuggestTrips(trips::SuggestDialog),
@@ -396,6 +398,8 @@ pub struct PicassoApp {
     trip_job: Option<trip_package::TripJob>,
     dupes: Option<dupes::DupeScan>,
     dupes_run: u64,
+    similar: Option<similar::SimilarScan>,
+    similar_run: u64,
     scans: i32,
     /// The catalog changed in the background and the view should be re-read.
     library_dirty: bool,
@@ -683,6 +687,8 @@ impl PicassoApp {
             trip_job: None,
             dupes: None,
             dupes_run: 0,
+            similar: None,
+            similar_run: 0,
             scans: 0,
             library_dirty: false,
             last_reload: Instant::now(),
@@ -1097,6 +1103,7 @@ impl PicassoApp {
                 error,
                 finished,
             } => self.on_batch_export(exported, failed, error, finished),
+            UiEvent::Similar { run, done, total, found } => self.on_similar(run, done, total, found),
             UiEvent::Duplicates {
                 run,
                 checked,
@@ -1995,6 +2002,7 @@ impl PicassoApp {
             Modal::Geotag(_) => self.geotag_modal(ctx),
             Modal::Rename(_) => self.renamer_modal(ctx),
             Modal::Duplicates { .. } => self.duplicates_modal(ctx),
+            Modal::Similar => self.similar_modal(ctx),
             Modal::Trip(_) => self.trip_modal(ctx),
             Modal::AddToTrip(_) => self.add_to_trip_modal(ctx),
             Modal::SuggestTrips(_) => self.suggest_trips_modal(ctx),

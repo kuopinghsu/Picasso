@@ -5,6 +5,7 @@
 
 mod app;
 mod backup;
+mod burst;
 #[cfg(test)]
 mod bench;
 mod config;

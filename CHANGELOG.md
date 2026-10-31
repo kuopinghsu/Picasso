@@ -27,6 +27,9 @@ section of this file as the release notes.
 - Practical info and Link blocks in Stories, in exports and WordPress posts; a Link can be filled
   from the Trip's links that may be published. Export and publishing warn about small photos,
   and export about a Story without a cover.
+- Similar photos… in a Trip suggests groups of photos taken close together that look alike, such
+  as bursts, with adjustable time and likeness; a group can be selected, and nothing is deleted
+  or starred.
 - Adding photos to a Trip first says how many have a location, are in another Trip, have no
   date, or may be copies of another.
 - Publish a Story to your own WordPress site from the Story's ⋯ menu. Connect sites in
@@ -56,6 +59,15 @@ section of this file as the release notes.
 
 ### Fixed
 
+- A zoom lens has one name at every focal length: Hasselblad's "XCD 35-100E@38" and
+  "XCD 35-100E@100" are both XCD 35-100E in Statistics and search; the focal length
+  stays in Focal lengths. Names already in the library are tidied when it opens.
+- One camera now has one name whichever program wrote the file: "NIKON CORPORATION
+  NIKON D850" and "Nikon D850" are both Nikon D850 in Statistics, the info panel
+  and search. Names already in the library are tidied when it opens.
+- Statistics › Cameras and Lenses: opening Other shows up to 12 names at once, with
+  the rest scrolling in the list, and the top names show their photo count beside
+  the percentage, as the rest do.
 - Standardized Traditional Chinese README terminology to match the interface, fixing the
   terminology test that blocked CI on Windows, Linux and macOS.
 - Empty library views now offer actions for the current context: clear a search, remove the

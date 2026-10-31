@@ -162,6 +162,13 @@ pub enum UiEvent {
         finished: bool,
     },
     /// Progress of duplicate search `run`; `groups` once it is done.
+    /// How far a search for similar photos is, and what it found once done.
+    Similar {
+        run: u64,
+        done: usize,
+        total: usize,
+        found: Option<(Vec<crate::burst::Shot>, std::collections::HashMap<i64, Photo>)>,
+    },
     Duplicates {
         run: u64,
         checked: usize,
@@ -1112,7 +1119,7 @@ fn make_thumb(path: &Path) -> Result<RgbaImage, String> {
 }
 
 /// The unedited thumbnail, made and stored first if it is missing.
-fn plain_thumb(store: &ThumbStore, id: i64, file: &Path) -> Option<RgbaImage> {
+pub(crate) fn plain_thumb(store: &ThumbStore, id: i64, file: &Path) -> Option<RgbaImage> {
     if let Some(rgba) = store.get(id).and_then(|jpeg| decode_jpeg(&jpeg)) {
         return Some(rgba);
     }

@@ -213,14 +213,7 @@ fn rows_from_raw(path: &Path) -> Vec<(&'static str, String)> {
 }
 
 fn camera_label(make: &str, model: &str) -> String {
-    let (make, model) = (make.trim(), model.trim());
-    if model.is_empty() {
-        make.to_string()
-    } else if make.is_empty() || model.to_lowercase().starts_with(&make.to_lowercase()) {
-        model.to_string()
-    } else {
-        format!("{make} {model}")
-    }
+    crate::image_io::camera_name(make, model)
 }
 
 fn shutter_label(n: u32, d: u32) -> String {
@@ -252,7 +245,7 @@ mod tests {
 
     #[test]
     fn formats_camera_and_shutter() {
-        assert_eq!(camera_label("NIKON CORPORATION", "NIKON Z 6"), "NIKON CORPORATION NIKON Z 6");
+        assert_eq!(camera_label("NIKON CORPORATION", "NIKON Z 6"), "Nikon Z 6");
         assert_eq!(camera_label("Hasselblad", "Hasselblad X2D 100C"), "Hasselblad X2D 100C");
         assert_eq!(shutter_label(1, 250), "1/250 s");
         assert_eq!(shutter_label(2, 1), "2.0 s");

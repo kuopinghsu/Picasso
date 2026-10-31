@@ -472,6 +472,7 @@ impl PicassoApp {
         }
         // Narrow the grid; the counts and the list come from the same query.
         let mut filter = self.trip_filter;
+        let mut similar = false;
         labelled_row(ui, tr("Show"), |ui| {
             let everything = MemberQuery { day: filter.day, ..MemberQuery::default() };
             if ui.selectable_label(filter == everything, tr("All")).clicked() {
@@ -527,7 +528,13 @@ impl PicassoApp {
                 let shown = self.db.count_trip_members(trip_id, &filter);
                 ui.label(RichText::new(trf("{} of {}", &[&shown, &trip_members])).size(13.0).color(theme::muted()));
             }
+            if ui.button(tr("Similar photos…")).on_hover_text(tr("Find photos taken close together that look alike, such as bursts, to choose from")).clicked() {
+                similar = true;
+            }
         });
+        if similar {
+            self.show_similar(ui.ctx(), trip_id);
+        }
         let days = self.db.trip_days(trip_id);
         if let DayFilter::Day(id) = filter.day {
             if !days.iter().any(|day| day.id == id) {

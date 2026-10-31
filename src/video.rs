@@ -283,14 +283,7 @@ fn parse_iso6709(text: &str) -> Option<(f64, f64)> {
 }
 
 fn camera_label(make: &str, model: &str) -> String {
-    let (make, model) = (make.trim(), model.trim());
-    if make.is_empty() || model.to_lowercase().starts_with(&make.to_lowercase()) {
-        model.to_string()
-    } else if model.is_empty() {
-        make.to_string()
-    } else {
-        format!("{make} {model}")
-    }
+    crate::image_io::camera_name(make, model)
 }
 
 /// Labeled details for the info panels, in display order.

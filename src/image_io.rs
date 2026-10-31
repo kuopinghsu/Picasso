@@ -324,7 +324,7 @@ fn bits_from_exif(exif: &exif::Exif) -> ExifBits {
             .into_iter()
             .find_map(|tag| parse_exif_time(&ascii_field(exif, tag)?)),
         camera: camera_name(make.as_deref().unwrap_or(""), model.as_deref().unwrap_or("")),
-        lens: ascii_field(exif, exif::Tag::LensModel).map(|lens| lens.trim().to_string()).unwrap_or_default(),
+        lens: ascii_field(exif, exif::Tag::LensModel).map(|lens| lens_name(&lens)).unwrap_or_default(),
         focal_mm: short_field(exif, exif::Tag::FocalLengthIn35mmFilm)
             .filter(|mm| *mm > 0)
             .map(f32::from)
@@ -378,15 +378,48 @@ impl ExifBits {
     }
 }
 
-fn camera_name(make: &str, model: &str) -> String {
-    let make = make.trim();
-    let model = model.trim();
-    match (make.is_empty(), model.is_empty()) {
-        (true, true) => String::new(),
-        (true, false) => model.to_string(),
-        (false, true) => make.to_string(),
-        (false, false) if model.starts_with(make) => model.to_string(),
-        (false, false) => format!("{make} {model}"),
+/// One name for a camera from its EXIF make and model, written the same
+/// way whichever program saved the file: "NIKON CORPORATION" + "NIKON D850"
+/// and "Nikon" + "Nikon D850" are both "Nikon D850".
+pub(crate) fn camera_name(make: &str, model: &str) -> String {
+    tidy_camera(&format!("{make} {model}"))
+}
+
+/// Words in a maker's company name that aren't its brand.
+const COMPANY_WORDS: [&str; 9] = ["corporation", "corp", "co", "ltd", "inc", "imaging", "optical", "company", "gmbh"];
+
+/// Brands as their makers write them, for makes recorded in capitals.
+const BRANDS: [&str; 14] = ["Nikon", "Canon", "Sony", "Fujifilm", "Olympus", "Pentax", "Ricoh", "Leica", "Panasonic", "Samsung", "Hasselblad", "Kodak", "Sigma", "Minolta"];
+
+/// A camera name with the maker's company words dropped, the brand once and
+/// written as the maker writes it, and the model as recorded. Applied to
+/// stored names too, so names from older scans match new ones.
+pub(crate) fn tidy_camera(name: &str) -> String {
+    let mut words: Vec<&str> = name
+        .split_whitespace()
+        .filter(|word| {
+            let bare = word.to_lowercase();
+            !bare.split([',', '.']).filter(|part| !part.is_empty()).all(|part| COMPANY_WORDS.contains(&part))
+        })
+        .collect();
+    if words.len() > 1 && words[0].eq_ignore_ascii_case(words[1]) {
+        words.remove(0);
+    }
+    let Some(first) = words.first_mut() else { return String::new() };
+    if let Some(brand) = BRANDS.iter().find(|brand| brand.eq_ignore_ascii_case(first)) {
+        *first = brand;
+    }
+    words.join(" ")
+}
+
+/// A lens's name without the focal length some cameras add to a zoom's
+/// name, as Hasselblad's "XCD 35-100E@38": one lens, one name. The focal
+/// length is kept on its own.
+pub(crate) fn lens_name(lens: &str) -> String {
+    let lens = lens.trim();
+    match lens.rsplit_once('@') {
+        Some((name, focal)) if !name.trim().is_empty() && focal.trim().trim_end_matches("mm").trim().parse::<f32>().is_ok() => name.trim_end().to_string(),
+        _ => lens.to_string(),
     }
 }
 
@@ -768,7 +801,7 @@ fn bits_from_raw(metadata: &rawler::decoders::RawMetadata) -> ExifBits {
             .into_iter()
             .find_map(|date| parse_exif_time(date.as_deref()?)),
         camera: camera_name(&metadata.make, &metadata.model),
-        lens: metadata.exif.lens_model.as_deref().map(str::trim).unwrap_or_default().to_string(),
+        lens: metadata.exif.lens_model.as_deref().map(lens_name).unwrap_or_default(),
         focal_mm: metadata
             .exif
             .focal_length
@@ -1039,5 +1072,30 @@ mod tests {
         assert_eq!(size(4000, 6000, 320), (320, 480));
         assert_eq!(size(12000, 1000, 320), (960, 80), "a panorama's long edge stops at three times the edge");
         assert_eq!(size(200, 150, 320), (200, 150), "never enlarged");
+    }
+
+    #[test]
+    fn one_camera_has_one_name_whichever_program_wrote_it() {
+        for (make, model) in [("NIKON CORPORATION", "NIKON D850"), ("Nikon", "Nikon D850"), ("", "NIKON D850"), ("NIKON", "D850")] {
+            assert_eq!(camera_name(make, model), "Nikon D850", "{make} / {model}");
+        }
+        assert_eq!(camera_name("OLYMPUS IMAGING CORP.", "E-M1"), "Olympus E-M1");
+        assert_eq!(camera_name("OLYMPUS OPTICAL CO.,LTD", "C2040Z"), "Olympus C2040Z");
+        assert_eq!(camera_name("FUJIFILM", "X-T5"), "Fujifilm X-T5");
+        assert_eq!(camera_name("Apple", "iPhone 15 Pro"), "Apple iPhone 15 Pro");
+        assert_eq!(camera_name("Canon", "Canon EOS R5"), "Canon EOS R5");
+        assert_eq!(camera_name("OM Digital Solutions", "OM-1"), "OM Digital Solutions OM-1");
+        assert_eq!(camera_name("", ""), "");
+        assert_eq!(tidy_camera("NIKON CORPORATION NIKON D850"), "Nikon D850");
+    }
+
+    #[test]
+    fn a_zoom_has_one_name_at_every_focal_length() {
+        assert_eq!(lens_name("XCD 35-100E@100"), "XCD 35-100E");
+        assert_eq!(lens_name("XCD 35-100E@38"), "XCD 35-100E");
+        assert_eq!(lens_name(" XCD 35-100E @ 38mm "), "XCD 35-100E");
+        assert_eq!(lens_name("NIKKOR Z 24-70mm f/4 S"), "NIKKOR Z 24-70mm f/4 S");
+        assert_eq!(lens_name("Lens@Home"), "Lens@Home");
+        assert_eq!(lens_name("@50"), "@50");
     }
 }

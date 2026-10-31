@@ -310,6 +310,21 @@ impl Database {
         self.conn
             .execute("UPDATE photos SET indexed_version=0 WHERE file_taken_at < ?1", [EARLIEST_PHOTO])
             .map_err(|err| err.to_string())?;
+        // Names stored before cameras were tidied, such as "NIKON CORPORATION
+        // NIKON D850", become the name new scans give ("Nikon D850").
+        for old in self.map_rows("SELECT DISTINCT camera FROM photos WHERE camera <> ''", [], |row| row.get::<_, String>(0)) {
+            let tidy = crate::image_io::tidy_camera(&old);
+            if tidy != old {
+                self.conn.execute("UPDATE photos SET camera=?1 WHERE camera=?2", [&tidy, &old]).map_err(|err| err.to_string())?;
+            }
+        }
+        // Zoom names stored with the focal length, as "XCD 35-100E@38".
+        for old in self.map_rows("SELECT DISTINCT lens FROM photos WHERE lens LIKE '%@%'", [], |row| row.get::<_, String>(0)) {
+            let name = crate::image_io::lens_name(&old);
+            if name != old {
+                self.conn.execute("UPDATE photos SET lens=?1 WHERE lens=?2", [&name, &old]).map_err(|err| err.to_string())?;
+            }
+        }
         // Version 2 missed the EXIF of HEIF files that attach it to an item
         // other than the primary picture; only those are read again.
         self.conn

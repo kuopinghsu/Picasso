@@ -26,8 +26,9 @@ use super::{Mode, PicassoApp};
 
 /// Names a donut shows on its own; the rest share one slice.
 const SLICES: usize = 5;
-/// Rows of the rest of a ranked list in view at once when it is opened.
-const REST_ROWS: f32 = 10.0;
+/// Rows of the rest of a ranked list in view at once when it is opened; more
+/// scroll.
+const REST_ROWS: f32 = 12.0;
 const BAR_ROW_H: f32 = 40.0;
 /// Zoom level whose cluster squares, 64 pixels wide, make a place: about
 /// 40 km across.
@@ -1217,7 +1218,10 @@ fn ranked_card(ui: &mut egui::Ui, ranked: &Ranked, text: &RankedText, scope: &Sc
         let most = ranked.rows[SLICES].1;
         egui::ScrollArea::vertical()
             .id_salt(("stats-ranked-rest", text.key))
-            .max_height(REST_ROWS * (BAR_ROW_H + 2.0))
+            // At least as tall when it scrolls: the room a card is given in a
+            // row of cards can be just one row high.
+            .max_height(REST_ROWS * BAR_ROW_H + (REST_ROWS - 1.0) * 2.0)
+            .min_scrolled_height(REST_ROWS * BAR_ROW_H + (REST_ROWS - 1.0) * 2.0)
             .auto_shrink([false, true])
             .show(ui, |ui| {
                 ui.spacing_mut().item_spacing.y = 2.0;
@@ -1615,7 +1619,7 @@ fn legend_row(ui: &mut egui::Ui, color: Color32, name: &str, count: usize, total
         painter.rect_filled(rect, 6, theme::hover());
     }
     painter.circle_filled(Pos2::new(rect.left() + 10.0, rect.center().y), 4.5, color);
-    let figure = painter.layout_no_wrap(format!("{}%", percent(count, total)), FontId::proportional(12.0), theme::text());
+    let figure = painter.layout_no_wrap(format!("{}  {}%", grouped(count), percent(count, total)), FontId::proportional(12.0), theme::text());
     let figure_w = figure.size().x;
     painter.galley(Pos2::new(rect.right() - 6.0 - figure_w, rect.center().y - figure.size().y / 2.0), figure, theme::text());
     let title = truncated(painter, name.to_string(), 12.5, theme::text(), width - 22.0 - figure_w - 14.0);

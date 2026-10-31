@@ -68,7 +68,25 @@ impl ThumbStore {
     pub fn remove(&self, id: i64) {
         let _ = self.conn.execute("DELETE FROM thumbs WHERE id=?1", [id]);
         let _ = self.conn.execute("DELETE FROM edited WHERE id=?1", [id]);
+        let _ = self.conn.execute("DELETE FROM looks WHERE id=?1", [id]);
         let _ = std::fs::remove_file(self.file(id));
+    }
+
+    /// How the photo looks, as [`crate::burst::look`] found from its
+    /// thumbnail. It goes when the thumbnail does.
+    pub fn look(&self, id: i64) -> Option<u64> {
+        self.conn
+            .query_row("SELECT look FROM looks WHERE id=?1", [id], |row| row.get::<_, i64>(0))
+            .optional()
+            .ok()
+            .flatten()
+            .map(|look| look as u64)
+    }
+
+    pub fn put_look(&self, id: i64, look: u64) {
+        if let Err(err) = self.conn.execute("INSERT OR REPLACE INTO looks(id, look) VALUES(?1, ?2)", params![id, look as i64]) {
+            eprintln!("picasso thumbs.db: {err}");
+        }
     }
 
     /// JPEG bytes of the photo's edited thumbnail, if it was made for `edit`.
@@ -135,6 +153,7 @@ impl ThumbStore {
         for id in &stale {
             let _ = tx.execute("DELETE FROM thumbs WHERE id=?1", [id]);
             let _ = tx.execute("DELETE FROM edited WHERE id=?1", [id]);
+            let _ = tx.execute("DELETE FROM looks WHERE id=?1", [id]);
         }
         let _ = tx.commit();
         for id in stale {
@@ -147,7 +166,7 @@ impl ThumbStore {
     pub fn clear(&self) {
         if let Err(err) = self
             .conn
-            .execute_batch("DELETE FROM thumbs; DELETE FROM edited; VACUUM; PRAGMA wal_checkpoint(TRUNCATE);")
+            .execute_batch("DELETE FROM thumbs; DELETE FROM edited; DELETE FROM looks; VACUUM; PRAGMA wal_checkpoint(TRUNCATE);")
         {
             eprintln!("picasso thumbs.db: {err}");
         }
@@ -170,7 +189,8 @@ impl ThumbStore {
 /// `edited` holds one thumbnail per edited photo, with the edit it shows,
 /// so a different edit misses it.
 const SCHEMA: &str = "CREATE TABLE IF NOT EXISTS thumbs (id INTEGER PRIMARY KEY, jpeg BLOB NOT NULL);
-CREATE TABLE IF NOT EXISTS edited (id INTEGER PRIMARY KEY, edit TEXT NOT NULL, jpeg BLOB NOT NULL);";
+CREATE TABLE IF NOT EXISTS edited (id INTEGER PRIMARY KEY, edit TEXT NOT NULL, jpeg BLOB NOT NULL);
+CREATE TABLE IF NOT EXISTS looks (id INTEGER PRIMARY KEY, look INTEGER NOT NULL);";
 
 /// Size of the thumbnails in the store. Ones from an older version are
 /// deleted on open and made again as they are needed: version 1 was 256
@@ -194,7 +214,7 @@ fn open_file(path: &Path) -> Result<Connection, String> {
     .map_err(|err| err.to_string())?;
     let version: i32 = conn.query_row("PRAGMA user_version", [], |row| row.get(0)).map_err(|err| err.to_string())?;
     if version < VERSION {
-        conn.execute_batch(&format!("DELETE FROM thumbs; DELETE FROM edited; PRAGMA user_version={VERSION};"))
+        conn.execute_batch(&format!("DELETE FROM thumbs; DELETE FROM edited; DELETE FROM looks; PRAGMA user_version={VERSION};"))
             .map_err(|err| err.to_string())?;
     }
     Ok(conn)

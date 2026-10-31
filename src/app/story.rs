@@ -936,9 +936,35 @@ impl PicassoApp {
                     self.paint_cropped(ui, media_id, rect, crop);
                 }
                 photo_access(ui, &response, rect, tr("Cover"));
+                // Its tools sit on the photo's bottom-right corner while it is
+                // pointed at, as a cover's do on a page; the same choices stay
+                // on a right-click.
+                let tools = egui::Id::unique("cover-tools");
+                let pointer = ui.input(|input| input.pointer.hover_pos());
+                let over_tools = ui.ctx().memory(|memory| memory.area_rect(tools)).zip(pointer).is_some_and(|(tools, at)| tools.contains(at));
+                let mut frame = false;
+                if ui.rect_contains_pointer(rect) || over_tools {
+                    let shape = if crop.is_full() { None } else { self.cover_size(media_id).map(|(w, h)| frame_name(crop, w, h)) };
+                    let width = ui.ctx().memory(|memory| memory.area_rect(tools)).map_or(260.0, |area| area.width());
+                    let at = rect.right_bottom() - Vec2::new(width + 10.0, TOOLS_HEIGHT + 10.0);
+                    egui::Area::new(tools).order(egui::Order::Foreground).fixed_pos(at).show(ui.ctx(), |ui| {
+                        overlay_bar(ui, |ui| {
+                            if let Some(shape) = &shape {
+                                ui.label(RichText::new(shape).size(12.0).color(egui::Color32::from_white_alpha(200)));
+                                overlay_divider(ui);
+                            }
+                            if overlay_button(ui, &format!("⛶  {}", tr("Frame cover…"))).on_hover_text(tr("Choose the part of the photo the cover shows, in this story only")).clicked() {
+                                frame = true;
+                            }
+                            if overlay_button(ui, tr("Remove cover")).on_hover_text(tr("The photo stays in the story and the trip")).clicked() {
+                                actions.push(Action::Cover(None));
+                            }
+                        });
+                    });
+                }
                 response.context_menu(|ui| {
                     if ui.button(tr("Frame cover…")).on_hover_text(tr("Choose the part of the photo the cover shows, in this story only")).clicked() {
-                        self.start_framing(media_id);
+                        frame = true;
                         ui.close();
                     }
                     if ui.button(tr("Remove cover")).clicked() {
@@ -946,6 +972,9 @@ impl PicassoApp {
                         ui.close();
                     }
                 });
+                if frame {
+                    self.start_framing(media_id);
+                }
                 ui.add_space(16.0);
             }
             None => {
@@ -1087,18 +1116,48 @@ impl PicassoApp {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
         }
         ui.label(RichText::new(tr(label)).size(12.0).color(theme::muted()));
+        // Groups: what the block is; how it looks; where it is; the rest.
+        if photos || is_text(block) {
+            tools_divider(ui);
+        }
         if photos {
             layout_menu(ui, index, uid, media, grid, gallery, actions);
+            // The cover from this block: its photo, or one of its photos.
+            let ids: Vec<i64> = block.media().iter().map(|item| item.media_id).collect();
+            let cover = editor.story.cover;
+            match ids.as_slice() {
+                [only] if cover == Some(*only) => {
+                    ui.label(RichText::new(format!("✓ {}", tr("Cover"))).size(12.0).color(theme::muted())).on_hover_text(tr("This photo is the story's cover"));
+                }
+                [only] => {
+                    if ui.add(egui::Button::new(tr("Use as cover")).small()).on_hover_text(tr("Show this photo at the top of the story")).clicked() {
+                        actions.push(Action::Cover(Some(*only)));
+                    }
+                }
+                [] => {}
+                many => {
+                    ui.menu_button(tr("Use as cover"), |ui| {
+                        for (n, id) in many.iter().enumerate() {
+                            if ui.add_enabled(cover != Some(*id), egui::Button::new(trf("Photo {}", &[&(n + 1)]))).clicked() {
+                                actions.push(Action::Cover(Some(*id)));
+                                ui.close();
+                            }
+                        }
+                    });
+                }
+            }
         }
         if is_text(block) {
             text_tools(ui, index, block, actions);
         }
+        tools_divider(ui);
         if theme::named(ui.add_enabled(index > 0, egui::Button::new("↑").small()), tr("Move up")).clicked() {
             actions.push(Action::Up(index));
         }
         if theme::named(ui.add_enabled(index + 1 < count, egui::Button::new("↓").small()), tr("Move down")).clicked() {
             actions.push(Action::Down(index));
         }
+        tools_divider(ui);
         let more = theme::named(ui.add(egui::Button::new("⋯").small()), tr("More"));
         egui::Popup::menu(&more).show(|ui| {
             if ui.button(tr("Duplicate")).clicked() {
@@ -1126,12 +1185,16 @@ impl PicassoApp {
         };
         let width = ui.available_width();
         let gap = 4.0;
+        let cover = self.story.as_ref().and_then(|editor| editor.story.cover);
         let mut pick = false;
         if photo {
             let aspect = self.media_width(media[0], 1.0);
             let height = (width / aspect).min(PHOTO_MAX_HEIGHT);
             let (rect, response) = ui.allocate_exact_size(Vec2::new((height * aspect).min(width), height), Sense::click_and_drag());
             self.paint_media(ui, media[0], rect, false);
+            if cover == Some(media[0]) {
+                cover_chip(ui, rect);
+            }
             photo_access(ui, &response, rect, &names[0]);
             drag_source(ui, &response, Drag::Placed(index, 0));
             drop_target(ui, &response, index, 0, actions);
@@ -1166,6 +1229,9 @@ impl PicassoApp {
                             continue;
                         };
                         self.paint_media(ui, media_id, rect, true);
+                        if cover == Some(media_id) {
+                            cover_chip(ui, rect);
+                        }
                         photo_access(ui, &response, rect, &names[n]);
                         drag_source(ui, &response, Drag::Placed(index, n));
                         drop_target(ui, &response, index, n, actions);
@@ -1190,6 +1256,9 @@ impl PicassoApp {
                 for (n, &media_id) in media.iter().enumerate() {
                     let (rect, response) = ui.allocate_exact_size(Vec2::splat(tile), Sense::click_and_drag());
                     self.paint_media(ui, media_id, rect, true);
+                    if cover == Some(media_id) {
+                        cover_chip(ui, rect);
+                    }
                     photo_access(ui, &response, rect, &names[n]);
                     drag_source(ui, &response, Drag::Placed(index, n));
                     drop_target(ui, &response, index, n, actions);
@@ -1971,6 +2040,66 @@ fn slash_menu(ui: &egui::Ui, query: &str, below: Rect, index: usize, ctl: &mut T
 
 /// Gives a photo in the Story its name for screen readers, its alt text
 /// when it has one, and the focus ring while the keyboard is on it.
+/// A dark rounded bar of white controls laid on a photo, readable on any
+/// picture in either theme.
+fn overlay_bar(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) {
+    egui::Frame::new()
+        .fill(egui::Color32::from_black_alpha(170))
+        .corner_radius(8)
+        .inner_margin(Margin::symmetric(6, 3))
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 4.0;
+                let visuals = &mut ui.visuals_mut().widgets;
+                for state in [&mut visuals.inactive, &mut visuals.hovered, &mut visuals.active] {
+                    state.fg_stroke.color = egui::Color32::WHITE;
+                    state.bg_stroke = egui::Stroke::NONE;
+                }
+                visuals.inactive.weak_bg_fill = egui::Color32::TRANSPARENT;
+                visuals.hovered.weak_bg_fill = egui::Color32::from_white_alpha(40);
+                visuals.active.weak_bg_fill = egui::Color32::from_white_alpha(60);
+                add(ui);
+            });
+        });
+}
+
+fn overlay_button(ui: &mut egui::Ui, text: &str) -> egui::Response {
+    ui.add(egui::Button::new(RichText::new(text).size(12.5)).corner_radius(5))
+}
+
+fn overlay_divider(ui: &mut egui::Ui) {
+    let (rect, _) = ui.allocate_exact_size(Vec2::new(9.0, 16.0), Sense::hover());
+    ui.painter().vline(rect.center().x, rect.y_range(), egui::Stroke::new(1.0, egui::Color32::from_white_alpha(70)));
+}
+
+/// A thin upright line between groups of a block's tools.
+fn tools_divider(ui: &mut egui::Ui) {
+    let (rect, _) = ui.allocate_exact_size(Vec2::new(9.0, 16.0), Sense::hover());
+    ui.painter().vline(rect.center().x, rect.y_range(), egui::Stroke::new(1.0, theme::hairline()));
+}
+
+/// The name of a cover's frame: its shape, or Free.
+fn frame_name(crop: CoverCrop, w: u32, h: u32) -> String {
+    match CoverCrop::SHAPES.get(Framing::of(crop, w, h).shape) {
+        Some(Some(shape)) => CoverCrop::shape_name(*shape),
+        Some(None) => tr("Whole photo").to_string(),
+        None => tr("Free").to_string(),
+    }
+}
+
+/// A small "Cover" label on the corner of a block's photo that is the
+/// Story's cover, so it is known where the cover came from.
+fn cover_chip(ui: &egui::Ui, rect: Rect) {
+    if rect.width() < 60.0 {
+        return;
+    }
+    let painter = ui.painter_at(rect);
+    let text = painter.layout_no_wrap(tr("Cover").to_string(), egui::FontId::proportional(11.0), egui::Color32::WHITE);
+    let chip = Rect::from_min_size(rect.left_top() + Vec2::new(6.0, 6.0), text.size() + Vec2::new(12.0, 4.0));
+    painter.rect_filled(chip, 4, egui::Color32::from_black_alpha(170));
+    painter.galley(chip.min + Vec2::new(6.0, 2.0), text, egui::Color32::WHITE);
+}
+
 fn photo_access(ui: &egui::Ui, response: &egui::Response, rect: Rect, name: &str) {
     response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Image, true, name));
     theme::focus_ring(ui, response, rect);

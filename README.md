@@ -46,7 +46,7 @@ Inspired by Picasa, Picasso is written in Rust. It stores your library and edits
 
 - Rename photos and videos from a date or metadata pattern. Preview names before applying them and undo renames, including after restarting Picasso.
 
-- Scan folders in the background and watch for changes. Import stars, captions and rotation from Picasa metadata files.
+- Scan folders in the background and watch for changes, following folders that are renamed, moved or deleted. Import stars, captions and rotation from Picasa metadata files.
 
 - Find duplicate files with content checks and SHA-256 verification. Review the results before moving unwanted copies to the system trash.
 

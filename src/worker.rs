@@ -423,7 +423,19 @@ impl Indexer {
         };
         let root = PathBuf::from(&path);
         if !root.is_dir() {
-            // An unplugged drive keeps its photos and its pending flag.
+            // An unplugged drive keeps its photos and its pending flag. A
+            // deleted, renamed or moved folder loses them; their user data
+            // waits in the archive for the files to turn up again.
+            if crate::db::folder_gone(&root) {
+                self.db.remove_missing(folder_id, &[]);
+                if self.db.remove_missing_tracks(folder_id, &[]) > 0 {
+                    self.send_tracks();
+                }
+                self.db.relink_trip_media();
+                self.db.set_scan_pending(folder_id, false);
+                self.notify(UiEvent::ScanFinished { folder: folder_id, unreadable: Vec::new() });
+                self.notify(UiEvent::Library);
+            }
             return Outcome::Finished;
         }
         let label = folder_label(&path);
@@ -467,6 +479,7 @@ impl Indexer {
         drop(done_tx);
 
         let mut ini_cache: HashMap<PathBuf, (PicasaIni, Sidecar)> = HashMap::new();
+        let mut claimed: HashSet<i64> = HashSet::new();
         let mut batch: Vec<ScanRecord> = Vec::with_capacity(BATCH_SIZE);
         let mut unreadable = Vec::new();
         let mut indexed = 0usize;
@@ -491,7 +504,7 @@ impl Indexer {
             }
             let finished = match done_rx.recv_timeout(BATCH_INTERVAL) {
                 Ok(result) => {
-                    match self.record(folder_id, result, &mut ini_cache) {
+                    match self.record(folder_id, result, &mut ini_cache, &mut claimed) {
                         Ok(record) => batch.push(record),
                         Err(item) => unreadable.push(item),
                     }
@@ -567,8 +580,14 @@ impl Indexer {
         folder_id: i64,
         result: ProbeResult,
         ini_cache: &mut HashMap<PathBuf, (PicasaIni, Sidecar)>,
+        claimed: &mut HashSet<i64>,
     ) -> Result<ScanRecord, Unreadable> {
-        let ProbeResult { job, probe } = result;
+        let ProbeResult { mut job, probe } = result;
+        // A file of a renamed or moved folder keeps the row it had.
+        if job.existing.is_none() {
+            job.existing = self.db.moved_photo(&job.filename, job.bytes, job.modified_at, claimed);
+            claimed.extend(job.existing);
+        }
         let probe = probe.map_err(|reason| Unreadable {
             path: job.path_text.clone(),
             reason,
@@ -1263,5 +1282,153 @@ mod tests {
         kept.sort();
         assert_eq!(kept, [known[3].clone(), known[0].clone(), known[1].clone()]);
         assert!(known_under(known.iter(), &[]).is_empty());
+    }
+
+    /// A library in a fresh temporary folder, scanned by a real indexer.
+    struct Library {
+        dir: PathBuf,
+        indexer: Indexer,
+        _commands: Sender<Command>,
+    }
+
+    impl Library {
+        fn new(name: &str) -> Self {
+            let dir = std::env::temp_dir().join(format!("picasso-{name}-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(dir.join("cache")).unwrap();
+            let dir = dir.canonicalize().unwrap();
+            let db = Database::open(&dir.join("picasso.db")).unwrap();
+            let (command_tx, commands) = crossbeam_channel::unbounded();
+            let (thumbs, _) = crossbeam_channel::unbounded();
+            let (events, _) = crossbeam_channel::unbounded();
+            let cache = dir.join("cache");
+            let indexer = Indexer {
+                db,
+                thumb_store: ThumbStore::open(&cache),
+                cache,
+                commands,
+                thumbs,
+                events,
+                ctx: eframe::egui::Context::default(),
+                pending: VecDeque::new(),
+                deferred: Vec::new(),
+                backfilled: true,
+                not_tracks: RefCell::new(HashMap::new()),
+            };
+            Library { dir, indexer, _commands: command_tx }
+        }
+
+        fn add(&self, folder: &str, photos: &[&str]) -> i64 {
+            let root = self.dir.join(folder);
+            for photo in photos {
+                let path = root.join(photo);
+                std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                image::RgbaImage::new(4, 3).save(&path).unwrap();
+            }
+            self.indexer.db.add_folder(&root).unwrap()
+        }
+
+        fn scan(&mut self, folder: i64) {
+            assert!(matches!(self.indexer.scan_folder(folder), Outcome::Finished));
+        }
+
+        /// Photo ids by path relative to the library folder.
+        fn photos(&self) -> HashMap<String, i64> {
+            let prefix = format!("{}{}", self.dir.display(), std::path::MAIN_SEPARATOR);
+            self.indexer
+                .db
+                .photo_paths()
+                .into_iter()
+                .map(|(id, path)| (path.strip_prefix(&prefix).unwrap().replace('\\', "/"), id))
+                .collect()
+        }
+
+        fn caption(&self, id: i64) -> String {
+            self.indexer.db.photo(id).unwrap().caption
+        }
+    }
+
+    impl Drop for Library {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
+    }
+
+    #[test]
+    fn renamed_folders_keep_their_photos() {
+        let mut lib = Library::new("rename-folder");
+        let folder = lib.add("pics", &["trip/a.png", "trip/b.png"]);
+        lib.scan(folder);
+        let before = lib.photos();
+        let a = before["pics/trip/a.png"];
+        lib.indexer.db.set_caption(a, "beach");
+
+        std::fs::rename(lib.dir.join("pics/trip"), lib.dir.join("pics/holiday")).unwrap();
+        lib.scan(folder);
+        let after = lib.photos();
+        assert_eq!(after.len(), 2);
+        assert_eq!(after["pics/holiday/a.png"], a);
+        assert_eq!(after["pics/holiday/b.png"], before["pics/trip/b.png"]);
+        assert_eq!(lib.caption(a), "beach");
+        assert_eq!(lib.indexer.db.photo(a).unwrap().filename, "a.png");
+    }
+
+    #[test]
+    fn deleted_folders_leave_the_library() {
+        let mut lib = Library::new("delete-folder");
+        let folder = lib.add("pics", &["keep.png", "old/a.png"]);
+        let other = lib.add("more", &["b.png"]);
+        lib.scan(folder);
+        lib.scan(other);
+        assert_eq!(lib.photos().len(), 3);
+
+        std::fs::remove_dir_all(lib.dir.join("pics/old")).unwrap();
+        lib.scan(folder);
+        let mut left: Vec<String> = lib.photos().into_keys().collect();
+        left.sort();
+        assert_eq!(left, ["more/b.png", "pics/keep.png"]);
+
+        // A whole library folder can go too, while an unplugged drive can't.
+        std::fs::remove_dir_all(lib.dir.join("more")).unwrap();
+        lib.scan(other);
+        assert_eq!(lib.photos().keys().collect::<Vec<_>>(), ["pics/keep.png"]);
+        assert!(crate::db::folder_gone(&lib.dir.join("more")));
+        assert!(!crate::db::folder_gone(&lib.dir.join("missing-drive").join("pics")));
+        assert!(!crate::db::folder_gone(Path::new("/Volumes/Card")));
+        assert!(!crate::db::folder_gone(&lib.dir));
+    }
+
+    #[test]
+    fn moved_folders_keep_their_photos() {
+        let mut lib = Library::new("move-folder");
+        let from = lib.add("from", &["trip/a.png", "stay.png"]);
+        let to = lib.add("to", &["other.png"]);
+        lib.scan(from);
+        lib.scan(to);
+        let a = lib.photos()["from/trip/a.png"];
+        lib.indexer.db.set_caption(a, "summit");
+
+        // Into another folder of the same library folder...
+        std::fs::create_dir_all(lib.dir.join("from/2024")).unwrap();
+        std::fs::rename(lib.dir.join("from/trip"), lib.dir.join("from/2024/trip")).unwrap();
+        lib.scan(from);
+        assert_eq!(lib.photos()["from/2024/trip/a.png"], a);
+
+        // ...and into another library folder, found by that folder's scan
+        // before or after the scan of the folder it left.
+        std::fs::rename(lib.dir.join("from/2024/trip"), lib.dir.join("to/trip")).unwrap();
+        lib.scan(to);
+        lib.scan(from);
+        let photos = lib.photos();
+        assert_eq!(photos.len(), 3);
+        assert_eq!(photos["to/trip/a.png"], a);
+        assert_eq!(lib.caption(a), "summit");
+        assert_eq!(lib.indexer.db.photo(a).unwrap().folder_id, to);
+
+        std::fs::rename(lib.dir.join("to/trip"), lib.dir.join("from/trip")).unwrap();
+        lib.scan(from);
+        lib.scan(to);
+        assert_eq!(lib.photos()["from/trip/a.png"], a);
+        assert_eq!(lib.caption(a), "summit");
     }
 }

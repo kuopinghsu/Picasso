@@ -63,6 +63,10 @@ section of this file as the release notes.
 
 ### Fixed
 
+- Renaming, deleting or moving a folder of photos on disk now shows in the library: moved and
+  renamed photos keep their stars, captions, albums, edits, Trips and Stories, and photos of a
+  deleted folder leave the library, as do those of an added folder that was itself deleted or
+  renamed. A folder on an unplugged drive still keeps its photos.
 - A zoom lens has one name at every focal length: Hasselblad's "XCD 35-100E@38" and
   "XCD 35-100E@100" are both XCD 35-100E in Statistics and search; the focal length
   stays in Focal lengths. Names already in the library are tidied when it opens.

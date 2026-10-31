@@ -756,6 +756,32 @@ impl Database {
         tx.commit().map_err(|err| err.to_string())
     }
 
+    /// The photo a moved file was known as: the one row with the same file
+    /// name, size and modification time whose file is gone and that is not
+    /// in `claimed`. Moving or renaming a folder then keeps the photo's row,
+    /// and with it its trips, stories, albums and edits.
+    pub fn moved_photo(&self, filename: &str, bytes: u64, modified_at: i64, claimed: &HashSet<i64>) -> Option<i64> {
+        let rows: Vec<(i64, String, String)> = self.map_rows(
+            "SELECT p.id, p.path, f.path FROM photos p JOIN folders f ON f.id = p.folder_id
+             WHERE p.bytes=?1 AND p.modified_at=?2 AND p.filename=?3",
+            params![bytes as i64, modified_at, filename],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        );
+        // A photo on an unplugged drive is not gone, only out of reach.
+        let gone: Vec<i64> = rows
+            .into_iter()
+            .filter(|(id, path, root)| {
+                let root = Path::new(root);
+                !claimed.contains(id) && !Path::new(path).exists() && (root.is_dir() || folder_gone(root))
+            })
+            .map(|(id, ..)| id)
+            .collect();
+        match gone[..] {
+            [one] => Some(one),
+            _ => None,
+        }
+    }
+
     pub fn photo(&self, id: i64) -> Option<Photo> {
         let sql = format!("SELECT {PHOTO_COLS} FROM photos p WHERE p.id=?1");
         self.conn
@@ -773,7 +799,7 @@ impl Database {
         {
             let mut update = tx
                 .prepare_cached(
-                    "UPDATE photos SET folder_id=?1, filename=?2, width=?3, height=?4, bytes=?5,
+                    "UPDATE photos SET folder_id=?1, path=?16, filename=?2, width=?3, height=?4, bytes=?5,
                      taken_at=CASE WHEN date_set != 0 THEN taken_at ELSE ?6 END, file_taken_at=?6,
                      modified_at=?7, camera=?8, gps_lat=?9, gps_lon=?10,
                      indexed_version=?11, duration=?13, lens=?14, focal_mm=?15
@@ -823,6 +849,7 @@ impl Database {
                                 photo.duration,
                                 photo.lens,
                                 f64::from(photo.focal_mm),
+                                photo.path,
                             ])
                             .map_err(|err| err.to_string())?;
                         result.updated += 1;
@@ -1631,6 +1658,22 @@ fn under_dir(dir: &str) -> (String, String) {
 
 fn path_text(path: &Path) -> String {
     path.to_string_lossy().into_owned()
+}
+
+/// True if the missing library folder `root` was deleted, renamed or moved
+/// rather than left on a drive that is not plugged in: its parent is still
+/// there, and is not where drives are mounted.
+pub fn folder_gone(root: &Path) -> bool {
+    if root.is_dir() {
+        return false;
+    }
+    let Some(parent) = root.parent().filter(|parent| parent.is_dir()) else {
+        return false;
+    };
+    let mounts = ["/Volumes", "/media", "/mnt", "/run/media"].map(Path::new);
+    let mount_point = parent.parent().is_none()
+        || mounts.iter().any(|dir| parent == *dir || (parent.parent() == Some(*dir) && !dir.ends_with("Volumes")));
+    !mount_point
 }
 
 pub fn app_dirs() -> (PathBuf, PathBuf) {

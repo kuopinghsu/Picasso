@@ -1858,7 +1858,7 @@ impl PicassoApp {
             editor.blocks.iter().filter(|block| block.uid != uid).flat_map(|block| block.block.media().iter().map(|item| item.media_id)).collect();
         let choices: Vec<i64> = picker.choices.iter().copied().filter(|id| !unused || !elsewhere.contains(id) || media.contains(id)).collect();
         if choices.is_empty() {
-            ui.label(RichText::new(tr("No photos here.")).color(theme::muted()));
+            ui.label(RichText::new(empty_strip(picker.day, picker.starred, !picker.choices.is_empty())).color(theme::muted()));
             return;
         }
         egui::ScrollArea::horizontal().id_salt(("pick-strip", uid)).show(ui, |ui| {
@@ -2527,6 +2527,21 @@ fn page_button(ui: &mut egui::Ui, text: &str, adds: bool) -> egui::Response {
         ui.add(egui::Button::new(label).min_size(Vec2::new(TOOL, TOOL)))
     })
     .inner
+}
+
+/// Why the photo strip shows nothing and what brings photos back: the
+/// "not in the story yet" filter hid them all, or the starred or day
+/// filter left none, or the Trip has none.
+fn empty_strip(day: DayFilter, starred: bool, all_used: bool) -> &'static str {
+    if all_used {
+        tr("Every photo here is already in the story. Turn off “Not in the story yet” to use one again.")
+    } else if starred {
+        tr("None of these photos has a star. Turn off “Starred only” to see them all.")
+    } else if day != DayFilter::Any {
+        tr("No photos on this day. Choose “All days” to pick from the whole trip.")
+    } else {
+        tr("No photos in this trip yet. Select photos in the library and use Add to Trip.")
+    }
 }
 
 /// An empty place to fill, drawn alike for the cover, a grid's places,
@@ -3585,6 +3600,16 @@ mod tests {
             Block::Heading(text) | Block::Subheading(text) | Block::Paragraph(text) | Block::Credits(text) => text,
             _ => "",
         }
+    }
+
+    #[test]
+    fn an_empty_photo_strip_names_the_filter_that_emptied_it() {
+        let says = |day, starred, all_used, words: &str| assert!(empty_strip(day, starred, all_used).contains(words), "{words}");
+        says(DayFilter::Day(1), true, true, "Not in the story yet");
+        says(DayFilter::Day(1), true, false, "Starred only");
+        says(DayFilter::Day(1), false, false, "All days");
+        says(DayFilter::Unassigned, false, false, "All days");
+        says(DayFilter::Any, false, false, "Add to Trip");
     }
 
     #[test]

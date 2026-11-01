@@ -128,7 +128,12 @@ section of this file as the release notes.
   beside the grid, with the month in view; the Help and Settings buttons; the thumbnail
   size slider; the sort menu; and a Trip's lists of days and places. The search field is
   named Search photos instead of by its whole tooltip.
-- At the smallest window size, the Settings button no longer falls off the end of the top bar.
+- At the smallest window size, the Settings button no longer falls off the end of the top bar,
+  and a Trip's All stories link moves to the next line whole instead of breaking in two.
+- An empty photo strip in the Story editor says why: every photo is already in the story,
+  none is starred, the day has none, or the Trip has none yet, and which filter to turn off.
+  A stopped photo export says how many photos weren't exported. An empty Trip in the
+  Library now reads in every language instead of English.
 - Trip packages and exported Story folders use names every system can write: characters
   Windows doesn't allow become spaces, names such as CON or AUX get an underscore, and
   photos whose names differ only in case are each written under a name of their own.

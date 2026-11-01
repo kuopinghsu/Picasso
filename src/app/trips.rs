@@ -797,8 +797,13 @@ impl PicassoApp {
                 }
             }
             new_story = Some(ui.button(format!("+ {}", tr("New story"))));
-            if !stories.is_empty() && ui.link(RichText::new(trf("All {} stories ›", &[&stories.len()])).size(13.0)).clicked() {
-                all = true;
+            if !stories.is_empty() {
+                // On one line, moved down whole when it doesn't fit: a link broken in two is
+                // two places to click, and screen readers get a name for only the first.
+                ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+                if ui.link(RichText::new(trf("All {} stories ›", &[&stories.len()])).size(13.0)).clicked() {
+                    all = true;
+                }
             }
         });
         if let Some(button) = new_story {

@@ -46,6 +46,17 @@ pub(super) struct ExportRun {
     finished: Option<Instant>,
 }
 
+impl ExportRun {
+    /// Photos never tried because Stop was pressed.
+    fn skipped(&self) -> usize {
+        if self.cancel.load(Ordering::Relaxed) {
+            self.total.saturating_sub(self.exported + self.failed)
+        } else {
+            0
+        }
+    }
+}
+
 impl PicassoApp {
     /// Opens the export dialog for `ids`; videos are left out.
     pub(super) fn open_export(&mut self, ids: &[i64]) {
@@ -295,6 +306,9 @@ impl PicassoApp {
         }
         ui.ctx().request_repaint_after(left);
         ui.label(small(trf("Exported {} photos", &[&run.exported])).color(theme::muted()));
+        if run.skipped() > 0 {
+            ui.label(small(trf("Stopped; the other {} weren't exported", &[&run.skipped()])).color(theme::muted()));
+        }
         if run.failed > 0 {
             let note = ui.label(small(trf("{} couldn't be exported", &[&run.failed])).color(theme::DANGER));
             if let Some(error) = &run.error {
@@ -345,6 +359,24 @@ fn target_paths(folder: &Path, jobs: &[Job], extension: &str) -> Vec<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_stopped_export_counts_the_photos_it_never_tried() {
+        let mut run = ExportRun {
+            cancel: Arc::new(AtomicBool::new(false)),
+            folder: PathBuf::new(),
+            total: 10,
+            exported: 6,
+            failed: 1,
+            error: None,
+            finished: Some(Instant::now()),
+        };
+        assert_eq!(run.skipped(), 0, "not stopped");
+        run.cancel.store(true, Ordering::Relaxed);
+        assert_eq!(run.skipped(), 3);
+        run.exported = 9;
+        assert_eq!(run.skipped(), 0, "stopped after the last one");
+    }
 
     #[test]
     fn exported_names_never_overwrite_a_file() {

@@ -413,7 +413,7 @@ Choose a *Folder*, a *Format* (JPEG, PNG, or TIFF), a *Size* (*Full size* or a l
 
 Batch export keeps the original filename with the new extension and adds a number if the name already exists.
 It skips videos. The status bar shows progress with *Stop*, then *Open folder* when complete.
-Stopping leaves files that have already been exported in the destination folder.
+Stopping leaves files that have already been exported in the destination folder, and the status bar says how many photos weren't exported.
 
 Editor export opens a save dialog where you choose the filename.
 It prevents saving over the original photo; choose a new filename if you also want to keep an earlier export.

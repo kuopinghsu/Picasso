@@ -127,8 +127,26 @@ impl Lang {
 
 static CURRENT: AtomicU8 = AtomicU8::new(0);
 
+#[cfg(test)]
+thread_local! {
+    /// The language of this thread alone, so a test can draw the window in
+    /// one while the others go on in English.
+    static THREAD: std::cell::Cell<Option<Lang>> = const { std::cell::Cell::new(None) };
+}
+
 pub fn current() -> Lang {
+    #[cfg(test)]
+    if let Some(lang) = THREAD.with(std::cell::Cell::get) {
+        return lang;
+    }
     Lang::ALL[CURRENT.load(Ordering::Relaxed) as usize % Lang::ALL.len()]
+}
+
+/// Sets the language of this thread alone, or with `None` follows [`set`]
+/// again.
+#[cfg(test)]
+pub fn set_for_thread(lang: Option<Lang>) {
+    THREAD.with(|thread| thread.set(lang));
 }
 
 pub fn set(lang: Lang) {

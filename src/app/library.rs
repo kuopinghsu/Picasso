@@ -1302,6 +1302,22 @@ mod tests {
     }
 
     #[test]
+    fn every_empty_state_is_translated() {
+        // Shown through a variable, so the scan of `tr` calls in the source can't see them.
+        let navs = [Nav::Library, Nav::Album(1), Nav::Trip(1), Nav::Starred, Nav::Folder(1), Nav::Dir("photos".into())];
+        crate::i18n::set_for_thread(Some(crate::i18n::Lang::German));
+        let mut missing = Vec::new();
+        for nav in &navs {
+            for (search, edited) in [("", false), ("", true), ("x", false)] {
+                let state = empty_state(nav, search, edited);
+                missing.extend([state.title, state.hint, state.button].into_iter().filter(|text| tr(text) == *text));
+            }
+        }
+        crate::i18n::set_for_thread(None);
+        assert!(missing.is_empty(), "{missing:?}");
+    }
+
+    #[test]
     fn empty_views_offer_actions_for_the_current_collection() {
         assert_eq!(empty_state(&Nav::Library, "", false).action, EmptyAction::Import);
         assert_eq!(empty_state(&Nav::Album(1), "", false).action, EmptyAction::Library);

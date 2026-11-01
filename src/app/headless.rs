@@ -332,6 +332,31 @@ mod tests {
         window.app.selection.extend(ids.iter().take(2));
         window.ctx.enable_accesskit();
 
+        // Each screen as it is now, with what was found on it.
+        let walk = |window: &mut Headless, how: &str| {
+            let mut found = Vec::new();
+            for screen in ["the library", "the Trips page", "a Trip", "a Story"] {
+                match screen {
+                    "the library" => window.app.set_nav(Nav::Library),
+                    "the Trips page" => window.app.set_nav(Nav::Trips),
+                    "a Trip" => window.app.set_nav(Nav::Trip(trip)),
+                    _ => {
+                        window.app.open_story(story);
+                    }
+                }
+                for _ in 0..20 {
+                    window.draw(Vec::new());
+                    std::thread::sleep(REFRESH);
+                }
+                let tree = window.access.as_ref().expect("the tree");
+                found.extend(problems(tree, window.size.x).into_iter().map(|problem| format!("{screen}, {how}: {problem}")));
+                if screen == "a Story" {
+                    let _ = window.app.close_story();
+                }
+            }
+            found
+        };
+
         let mut found = Vec::new();
         // The size Picasso opens at and the smallest it lets the window be.
         for size in [WINDOW, Vec2::new(880.0, 560.0)] {
@@ -341,30 +366,28 @@ mod tests {
                     window.pixels_per_point = pixels_per_point;
                     let ctx = window.ctx.clone();
                     window.app.set_theme_mode(&ctx, theme);
-                    for screen in ["the library", "the Trips page", "a Trip", "a Story"] {
-                        match screen {
-                            "the library" => window.app.set_nav(Nav::Library),
-                            "the Trips page" => window.app.set_nav(Nav::Trips),
-                            "a Trip" => window.app.set_nav(Nav::Trip(trip)),
-                            _ => {
-                                window.app.open_story(story);
-                            }
-                        }
-                        for _ in 0..20 {
-                            window.draw(Vec::new());
-                            std::thread::sleep(REFRESH);
-                        }
-                        assert_eq!(window.ctx.pixels_per_point(), pixels_per_point);
-                        assert_eq!(window.ctx.global_style().visuals.dark_mode, theme == ThemeMode::Dark, "{theme:?} on {screen}");
-                        let at = format!("{screen}, {}×{} at {pixels_per_point}×, {theme:?}", size.x, size.y);
-                        found.extend(problems(window.access.as_ref().expect("the tree"), size.x).into_iter().map(|problem| format!("{at}: {problem}")));
-                        if screen == "a Story" {
-                            let _ = window.app.close_story();
-                        }
-                    }
+                    found.extend(walk(&mut window, &format!("{}×{} at {pixels_per_point}×, {theme:?}", size.x, size.y)));
+                    assert_eq!(window.ctx.pixels_per_point(), pixels_per_point);
+                    assert_eq!(window.ctx.global_style().visuals.dark_mode, theme == ThemeMode::Dark);
                 }
             }
         }
+
+        // German has the longest words and labels, and Traditional Chinese
+        // other letters, in the smallest window.
+        window.size = Vec2::new(880.0, 560.0);
+        window.pixels_per_point = 1.0;
+        for lang in [crate::i18n::Lang::German, crate::i18n::Lang::TraditionalChinese] {
+            crate::i18n::set_for_thread(Some(lang));
+            window.app.reload();
+            found.extend(walk(&mut window, &format!("smallest window, {lang:?}")));
+            let tree = window.access.as_ref().expect("the tree");
+            let settings = crate::i18n::tr("Settings");
+            assert_ne!(settings, "Settings");
+            assert!(tree.nodes.iter().any(|(_, node)| name(node) == Some(settings)), "drawn in {lang:?}");
+        }
+        crate::i18n::set_for_thread(None);
+        window.app.reload();
         assert!(found.is_empty(), "{}", found.join("\n"));
 
         // Tab goes from the search field through the controls, each with a name.

@@ -649,7 +649,7 @@ An empty Story offers *Start writing*, *Add photos*, which adds a gallery with t
 
 * Type in a paragraph; kbd:[Enter] starts a new one. Typing `/` in an empty paragraph lists the blocks, such as `/heading` or `/grid 3x2`.
 * Markdown works at the start of an empty paragraph: `#` and a space make a heading, `##` and a space a subheading, `-` or `*` a list, `1.` a numbered list, `>` a quote, and `---` a separator with a new paragraph after it.
-* Point at a block to show its handle, its kind, *↑*, *↓* and *⋯* above it; the block you are writing in also shows buttons for bold, italic, strikethrough, code and a link. kbd:[Ctrl+Shift+↑] and kbd:[Ctrl+Shift+↓] move the chosen block, and kbd:[Ctrl+D] duplicates it. Click elsewhere or press kbd:[Esc] to let go of it.
+* Point at a block to show its handle, its kind, *↑*, *↓* and *⋯* above it; the block you are writing in also shows buttons for bold, italic, strikethrough, code and a link. kbd:[Ctrl+Shift+↑] and kbd:[Ctrl+Shift+↓] move the chosen block, and kbd:[Ctrl+D] duplicates it. Click elsewhere or press kbd:[Esc] to let go of it. If something is open, kbd:[Esc] closes that first: the `/` menu (your words stay), framing the cover (like *Cancel*), the cover's photo choices, or the photo strip.
 * Point between blocks and click *+* to add one there, or use the handle to drag a block.
 * Select photos in the grid and choose *Add to Story* to add them as single photos, a *Gallery* or a *Photo grid*. Each photo has its own caption and alt text in that Story.
 * Blocks include *Heading*, *Subheading*, *Paragraph*, *List*, *Quote*, *Separator*, *Credits*, *Practical info*, *Link* and *Route map*, which draws a linked GPS track on the map.

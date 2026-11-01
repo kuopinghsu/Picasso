@@ -35,6 +35,10 @@ section of this file as the release notes.
   accent colour. Menus, chosen blocks and empty places have the same rounded corners.
   The gaps between blocks are named for screen readers, an empty story no longer shows
   two ways to start writing, and Introduction and Conclusion are named only once written in.
+- In the Story editor, Escape closes the innermost thing open before letting go of the
+  block. That is the "/" menu (the words and caret stay), framing the cover (like Cancel),
+  the cover's photo choices or the photo strip. A pointer resting over the "/" menu no
+  longer overrides ↑ and ↓, and block menus widen to fit longer translations.
 - The user guide, in English and Traditional Chinese, has a Trips and Stories chapter:
   making Trips, Days and reviewing times, Places, tracks and resources, Trip search
   words, Similar photos, writing Stories, templates, preview and export, publishing to

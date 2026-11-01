@@ -58,6 +58,16 @@ struct Snapshot {
     blocks: Vec<StoryBlock>,
 }
 
+/// What Escape closed in the Story.
+#[derive(Debug, PartialEq)]
+enum Closed {
+    SlashMenu,
+    Framing,
+    CoverChoices,
+    PhotoStrip,
+    Block,
+}
+
 pub(super) struct StoryEditor {
     pub(super) story: Story,
     blocks: Vec<StoryBlock>,
@@ -91,6 +101,9 @@ pub(super) struct StoryEditor {
     framing: Option<Framing>,
     /// The Story's photos are shown to pick a cover from.
     choosing_cover: bool,
+    /// Edits asked for between frames, as by Escape, made with the next
+    /// frame's own so they are saved and undone like them.
+    queued: Vec<Action>,
 }
 
 /// A frame for the cover being chosen: its shape (an index of
@@ -223,6 +236,27 @@ struct Picker {
 impl StoryEditor {
     fn snapshot(&self) -> Snapshot {
         Snapshot { story: self.story.clone(), blocks: self.blocks.clone() }
+    }
+
+    /// Closes the innermost thing open, for Escape, and says which it was.
+    fn escape(&mut self) -> Option<Closed> {
+        if let Some(id) = self.text.slash_open.take() {
+            self.text.slash_shut = Some(id);
+            return Some(Closed::SlashMenu);
+        }
+        if self.framing.take().is_some() {
+            return Some(Closed::Framing);
+        }
+        if std::mem::take(&mut self.choosing_cover) {
+            return Some(Closed::CoverChoices);
+        }
+        if let Some(picker) = self.picking.take() {
+            // A gallery left with no photos shows nothing on the page.
+            let empty = self.blocks.iter().position(|block| block.uid == picker.uid && matches!(&block.block, Block::Gallery(items) if items.is_empty()));
+            self.queued.extend(empty.map(Action::Remove));
+            return Some(Closed::PhotoStrip);
+        }
+        self.active.take().map(|_| Closed::Block)
     }
 
     fn restore(&mut self, snapshot: Snapshot) {
@@ -411,6 +445,7 @@ impl PicassoApp {
             text: TextCtl::default(),
             framing: None,
             choosing_cover: false,
+            queued: Vec::new(),
         });
     }
 
@@ -479,11 +514,16 @@ impl PicassoApp {
         self.story_shown() || matches!(self.nav, Nav::Trip(id) if self.trip_stories.contains(&id))
     }
 
-    /// Lets go of the Story's chosen block, and of the keys in it, on
-    /// Escape. Whether there was one to let go of.
+    /// Escape in the Story closes the innermost thing open: the "/" menu,
+    /// leaving the caret and the words; the cover's framing, as Cancel; the
+    /// cover's choices; the photo strip, as Done; and last lets go of the
+    /// chosen block and the keys in it. Whether there was anything to close.
     pub(super) fn story_escape(&mut self, ctx: &egui::Context) -> bool {
-        let Some(editor) = self.story.as_mut().filter(|editor| editor.active.is_some()) else { return false };
-        editor.active = None;
+        match self.story.as_mut().and_then(StoryEditor::escape) {
+            None => return false,
+            Some(Closed::Block) => {}
+            Some(_) => return true,
+        }
         let block = ctx.data(|data| data.get_temp::<Rect>(egui::Id::unique(CHOSEN_BLOCK)));
         let focus = ctx.memory(|memory| memory.focused());
         let inside = focus.and_then(|id| ctx.read_response(id)).zip(block).is_some_and(|(field, block)| block.contains_rect(field.rect));
@@ -607,7 +647,10 @@ impl PicassoApp {
         });
         ui.add_space(6.0);
 
-        let mut actions = Vec::new();
+        let mut actions = self.story.as_mut().map_or_else(Vec::new, |editor| {
+            editor.text.slash_open = None;
+            std::mem::take(&mut editor.queued)
+        });
         let mut typed: Option<(String, u8)> = None;
         // Moving and copying the chosen block, keys and all, before its
         // field would take them as a selection.
@@ -650,13 +693,14 @@ impl PicassoApp {
                     ui.scope(|ui| {
                         ui.set_max_width(360.0);
                         ui.spacing_mut().item_spacing.y = 2.0;
+                        let new = |name: &str| new_blocks().into_iter().find(|(english, _)| *english == name).map(|(_, block)| block);
                         let starts = [
-                            (Block::Paragraph(String::new()), tr("Start writing"), tr("Plain text")),
-                            (Block::Gallery(Vec::new()), tr("Add photos"), tr("Pick photos of the trip for a gallery")),
-                            (Block::Route { caption: String::new(), source: String::new(), route: Vec::new() }, tr("Add a route map"), tr("The trip's tracks on a map, with their height")),
+                            (new("Paragraph"), tr("Start writing"), tr("Plain text")),
+                            (Some(Block::Gallery(Vec::new())), tr("Add photos"), tr("Pick photos of the trip for a gallery")),
+                            (new("Route map"), tr("Add a route map"), tr("The trip's tracks on a map, with their height")),
                         ];
-                        for (block, label, hint) in starts {
-                            if block_row(ui, &block, label, Some(hint), false).clicked() {
+                        for (block, label, hint) in starts.into_iter().filter_map(|(block, label, hint)| Some((block?, label, hint))) {
+                            if block_row(ui, &block, label, Some(hint), None).clicked() {
                                 add_photos |= matches!(block, Block::Gallery(_));
                                 actions.push(Action::Insert(0, block));
                             }
@@ -2022,6 +2066,10 @@ struct TextCtl {
     pending: Option<Mark>,
     /// The choice picked with ↑ and ↓ in the "/" menu.
     slash: usize,
+    /// The field whose "/" menu was shown on the last frame.
+    slash_open: Option<egui::Id>,
+    /// The field whose "/" menu Escape closed, until it is typed in again.
+    slash_shut: Option<egui::Id>,
 }
 
 /// A caret position after the last character of a field.
@@ -2182,12 +2230,15 @@ fn slash_menu(ui: &egui::Ui, query: &str, below: Rect, index: usize, ctl: &mut T
         .fixed_pos(below.left_bottom() + Vec2::new(0.0, 4.0))
         .show(ui.ctx(), |ui| {
             egui::Frame::popup(ui.style()).inner_margin(Margin::same(6)).show(ui, |ui| {
-                ui.set_width(300.0);
+                ui.set_min_width(300.0);
                 ui.spacing_mut().item_spacing.y = 2.0;
                 ui.label(RichText::new(tr("Blocks")).size(11.0).color(theme::muted()));
+                // Only a pointer that moves takes the choice from ↑ and ↓,
+                // not one left resting where the menu opened.
+                let moved = ui.input(|input| input.pointer.delta() != Vec2::ZERO);
                 for (n, (label, block)) in choices.into_iter().take(SLASH_SHOWN).enumerate() {
-                    let row = block_row(ui, &block, &label, Some(tr(block_hint(&block))), n == ctl.slash);
-                    if row.hovered() {
+                    let row = block_row(ui, &block, &label, Some(tr(block_hint(&block))), Some(n == ctl.slash));
+                    if row.hovered() && moved {
                         ctl.slash = n;
                     }
                     if n == ctl.slash {
@@ -2328,19 +2379,33 @@ fn empty_slot(ui: &egui::Ui, rect: Rect, lit: bool, text: &str, size: f32) {
 }
 
 /// A kind of block to add, alike wherever blocks are offered: its mark in
-/// a tile, its name, and `hint` under it when given. `lit` marks it as
-/// chosen, as pointing at it or the keyboard on it do.
-fn block_row(ui: &mut egui::Ui, block: &Block, label: &str, hint: Option<&str>, lit: bool) -> egui::Response {
+/// a tile, its name, and `hint` under it when given. It is as wide as its
+/// words need, a long hint cut short with "…". `lit` says whether it is
+/// the one chosen; `None` leaves that to pointing at it or the keyboard.
+fn block_row(ui: &mut egui::Ui, block: &Block, label: &str, hint: Option<&str>, lit: Option<bool>) -> egui::Response {
+    const HINT_WIDTH: f32 = 340.0;
     let (height, tile) = if hint.is_some() { (44.0, 30.0) } else { (32.0, 22.0) };
-    let (rect, row) = ui.allocate_exact_size(Vec2::new(ui.available_width(), height), Sense::click());
+    let visuals = ui.visuals();
+    let ink = visuals.strong_text_color();
+    let name = ui.painter().layout_no_wrap(label.to_string(), egui::FontId::proportional(14.0), ink);
+    let note = hint.map(|hint| {
+        let mut job = egui::text::LayoutJob::simple_singleline(hint.to_string(), egui::FontId::proportional(11.5), theme::muted());
+        job.wrap = egui::text::TextWrapping::truncate_at_width(HINT_WIDTH);
+        ui.painter().layout_job(job)
+    });
+    // The tile and its margins before the words, and room after them for
+    // a mark such as ↵ or a submenu's arrow.
+    let left = 6.0 + tile + 10.0;
+    let words = name.size().x.max(note.as_ref().map_or(0.0, |note| note.size().x));
+    let width = ui.available_width().max(left + words + 24.0);
+    let (rect, row) = ui.allocate_exact_size(Vec2::new(width, height), Sense::click());
     row.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, label));
     let painter = ui.painter();
     let visuals = ui.visuals();
-    if lit || row.hovered() || row.has_focus() {
+    if lit.unwrap_or_else(|| row.hovered() || row.has_focus()) {
         painter.rect_filled(rect, TOOL_RADIUS, theme::accent().gamma_multiply(0.14));
     }
     let icon = Rect::from_center_size(egui::pos2(rect.left() + 6.0 + tile / 2.0, rect.center().y), Vec2::splat(tile));
-    let ink = visuals.strong_text_color();
     painter.rect_filled(icon, TOOL_RADIUS, visuals.faint_bg_color);
     painter.rect_stroke(icon, TOOL_RADIUS, egui::Stroke::new(1.0, visuals.widgets.noninteractive.bg_stroke.color), egui::StrokeKind::Inside);
     if matches!(block, Block::Link { .. }) {
@@ -2348,12 +2413,13 @@ fn block_row(ui: &mut egui::Ui, block: &Block, label: &str, hint: Option<&str>, 
     } else {
         painter.text(icon.center(), egui::Align2::CENTER_CENTER, block_icon(block), egui::FontId::proportional(tile * 0.46), ink);
     }
-    let left = icon.right() + 10.0;
-    if let Some(hint) = hint {
-        painter.text(egui::pos2(left, rect.top() + 7.0), egui::Align2::LEFT_TOP, label, egui::FontId::proportional(14.0), ink);
-        painter.text(egui::pos2(left, rect.top() + 25.0), egui::Align2::LEFT_TOP, hint, egui::FontId::proportional(11.5), theme::muted());
-    } else {
-        painter.text(egui::pos2(left, rect.center().y), egui::Align2::LEFT_CENTER, label, egui::FontId::proportional(14.0), ink);
+    let left = rect.left() + left;
+    match note {
+        Some(note) => {
+            painter.galley(egui::pos2(left, rect.top() + 7.0), name, ink);
+            painter.galley(egui::pos2(left, rect.top() + 25.0), note, theme::muted());
+        }
+        None => painter.galley(egui::pos2(left, rect.center().y - name.size().y / 2.0), name, ink),
     }
     row.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
@@ -2540,7 +2606,7 @@ fn text_block(
 ) {
     let id = field_id(uid, 0);
     // A first line starting with "/" that names a block, spaces and all.
-    let slash = kind == TextKind::Paragraph && text.starts_with('/') && !text.contains('\n') && !slash_choices(&text[1..]).is_empty();
+    let slash = kind == TextKind::Paragraph && text.starts_with('/') && !text.contains('\n') && ctl.slash_shut != Some(id) && !slash_choices(&text[1..]).is_empty();
     let focused = ui.memory(|memory| memory.has_focus(id));
     if !slash && focused {
         ctl.slash = 0;
@@ -2586,12 +2652,17 @@ fn text_block(
     let (response, _) = styled_field(ui, text, id, size, kind != TextKind::Heading && kind != TextKind::Subheading, hint, ctl, focus);
     if response.changed() {
         *typed = Some((uid.to_string(), 0));
+        if ctl.slash_shut == Some(id) {
+            ctl.slash_shut = None;
+        }
         if kind == TextKind::Paragraph {
             actions.extend(markdown_shortcut(text, index));
         }
     }
-    // Typing in the field may have taken the "/" away this frame.
-    if let Some(query) = text.strip_prefix('/').filter(|query| slash && !query.contains('\n')) {
+    // Typing in the field may have taken the "/" away this frame, and the
+    // menu goes with the caret.
+    if let Some(query) = text.strip_prefix('/').filter(|query| slash && response.has_focus() && !query.contains('\n')) {
+        ctl.slash_open = Some(id);
         slash_menu(ui, query, response.rect, index, ctl, actions);
     }
 }
@@ -2843,14 +2914,14 @@ fn block_menu(ui: &mut egui::Ui, at: usize, actions: &mut Vec<Action>) {
     ui.set_min_width(220.0);
     ui.spacing_mut().item_spacing.y = 2.0;
     for (label, block) in new_blocks() {
-        let row = block_row(ui, &block, tr(label), None, false).on_hover_text(tr(block_hint(&block)));
+        let row = block_row(ui, &block, tr(label), None, None).on_hover_text(tr(block_hint(&block)));
         if row.clicked() {
             actions.push(Action::Insert(at, block));
             ui.close();
         }
     }
     let grid = Block::Grid { columns: 2, rows: 2, caption: String::new(), media: Vec::new() };
-    let row = block_row(ui, &grid, tr("Photo grid"), None, false);
+    let row = block_row(ui, &grid, tr("Photo grid"), None, None);
     let arrow = Rect::from_center_size(egui::pos2(row.rect.right() - 12.0, row.rect.center().y), Vec2::splat(ui.spacing().icon_width));
     ui.painter().add(egui::containers::menu::SubMenuButton::arrow_shape(arrow, theme::muted()));
     egui::containers::menu::SubMenu::new().show(ui, &row, |ui| grid_menu(ui, at, actions));
@@ -3316,6 +3387,7 @@ mod tests {
             text: TextCtl::default(),
             framing: None,
             choosing_cover: false,
+            queued: Vec::new(),
         }
     }
 
@@ -3415,6 +3487,25 @@ mod tests {
         assert!(((left + right) / 2.0 - 0.75).abs() < 0.01 && ((top + bottom) / 2.0 - 0.7).abs() < 0.01, "centred where it was");
         let (free_area, square_area) = (0.3 * 0.4, (right - left) * (bottom - top));
         assert!((square_area / free_area - 1.0).abs() < 0.05, "about as large: {square_area} vs {free_area}");
+    }
+
+    #[test]
+    fn escape_closes_the_innermost_thing_first() {
+        let mut editor = editor(vec![Block::Gallery(Vec::new()), Block::Paragraph("/hea".into())]);
+        let field = field_id(&editor.blocks[1].uid, 0);
+        editor.text.slash_open = Some(field);
+        editor.framing = Some(Framing::of(CoverCrop::FULL, 3000, 2000));
+        editor.choosing_cover = true;
+        editor.picking = Some(Picker { uid: editor.blocks[0].uid.clone(), day: DayFilter::Any, starred: false, unused: false, choices: Vec::new() });
+        editor.active = Some(editor.blocks[1].uid.clone());
+        assert_eq!(editor.escape(), Some(Closed::SlashMenu));
+        assert_eq!(editor.text.slash_shut, Some(field), "the menu stays shut until typed in");
+        assert_eq!(editor.escape(), Some(Closed::Framing));
+        assert_eq!(editor.escape(), Some(Closed::CoverChoices));
+        assert_eq!(editor.escape(), Some(Closed::PhotoStrip));
+        assert!(matches!(editor.queued.as_slice(), [Action::Remove(0)]), "the empty gallery goes");
+        assert_eq!(editor.escape(), Some(Closed::Block));
+        assert_eq!(editor.escape(), None);
     }
 
     #[test]

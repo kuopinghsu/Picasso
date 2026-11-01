@@ -62,7 +62,7 @@ help: ## List the targets and the variables they take
 	@echo "  CORPUS=dir     folder of your own photos for make corpus"
 	@echo "  PREFIX=dir     where install puts Picasso (default ~/.local)"
 	@echo "  SIGN_IDENTITY  macOS code-signing identity for builds (default Picasso Development)"
-	@echo "  PICASSO_BENCH_PHOTOS, PICASSO_BENCH_FILES   sizes for make bench (docs/PERFORMANCE.md)"
+	@echo "  PICASSO_BENCH_PHOTOS, _TRIP, _FILES   sizes for make bench (docs/PERFORMANCE.md)"
 
 ##@ Build and run
 

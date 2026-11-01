@@ -2,6 +2,7 @@
 //! ignored by `cargo test`. Sizes come from the environment:
 //!
 //! - `PICASSO_BENCH_PHOTOS` (default 100000): catalog rows for the queries.
+//! - `PICASSO_BENCH_TRIP` (default 10000): photos in a Trip over 365 Days.
 //! - `PICASSO_BENCH_FILES` (default 2000): photo files for the scan and
 //!   thumbnail timings, made once and kept in `target/bench-photos-<n>`.
 //! - `PICASSO_BENCH_CHECK=1` fails the run when a result is past its limit.
@@ -177,6 +178,68 @@ fn catalog(report: &mut Report, count: usize) {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A Trip of `count` photos over a year: added, given capture times,
+/// sorted into 365 Days, and shown as the Trips view shows it.
+fn trip(report: &mut Report, count: usize) {
+    use crate::trip::{Capture, DayFilter, MemberQuery, TripDraft, TripQuery};
+    /// 2025-01-01 00:00 in Taipei.
+    const START: i64 = 1_735_660_800;
+    const TAIPEI: i64 = 8 * 3_600;
+    let dir = scratch("trip");
+    let root = dir.join("photos");
+    std::fs::create_dir_all(&root).unwrap();
+    let db = Database::open(&dir.join("picasso.db")).unwrap();
+    let folder_id = db.add_folder(&root).unwrap();
+    let root = root.canonicalize().unwrap();
+    let step = 365 * 86_400 / count.max(1) as i64;
+    for start in (0..count).step_by(1000) {
+        let batch: Vec<ScanRecord> = (start..(start + 1000).min(count))
+            .map(|index| {
+                let mut row = record(folder_id, &root, index);
+                row.photo.taken_at = START + index as i64 * step;
+                row
+            })
+            .collect();
+        db.write_batch(&batch).unwrap();
+    }
+    let photos: Vec<i64> = db.photos(&Nav::Library, "", Sort::DateOldest).iter().map(|photo| photo.id).collect();
+    let trip_id = db.create_trip(&TripDraft::new("A year", "Asia/Taipei")).unwrap();
+    let second = Duration::from_secs(1);
+    let media = report.time_within(&format!("Add {count} photos to a Trip"), 5 * second, || db.add_to_trip(trip_id, &photos).unwrap());
+    report.time_within(&format!("Keep {count} capture times"), 10 * second, || {
+        for (index, &id) in media.iter().enumerate() {
+            let taken = START + index as i64 * step;
+            let clock = chrono::DateTime::from_timestamp(taken + TAIPEI, 0).unwrap().naive_utc();
+            // One camera in 50 records no offset; its photos wait for review.
+            let offset = (index % 50 != 0).then_some(TAIPEI as i32);
+            db.store_capture(id, Capture::Clock { clock, offset }, taken);
+        }
+    });
+    let suggestion = report.time_within("Suggest Days", 10 * second, || db.suggest_days(trip_id).unwrap());
+    assert_eq!(suggestion.new_days, 365, "a Day for each date");
+    let days = db.trip_days(trip_id);
+    let filtered = MemberQuery { starred: true, ..MemberQuery::default() };
+    // The Trips view asks these each time it draws a frame.
+    report.time_within(&format!("Trip header: {} Days, counts, review", days.len()), Duration::from_millis(50), || {
+        db.trip_days(trip_id);
+        db.count_trip_members(trip_id, &MemberQuery { day: DayFilter::Unassigned, ..MemberQuery::default() });
+        db.review_counts(trip_id);
+        db.count_trip_members(trip_id, &filtered);
+    });
+    let all = report.time_within("List the Trip's photos, oldest first", second, || db.trip_photos(trip_id, &MemberQuery::default(), Sort::DateOldest));
+    assert_eq!(all.len(), count);
+    let middle = MemberQuery { day: DayFilter::Day(days[days.len() / 2].id), ..MemberQuery::default() };
+    report.time_within("Open one Day", second, || db.trip_photos(trip_id, &middle, Sort::DateOldest));
+    report.time_within("Starred photos of the Trip", second, || db.trip_photos(trip_id, &filtered, Sort::DateOldest));
+    report.time_within("Suggest Places", 10 * second, || db.suggest_places(trip_id, 300.0, 3 * 3_600).unwrap());
+    let day_ids: Vec<i64> = days.iter().map(|day| day.id).collect();
+    report.time_within("A Story from all 365 Days", 5 * second, || {
+        db.create_story_from_days(trip_id, "A year", &day_ids, |date| date.to_string()).unwrap()
+    });
+    report.time_within("List Trips", second, || db.trips(&TripQuery::default()));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Photo files kept between runs, so each run reads the same files.
 fn photo_files(count: usize) -> PathBuf {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("target").join(format!("bench-photos-{count}"));
@@ -280,6 +343,8 @@ fn bench_large_library() {
     );
     catalog(&mut report, size("PICASSO_BENCH_PHOTOS", 100_000));
     report.memory("Peak memory after the catalog", 400.0);
+    trip(&mut report, size("PICASSO_BENCH_TRIP", 10_000));
+    report.memory("Peak memory after the Trip", 400.0);
     scan(&mut report, size("PICASSO_BENCH_FILES", 2_000));
     // Making thumbnails once held on to about 1 MB per photo; this limit
     // catches that coming back.

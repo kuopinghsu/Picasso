@@ -1379,6 +1379,244 @@ mod tests {
         let _ = std::fs::remove_dir_all(&parent);
     }
 
+    /// A photo of `w` × `h` whose colours differ with `n`, so each one's
+    /// rendered bytes, and file, are its own.
+    fn photo(n: u32, w: u32, h: u32) -> image::RgbImage {
+        image::RgbImage::from_fn(w, h, |x, y| image::Rgb([(n * 37 % 256) as u8, (x * 255 / w) as u8, (y * 255 / h) as u8]))
+    }
+
+    /// A TIFF-based raw file from a camera no decoder knows, as some
+    /// cameras write them: its first directory points at a JPEG preview,
+    /// and a second one at the sensor data.
+    fn raw_with_preview(jpeg: &[u8], width: u32, height: u32) -> Vec<u8> {
+        let entry = |tag: u16, kind: u16, value: u32| {
+            let mut bytes = tag.to_le_bytes().to_vec();
+            bytes.extend(kind.to_le_bytes());
+            bytes.extend(1u32.to_le_bytes());
+            bytes.extend(value.to_le_bytes());
+            bytes
+        };
+        let ifd = |entries: &[Vec<u8>]| {
+            let mut bytes = (entries.len() as u16).to_le_bytes().to_vec();
+            entries.iter().for_each(|entry| bytes.extend(entry));
+            bytes.extend(0u32.to_le_bytes());
+            bytes
+        };
+        let root_len = 2 + 7 * 12 + 4;
+        let sub_at = 8 + root_len;
+        let sub_len = 2 + 5 * 12 + 4;
+        let preview_at = sub_at + sub_len;
+        let mut out = b"II\x2a\x00".to_vec();
+        out.extend(8u32.to_le_bytes());
+        out.extend(ifd(&[
+            entry(256, 4, width),
+            entry(257, 4, height),
+            entry(259, 3, 7),
+            entry(262, 3, 6),
+            entry(273, 4, preview_at),
+            entry(279, 4, jpeg.len() as u32),
+            entry(330, 4, sub_at),
+        ]));
+        out.extend(ifd(&[entry(256, 4, width * 2), entry(257, 4, height * 2), entry(259, 3, 1), entry(262, 3, 32803), entry(273, 4, preview_at)]));
+        out.extend(jpeg);
+        out
+    }
+
+    #[test]
+    fn twenty_photos_with_edits_and_a_raw_export_whole_and_offline() {
+        let root = std::env::temp_dir().join(format!("picasso-export-twenty-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let (originals, out) = (root.join("photos"), root.join("out"));
+        std::fs::create_dir_all(&originals).unwrap();
+        std::fs::create_dir_all(&out).unwrap();
+        // 18 plain photos, landscape and portrait, one of them turned in
+        // the library; one with an edit that crops it to its left half and
+        // brightens it; and a camera raw file, darkened.
+        let mut sources = HashMap::new();
+        for n in 1..=18 {
+            let (w, h) = if n % 2 == 0 { (800, 1200) } else { (1200, 800) };
+            let path = originals.join(format!("{n:02}.jpg"));
+            photo(n, w, h).save(&path).unwrap();
+            sources.insert(i64::from(n), Some((path, Settings::default(), if n == 17 { 90 } else { 0 })));
+        }
+        let exposure = crate::edit::Control::from_key("light.exposure").unwrap();
+        let mut edit = Settings::default();
+        edit.set(crate::edit::Control::CROP_RIGHT, 0.5);
+        edit.set(exposure, 0.5);
+        sources.insert(18, Some((originals.join("18.jpg"), edit, 0)));
+        let mut raw_edit = Settings::default();
+        raw_edit.set(exposure, -0.5);
+        let mut preview = Vec::new();
+        image::DynamicImage::ImageRgb8(photo(19, 1200, 800)).write_to(&mut std::io::Cursor::new(&mut preview), image::ImageFormat::Jpeg).unwrap();
+        let raw = originals.join("19.3fr");
+        std::fs::write(&raw, raw_with_preview(&preview, 1200, 800)).unwrap();
+        sources.insert(19, Some((raw, raw_edit, 0)));
+        let twentieth = originals.join("京都 #20 (copy).jpg");
+        photo(20, 1200, 800).save(&twentieth).unwrap();
+        sources.insert(20, Some((twentieth, Settings::default(), 0)));
+        let digest = |sources: &HashMap<i64, Source>| -> Vec<String> {
+            let mut all: Vec<_> = sources.values().flatten().map(|(path, _, _)| key(&std::fs::read(path).unwrap())).collect();
+            all.sort();
+            all
+        };
+        let before = digest(&sources);
+
+        let described = |n: i64| {
+            let mut media = MediaUse::new(n);
+            media.alt = format!("Photo {n}");
+            media
+        };
+        let blocks = [
+            StoryBlock::new(Block::Heading("Day 1".into())),
+            StoryBlock::new(Block::Paragraph("Rain, then sun.".into())),
+            StoryBlock::new(Block::Photo(described(1))),
+            StoryBlock::new(Block::Gallery((2..=7).map(described).collect())),
+            StoryBlock::new(Block::Grid { columns: 2, rows: 2, caption: "Market".into(), media: (8..=11).map(described).collect() }),
+            StoryBlock::new(Block::Heading("Day 2".into())),
+            StoryBlock::new(Block::Gallery((12..=16).map(described).collect())),
+            StoryBlock::new(Block::Photo(described(17))),
+            StoryBlock::new(Block::Photo(described(18))),
+            StoryBlock::new(Block::Photo(described(19))),
+            StoryBlock::new(Block::Photo(described(20))),
+        ];
+        let story = Story { cover: Some(2), ..story() };
+        let words = words();
+        let page = Page { story: &story, dates: None, blocks: &blocks, sources: &sources, words: &words, map: None, profiles: &HashMap::new() };
+        let check = preflight(&page);
+        assert_eq!((check.photos, check.missing, check.unreadable, check.no_alt, check.blocked(false)), (20, 0, 0, 0, false), "{check:?}");
+
+        let profile = Profile { edge: 1000, quality: 85 };
+        for format in [Format::Html, Format::Markdown] {
+            let (folder, outcome) = export_story(&out, "Twenty photos", format, profile, &page, &Progress::default()).unwrap();
+            assert_eq!(outcome, Outcome::default(), "every photo shown");
+            let (text, links): (String, Vec<String>) = match format {
+                Format::Html => {
+                    let html = std::fs::read_to_string(folder.join("index.html")).unwrap();
+                    let links = html.split("src=\"").skip(1).map(|rest| rest.split('"').next().unwrap().to_string()).collect();
+                    (html, links)
+                }
+                Format::Markdown => {
+                    let md = std::fs::read_to_string(folder.join("story.md")).unwrap();
+                    let links = md.split("](").skip(1).map(|rest| rest.split(')').next().unwrap().to_string()).collect();
+                    (md, links)
+                }
+            };
+            assert!(!text.contains("http") && !text.contains("file:") && !text.contains(originals.to_str().unwrap()), "nothing outside the folder");
+            let distinct: std::collections::HashSet<_> = links.iter().collect();
+            assert_eq!(distinct.len(), 20, "{format:?}: one picture a photo, the cover reusing its photo's");
+            for link in &links {
+                assert!(link.starts_with("images/") && !link.contains(".."), "{link}");
+                assert!(folder.join(link).is_file(), "{link}");
+            }
+            let manifest: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(folder.join("manifest.json")).unwrap()).unwrap();
+            let photos = manifest["photos"].as_array().unwrap();
+            assert_eq!(photos.len(), 20);
+            let size = |media: i64| {
+                let entry = photos.iter().find(|entry| entry["media"].as_i64() == Some(media)).unwrap();
+                let file = folder.join(entry["file"].as_str().unwrap());
+                let jpeg = std::fs::read(&file).unwrap();
+                assert!(!jpeg.windows(4).any(|w| w == b"Exif"), "no camera details in {file:?}");
+                let (w, h) = image::image_dimensions(&file).unwrap();
+                assert_eq!((entry["width"].as_u64(), entry["height"].as_u64()), (Some(u64::from(w)), Some(u64::from(h))));
+                (w, h)
+            };
+            assert_eq!(size(1), (1000, 667), "landscape fits the edge");
+            assert_eq!(size(2), (667, 1000), "portrait fits the edge");
+            assert_eq!(size(17), (667, 1000), "turned in the library");
+            assert_eq!(size(18), (333, 1000), "the left half of a portrait photo");
+            assert_eq!(size(19), (1000, 667), "the raw file's picture");
+            let brightness = |pixels: image::GrayImage| {
+                pixels.pixels().map(|p| u64::from(p[0])).sum::<u64>() / u64::from(pixels.width() * pixels.height())
+            };
+            let entry = photos.iter().find(|entry| entry["media"].as_i64() == Some(19)).unwrap();
+            let exported = image::open(folder.join(entry["file"].as_str().unwrap())).unwrap().to_luma8();
+            let original = image::DynamicImage::ImageRgb8(photo(19, 1200, 800)).to_luma8();
+            assert!(brightness(exported) + 10 < brightness(original), "the raw file's edit is applied");
+        }
+        assert_eq!(digest(&sources), before, "the originals are untouched");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_photo_changed_while_exporting_stops_it_and_leaves_nothing() {
+        use std::io::Write as _;
+        let root = std::env::temp_dir().join(format!("picasso-export-changed-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let out = root.join("out");
+        std::fs::create_dir_all(&out).unwrap();
+        let (first, large) = (root.join("first.jpg"), root.join("large.jpg"));
+        photo(1, 600, 400).save(&first).unwrap();
+        photo(2, 3000, 2000).save(&large).unwrap();
+        // The first photo, then three slow ones while its file changes.
+        let mut sources = HashMap::from([(1, Some((first.clone(), Settings::default(), 0)))]);
+        for n in 2..=4 {
+            sources.insert(n, Some((large.clone(), Settings::default(), 0)));
+        }
+        let blocks: Vec<_> = (1..=4).map(|n| StoryBlock::new(Block::Photo(MediaUse::new(n)))).collect();
+        let (story, words) = (story(), words());
+        let page = Page { story: &story, dates: None, blocks: &blocks, sources: &sources, words: &words, map: None, profiles: &HashMap::new() };
+        let progress = Progress::default();
+        let finished = AtomicBool::new(false);
+        let result = std::thread::scope(|scope| {
+            scope.spawn(|| {
+                // Once the first photo is rendered and the next begun, its file is saved again.
+                while progress.done.load(Ordering::Relaxed) < 2 && !finished.load(Ordering::Relaxed) {
+                    std::thread::yield_now();
+                }
+                std::fs::OpenOptions::new().append(true).open(&first).unwrap().write_all(b"saved again").unwrap();
+            });
+            let result = export_story(&out, "Changed", Format::Html, Profile::default(), &page, &progress);
+            finished.store(true, Ordering::Relaxed);
+            result
+        });
+        assert_eq!(result, Err(SOURCE_CHANGED.into()));
+        assert_eq!(std::fs::read_dir(&out).unwrap().count(), 0, "no page made of two versions, and no staging left");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_write_that_fails_is_an_error_not_a_shorter_page() {
+        // As when the disk fills up: the photos are written, the page can't be.
+        let folder = std::env::temp_dir().join(format!("picasso-export-full-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&folder);
+        std::fs::create_dir_all(folder.join("index.html/taken")).unwrap();
+        let photo = Path::new(env!("CARGO_MANIFEST_DIR")).join("images/banner.jpg");
+        let sources = HashMap::from([(1, Some((photo, Settings::default(), 0)))]);
+        let blocks = [StoryBlock::new(Block::Photo(MediaUse::new(1)))];
+        let (story, words) = (story(), words());
+        let page = Page { story: &story, dates: None, blocks: &blocks, sources: &sources, words: &words, map: None, profiles: &HashMap::new() };
+        assert!(write_story(&folder, Format::Html, Profile::default(), &page, &Progress::default()).is_err());
+        assert!(!folder.join("manifest.json").exists(), "nothing claims the export is whole");
+        let _ = std::fs::remove_dir_all(&folder);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_folder_that_refuses_writing_stops_the_export_and_keeps_what_is_there() {
+        use std::os::unix::fs::PermissionsExt;
+        let parent = std::env::temp_dir().join(format!("picasso-export-refused-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&parent);
+        std::fs::create_dir_all(&parent).unwrap();
+        std::fs::write(parent.join("mine.txt"), "keep").unwrap();
+        std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o555)).unwrap();
+        // An administrator may write anyway; then there is nothing to check.
+        let refused = std::fs::write(parent.join("probe"), "").is_err();
+        let photo = Path::new(env!("CARGO_MANIFEST_DIR")).join("images/banner.jpg");
+        let sources = HashMap::from([(1, Some((photo, Settings::default(), 0)))]);
+        let blocks = [StoryBlock::new(Block::Photo(MediaUse::new(1)))];
+        let (story, words) = (story(), words());
+        let page = Page { story: &story, dates: None, blocks: &blocks, sources: &sources, words: &words, map: None, profiles: &HashMap::new() };
+        let result = export_story(&parent, "Refused", Format::Html, Profile::default(), &page, &Progress::default());
+        std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o755)).unwrap();
+        if refused {
+            assert!(result.is_err(), "{result:?}");
+            let names: Vec<_> = std::fs::read_dir(&parent).unwrap().map(|entry| entry.unwrap().file_name()).collect();
+            assert_eq!(names, ["mine.txt"]);
+            assert_eq!(std::fs::read_to_string(parent.join("mine.txt")).unwrap(), "keep");
+        }
+        let _ = std::fs::remove_dir_all(&parent);
+    }
+
     #[test]
     fn the_page_needs_nothing_from_the_network() {
         let (html, _) = page(&story(), None, &[], &HashMap::new(), &HashMap::new(), &words());

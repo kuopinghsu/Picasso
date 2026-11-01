@@ -6,7 +6,7 @@ English | [繁體中文](README_zh-TW.md)
 
 Picasso is a free, open-source photo library, viewer and editor for **Windows, macOS and Linux**. Organize photos in your existing folders, browse them by date or location, and edit them without changing the original files.
 
-Inspired by Picasa, Picasso is written in Rust. It stores your library and edits locally. No cloud account is required, and photos and videos are not uploaded.
+Inspired by Picasa, Picasso is written in Rust. It stores your library and edits locally. No cloud account is required, and photos are uploaded only when you publish a Story to your own WordPress site.
 
 [Download](https://github.com/kuopinghsu/picasso/releases/latest) · [User guide](docs/USER_GUIDE.adoc) · [Release history](CHANGELOG.md)
 
@@ -83,6 +83,18 @@ Copy an edited photo to the clipboard, copy file paths, or open a file in its de
 ![Travel Map](images/travelmap.png)
 
 ![Library statistics](images/statistics.png)
+
+### Trips, Stories and publishing
+
+- Gather the photos of a journey from any folders into a **Trip**. **Suggest trips** finds journeys in the library by date. **Suggest days** sorts photos into Days by camera time in the Trip's time zone, and sends uncertain times to review instead of guessing. Trips never change your photos.
+
+- Group a Trip's photos into Places, link GPS tracks, keep tickets, bookings and links as private resources, and find bursts with **Similar photos**.
+
+- Write a **Story** from a Trip's photos with headings, text, photos, galleries, grids, route maps and practical information. Frame its cover, choose one of four templates, undo any change, and preview it in your web browser.
+
+- Export a Story as a web page or Markdown folder that works offline, or move a whole Trip to another computer as a `.picassotrip` package.
+
+- Publish a Story to your own self-hosted WordPress site. It is saved as a draft and made public only after you confirm what readers will see. Photos are sent at 2048 or 1280 pixels, never with their location.
 
 ### Languages and appearance
 
@@ -165,7 +177,7 @@ The cache contains thumbnails, map tiles and duplicate-search hashes. It can be 
 
 At startup, Picasso creates a library backup if the latest backup is at least one week old, or if none exists. It keeps the five newest backups in a folder beside the database. Use **Settings → Storage** to create or restore a backup manually.
 
-**Library backups do not include your photo and video files or the settings file.** Back up those files separately. Library backups include albums, stars, captions, edits and their history, presets and GPS tracks.
+**Library backups do not include your photo and video files or the settings file.** Back up those files separately. Library backups include albums, stars, captions, edits and their history, presets, GPS tracks, Trips and Stories, and records of what was published. WordPress passwords are kept in the system's credential store, not in backups.
 
 If the database cannot be opened, Picasso shows recovery options. A damaged library can be preserved and replaced with a readable backup or a new library. A busy or inaccessible library is not replaced. See the [user guide](docs/USER_GUIDE.adoc) for recovery steps.
 
@@ -173,7 +185,9 @@ Renaming history is stored in `.picasso-renames.json` beside your photos. Keep i
 
 ## Privacy and limitations
 
-- **Network access:** photo browsing and editing work locally. Online maps download tiles; elevation lookup downloads terrain tiles for the track area. These requests reveal the requested map or terrain areas to the provider. Travel Map uses built-in boundaries and works offline.
+- **Network access:** photo browsing and editing work locally. Online maps download tiles; elevation lookup downloads terrain tiles for the track area. These requests reveal the requested map or terrain areas to the provider. Looking up place names, when turned on in Settings, sends positions rounded to about 100 m to OpenStreetMap. Travel Map uses built-in boundaries and works offline.
+
+- **Publishing:** only when you choose, a Story's text and photos rendered from your edits are sent to the WordPress site you connect. On the site, photos can be opened by their address while the post is still a draft. Camera details are sent only when you keep them, and locations never. Only self-hosted WordPress sites with an Application Password are supported. Passwords are kept in macOS Keychain, Windows Credential Manager or a Secret Service keyring on Linux; without one, a password lasts until Picasso quits.
 
 - **Updates:** automatic update checks are enabled by default and contact GitHub at most once a day. Disable them in **Settings → General**. Updates are downloaded manually from the release page.
 

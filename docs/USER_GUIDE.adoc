@@ -746,6 +746,7 @@ Right-click a folder in the sidebar for:
 === What the library stores
 
 The library, `picasso.db`, holds the folders you added, every photo's stars, caption, rotation, place, fixed date, albums, and edits, your presets, and your GPS tracks.
+It also holds your Trips with their Days, Places and resources, your Stories, and the WordPress sites you connected with a record of what was published, but not their passwords.
 It does not contain the photo or video files. Back up your media files separately.
 
 The cache holds thumbnails, map tiles and duplicate-search hashes.

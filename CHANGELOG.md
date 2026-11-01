@@ -79,6 +79,9 @@ section of this file as the release notes.
   is made.
 - Uploads of the same bytes are reused, interrupted or lost requests are recovered without
   duplicates, safe requests are retried with backoff, and each job is kept under History.
+- For developers: `make bench` also times a 10,000-photo Trip over 365 Days, and tests
+  cover a photo changing during an export, a folder that refuses writing, a failed write,
+  and a 20-photo export with edited JPEG and raw photos.
 
 ### Changed
 

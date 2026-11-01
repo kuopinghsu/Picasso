@@ -10,11 +10,31 @@ section of this file as the release notes.
 - Suggest days and Suggest places show how many photos' times they have read, with
   Cancel; times already read are kept, so the next run reads only the rest.
 - Frame a Story's cover: choose a shape, fixed or free to drag to any shape, and the
-  part of the photo it shows, for that Story only. The cover shows its frame, Frame cover…
-  and Remove cover on its corner when pointed at; photo blocks' tools, now grouped,
-  have Use as cover, and the photo that is the cover is labelled. Preview, export and WordPress use the framed cover; the photo, its edits
-  and its other uses stay whole. The Story photo picker can show only starred photos
-  or those not in the story yet, and marks photos already used.
+  part of the photo it shows, for that Story only. Preview, export and WordPress use the
+  framed cover; the photo, its edits and its other uses stay whole. The Story photo picker
+  can show only starred photos or those not in the story yet, and marks photos already used.
+- In the Story editor, actions sit on what they act on, without right-click menus: the
+  cover's frame, Frame cover… and Remove cover on its corner; Use as cover and, in a
+  gallery or grid, ✕ to remove on a photo's corner; a block's own tools, grouped, above
+  it. These bars also show while the keyboard is on the photo, and the photo that is the
+  cover is labelled.
+- A calmer Story editor: Add cover… above the title picks the cover from the story's
+  photos; the top bar has ↶ ↷, Saving…/Saved, a Draft/Finished status to click, ⚙ for the
+  template and the trip's dates, and one Publish menu with Export… and Publish to
+  WordPress…; text styles show only on the block being written in; `# `, `## ` and `---`
+  make a heading, subheading or separator; Cmd/Ctrl+Shift+↑/↓ moves a block and
+  Cmd/Ctrl+D duplicates it; an empty story offers Start writing, Add photos and Add a
+  route map.
+- The Story editor's toolbars share one design: the top bar, a block's tools, the bars on
+  photos and the cover, cover framing and the photo strip's filters have the same
+  borderless buttons, icons, dividers and rounded bars, with Publish as the one filled
+  button and the strip's filters as chips. The page matches them. The + menu, Add below
+  and an empty story's beginnings offer blocks in the same rows as the "/" menu, each
+  with its mark. The empty cover, a grid's empty places and a route map with no track
+  share one outlined look. Buttons inside blocks are borderless, with "+" actions in the
+  accent colour. Menus, chosen blocks and empty places have the same rounded corners.
+  The gaps between blocks are named for screen readers, an empty story no longer shows
+  two ways to start writing, and Introduction and Conclusion are named only once written in.
 - The user guide, in English and Traditional Chinese, has a Trips and Stories chapter:
   making Trips, Days and reviewing times, Places, tracks and resources, Trip search
   words, Similar photos, writing Stories, templates, preview and export, publishing to

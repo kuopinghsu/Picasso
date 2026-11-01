@@ -1306,6 +1306,9 @@ impl PicassoApp {
                 self.slideshow = None;
                 return;
             }
+            if self.story_shown() && self.story_escape(ctx) {
+                return;
+            }
             if self.editing && self.mode == Mode::View {
                 if !self.edit_escape() {
                     self.toggle_editing();

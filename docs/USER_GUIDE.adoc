@@ -644,24 +644,32 @@ Videos and photos without a date are left out.
 === Writing a Story
 
 *New story* starts a *Blank story*, one made from the selected photos, or one made *From the trip's days* or *From one day*, with a heading for each Day and its photos in order.
-The Story opens in place of the Trip's photos and is saved as you type.
+The Story opens in place of the Trip's photos and is saved as you type; the bar at the top shows *Saving…* and then *Saved*.
+An empty Story offers *Start writing*, *Add photos*, which adds a gallery with the Trip's photos open to pick from, and *Add a route map*.
 
 * Type in a paragraph; kbd:[Enter] starts a new one. Typing `/` in an empty paragraph lists the blocks, such as `/heading` or `/grid 3x2`.
+* Markdown works at the start of an empty paragraph: `#` and a space make a heading, `##` and a space a subheading, `-` or `*` a list, `1.` a numbered list, `>` a quote, and `---` a separator with a new paragraph after it.
+* Point at a block to show its handle, its kind, *↑*, *↓* and *⋯* above it; the block you are writing in also shows buttons for bold, italic, strikethrough, code and a link. kbd:[Ctrl+Shift+↑] and kbd:[Ctrl+Shift+↓] move the chosen block, and kbd:[Ctrl+D] duplicates it. Click elsewhere or press kbd:[Esc] to let go of it.
 * Point between blocks and click *+* to add one there, or use the handle to drag a block.
 * Select photos in the grid and choose *Add to Story* to add them as single photos, a *Gallery* or a *Photo grid*. Each photo has its own caption and alt text in that Story.
 * Blocks include *Heading*, *Subheading*, *Paragraph*, *List*, *Quote*, *Separator*, *Credits*, *Practical info*, *Link* and *Route map*, which draws a linked GPS track on the map.
 * *Introduction* and *Conclusion* are optional text before and after the blocks.
-* Point at a photo block and choose *Use as cover* in its tools, or right-click the photo. The cover's own tools, on its bottom-right corner when you point at it, have *Frame cover…*, which chooses its shape, a fixed one or *Free* to drag the corners and edges to any shape, and the part of the photo it shows, in this Story only, and *Remove cover*.
+* Point at a photo in the Story to show its tools on its top-right corner: *Use as cover*, and in a gallery or grid *✕* to take the photo out. The photo that is the cover is labelled *Cover*.
+* Until the Story has a cover, *Add cover…* above the title shows the Story's photos; click one to make it the cover.
+* Point at the cover to show its tools on its bottom-right corner: *Frame cover…* chooses its shape, a fixed one or *Free* to drag the corners and edges to any shape, and the part of the photo it shows, in this Story only; *Remove cover* takes the cover away and leaves the photo in the Story.
 * *Add photos…* on a gallery or grid opens a strip of the Trip's photos; *Starred only* and *Not in the story yet* narrow it, and a dot marks photos already used.
 
 Select text and press kbd:[Ctrl+B], kbd:[Ctrl+I] or kbd:[Ctrl+K] for bold, italic or a link.
-A Story is a *Draft* until you mark it *Finished*.
+*↶* and *↷* at the top undo and redo, as do kbd:[Ctrl+Z] and kbd:[Ctrl+Shift+Z].
+A Story is a *Draft* until you click *Draft*, beside the way back to the Trip, to mark it *Finished*; click it again to make it a draft.
 
 === Templates, preview and export
 
-The Story's template changes how its page looks, never its content: *Photography Journal*, *Travel Diary*, *Travel Guide*, with a *Contents* list, or *Photo Essay*.
+The *⚙* button at the top of a Story holds its settings: the template, and whether the Trip's dates show under the title.
+The template changes how the page looks, never its content: *Photography Journal*, *Travel Diary*, *Travel Guide*, with a *Contents* list, or *Photo Essay*.
 
 *Preview* opens the page in your web browser.
+*Publish* holds *Export…* and *Publish to WordPress…*.
 *Export…* writes the Story as a web page or Markdown, with its photos, into a new folder; choose the photo size and JPEG quality.
 Exported photos are rendered with your edits and carry no camera details or location.
 Before export, Picasso lists anything that needs attention, such as missing photos, missing alt text or low-resolution photos, with a link to each.
@@ -671,7 +679,7 @@ Before export, Picasso lists anything that needs attention, such as missing phot
 Connect a self-hosted WordPress site in *Settings › Publishing* with its address, your user name and an *Application Password* made in WordPress.
 The password is kept in the system's credential store, never in the library or its backups.
 
-*Publish to WordPress…*, in a Story's menu, saves the Story as a draft on the site.
+*Publish to WordPress…*, under a Story's *Publish*, saves the Story as a draft on the site.
 Choose the *Photo size* (*Standard web* or *Low resolution*), whether to *Keep camera details*, *Categories and tags*, and *By Day* to make an index post and one post per Day.
 The *Summary* lists what will change on the site before anything is sent.
 The post becomes public only with *Publish it once saved*, or *At a set time*, after a confirmation of what readers will see.

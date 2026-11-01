@@ -22,8 +22,19 @@ const SAVE_PAUSE: Duration = Duration::from_secs(1);
 const SAVE_WITHIN: Duration = Duration::from_secs(5);
 /// Tallest a single photo is shown in the editor.
 const PHOTO_MAX_HEIGHT: f32 = 520.0;
-/// Height of the tools floating above a block.
-const TOOLS_HEIGHT: f32 = 30.0;
+/// Height of a toolbar's buttons, on the page and on photos alike.
+const TOOL: f32 = 28.0;
+/// Rounding of a toolbar's buttons; the bar's is a little more, to wrap them.
+const TOOL_RADIUS: u8 = 6;
+/// Rounding of what frames part of the page, as of the menus: a chosen
+/// block, a Practical info box, and an empty place to fill.
+const CORNER: u8 = 8;
+/// Height of the tools floating above a block: a toolbar's buttons, its
+/// margin, and its outline.
+const TOOLS_HEIGHT: f32 = TOOL + 8.0;
+/// Where the chosen block was last drawn, kept to tell whether the keys
+/// are in it.
+const CHOSEN_BLOCK: &str = "story-chosen-block";
 /// Height of the gap between blocks, where a block is added or dropped.
 const GAP: f32 = 14.0;
 /// Photos in a row of a gallery in the editor.
@@ -78,6 +89,8 @@ pub(super) struct StoryEditor {
     text: TextCtl,
     /// The cover's frame being chosen, until Done or Cancel.
     framing: Option<Framing>,
+    /// The Story's photos are shown to pick a cover from.
+    choosing_cover: bool,
 }
 
 /// A frame for the cover being chosen: its shape (an index of
@@ -109,9 +122,12 @@ impl Framing {
                 .enumerate()
                 .skip(1)
                 .min_by(|(_, a), (_, b)| off(a).total_cmp(&off(b)))
-                // A frame no offered shape fits, within 1%, is free.
                 .filter(|(_, shape)| off(shape) < 0.01)
-                .map_or(FREE_SHAPE, |(index, _)| index)
+                .map(|(index, _)| index)
+                // Then the photo's own shape, made smaller; a frame neither
+                // fits, within 1%, is free.
+                .or_else(|| (off(&Some((w.max(1), h.max(1)))) < 0.01).then_some(0))
+                .unwrap_or(FREE_SHAPE)
         };
         let fixed = CoverCrop::SHAPES.get(shape).copied().flatten();
         let largest = CoverCrop::framed(fixed, w, h, 1.0, [0.5, 0.5]).fractions();
@@ -125,6 +141,39 @@ impl Framing {
             None => CoverCrop::from_fractions(self.free),
         }
     }
+
+    /// Takes the fixed shape `self.shape` on from the free frame: centred
+    /// where it was and covering about as much of the photo.
+    fn leave_free(&mut self, w: u32, h: u32) {
+        let [left, top, right, bottom] = self.free;
+        let fixed = CoverCrop::SHAPES.get(self.shape).copied().flatten();
+        let largest = CoverCrop::framed(fixed, w, h, 1.0, [0.5, 0.5]).fractions();
+        let area = |[left, top, right, bottom]: [f32; 4]| (right - left) * (bottom - top);
+        self.zoom = (area(self.free) / area(largest).max(0.0001)).sqrt().clamp(0.2, 1.0);
+        self.centre = [(left + right) / 2.0, (top + bottom) / 2.0];
+    }
+}
+
+/// The free frame `free` with the edges marked in `edges` (left, top, right,
+/// bottom) moved by `moved`, as fractions of the photo. Each stays on the
+/// photo and at least [`CoverCrop::SMALLEST`] from the edge opposite, so a
+/// handle stops there rather than pushing or flipping the frame.
+fn pull_edges(free: [f32; 4], edges: [bool; 4], moved: Vec2) -> [f32; 4] {
+    let [mut left, mut top, mut right, mut bottom] = free;
+    let least = CoverCrop::SMALLEST;
+    if edges[0] {
+        left = (left + moved.x).min(right - least).max(0.0);
+    }
+    if edges[1] {
+        top = (top + moved.y).min(bottom - least).max(0.0);
+    }
+    if edges[2] {
+        right = (right + moved.x).max(left + least).min(1.0);
+    }
+    if edges[3] {
+        bottom = (bottom + moved.y).max(top + least).min(1.0);
+    }
+    CoverCrop::from_fractions([left, top, right, bottom]).fractions()
 }
 
 /// A route's elevation in the bottom-right corner of its drawing, as the
@@ -179,6 +228,10 @@ impl StoryEditor {
     fn restore(&mut self, snapshot: Snapshot) {
         // The revision belongs to the library, not to the edit being undone.
         let revision = self.story.revision;
+        // A frame being chosen was for the cover as it was.
+        if (snapshot.story.cover, snapshot.story.cover_crop) != (self.story.cover, self.story.cover_crop) {
+            self.framing = None;
+        }
         self.story = snapshot.story;
         self.story.revision = revision;
         self.blocks = snapshot.blocks;
@@ -323,7 +376,7 @@ fn drop_target(ui: &egui::Ui, response: &egui::Response, i: usize, n: usize, act
     if response.dnd_hover_payload::<Drag>().is_some() {
         let x = if after { rect.right() } else { rect.left() - 3.0 };
         let bar = egui::Rect::from_min_size(egui::pos2(x, rect.top()), Vec2::new(3.0, rect.height()));
-        ui.painter().rect_filled(bar, 1, theme::ACCENT);
+        ui.painter().rect_filled(bar, 1, theme::accent());
     }
     if let Some(drag) = response.dnd_release_payload::<Drag>() {
         actions.push(Action::Drop(*drag, i, n + usize::from(after)));
@@ -357,6 +410,7 @@ impl PicassoApp {
             hovered: None,
             text: TextCtl::default(),
             framing: None,
+            choosing_cover: false,
         });
     }
 
@@ -425,6 +479,20 @@ impl PicassoApp {
         self.story_shown() || matches!(self.nav, Nav::Trip(id) if self.trip_stories.contains(&id))
     }
 
+    /// Lets go of the Story's chosen block, and of the keys in it, on
+    /// Escape. Whether there was one to let go of.
+    pub(super) fn story_escape(&mut self, ctx: &egui::Context) -> bool {
+        let Some(editor) = self.story.as_mut().filter(|editor| editor.active.is_some()) else { return false };
+        editor.active = None;
+        let block = ctx.data(|data| data.get_temp::<Rect>(egui::Id::unique(CHOSEN_BLOCK)));
+        let focus = ctx.memory(|memory| memory.focused());
+        let inside = focus.and_then(|id| ctx.read_response(id)).zip(block).is_some_and(|(field, block)| block.contains_rect(field.rect));
+        if let Some(id) = focus.filter(|_| inside) {
+            ctx.memory_mut(|memory| memory.surrender_focus(id));
+        }
+        true
+    }
+
     pub(super) fn story_ui(&mut self, ui: &mut egui::Ui) {
         let Some(editor) = &self.story else { return };
         let before = editor.snapshot();
@@ -438,62 +506,68 @@ impl PicassoApp {
         let mut preview = false;
         let mut export = false;
         let mut publish = false;
+        // The Story's keys are left alone while a dialog or menu is over it.
+        let ctx = ui.ctx().clone();
+        let covered = ctx.memory(|memory| memory.top_modal_layer().is_some()) || egui::Popup::is_any_open(&ctx);
         // Undo and redo of the Story, while no text field has the keys.
-        if !ui.ctx().egui_wants_keyboard_input() {
+        if !covered && !ctx.egui_wants_keyboard_input() {
             ui.ctx().input_mut(|input| {
                 redo = input.consume_key(Modifiers::COMMAND | Modifiers::SHIFT, egui::Key::Z) || input.consume_key(Modifiers::COMMAND, egui::Key::Y);
                 undo = !redo && input.consume_key(Modifiers::COMMAND, egui::Key::Z);
             });
         }
 
-        let editor = self.story.as_ref().unwrap();
+        let editor = self.story.as_mut().unwrap();
         ui.horizontal_wrapped(|ui| {
-            if ui.button(format!("‹ {trip_title}")).on_hover_text(tr("Back to the trip's photos")).clicked() {
+            // The Story's bar has the controls of its toolbars, laid out
+            // as a header.
+            tool_style(ui, Surface::Page);
+            ui.spacing_mut().item_spacing.x = 8.0;
+            if tool_button(ui, true, format!("‹  {trip_title}")).on_hover_text(tr("Back to the trip's photos")).clicked() {
                 back = true;
             }
+            // Where the Story stands: a draft until it is marked finished.
+            let finished = editor.story.finished;
+            let (label, ink, fill) = if finished {
+                (format!("✓ {}", tr("Finished")), theme::accent(), theme::select())
+            } else {
+                (tr("Draft").to_string(), theme::muted(), theme::well())
+            };
+            let pill = egui::Button::new(RichText::new(label).size(12.0).color(ink)).fill(fill).small().min_size(Vec2::new(0.0, 20.0)).corner_radius(10);
+            let hint = if finished { tr("Finished. Click to make it a draft again.") } else { tr("A draft until you mark it finished. Click when it is done.") };
+            if ui.add(pill).on_hover_text(hint).clicked() {
+                editor.story.finished = !finished;
+            }
+            // Saved within seconds of a pause, so a change waiting for it is
+            // already on its way.
             let (status, color) = match (&editor.error, editor.unsaved) {
                 (Some(err), _) => (trf("Couldn't save: {}", &[err]), theme::DANGER),
-                (None, Some(_)) => (tr("Unsaved").to_string(), theme::muted()),
+                (None, Some(_)) => (tr("Saving…").to_string(), theme::muted()),
                 (None, None) => (tr("Saved").to_string(), theme::muted()),
             };
             ui.label(RichText::new(status).size(13.0).color(color));
             let words = story_words(editor);
             let minutes = words.div_ceil(WORDS_A_MINUTE).max(1);
             ui.label(RichText::new(trf("{} words · {} min read", &[&words, &minutes])).size(13.0).color(theme::muted()));
-            if editor.error.is_some() && ui.button(tr("Try again")).clicked() {
+            if editor.error.is_some() && tool_button(ui, true, tr("Try again")).clicked() {
                 retry = true;
             }
+            // Editing, then the Story's own settings and menu, then what
+            // takes it out of Picasso, the main action last.
             theme::end_actions(ui, "story-bar", |ui| {
-                if ui.add_enabled(!editor.undo.is_empty(), egui::Button::new(tr("Undo"))).clicked() {
+                ui.spacing_mut().item_spacing.x = 2.0;
+                let undo_hint = format!("{} ({})", tr("Undo"), keys("Ctrl+Z"));
+                if tool_icon(ui, !editor.undo.is_empty(), &undo_hint, |painter, at, ink| theme::paint_icon(painter, theme::Icon::Undo, at, ink)).clicked() {
                     undo = true;
                 }
-                if ui.add_enabled(!editor.redo.is_empty(), egui::Button::new(tr("Redo"))).clicked() {
+                let redo_hint = format!("{} ({})", tr("Redo"), keys("Ctrl+Shift+Z"));
+                if tool_icon(ui, !editor.redo.is_empty(), &redo_hint, |painter, at, ink| theme::paint_icon(painter, theme::Icon::Redo, at, ink)).clicked() {
                     redo = true;
                 }
-                ui.add_space(8.0);
-                if let Some(job) = &editor.job {
-                    ui.add(egui::Spinner::new().size(13.0));
-                    let (done, total) = (job.done.load(Ordering::Relaxed), job.total.load(Ordering::Relaxed));
-                    ui.label(RichText::new(trf("Rendering photos: {} of {}", &[&done, &total])).size(13.0).color(theme::muted()));
-                    if ui.button(tr("Cancel")).clicked() {
-                        job.cancel.store(true, Ordering::Relaxed);
-                    }
-                    ui.ctx().request_repaint_after(Duration::from_millis(200));
-                } else {
-                    let button = ui.button(tr("Preview"));
-                    if button.on_hover_text(tr("Open the story in your web browser, as it will look when exported")).clicked() {
-                        preview = true;
-                    }
-                    if ui.button(tr("Export…")).clicked() {
-                        export = true;
-                    }
-                }
-                let more = theme::named(ui.button("⋯"), tr("More"));
+                tool_divider(ui);
+                story_settings(ui, &mut editor.story);
+                let more = tool_icon(ui, true, tr("More"), |painter, at, ink| theme::paint_icon(painter, theme::Icon::More, at, ink));
                 egui::Popup::menu(&more).show(|ui| {
-                    if ui.add_enabled(editor.job.is_none(), egui::Button::new(tr("Publish to WordPress…"))).clicked() {
-                        publish = true;
-                    }
-                    ui.separator();
                     let label = if editor.story.archived { tr("Restore story") } else { tr("Archive story") };
                     if ui.button(label).clicked() {
                         archive = true;
@@ -503,12 +577,56 @@ impl PicassoApp {
                         delete = true;
                     }
                 });
+                tool_divider(ui);
+                if let Some(job) = &editor.job {
+                    ui.add(egui::Spinner::new().size(13.0));
+                    ui.add_space(4.0);
+                    let (done, total) = (job.done.load(Ordering::Relaxed), job.total.load(Ordering::Relaxed));
+                    ui.label(RichText::new(trf("Rendering photos: {} of {}", &[&done, &total])).size(13.0).color(theme::muted()));
+                    if tool_button(ui, true, tr("Cancel")).clicked() {
+                        job.cancel.store(true, Ordering::Relaxed);
+                    }
+                    ui.ctx().request_repaint_after(Duration::from_millis(200));
+                } else {
+                    let button = tool_button(ui, true, tr("Preview"));
+                    if button.on_hover_text(tr("Open the story in your web browser, as it will look when exported")).clicked() {
+                        preview = true;
+                    }
+                    ui.add_space(4.0);
+                    let share = ui.add(theme::primary_button(&format!("{}  ▾", tr("Publish"))).corner_radius(TOOL_RADIUS));
+                    egui::Popup::menu(&share).show(|ui| {
+                        if ui.button(tr("Export…")).on_hover_text(tr("Save the story as a web page or Markdown, with its photos")).clicked() {
+                            export = true;
+                        }
+                        if ui.button(tr("Publish to WordPress…")).clicked() {
+                            publish = true;
+                        }
+                    });
+                }
             });
         });
         ui.add_space(6.0);
 
         let mut actions = Vec::new();
         let mut typed: Option<(String, u8)> = None;
+        // Moving and copying the chosen block, keys and all, before its
+        // field would take them as a selection.
+        let chosen = self.story.as_ref().and_then(|editor| editor.blocks.iter().position(|block| editor.active.as_deref() == Some(block.uid.as_str())));
+        let field = ctx.memory(|memory| memory.focused()).and_then(|id| ctx.read_response(id)).map(|field| field.rect);
+        let block = ctx.data(|data| data.get_temp::<Rect>(egui::Id::unique(CHOSEN_BLOCK)));
+        let typing_elsewhere = ctx.egui_wants_keyboard_input() && !field.zip(block).is_some_and(|(field, block)| block.contains_rect(field));
+        if let Some(index) = chosen.filter(|_| !typing_elsewhere && !covered) {
+            ui.ctx().input_mut(|input| {
+                if input.consume_key(Modifiers::COMMAND | Modifiers::SHIFT, egui::Key::ArrowUp) {
+                    actions.push(Action::Up(index));
+                } else if input.consume_key(Modifiers::COMMAND | Modifiers::SHIFT, egui::Key::ArrowDown) {
+                    actions.push(Action::Down(index));
+                } else if input.consume_key(Modifiers::COMMAND, egui::Key::D) {
+                    actions.push(Action::Duplicate(index));
+                }
+            });
+        }
+        let mut add_photos = false;
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |outer| {
             let ui = &mut *outer;
             // A column the width of a page, in the middle like a document.
@@ -524,12 +642,30 @@ impl PicassoApp {
             });
             let count = self.story.as_ref().map_or(0, |editor| editor.blocks.len());
             if count == 0 {
-                ui.label(
-                    RichText::new(tr(
-                        "This story is empty. Add text below, or select photos in the trip and choose Add to Story.",
-                    ))
-                    .color(theme::muted()),
-                );
+                // What to begin with, rather than an empty page.
+                egui::Frame::new().inner_margin(Margin::symmetric(BLOCK_INSET, 12)).show(ui, |ui| {
+                    ui.label(RichText::new(tr("This story is empty. Begin with:")).color(theme::muted()));
+                    ui.add_space(4.0);
+                    // The rows blocks are offered in everywhere else.
+                    ui.scope(|ui| {
+                        ui.set_max_width(360.0);
+                        ui.spacing_mut().item_spacing.y = 2.0;
+                        let starts = [
+                            (Block::Paragraph(String::new()), tr("Start writing"), tr("Plain text")),
+                            (Block::Gallery(Vec::new()), tr("Add photos"), tr("Pick photos of the trip for a gallery")),
+                            (Block::Route { caption: String::new(), source: String::new(), route: Vec::new() }, tr("Add a route map"), tr("The trip's tracks on a map, with their height")),
+                        ];
+                        for (block, label, hint) in starts {
+                            if block_row(ui, &block, label, Some(hint), false).clicked() {
+                                add_photos |= matches!(block, Block::Gallery(_));
+                                actions.push(Action::Insert(0, block));
+                            }
+                        }
+                    });
+                    ui.add_space(4.0);
+                    let hint = tr("Or select photos in the trip and choose Add to Story.");
+                    ui.label(RichText::new(hint).size(12.5).color(theme::muted()));
+                });
             }
             for index in 0..count {
                 inserter(ui, index, &mut actions);
@@ -537,8 +673,9 @@ impl PicassoApp {
             }
             inserter(ui, count, &mut actions);
             // Like the end of a page: a click starts a new paragraph there.
+            // An empty story offers its own beginnings above instead.
             let start = egui::Button::new(RichText::new(tr("Start writing, or type / to choose a block")).size(15.0).color(theme::muted())).frame(false);
-            if ui.add(start).clicked() {
+            if count > 0 && ui.add(start).clicked() {
                 actions.push(Action::Insert(count, Block::Paragraph(String::new())));
             }
             ui.add_space(10.0);
@@ -554,6 +691,10 @@ impl PicassoApp {
         let structural = !actions.is_empty();
         for action in actions {
             apply(editor, action);
+        }
+        if let Some(gallery) = editor.blocks.first().filter(|_| add_photos) {
+            let choices = trip_photos(&self.db, editor.story.trip_id, DayFilter::Any, false);
+            editor.picking = Some(Picker { uid: gallery.uid.clone(), day: DayFilter::Any, starred: false, unused: false, choices });
         }
         let now = editor.snapshot();
         if now != before {
@@ -809,7 +950,7 @@ impl PicassoApp {
                     show_link(ui, check.first[4], &mut show);
                 }
                 if check.no_cover && !check.empty {
-                    ui.label(RichText::new(tr("The story has no cover; it starts with its title. Right-click a photo in the story to make it the cover.")).color(theme::muted()));
+                    ui.label(RichText::new(tr("The story has no cover; it starts with its title. Add one with Add cover… above the title.")).color(theme::muted()));
                 }
                 if !dialog.error.is_empty() {
                     ui.label(RichText::new(&dialog.error).color(theme::DANGER));
@@ -936,53 +1077,51 @@ impl PicassoApp {
                     self.paint_cropped(ui, media_id, rect, crop);
                 }
                 photo_access(ui, &response, rect, tr("Cover"));
+                if response.has_focus() && pressed_outside(ui, rect) {
+                    response.surrender_focus();
+                }
                 // Its tools sit on the photo's bottom-right corner while it is
-                // pointed at, as a cover's do on a page; the same choices stay
-                // on a right-click.
+                // pointed at or the keyboard is on it or them, as a cover's do
+                // on a page.
                 let tools = egui::Id::unique("cover-tools");
                 let pointer = ui.input(|input| input.pointer.hover_pos());
                 let over_tools = ui.ctx().memory(|memory| memory.area_rect(tools)).zip(pointer).is_some_and(|(tools, at)| tools.contains(at));
+                let tools_focused = ui.ctx().data(|data| data.get_temp::<bool>(tools)).unwrap_or(false);
                 let mut frame = false;
-                if ui.rect_contains_pointer(rect) || over_tools {
+                let mut focused = false;
+                // Areas aren't clipped, so the bar goes on the part in view.
+                let seen = rect.intersect(ui.clip_rect());
+                if (ui.rect_contains_pointer(rect) || over_tools || response.has_focus() || tools_focused) && seen.height() >= TOOLS_HEIGHT + 20.0 {
                     let shape = if crop.is_full() { None } else { self.cover_size(media_id).map(|(w, h)| frame_name(crop, w, h)) };
                     let width = ui.ctx().memory(|memory| memory.area_rect(tools)).map_or(260.0, |area| area.width());
-                    let at = rect.right_bottom() - Vec2::new(width + 10.0, TOOLS_HEIGHT + 10.0);
+                    let at = seen.right_bottom() - Vec2::new(width + 10.0, TOOLS_HEIGHT + 10.0);
                     egui::Area::new(tools).order(egui::Order::Foreground).fixed_pos(at).show(ui.ctx(), |ui| {
-                        overlay_bar(ui, |ui| {
+                        tool_bar(ui, Surface::Photo, |ui| {
                             if let Some(shape) = &shape {
+                                ui.add_space(6.0);
                                 ui.label(RichText::new(shape).size(12.0).color(egui::Color32::from_white_alpha(200)));
-                                overlay_divider(ui);
+                                tool_divider(ui);
                             }
-                            if overlay_button(ui, &format!("⛶  {}", tr("Frame cover…"))).on_hover_text(tr("Choose the part of the photo the cover shows, in this story only")).clicked() {
-                                frame = true;
-                            }
-                            if overlay_button(ui, tr("Remove cover")).on_hover_text(tr("The photo stays in the story and the trip")).clicked() {
+                            let framer = tool_button(ui, true, format!("⛶  {}", tr("Frame cover…"))).on_hover_text(tr("Choose the part of the photo the cover shows, in this story only"));
+                            frame = framer.clicked();
+                            let remove = tool_button(ui, true, tr("Remove cover")).on_hover_text(tr("The photo stays in the story and the trip"));
+                            if remove.clicked() {
                                 actions.push(Action::Cover(None));
                             }
+                            focused = framer.has_focus() || remove.has_focus();
                         });
                     });
                 }
-                response.context_menu(|ui| {
-                    if ui.button(tr("Frame cover…")).on_hover_text(tr("Choose the part of the photo the cover shows, in this story only")).clicked() {
-                        frame = true;
-                        ui.close();
-                    }
-                    if ui.button(tr("Remove cover")).clicked() {
-                        actions.push(Action::Cover(None));
-                        ui.close();
-                    }
-                });
+                ui.ctx().data_mut(|data| data.insert_temp(tools, focused));
                 if frame {
                     self.start_framing(media_id);
                 }
                 ui.add_space(16.0);
             }
-            None => {
-                let hint = format!("{} · {}", tr("No cover"), tr("Right-click a photo in the story to make it the cover"));
-                ui.label(RichText::new(hint).size(12.0).color(theme::muted()));
-                ui.add_space(6.0);
-            }
+            None => self.cover_placeholder(ui, width, actions),
         }
+        let trip_id = self.story.as_ref().map(|editor| editor.story.trip_id);
+        let trip_dates = self.trips.iter().find(|trip| Some(trip.id) == trip_id).and_then(super::trips::trip_dates);
         let Some(editor) = &mut self.story else { return };
         let story = &mut editor.story;
         let title = egui::TextEdit::singleline(&mut story.title)
@@ -1003,28 +1142,72 @@ impl PicassoApp {
             *typed = Some((String::new(), 1));
         }
         ui.add_space(4.0);
+        // The byline as the page has it: who wrote it, and when the trip was.
         ui.horizontal(|ui| {
             let author = egui::TextEdit::singleline(&mut story.author).hint_text(tr("Author")).frame(egui::Frame::NONE).desired_width(180.0);
             if ui.add(author).changed() {
                 *typed = Some((String::new(), 2));
             }
-            ui.label(RichText::new("·").color(theme::muted()));
-            ui.checkbox(&mut story.show_date, tr("Show the trip's dates"));
-            ui.label(RichText::new("·").color(theme::muted()));
-            ui.checkbox(&mut story.finished, tr("Finished")).on_hover_text(tr("A story is a draft until you mark it finished."));
-            ui.label(RichText::new("·").color(theme::muted()));
-            egui::ComboBox::from_id_salt("story-template")
-                .selected_text(tr(crate::trip::template_name(&story.template)))
-                .show_ui(ui, |ui| {
-                    for code in crate::trip::TEMPLATES {
-                        ui.selectable_value(&mut story.template, code.to_string(), tr(crate::trip::template_name(code)));
-                    }
-                })
-                .response
-                .on_hover_text(tr("How the preview and export look. The blocks stay the same."));
+            if let Some(dates) = trip_dates.filter(|_| story.show_date) {
+                ui.label(RichText::new(format!("·  {dates}")).color(theme::muted()));
+            }
         });
         ui.add_space(8.0);
         ui.separator();
+    }
+
+    /// Where the cover goes while there is none: Add cover…, which shows the
+    /// Story's photos to click one, or what to do first when it has none.
+    fn cover_placeholder(&mut self, ui: &mut egui::Ui, width: f32, actions: &mut Vec<Action>) {
+        let Some(editor) = &self.story else { return };
+        // Each photo once, named as it is where it was first used.
+        let mut photos: Vec<(i64, String)> = Vec::new();
+        for item in editor.blocks.iter().flat_map(|block| block.block.media()) {
+            if !photos.iter().any(|(media_id, _)| *media_id == item.media_id) {
+                photos.push((item.media_id, photo_name(&item.alt, photos.len())));
+            }
+        }
+        let open = editor.choosing_cover && !photos.is_empty();
+        // With no photos to choose from it only says so, and takes no clicks or keys.
+        let sense = if photos.is_empty() { Sense::hover() } else { Sense::click() };
+        let (rect, response) = ui.allocate_exact_size(Vec2::new(width, 56.0), sense);
+        let lit = !photos.is_empty() && (response.hovered() || response.has_focus() || open);
+        let text = if photos.is_empty() {
+            tr("No cover yet. Add photos to the story to choose one from them.").to_string()
+        } else {
+            format!("+  {}", tr("Add cover…"))
+        };
+        empty_slot(ui, rect, lit, &text, 14.0);
+        if !photos.is_empty() {
+            response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tr("Add cover…")));
+            theme::focus_ring(ui, &response, rect);
+            if response.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(tr("Choose one of the story's photos for the top of the story")).clicked() {
+                if let Some(editor) = &mut self.story {
+                    editor.choosing_cover = !open;
+                }
+            }
+        }
+        if open {
+            ui.add_space(6.0);
+            ui.label(RichText::new(tr("Click a photo to make it the cover.")).size(12.0).color(theme::muted()));
+            egui::ScrollArea::horizontal().id_salt("cover-choices").show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    for (media_id, name) in photos {
+                        let (tile, choice) = ui.allocate_exact_size(Vec2::splat(PICK_TILE), Sense::click());
+                        self.paint_media(ui, media_id, tile, true);
+                        choice.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &name));
+                        theme::focus_ring(ui, &choice, tile);
+                        if choice.hovered() {
+                            ui.painter().rect_stroke(tile, 4, egui::Stroke::new(3.0, theme::ACCENT), egui::StrokeKind::Inside);
+                        }
+                        if choice.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+                            actions.push(Action::Cover(Some(media_id)));
+                        }
+                    }
+                });
+            });
+        }
+        ui.add_space(10.0);
     }
 
     /// The optional Introduction before the blocks or Conclusion after
@@ -1035,8 +1218,12 @@ impl PicassoApp {
             Section::Introduction => (tr("Introduction"), tr("How the story begins (optional)"), &mut story.introduction, 3),
             Section::Conclusion => (tr("Conclusion"), tr("How the story ends (optional)"), &mut story.conclusion, 4),
         };
-        ui.label(RichText::new(label).size(13.0).color(theme::muted()));
-        if styled_field(ui, text, field_id("story", usize::from(field)), 16.0, true, hint, ctl, None).0.changed() {
+        // Empty, its hint says what it is: the name only shows once it has
+        // words or the keys, its room kept so the page doesn't jump then.
+        let id = field_id("story", usize::from(field));
+        let named = !text.is_empty() || ui.memory(|memory| memory.has_focus(id));
+        ui.label(RichText::new(label).size(13.0).color(if named { theme::muted() } else { egui::Color32::TRANSPARENT }));
+        if styled_field(ui, text, id, 16.0, true, hint, ctl, None).0.changed() {
             *typed = Some((String::new(), field));
         }
         ui.add_space(6.0);
@@ -1049,13 +1236,13 @@ impl PicassoApp {
         let uid = editor.blocks[index].uid.clone();
         let active = editor.active.as_deref() == Some(uid.as_str());
         let stroke = if active {
-            egui::Stroke::new(1.0, theme::ACCENT)
+            egui::Stroke::new(1.0, theme::accent())
         } else if editor.hovered.as_deref() == Some(uid.as_str()) {
             egui::Stroke::new(1.0, theme::muted().gamma_multiply(0.4))
         } else {
             egui::Stroke::NONE
         };
-        let frame = egui::Frame::new().stroke(stroke).corner_radius(4).inner_margin(Margin::symmetric(BLOCK_INSET, 6));
+        let frame = egui::Frame::new().stroke(stroke).corner_radius(CORNER).inner_margin(Margin::symmetric(BLOCK_INSET, 6));
         let shown = frame.show(ui, |ui| {
             ui.set_width(ui.available_width());
             self.block_body(ui, index, &uid, actions, typed);
@@ -1069,7 +1256,19 @@ impl PicassoApp {
         let pointer = ui.input(|input| input.pointer.hover_pos());
         let over_tools = ui.ctx().memory(|memory| memory.area_rect(tools)).zip(pointer).is_some_and(|(tools, at)| tools.contains(at));
         let pointed = ui.rect_contains_pointer(rect) || over_tools;
+        // The keys arriving in it, by Tab or a new block, choose it too.
+        let focus = ui.ctx().memory(|memory| memory.focused()).filter(|&id| ui.ctx().read_response(id).is_some_and(|field| rect.contains_rect(field.rect)));
         let Some(editor) = &mut self.story else { return };
+        if pressed_outside(ui, rect) && !over_tools && editor.active.as_deref() == Some(uid.as_str()) {
+            // A click elsewhere on the page lets go of the block, and of
+            // the keys too, or they would choose it again.
+            editor.active = None;
+            if let Some(id) = focus {
+                ui.ctx().memory_mut(|memory| memory.surrender_focus(id));
+            }
+        } else if focus.is_some() && !active {
+            editor.active = Some(uid.clone());
+        }
         if pointed {
             editor.hovered = Some(uid.clone());
             if ui.input(|input| input.pointer.primary_pressed()) {
@@ -1078,15 +1277,19 @@ impl PicassoApp {
         } else if editor.hovered.as_deref() == Some(uid.as_str()) {
             editor.hovered = None;
         }
-        if active || pointed {
+        let active = editor.active.as_deref() == Some(uid.as_str());
+        if active {
+            ui.ctx().data_mut(|data| data.insert_temp(egui::Id::unique(CHOSEN_BLOCK), rect));
+        }
+        // Areas aren't clipped, so the tools of a block scrolled out of
+        // view would float over the rest of the page or past its end.
+        if (active || pointed) && rect.intersects(ui.clip_rect()) {
             let top = (rect.top() - TOOLS_HEIGHT).max(ui.clip_rect().top());
             egui::Area::new(tools)
                 .order(egui::Order::Foreground)
                 .fixed_pos(egui::pos2(rect.left(), top))
                 .show(ui.ctx(), |ui| {
-                    egui::Frame::popup(ui.style()).inner_margin(Margin::symmetric(6, 2)).show(ui, |ui| {
-                        ui.horizontal(|ui| self.block_tools(ui, index, count, &uid, actions));
-                    });
+                    tool_bar(ui, Surface::Page, |ui| self.block_tools(ui, index, count, &uid, active, actions));
                 });
         }
         if let Some(editor) = self.story.as_mut().filter(|editor| editor.reveal == Some(index)) {
@@ -1096,8 +1299,9 @@ impl PicassoApp {
     }
 
     /// The tools of the block pointed at or chosen: a handle to drag it by,
-    /// its kind and layout, moving it, and the rest in ⋯.
-    fn block_tools(&mut self, ui: &mut egui::Ui, index: usize, count: usize, uid: &str, actions: &mut Vec<Action>) {
+    /// its kind and layout, moving it, and the rest in ⋯. Text styles only
+    /// show on the block being written in.
+    fn block_tools(&mut self, ui: &mut egui::Ui, index: usize, count: usize, uid: &str, active: bool, actions: &mut Vec<Action>) {
         let Some(editor) = &self.story else { return };
         let block = &editor.blocks[index].block;
         let media = block.media().len();
@@ -1108,7 +1312,7 @@ impl PicassoApp {
         };
         let photos = matches!(block, Block::Photo(_)) || gallery || grid.is_some();
         let label = block_label(block);
-        let handle = ui.add(egui::Label::new(RichText::new("⋮⋮").size(15.0).color(theme::muted())).sense(Sense::drag()));
+        let handle = drag_handle(ui);
         if handle.drag_started() || handle.dragged() {
             handle.dnd_set_drag_payload(MoveBlock(index));
             ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
@@ -1116,51 +1320,31 @@ impl PicassoApp {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
         }
         ui.label(RichText::new(tr(label)).size(12.0).color(theme::muted()));
+        ui.add_space(4.0);
         // Groups: what the block is; how it looks; where it is; the rest.
-        if photos || is_text(block) {
-            tools_divider(ui);
+        let styles = active && is_text(block);
+        if photos || styles {
+            tool_divider(ui);
         }
         if photos {
             layout_menu(ui, index, uid, media, grid, gallery, actions);
-            // The cover from this block: its photo, or one of its photos.
-            let ids: Vec<i64> = block.media().iter().map(|item| item.media_id).collect();
-            let cover = editor.story.cover;
-            match ids.as_slice() {
-                [only] if cover == Some(*only) => {
-                    ui.label(RichText::new(format!("✓ {}", tr("Cover"))).size(12.0).color(theme::muted())).on_hover_text(tr("This photo is the story's cover"));
-                }
-                [only] => {
-                    if ui.add(egui::Button::new(tr("Use as cover")).small()).on_hover_text(tr("Show this photo at the top of the story")).clicked() {
-                        actions.push(Action::Cover(Some(*only)));
-                    }
-                }
-                [] => {}
-                many => {
-                    ui.menu_button(tr("Use as cover"), |ui| {
-                        for (n, id) in many.iter().enumerate() {
-                            if ui.add_enabled(cover != Some(*id), egui::Button::new(trf("Photo {}", &[&(n + 1)]))).clicked() {
-                                actions.push(Action::Cover(Some(*id)));
-                                ui.close();
-                            }
-                        }
-                    });
-                }
-            }
         }
-        if is_text(block) {
+        if styles {
             text_tools(ui, index, block, actions);
         }
-        tools_divider(ui);
-        if theme::named(ui.add_enabled(index > 0, egui::Button::new("↑").small()), tr("Move up")).clicked() {
+        tool_divider(ui);
+        let up = format!("{} ({})", tr("Move up"), keys("Ctrl+Shift+↑"));
+        if theme::named(tool_button(ui, index > 0, "↑"), &up).clicked() {
             actions.push(Action::Up(index));
         }
-        if theme::named(ui.add_enabled(index + 1 < count, egui::Button::new("↓").small()), tr("Move down")).clicked() {
+        let down = format!("{} ({})", tr("Move down"), keys("Ctrl+Shift+↓"));
+        if theme::named(tool_button(ui, index + 1 < count, "↓"), &down).clicked() {
             actions.push(Action::Down(index));
         }
-        tools_divider(ui);
-        let more = theme::named(ui.add(egui::Button::new("⋯").small()), tr("More"));
+        tool_divider(ui);
+        let more = tool_icon(ui, true, tr("More"), |painter, at, ink| theme::paint_icon(painter, theme::Icon::More, at, ink));
         egui::Popup::menu(&more).show(|ui| {
-            if ui.button(tr("Duplicate")).clicked() {
+            if ui.add(egui::Button::new(tr("Duplicate")).shortcut_text(keys("Ctrl+D"))).clicked() {
                 actions.push(Action::Duplicate(index));
             }
             ui.menu_button(tr("Add below"), |ui| block_menu(ui, index + 1, actions));
@@ -1198,12 +1382,7 @@ impl PicassoApp {
             photo_access(ui, &response, rect, &names[0]);
             drag_source(ui, &response, Drag::Placed(index, 0));
             drop_target(ui, &response, index, 0, actions);
-            response.context_menu(|ui| {
-                if ui.button(tr("Use as cover")).clicked() {
-                    actions.push(Action::Cover(Some(media[0])));
-                    ui.close();
-                }
-            });
+            photo_tools(ui, &response, rect, media[0], cover, None, actions);
         } else if let Some((columns, rows)) = grid {
             // The grid as it will be laid out: places in order, more rows
             // for photos beyond them, and empty places outlined.
@@ -1217,13 +1396,11 @@ impl PicassoApp {
                         let n = row * usize::from(columns) + column;
                         let (rect, response) = ui.allocate_exact_size(Vec2::new(cell, height), Sense::click_and_drag());
                         let Some(&media_id) = media.get(n) else {
-                            let stroke = egui::Stroke::new(1.0, theme::muted().gamma_multiply(0.5));
-                            ui.painter().rect_stroke(rect, 4, stroke, egui::StrokeKind::Inside);
-                            ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, "+", egui::FontId::proportional(20.0), theme::muted());
+                            empty_slot(ui, rect, response.hovered() || response.has_focus(), "+", 20.0);
                             response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tr("Add photos…")));
                             theme::focus_ring(ui, &response, rect);
                             drop_target(ui, &response, index, media.len(), actions);
-                            if response.on_hover_text(tr("Add photos from the trip, or drop one here")).clicked() {
+                            if response.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(tr("Add photos from the trip, or drop one here")).clicked() {
                                 pick = true;
                             }
                             continue;
@@ -1235,16 +1412,7 @@ impl PicassoApp {
                         photo_access(ui, &response, rect, &names[n]);
                         drag_source(ui, &response, Drag::Placed(index, n));
                         drop_target(ui, &response, index, n, actions);
-                        response.context_menu(|ui| {
-                            if ui.button(tr("Use as cover")).clicked() {
-                                actions.push(Action::Cover(Some(media_id)));
-                                ui.close();
-                            }
-                            if ui.button(tr("Remove from grid")).clicked() {
-                                actions.push(Action::RemoveFromGallery(index, n));
-                                ui.close();
-                            }
-                        });
+                        photo_tools(ui, &response, rect, media_id, cover, Some((index, n, "Remove from grid")), actions);
                     }
                 });
                 ui.add_space(gap - ui.spacing().item_spacing.y);
@@ -1262,16 +1430,7 @@ impl PicassoApp {
                     photo_access(ui, &response, rect, &names[n]);
                     drag_source(ui, &response, Drag::Placed(index, n));
                     drop_target(ui, &response, index, n, actions);
-                    response.context_menu(|ui| {
-                        if ui.button(tr("Use as cover")).clicked() {
-                            actions.push(Action::Cover(Some(media_id)));
-                            ui.close();
-                        }
-                        if ui.button(tr("Remove from gallery")).clicked() {
-                            actions.push(Action::RemoveFromGallery(index, n));
-                            ui.close();
-                        }
-                    });
+                    photo_tools(ui, &response, rect, media_id, cover, Some((index, n, "Remove from gallery")), actions);
                 }
             });
         }
@@ -1393,14 +1552,15 @@ impl PicassoApp {
     /// from a dot where it starts to a ring where it ends, with the map's
     /// credit and scale.
     fn route_drawing(&mut self, ui: &mut egui::Ui, route: &[Vec<[i32; 2]>], profile: Option<&[[f32; 2]]>, width: f32) {
-        let height = (width * 0.55).min(400.0);
+        // Until a track is chosen, a low empty place rather than a blank map.
+        let height = if route.iter().all(Vec::is_empty) { 96.0 } else { (width * 0.55).min(400.0) };
         let (rect, _) = ui.allocate_exact_size(Vec2::new(width, height), Sense::hover());
-        let painter = ui.painter_at(rect);
-        painter.rect_filled(rect, 6, theme::placeholder());
         let Some((view, shape)) = crate::trip::route_shape(route, rect.width(), rect.height(), 28.0) else {
-            painter.text(rect.center(), egui::Align2::CENTER_CENTER, tr("No route yet"), egui::FontId::proportional(14.0), theme::muted());
+            empty_slot(ui, rect, false, tr("No route yet"), 14.0);
             return;
         };
+        let painter = ui.painter_at(rect);
+        painter.rect_filled(rect, 6, theme::placeholder());
         let (lat, lon) = crate::geo::world_to_latlon(view.x, view.y, view.zoom);
         let map = super::places::MapView { lat, lon, zoom: view.zoom, pan: Vec2::ZERO };
         self.paint_tiles(&painter, rect, map);
@@ -1449,15 +1609,19 @@ impl PicassoApp {
             links.iter().find(|link| link.path == source).map_or_else(|| source.to_string(), name)
         };
         let mut picked: Option<Option<usize>> = None;
-        egui::ComboBox::from_id_salt(("route-track", uid)).selected_text(shown).height(320.0).show_ui(ui, |ui| {
-            if ui.selectable_label(!empty && source.is_empty(), &all).clicked() {
-                picked = Some(None);
-            }
-            for (n, link) in links.iter().enumerate() {
-                if ui.selectable_label(!empty && link.path == source, name(link)).clicked() {
-                    picked = Some(Some(n));
+        // A toolbar under the map, as the photo strip's filters are.
+        ui.add_space(4.0);
+        tool_bar(ui, Surface::Page, |ui| {
+            egui::ComboBox::from_id_salt(("route-track", uid)).selected_text(shown).height(320.0).show_ui(ui, |ui| {
+                if ui.selectable_label(!empty && source.is_empty(), &all).clicked() {
+                    picked = Some(None);
                 }
-            }
+                for (n, link) in links.iter().enumerate() {
+                    if ui.selectable_label(!empty && link.path == source, name(link)).clicked() {
+                        picked = Some(Some(n));
+                    }
+                }
+            });
         });
         let picked = picked?;
         let chosen: Vec<_> = match picked {
@@ -1479,30 +1643,39 @@ impl PicassoApp {
         let mut day = editor.picking.as_ref().filter(|_| open).map_or(DayFilter::Any, |picker| picker.day);
         let (mut starred, mut unused) = editor.picking.as_ref().filter(|_| open).map_or((false, false), |picker| (picker.starred, picker.unused));
         let mut toggle = start && !open;
-        ui.horizontal(|ui| {
-            let label = if open { tr("Done") } else { tr("Add photos…") };
-            if ui.button(label).on_hover_text(tr("Pick photos of the trip for this block")).clicked() {
-                toggle = true;
-            }
-            if open {
-                let days = self.db.trip_days(trip_id);
-                let shown = match day {
-                    DayFilter::Day(id) => days.iter().find(|d| d.id == id).map(super::trips::day_name).unwrap_or_default(),
-                    _ => tr("All days").to_string(),
-                };
+        if open {
+            // The strip's filters as a toolbar: which Day, then narrowing
+            // chips, then Done.
+            let days = self.db.trip_days(trip_id);
+            let shown = match day {
+                DayFilter::Day(id) => days.iter().find(|d| d.id == id).map(super::trips::day_name).unwrap_or_default(),
+                _ => tr("All days").to_string(),
+            };
+            tool_bar(ui, Surface::Page, |ui| {
                 egui::ComboBox::from_id_salt(("pick-day", uid)).selected_text(shown).height(320.0).show_ui(ui, |ui| {
                     ui.selectable_value(&mut day, DayFilter::Any, tr("All days"));
                     for d in &days {
                         ui.selectable_value(&mut day, DayFilter::Day(d.id), super::trips::day_name(d));
                     }
                 });
-                ui.checkbox(&mut starred, tr("Starred only")).on_hover_text(tr("Your stars are only read, never changed"));
-                ui.checkbox(&mut unused, tr("Not in the story yet")).on_hover_text(tr("Hide photos already used elsewhere in this story"));
-                ui.label(RichText::new(tr("Click a photo to add it, again to take it out.")).size(12.0).color(theme::muted()));
-            }
-        });
+                tool_divider(ui);
+                ui.toggle_value(&mut starred, format!("★  {}", tr("Starred only"))).on_hover_text(tr("Your stars are only read, never changed"));
+                ui.toggle_value(&mut unused, tr("Not in the story yet")).on_hover_text(tr("Hide photos already used elsewhere in this story"));
+                tool_divider(ui);
+                if ui.add(theme::primary_button(tr("Done")).corner_radius(TOOL_RADIUS)).clicked() {
+                    toggle = true;
+                }
+            });
+            ui.label(RichText::new(tr("Click a photo to add it, again to take it out.")).size(12.0).color(theme::muted()));
+        } else if page_button(ui, tr("Add photos…"), true).on_hover_text(tr("Pick photos of the trip for this block")).clicked() {
+            toggle = true;
+        }
         let Some(editor) = &mut self.story else { return };
         if toggle {
+            // A gallery left with no photos shows nothing on the page.
+            if open && media.is_empty() && matches!(editor.blocks[index].block, Block::Gallery(_)) {
+                actions.push(Action::Remove(index));
+            }
             editor.picking = if open { None } else { Some(Picker { uid: uid.into(), day: DayFilter::Any, starred: false, unused: false, choices: Vec::new() }) };
             if let Some(picker) = &mut editor.picking {
                 picker.choices = trip_photos(&self.db, trip_id, picker.day, false);
@@ -1631,6 +1804,7 @@ impl PicassoApp {
                 framing.centre = [(left + right) / 2.0, (top + bottom) / 2.0];
             }
         }
+        let mut grips = Vec::new();
         if framing.shape == FREE_SHAPE {
             // Handles on the corners and edges: which edges each one moves.
             const GRIP: f32 = 14.0;
@@ -1648,16 +1822,9 @@ impl PicassoApp {
                 let grip = Rect::from_center_size(at, Vec2::splat(GRIP));
                 let handle = ui.interact(grip, ui.scope_id().with(("cover-grip", n)), Sense::drag()).on_hover_cursor(cursor);
                 if handle.dragged() {
-                    let moved = handle.drag_delta() / rect.size();
-                    let mut free = framing.free;
-                    for (side, moves) in edges.into_iter().enumerate() {
-                        if moves {
-                            free[side] += if side % 2 == 0 { moved.x } else { moved.y };
-                        }
-                    }
-                    framing.free = CoverCrop::from_fractions(free).fractions();
+                    framing.free = pull_edges(framing.free, edges, handle.drag_delta() / rect.size());
                 }
-                ui.painter().rect_filled(Rect::from_center_size(at, Vec2::splat(8.0)), 1, egui::Color32::WHITE);
+                grips.push(at);
             }
         }
         let painter = ui.painter_at(rect);
@@ -1671,11 +1838,15 @@ impl PicassoApp {
             painter.rect_filled(outside, 0, shade);
         }
         painter.rect_stroke(frame, 2, egui::Stroke::new(2.0, egui::Color32::WHITE), egui::StrokeKind::Inside);
+        for at in grips {
+            ui.painter().rect_filled(Rect::from_center_size(at, Vec2::splat(8.0)), 1, egui::Color32::WHITE);
+        }
         ui.add_space(6.0);
         let mut done = false;
         let mut cancel = false;
-        ui.horizontal_wrapped(|ui| {
-            ui.label(tr("Shape"));
+        tool_bar(ui, Surface::Page, |ui| {
+            ui.add_space(6.0);
+            ui.label(RichText::new(tr("Shape")).color(theme::muted()));
             let name = |index: usize| match CoverCrop::SHAPES.get(index) {
                 Some(None) => tr("Whole photo").to_string(),
                 Some(Some(shape)) => CoverCrop::shape_name(*shape),
@@ -1692,29 +1863,38 @@ impl PicassoApp {
                 let mut was = framing;
                 was.shape = before;
                 framing.free = was.crop(w, h).fractions();
+            } else if before == FREE_SHAPE && framing.shape != FREE_SHAPE {
+                framing.leave_free(w, h);
             }
-            ui.add_space(8.0);
+            tool_divider(ui);
             if framing.shape == FREE_SHAPE {
+                ui.add_space(6.0);
                 ui.label(RichText::new(tr("Drag the corners and edges to any shape")).size(12.0).color(theme::muted()));
+                ui.add_space(6.0);
             } else {
-                ui.label(tr("Size"));
+                ui.add_space(6.0);
+                ui.label(RichText::new(tr("Size")).color(theme::muted()));
+                ui.add_space(4.0);
                 ui.add(egui::Slider::new(&mut framing.zoom, 0.2..=1.0).show_value(false));
+                ui.add_space(6.0);
             }
-            ui.add_space(8.0);
-            if ui.button(tr("Reset")).on_hover_text(tr("Show the whole photo")).clicked() {
+            if tool_button(ui, true, tr("Reset")).on_hover_text(tr("Show the whole photo")).clicked() {
                 framing = Framing { shape: 0, zoom: 1.0, centre: [0.5, 0.5], free: CoverCrop::FULL.fractions() };
             }
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                done = ui.add(theme::primary_button(tr("Done"))).clicked();
-                cancel = ui.button(tr("Cancel")).clicked();
-            });
+            tool_divider(ui);
+            cancel = tool_button(ui, true, tr("Cancel")).clicked();
+            ui.add_space(4.0);
+            done = ui.add(theme::primary_button(tr("Done")).corner_radius(TOOL_RADIUS)).clicked();
         });
+        ui.add_space(4.0);
         ui.label(RichText::new(tr("Drag the frame to choose what the cover shows. Only this story's cover changes; the photo and its edits stay as they are.")).size(12.0).color(theme::muted()));
         ui.add_space(12.0);
         let Some(editor) = &mut self.story else { return };
         if done {
             let crop = framing.crop(w, h);
-            if crop != editor.story.cover_crop {
+            // A saved frame reads back a hair off its shape, so it is saved
+            // again only when it was moved.
+            if framing != Framing::of(editor.story.cover_crop, w, h) && crop != editor.story.cover_crop {
                 actions.push(Action::CoverCrop(crop));
             }
             editor.framing = None;
@@ -1886,8 +2066,8 @@ fn styled_job(ui: &egui::Ui, text: &str, size: f32, wrap: f32, marks: bool) -> e
                     format.strikethrough = egui::Stroke::new(1.0, format.color);
                 }
                 if style.link.is_some() {
-                    format.color = theme::ACCENT;
-                    format.underline = egui::Stroke::new(1.0, theme::ACCENT);
+                    format.color = theme::accent();
+                    format.underline = egui::Stroke::new(1.0, theme::accent());
                 }
             }
             job.append(span.text, 0.0, format);
@@ -1993,7 +2173,6 @@ fn arrow_step(ui: &egui::Ui, id: egui::Id, text: &str) -> Option<bool> {
 /// The blocks named by what follows "/", floating under the paragraph: an
 /// icon, the name, and what it is for each, the chosen one marked.
 fn slash_menu(ui: &egui::Ui, query: &str, below: Rect, index: usize, ctl: &mut TextCtl, actions: &mut Vec<Action>) {
-    const ROW: f32 = 44.0;
     let choices = slash_choices(query);
     if choices.is_empty() {
         return;
@@ -2002,32 +2181,20 @@ fn slash_menu(ui: &egui::Ui, query: &str, below: Rect, index: usize, ctl: &mut T
         .order(egui::Order::Foreground)
         .fixed_pos(below.left_bottom() + Vec2::new(0.0, 4.0))
         .show(ui.ctx(), |ui| {
-            egui::Frame::popup(ui.style()).inner_margin(Margin::same(6)).corner_radius(10).show(ui, |ui| {
+            egui::Frame::popup(ui.style()).inner_margin(Margin::same(6)).show(ui, |ui| {
                 ui.set_width(300.0);
                 ui.spacing_mut().item_spacing.y = 2.0;
                 ui.label(RichText::new(tr("Blocks")).size(11.0).color(theme::muted()));
                 for (n, (label, block)) in choices.into_iter().take(SLASH_SHOWN).enumerate() {
-                    let (rect, row) = ui.allocate_exact_size(Vec2::new(ui.available_width(), ROW), Sense::click());
-                    row.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &label));
+                    let row = block_row(ui, &block, &label, Some(tr(block_hint(&block))), n == ctl.slash);
                     if row.hovered() {
                         ctl.slash = n;
                     }
-                    let painter = ui.painter();
-                    let visuals = ui.visuals();
                     if n == ctl.slash {
-                        painter.rect_filled(rect, 6, theme::ACCENT.gamma_multiply(0.14));
+                        let at = egui::pos2(row.rect.right() - 10.0, row.rect.center().y);
+                        ui.painter().text(at, egui::Align2::RIGHT_CENTER, "↵", egui::FontId::proportional(13.0), theme::muted());
                     }
-                    let icon = Rect::from_center_size(egui::pos2(rect.left() + 22.0, rect.center().y), Vec2::splat(30.0));
-                    painter.rect_filled(icon, 6, visuals.faint_bg_color);
-                    painter.rect_stroke(icon, 6, egui::Stroke::new(1.0, visuals.widgets.noninteractive.bg_stroke.color), egui::StrokeKind::Inside);
-                    painter.text(icon.center(), egui::Align2::CENTER_CENTER, block_icon(&block), egui::FontId::proportional(14.0), visuals.strong_text_color());
-                    let left = icon.right() + 10.0;
-                    painter.text(egui::pos2(left, rect.top() + 7.0), egui::Align2::LEFT_TOP, &label, egui::FontId::proportional(14.0), visuals.strong_text_color());
-                    painter.text(egui::pos2(left, rect.top() + 25.0), egui::Align2::LEFT_TOP, tr(block_hint(&block)), egui::FontId::proportional(11.5), theme::muted());
-                    if n == ctl.slash {
-                        painter.text(egui::pos2(rect.right() - 10.0, rect.center().y), egui::Align2::RIGHT_CENTER, "↵", egui::FontId::proportional(13.0), theme::muted());
-                    }
-                    if row.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+                    if row.clicked() {
                         actions.push(Action::Replace(index, block));
                     }
                 }
@@ -2038,44 +2205,240 @@ fn slash_menu(ui: &egui::Ui, query: &str, below: Rect, index: usize, ctl: &mut T
         });
 }
 
-/// Gives a photo in the Story its name for screen readers, its alt text
-/// when it has one, and the focus ring while the keyboard is on it.
-/// A dark rounded bar of white controls laid on a photo, readable on any
-/// picture in either theme.
-fn overlay_bar(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) {
-    egui::Frame::new()
-        .fill(egui::Color32::from_black_alpha(170))
-        .corner_radius(8)
-        .inner_margin(Margin::symmetric(6, 3))
+/// `text`, a shortcut written with Ctrl+, Shift+ and Alt+, with the Mac's
+/// key symbols on a Mac.
+fn keys(text: &str) -> String {
+    if cfg!(target_os = "macos") {
+        text.replace("Ctrl+", "⌘").replace("Shift+", "⇧").replace("Alt+", "⌥")
+    } else {
+        text.to_string()
+    }
+}
+
+/// The ⚙ of the Story's bar: how the preview and export look, and whether
+/// the trip's dates show under the title.
+fn story_settings(ui: &mut egui::Ui, story: &mut Story) {
+    let gear = tool_icon(ui, true, tr("Story settings"), theme::paint_settings_icon);
+    egui::Popup::from_toggle_button_response(&gear).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
+        ui.set_min_width(260.0);
+        ui.label(RichText::new(tr("Template")).size(12.0).color(theme::muted()));
+        for code in crate::trip::TEMPLATES {
+            ui.radio_value(&mut story.template, code.to_string(), tr(crate::trip::template_name(code)));
+        }
+        ui.label(RichText::new(tr("How the preview and export look. The blocks stay the same.")).size(11.5).color(theme::muted()));
+        ui.separator();
+        ui.checkbox(&mut story.show_date, tr("Show the trip's dates"));
+    });
+}
+
+/// What a toolbar is laid on. Every toolbar of the Story has the same
+/// shape, buttons, and dividers; only their colours differ, so the bar
+/// reads on the page and on any photo in either theme.
+#[derive(Clone, Copy, PartialEq)]
+enum Surface {
+    Page,
+    Photo,
+}
+
+/// A toolbar: a rounded bar of borderless buttons that light up when
+/// pointed at, in groups split by [`tool_divider`].
+fn tool_bar<R>(ui: &mut egui::Ui, surface: Surface, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    let frame = match surface {
+        Surface::Page => {
+            let shadow = egui::Shadow { offset: [0, 2], blur: 8, spread: 0, color: egui::Color32::from_black_alpha(if theme::is_dark() { 70 } else { 20 }) };
+            egui::Frame::new().fill(ui.visuals().window_fill).stroke(egui::Stroke::new(1.0, theme::hairline())).shadow(shadow)
+        }
+        Surface::Photo => egui::Frame::new().fill(egui::Color32::from_black_alpha(170)),
+    };
+    frame
+        .corner_radius(TOOL_RADIUS + 3)
+        .inner_margin(Margin::same(3))
         .show(ui, |ui| {
             ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 4.0;
-                let visuals = &mut ui.visuals_mut().widgets;
-                for state in [&mut visuals.inactive, &mut visuals.hovered, &mut visuals.active] {
-                    state.fg_stroke.color = egui::Color32::WHITE;
-                    state.bg_stroke = egui::Stroke::NONE;
-                }
-                visuals.inactive.weak_bg_fill = egui::Color32::TRANSPARENT;
-                visuals.hovered.weak_bg_fill = egui::Color32::from_white_alpha(40);
-                visuals.active.weak_bg_fill = egui::Color32::from_white_alpha(60);
-                add(ui);
-            });
-        });
+                tool_style(ui, surface);
+                add(ui)
+            })
+            .inner
+        })
+        .inner
 }
 
-fn overlay_button(ui: &mut egui::Ui, text: &str) -> egui::Response {
-    ui.add(egui::Button::new(RichText::new(text).size(12.5)).corner_radius(5))
+/// The look of a toolbar's controls, for `ui` and what is added to it:
+/// buttons with no fill or outline until pointed at, a chosen one tinted,
+/// all the same height.
+fn tool_style(ui: &mut egui::Ui, surface: Surface) {
+    let (ink, over, pressed, chosen, chosen_ink, line) = match surface {
+        Surface::Page => (theme::text(), theme::hover(), theme::select(), theme::select(), theme::accent(), theme::hairline()),
+        Surface::Photo => {
+            let white = egui::Color32::from_white_alpha;
+            (egui::Color32::WHITE, white(40), white(60), white(56), egui::Color32::WHITE, white(70))
+        }
+    };
+    let spacing = ui.spacing_mut();
+    spacing.item_spacing.x = 2.0;
+    spacing.button_padding = Vec2::new(8.0, 4.0);
+    spacing.interact_size.y = TOOL;
+    let visuals = ui.visuals_mut();
+    visuals.selection.bg_fill = chosen;
+    visuals.selection.stroke.color = chosen_ink;
+    visuals.widgets.noninteractive.bg_stroke.color = line;
+    let widgets = &mut visuals.widgets;
+    for (state, fill) in [(&mut widgets.inactive, egui::Color32::TRANSPARENT), (&mut widgets.hovered, over), (&mut widgets.active, pressed), (&mut widgets.open, pressed)] {
+        state.weak_bg_fill = fill;
+        state.fg_stroke.color = ink;
+        state.bg_stroke = egui::Stroke::NONE;
+        state.corner_radius = egui::CornerRadius::same(TOOL_RADIUS);
+    }
 }
 
-fn overlay_divider(ui: &mut egui::Ui) {
-    let (rect, _) = ui.allocate_exact_size(Vec2::new(9.0, 16.0), Sense::hover());
-    ui.painter().vline(rect.center().x, rect.y_range(), egui::Stroke::new(1.0, egui::Color32::from_white_alpha(70)));
+/// A toolbar button with text or a symbol, at least as wide as it is tall.
+fn tool_button(ui: &mut egui::Ui, enabled: bool, text: impl Into<egui::WidgetText>) -> egui::Response {
+    ui.add_enabled(enabled, egui::Button::new(text).min_size(Vec2::splat(TOOL)))
 }
 
-/// A thin upright line between groups of a block's tools.
-fn tools_divider(ui: &mut egui::Ui) {
-    let (rect, _) = ui.allocate_exact_size(Vec2::new(9.0, 16.0), Sense::hover());
-    ui.painter().vline(rect.center().x, rect.y_range(), egui::Stroke::new(1.0, theme::hairline()));
+/// A square toolbar button with an icon drawn by `paint`, named `name`
+/// for screen readers and on hover.
+fn tool_icon(ui: &mut egui::Ui, enabled: bool, name: &str, paint: impl FnOnce(&egui::Painter, Pos2, egui::Color32)) -> egui::Response {
+    let response = tool_button(ui, enabled, "");
+    let ink = ui.visuals().widgets.inactive.fg_stroke.color;
+    paint(ui.painter(), response.rect.center(), if enabled { ink } else { ink.gamma_multiply(0.35) });
+    theme::named(response, name)
+}
+
+/// A borderless button on the page, like a toolbar's; one that adds
+/// something reads "+ …" in the accent colour.
+fn page_button(ui: &mut egui::Ui, text: &str, adds: bool) -> egui::Response {
+    ui.scope(|ui| {
+        tool_style(ui, Surface::Page);
+        let label = if adds { RichText::new(format!("+  {text}")).color(theme::accent()) } else { RichText::new(text) };
+        ui.add(egui::Button::new(label).min_size(Vec2::new(TOOL, TOOL)))
+    })
+    .inner
+}
+
+/// An empty place to fill, drawn alike for the cover, a grid's places,
+/// and a route with no track: a hairline outline and muted `text`, lit
+/// when pointed at or the keyboard is on it.
+fn empty_slot(ui: &egui::Ui, rect: Rect, lit: bool, text: &str, size: f32) {
+    let painter = ui.painter();
+    let fill = if lit { theme::select() } else { egui::Color32::TRANSPARENT };
+    painter.rect(rect, CORNER, fill, egui::Stroke::new(1.0, theme::hairline()), egui::StrokeKind::Inside);
+    let ink = if lit { theme::accent() } else { theme::muted() };
+    painter.text(rect.center(), egui::Align2::CENTER_CENTER, text, egui::FontId::proportional(size), ink);
+}
+
+/// A kind of block to add, alike wherever blocks are offered: its mark in
+/// a tile, its name, and `hint` under it when given. `lit` marks it as
+/// chosen, as pointing at it or the keyboard on it do.
+fn block_row(ui: &mut egui::Ui, block: &Block, label: &str, hint: Option<&str>, lit: bool) -> egui::Response {
+    let (height, tile) = if hint.is_some() { (44.0, 30.0) } else { (32.0, 22.0) };
+    let (rect, row) = ui.allocate_exact_size(Vec2::new(ui.available_width(), height), Sense::click());
+    row.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, label));
+    let painter = ui.painter();
+    let visuals = ui.visuals();
+    if lit || row.hovered() || row.has_focus() {
+        painter.rect_filled(rect, TOOL_RADIUS, theme::accent().gamma_multiply(0.14));
+    }
+    let icon = Rect::from_center_size(egui::pos2(rect.left() + 6.0 + tile / 2.0, rect.center().y), Vec2::splat(tile));
+    let ink = visuals.strong_text_color();
+    painter.rect_filled(icon, TOOL_RADIUS, visuals.faint_bg_color);
+    painter.rect_stroke(icon, TOOL_RADIUS, egui::Stroke::new(1.0, visuals.widgets.noninteractive.bg_stroke.color), egui::StrokeKind::Inside);
+    if matches!(block, Block::Link { .. }) {
+        paint_link_icon(painter, icon.center(), ink);
+    } else {
+        painter.text(icon.center(), egui::Align2::CENTER_CENTER, block_icon(block), egui::FontId::proportional(tile * 0.46), ink);
+    }
+    let left = icon.right() + 10.0;
+    if let Some(hint) = hint {
+        painter.text(egui::pos2(left, rect.top() + 7.0), egui::Align2::LEFT_TOP, label, egui::FontId::proportional(14.0), ink);
+        painter.text(egui::pos2(left, rect.top() + 25.0), egui::Align2::LEFT_TOP, hint, egui::FontId::proportional(11.5), theme::muted());
+    } else {
+        painter.text(egui::pos2(left, rect.center().y), egui::Align2::LEFT_CENTER, label, egui::FontId::proportional(14.0), ink);
+    }
+    row.on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+
+/// Whether the pointer was just pressed on the page outside `rect`: not on
+/// a toolbar, menu, or list open above the page, which are layers of
+/// their own.
+fn pressed_outside(ui: &egui::Ui, rect: Rect) -> bool {
+    let at = ui.input(|input| input.pointer.primary_pressed().then(|| input.pointer.interact_pos()).flatten());
+    at.is_some_and(|at| !rect.contains(at) && ui.ctx().layer_id_at(at) == Some(ui.layer_id()))
+}
+
+/// Two links of a chain, slanted, about 14 points wide.
+fn paint_link_icon(painter: &egui::Painter, center: Pos2, color: egui::Color32) {
+    let stroke = egui::Stroke::new(1.4, color);
+    let slant = Vec2::angled(-std::f32::consts::FRAC_PI_4);
+    for side in [-1.0, 1.0] {
+        let middle = center + slant * (side * 2.6);
+        let points: Vec<Pos2> = (0..=24)
+            .map(|step| {
+                let angle = std::f32::consts::TAU * step as f32 / 24.0;
+                // An oval along the slant, 4.5 long either way and 2.4 across.
+                middle + slant * (4.5 * angle.cos()) + slant.rot90() * (2.4 * angle.sin())
+            })
+            .collect();
+        painter.add(egui::Shape::line(points, stroke));
+    }
+}
+
+/// The grip a block is dragged by: two columns of dots, lit when pointed at.
+fn drag_handle(ui: &mut egui::Ui) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(Vec2::new(18.0, TOOL), Sense::drag());
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tr("Drag to move this block")));
+    let painter = ui.painter();
+    if response.hovered() || response.dragged() {
+        painter.rect_filled(rect, TOOL_RADIUS, ui.visuals().widgets.hovered.weak_bg_fill);
+    }
+    for (x, y) in [(-3.0, -5.0), (3.0, -5.0), (-3.0, 0.0), (3.0, 0.0), (-3.0, 5.0), (3.0, 5.0)] {
+        painter.circle_filled(rect.center() + Vec2::new(x, y), 1.4, theme::muted());
+    }
+    response
+}
+
+/// A thin upright line between groups of a toolbar's controls.
+fn tool_divider(ui: &mut egui::Ui) {
+    let (rect, _) = ui.allocate_exact_size(Vec2::new(9.0, TOOL - 10.0), Sense::hover());
+    ui.painter().vline(rect.center().x, rect.y_range(), egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color));
+}
+
+/// The tools of a photo in a block, on its top-right corner while it is
+/// pointed at or the keyboard is on it or them: Use as cover, unless it is
+/// the cover, and Remove for a photo of a gallery or grid, whose English
+/// name `remove` carries. Hidden while anything is dragged, so they never
+/// stand in the way of a drop.
+fn photo_tools(ui: &mut egui::Ui, response: &egui::Response, rect: Rect, media_id: i64, cover: Option<i64>, remove: Option<(usize, usize, &'static str)>, actions: &mut Vec<Action>) {
+    let key = response.id.with("photo-tools");
+    let tools_focused = ui.ctx().data(|data| data.get_temp::<bool>(key)).unwrap_or(false);
+    let is_cover = cover == Some(media_id);
+    let wanted = ui.rect_contains_pointer(rect) || response.has_focus() || tools_focused;
+    if !wanted || egui::DragAndDrop::has_any_payload(ui.ctx()) || (is_cover && remove.is_none()) || rect.width() < 60.0 {
+        ui.ctx().data_mut(|data| data.remove::<bool>(key));
+        return;
+    }
+    let mut bar = ui.new_child(egui::UiBuilder::new().max_rect(rect.shrink(6.0)).layout(Layout::right_to_left(Align::Min)));
+    let mut focused = false;
+    tool_bar(&mut bar, Surface::Photo, |ui| {
+        // Laid out from the right, so ✕ comes first to sit in the corner.
+        if let Some((index, n, name)) = remove {
+            let button = theme::named(tool_button(ui, true, "✕"), tr(name));
+            if button.clicked() {
+                actions.push(Action::RemoveFromGallery(index, n));
+            }
+            focused |= button.has_focus();
+        }
+        if !is_cover {
+            // A small tile has room for a word only.
+            let label = if rect.width() >= 220.0 { tr("Use as cover") } else { tr("Cover") };
+            let button = theme::named(tool_button(ui, true, label), tr("Use as cover"));
+            if button.clicked() {
+                actions.push(Action::Cover(Some(media_id)));
+            }
+            focused |= button.has_focus();
+        }
+    });
+    ui.ctx().data_mut(|data| data.insert_temp(key, focused));
 }
 
 /// The name of a cover's frame: its shape, or Free.
@@ -2100,6 +2463,8 @@ fn cover_chip(ui: &egui::Ui, rect: Rect) {
     painter.galley(chip.min + Vec2::new(6.0, 2.0), text, egui::Color32::WHITE);
 }
 
+/// Gives a photo in the Story its name for screen readers, its alt text
+/// when it has one, and the focus ring while the keyboard is on it.
 fn photo_access(ui: &egui::Ui, response: &egui::Response, rect: Rect, name: &str) {
     response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Image, true, name));
     theme::focus_ring(ui, response, rect);
@@ -2113,7 +2478,8 @@ fn photo_name(alt: &str, n: usize) -> String {
     }
 }
 
-/// The mark of a kind of block in the "/" menu.
+/// The mark of a kind of block where blocks are offered; [`block_row`]
+/// draws a Link's as the toolbar's link icon instead.
 fn block_icon(block: &Block) -> &'static str {
     match block {
         Block::Heading(_) => "H2",
@@ -2221,21 +2587,28 @@ fn text_block(
     if response.changed() {
         *typed = Some((uid.to_string(), 0));
         if kind == TextKind::Paragraph {
-            let shortcut = match text.as_str() {
-                "- " | "* " => Some(Block::List { ordered: false, items: vec![String::new()] }),
-                "1. " => Some(Block::List { ordered: true, items: vec![String::new()] }),
-                "> " => Some(Block::Quote { text: String::new(), citation: String::new() }),
-                _ => None,
-            };
-            if let Some(block) = shortcut {
-                actions.push(Action::Replace(index, block));
-            }
+            actions.extend(markdown_shortcut(text, index));
         }
     }
     // Typing in the field may have taken the "/" away this frame.
     if let Some(query) = text.strip_prefix('/').filter(|query| slash && !query.contains('\n')) {
         slash_menu(ui, query, response.rect, index, ctl, actions);
     }
+}
+
+/// What typing `text` into empty paragraph `index` turns it into, as
+/// Markdown would have it. A separator goes on with a paragraph after it.
+fn markdown_shortcut(text: &str, index: usize) -> Vec<Action> {
+    let block = match text {
+        "# " => Block::Heading(String::new()),
+        "## " => Block::Subheading(String::new()),
+        "- " | "* " => Block::List { ordered: false, items: vec![String::new()] },
+        "1. " => Block::List { ordered: true, items: vec![String::new()] },
+        "> " => Block::Quote { text: String::new(), citation: String::new() },
+        "---" => return vec![Action::Replace(index, Block::Separator), Action::Insert(index + 1, Block::Paragraph(String::new()))],
+        _ => return Vec::new(),
+    };
+    vec![Action::Replace(index, block)]
 }
 
 /// A list, one field an item, each with its bullet or number. Enter makes
@@ -2319,7 +2692,7 @@ fn quote_block(ui: &mut egui::Ui, text: &mut String, citation: &mut String, uid:
 /// A Practical info block: its title, and label and value lines that can
 /// be added and removed.
 fn info_block(ui: &mut egui::Ui, title: &mut String, items: &mut Vec<(String, String)>, uid: &str, typed: &mut Option<(String, u8)>) {
-    let frame = egui::Frame::new().stroke(egui::Stroke::new(1.0, theme::hairline())).corner_radius(6).inner_margin(Margin::symmetric(12, 10));
+    let frame = egui::Frame::new().stroke(egui::Stroke::new(1.0, theme::hairline())).corner_radius(CORNER).inner_margin(Margin::symmetric(12, 10));
     frame.show(ui, |ui| {
         ui.set_width(ui.available_width());
         let edit = egui::TextEdit::singleline(title).hint_text(tr("Practical info")).font(egui::FontId::proportional(16.0)).frame(egui::Frame::NONE).desired_width(f32::INFINITY);
@@ -2333,11 +2706,11 @@ fn info_block(ui: &mut egui::Ui, title: &mut String, items: &mut Vec<(String, St
                 if ui.add(egui::TextEdit::singleline(label).hint_text(tr("Label, such as Getting there")).desired_width(170.0)).changed() {
                     *typed = Some((uid.to_string(), field));
                 }
-                let width = ui.available_width() - 30.0;
+                let width = ui.available_width() - TOOL - ui.spacing().item_spacing.x;
                 if ui.add(egui::TextEdit::singleline(value).hint_text(tr("Details")).desired_width(width)).changed() {
                     *typed = Some((uid.to_string(), field + 1));
                 }
-                if theme::named(ui.small_button("×"), tr("Remove this line")).clicked() {
+                if theme::named(page_button(ui, "✕", false), tr("Remove this line")).clicked() {
                     remove = Some(n);
                 }
             });
@@ -2346,7 +2719,7 @@ fn info_block(ui: &mut egui::Ui, title: &mut String, items: &mut Vec<(String, St
             items.remove(n);
             *typed = Some((String::new(), 0));
         }
-        if ui.small_button(tr("Add a line")).clicked() {
+        if page_button(ui, tr("Add a line"), true).clicked() {
             items.push((String::new(), String::new()));
             *typed = Some((String::new(), 0));
         }
@@ -2369,7 +2742,7 @@ fn link_block(ui: &mut egui::Ui, url: &mut String, title: &mut String, note: &mu
                 *typed = Some((uid.to_string(), 1));
             }
             if !shareable.is_empty() {
-                let button = ui.button(tr("From the trip…")).on_hover_text(tr("Links kept with the trip that may be published"));
+                let button = page_button(ui, tr("From the trip…"), false).on_hover_text(tr("Links kept with the trip that may be published"));
                 egui::Popup::menu(&button).show(|ui| {
                     for resource in shareable {
                         if ui.button(resource.shown_name()).on_hover_text(&resource.reference).clicked() {
@@ -2391,24 +2764,26 @@ fn link_block(ui: &mut egui::Ui, url: &mut String, title: &mut String, note: &mu
         }
     });
     let rect = shown.response.rect;
-    ui.painter().vline(rect.left() + 2.0, rect.y_range(), egui::Stroke::new(3.0, theme::ACCENT));
+    ui.painter().vline(rect.left() + 2.0, rect.y_range(), egui::Stroke::new(3.0, theme::accent()));
 }
 
 /// The format buttons of a text block: styles for the selection, the
 /// heading's level, and the list's kind.
 fn text_tools(ui: &mut egui::Ui, index: usize, block: &Block, actions: &mut Vec<Action>) {
-    ui.separator();
+    let name = |name: &str, shortcut: &str| format!("{name} ({})", keys(shortcut));
     let styles = [
-        (RichText::new("B").strong(), Mark::Bold, "Bold (⌘B)"),
-        (RichText::new("I").italics(), Mark::Italic, "Italic (⌘I)"),
-        (RichText::new("S").strikethrough(), Mark::Strike, "Strikethrough (⌘⇧X)"),
-        (RichText::new("</>").monospace(), Mark::Code, "Code (⌘E)"),
-        (RichText::new("🔗"), Mark::Link, "Link (⌘K)"),
+        (RichText::new("B").strong(), Mark::Bold, name(tr("Bold"), "Ctrl+B")),
+        (RichText::new("I").italics(), Mark::Italic, name(tr("Italic"), "Ctrl+I")),
+        (RichText::new("S").strikethrough(), Mark::Strike, name(tr("Strikethrough"), "Ctrl+Shift+X")),
+        (RichText::new("</>").monospace().size(12.0), Mark::Code, name(tr("Code"), "Ctrl+E")),
     ];
     for (label, mark, name) in styles {
-        if theme::named(ui.add(egui::Button::new(label).small()), tr(name)).clicked() {
+        if theme::named(tool_button(ui, true, label), &name).clicked() {
             actions.push(Action::Format(mark));
         }
+    }
+    if tool_icon(ui, true, &name(tr("Link"), "Ctrl+K"), paint_link_icon).clicked() {
+        actions.push(Action::Format(Mark::Link));
     }
     let other = match block {
         Block::Heading(text) => Some(("H3", "Make it a subheading", Block::Subheading(text.clone()))),
@@ -2422,8 +2797,8 @@ fn text_tools(ui: &mut egui::Ui, index: usize, block: &Block, actions: &mut Vec<
         _ => None,
     };
     if let Some((label, name, block)) = other {
-        ui.separator();
-        if theme::named(ui.add(egui::Button::new(label).small()), tr(name)).clicked() {
+        tool_divider(ui);
+        if theme::named(tool_button(ui, true, label), tr(name)).clicked() {
             actions.push(Action::Replace(index, block));
         }
     }
@@ -2447,29 +2822,38 @@ fn inserter(ui: &mut egui::Ui, at: usize, actions: &mut Vec<Action>) {
     let (rect, response) = ui.allocate_exact_size(Vec2::new(ui.available_width(), GAP), Sense::click());
     let moving = response.dnd_hover_payload::<MoveBlock>().is_some();
     if moving {
-        ui.painter().hline(rect.x_range(), rect.center().y, egui::Stroke::new(3.0, theme::ACCENT));
-    } else if response.hovered() {
+        ui.painter().hline(rect.x_range(), rect.center().y, egui::Stroke::new(3.0, theme::accent()));
+    } else if response.hovered() || response.has_focus() {
         // The + at the right end, clear of the tools floating at the left.
         let plus = egui::pos2(rect.right() - GAP, rect.center().y);
-        ui.painter().hline(rect.x_range(), rect.center().y, egui::Stroke::new(1.0, theme::ACCENT));
+        ui.painter().hline(rect.x_range(), rect.center().y, egui::Stroke::new(1.0, theme::accent()));
         ui.painter().circle_filled(plus, GAP / 2.0 + 1.0, theme::ACCENT);
         ui.painter().text(plus, egui::Align2::CENTER_CENTER, "+", egui::FontId::proportional(14.0), egui::Color32::WHITE);
     }
     if let Some(moved) = response.dnd_release_payload::<MoveBlock>() {
         actions.push(Action::Move(moved.0, at));
     }
-    let response = response.on_hover_text(tr("Add a block here"));
+    let response = theme::named(response, tr("Add a block here"));
     egui::Popup::menu(&response).show(|ui| block_menu(ui, at, actions));
 }
 
-/// The blocks that can be added at `at`.
+/// The blocks that can be added at `at`, in the rows of the "/" menu with
+/// what each is for on hover, and the Photo grid's layouts beside.
 fn block_menu(ui: &mut egui::Ui, at: usize, actions: &mut Vec<Action>) {
+    ui.set_min_width(220.0);
+    ui.spacing_mut().item_spacing.y = 2.0;
     for (label, block) in new_blocks() {
-        if ui.button(tr(label)).clicked() {
+        let row = block_row(ui, &block, tr(label), None, false).on_hover_text(tr(block_hint(&block)));
+        if row.clicked() {
             actions.push(Action::Insert(at, block));
+            ui.close();
         }
     }
-    grid_menu(ui, at, actions);
+    let grid = Block::Grid { columns: 2, rows: 2, caption: String::new(), media: Vec::new() };
+    let row = block_row(ui, &grid, tr("Photo grid"), None, false);
+    let arrow = Rect::from_center_size(egui::pos2(row.rect.right() - 12.0, row.rect.center().y), Vec2::splat(ui.spacing().icon_width));
+    ui.painter().add(egui::containers::menu::SubMenuButton::arrow_shape(arrow, theme::muted()));
+    egui::containers::menu::SubMenu::new().show(ui, &row, |ui| grid_menu(ui, at, actions));
 }
 
 /// The caption and alt text of one photo, as used in this Story.
@@ -2635,7 +3019,9 @@ fn apply(editor: &mut StoryEditor, action: Action) {
             // A new cover starts whole; the old one's frame wouldn't fit it.
             if editor.story.cover != media {
                 editor.story.cover_crop = CoverCrop::FULL;
+                editor.framing = None;
             }
+            editor.choosing_cover = false;
             editor.story.cover = media;
         }
         Action::CoverCrop(crop) => editor.story.cover_crop = crop,
@@ -2786,7 +3172,6 @@ fn layout_menu(ui: &mut egui::Ui, index: usize, uid: &str, count: usize, grid: O
         None if gallery => Shape::Gallery,
         None => Shape::Photo,
     };
-    ui.label(RichText::new("·").color(theme::muted()));
     let combo = egui::ComboBox::from_id_salt(("block-layout", uid)).selected_text(shown).height(360.0).show_ui(ui, |ui| {
         let mut choice = |ui: &mut egui::Ui, shape: Shape, text: String, fits: bool| {
             if ui.add_enabled(fits, egui::Button::selectable(current == shape, text)).clicked() {
@@ -2804,18 +3189,16 @@ fn layout_menu(ui: &mut egui::Ui, index: usize, uid: &str, count: usize, grid: O
     combo.response.on_hover_text(tr("How this block's photos are laid out. Drag a photo onto another to put them together."));
 }
 
-/// A Photo grid to add at `at`, each layout its own choice; its photos are
-/// picked from the Trip afterwards.
+/// The layouts of a Photo grid to add at `at`, each its own choice; its
+/// photos are picked from the Trip afterwards.
 fn grid_menu(ui: &mut egui::Ui, at: usize, actions: &mut Vec<Action>) {
-    ui.menu_button(tr("Photo grid"), |ui| {
-        for (columns, rows) in GRID_LAYOUTS {
-            let text = format!("{columns} × {rows}  ·  {}", trf("{} photos", &[&(columns * rows)]));
-            if ui.button(text).clicked() {
-                actions.push(Action::Insert(at, Block::Grid { columns, rows, caption: String::new(), media: Vec::new() }));
-                ui.close();
-            }
+    for (columns, rows) in GRID_LAYOUTS {
+        let text = format!("{columns} × {rows}  ·  {}", trf("{} photos", &[&(columns * rows)]));
+        if ui.button(text).clicked() {
+            actions.push(Action::Insert(at, Block::Grid { columns, rows, caption: String::new(), media: Vec::new() }));
+            ui.close();
         }
-    });
+    }
 }
 
 /// The blocks that can be added as text, with their names.
@@ -2932,6 +3315,7 @@ mod tests {
             hovered: None,
             text: TextCtl::default(),
             framing: None,
+            choosing_cover: false,
         }
     }
 
@@ -2978,6 +3362,59 @@ mod tests {
         let free = Framing::of(odd, 3000, 2000);
         assert_eq!(free.shape, FREE_SHAPE, "a frame no shape fits is free");
         assert_eq!(free.crop(3000, 2000), odd);
+    }
+
+    #[test]
+    fn a_smaller_frame_of_the_photos_own_shape_reads_back_as_the_whole_photo() {
+        // 1.85:1 is not an offered shape.
+        let crop = CoverCrop::framed(None, 3700, 2000, 0.6, [0.4, 0.5]);
+        let framing = Framing::of(crop, 3700, 2000);
+        assert_eq!(framing.shape, 0);
+        assert!((framing.zoom - 0.6).abs() < 0.01);
+        assert_eq!(framing.crop(3700, 2000), crop);
+    }
+
+    #[test]
+    fn another_cover_or_an_undo_of_it_closes_the_frame() {
+        let mut editor = editor(vec![Block::Separator]);
+        let framing = Framing::of(CoverCrop::FULL, 3000, 2000);
+        let before = editor.snapshot();
+        editor.framing = Some(framing);
+        apply(&mut editor, Action::Cover(Some(7)));
+        assert!(editor.framing.is_none(), "another cover");
+        editor.framing = Some(framing);
+        let same = editor.snapshot();
+        editor.restore(same);
+        assert!(editor.framing.is_some(), "an undo that leaves the cover keeps the frame");
+        editor.restore(before);
+        assert!(editor.framing.is_none(), "undone to no cover");
+    }
+
+    #[test]
+    fn free_handles_stop_at_the_smallest_frame() {
+        let near = |a: [f32; 4], b: [f32; 4]| a.iter().zip(b).all(|(a, b)| (a - b).abs() < 1e-3);
+        let frame = [0.2, 0.2, 0.6, 0.6];
+        let left = [true, false, false, false];
+        assert!(near(pull_edges(frame, left, Vec2::new(0.1, 0.0)), [0.3, 0.2, 0.6, 0.6]));
+        // Pulled past the opposite edge, the left edge stops short of it and the right stays.
+        assert!(near(pull_edges(frame, left, Vec2::new(0.9, 0.0)), [0.55, 0.2, 0.6, 0.6]));
+        let top_left = [true, true, false, false];
+        assert!(near(pull_edges(frame, top_left, Vec2::new(-0.5, 0.9)), [0.0, 0.55, 0.6, 0.6]));
+        let right = [false, false, true, false];
+        assert!(near(pull_edges(frame, right, Vec2::new(-0.9, 0.0)), [0.2, 0.2, 0.25, 0.6]));
+        assert!(near(pull_edges(frame, right, Vec2::new(0.9, 0.0)), [0.2, 0.2, 1.0, 0.6]));
+    }
+
+    #[test]
+    fn a_fixed_shape_takes_over_where_the_free_frame_was() {
+        let mut framing = Framing::of(CoverCrop::from_fractions([0.6, 0.5, 0.9, 0.9]), 3000, 2000);
+        assert_eq!(framing.shape, FREE_SHAPE);
+        framing.shape = CoverCrop::SHAPES.iter().position(|shape| *shape == Some((1, 1))).unwrap();
+        framing.leave_free(3000, 2000);
+        let [left, top, right, bottom] = framing.crop(3000, 2000).fractions();
+        assert!(((left + right) / 2.0 - 0.75).abs() < 0.01 && ((top + bottom) / 2.0 - 0.7).abs() < 0.01, "centred where it was");
+        let (free_area, square_area) = (0.3 * 0.4, (right - left) * (bottom - top));
+        assert!((square_area / free_area - 1.0).abs() < 0.05, "about as large: {square_area} vs {free_area}");
     }
 
     #[test]
@@ -3052,6 +3489,19 @@ mod tests {
         assert!(matches!(slash_choices("head").first(), Some((_, Block::Heading(_)))));
         apply(&mut editor, Action::Replace(2, Block::Heading(String::new())));
         assert_eq!(kinds(&editor), ["heading", "separator", "heading"]);
+    }
+
+    #[test]
+    fn markdown_at_the_start_of_a_paragraph_makes_its_block() {
+        let mut editor = editor(vec![Block::Paragraph("# ".into()), Block::Paragraph("## ".into()), Block::Paragraph("---".into())]);
+        for (index, text) in [(0, "# "), (1, "## "), (2, "---")] {
+            for action in markdown_shortcut(text, index) {
+                apply(&mut editor, action);
+            }
+        }
+        assert_eq!(kinds(&editor), ["heading", "subheading", "separator", "paragraph"]);
+        assert_eq!(editor.text.focus.as_ref().map(|focus| focus.0.as_str()), Some(editor.blocks[3].uid.as_str()), "writing goes on after the line");
+        assert!(markdown_shortcut("#x", 0).is_empty() && markdown_shortcut("-- ", 0).is_empty());
     }
 
     #[test]

@@ -258,6 +258,8 @@ pub struct PicassoApp {
     /// Active Trips, then archived ones.
     trips: Vec<crate::trip::Trip>,
     trip_reads: trips::TripReads,
+    /// What photos rendered to for publishing in this session.
+    publish_renders: crate::publish::Renders,
     /// The Story being edited, shown in place of its Trip's photos.
     story: Option<story::StoryEditor>,
     /// The archived Trips are listed in the side bar.
@@ -595,6 +597,7 @@ impl PicassoApp {
             albums: Vec::new(),
             trips: Vec::new(),
             trip_reads: trips::TripReads::default(),
+            publish_renders: crate::publish::Renders::default(),
             story: None,
             show_archived_trips: false,
             trip_filter: crate::trip::MemberQuery::default(),

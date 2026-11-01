@@ -79,7 +79,8 @@ section of this file as the release notes.
   is made.
 - Uploads of the same bytes are reused, interrupted or lost requests are recovered without
   duplicates, safe requests are retried with backoff, and each job is kept under History.
-- For developers: `make bench` also times a 10,000-photo Trip over 365 Days, and tests
+- For developers: `make bench` also times a 10,000-photo Trip over 365 Days and exporting
+  and publishing a 300-photo Story, and tests
   cover a photo changing during an export, a folder that refuses writing, a failed write,
   a 20-photo export with edited JPEG and raw photos, an edit made while exporting, a new
   upload when the photo size changes, saving a new draft beside an edited post, and a
@@ -87,6 +88,10 @@ section of this file as the release notes.
 
 ### Changed
 
+- Exporting and publishing a Story render three photos at a time, as exporting photos
+  from the Library does: about three times faster, for more memory while they run.
+  Publishing a Story again doesn't render the photos the site already has, unless
+  their file or edit changed since they were rendered while Picasso was open.
 - The Trips pages read the library again only after it changes, instead of on every
   frame they draw. The READMEs describe Trips, Stories and WordPress publishing, and
   list them in what backups keep.

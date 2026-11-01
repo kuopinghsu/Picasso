@@ -1634,12 +1634,12 @@ impl PicassoApp {
     /// Returns the choice made, as the block's source and points.
     fn route_chooser(&mut self, ui: &mut egui::Ui, uid: &str, source: &str, empty: bool) -> Option<(String, Vec<Vec<[i32; 2]>>)> {
         let trip_id = self.story.as_ref()?.story.trip_id;
-        let links: Vec<_> = self.db.trip_tracks(trip_id).into_iter().filter(|link| link.track_id.is_some()).collect();
+        let links: Vec<_> = self.tracks_of(trip_id).into_iter().filter(|link| link.track_id.is_some()).collect();
         if links.is_empty() {
             ui.label(RichText::new(tr("Link a GPS track to the trip first, in its Tracks row.")).size(12.0).color(theme::muted()));
             return None;
         }
-        let days = self.db.trip_days(trip_id);
+        let days = self.days_of(trip_id);
         let name = |link: &crate::trip::TripTrack| match link.day_id.and_then(|id| days.iter().find(|day| day.id == id)) {
             Some(day) => format!("{} · {}", link.name, super::trips::day_name(day)),
             None => link.name.clone(),
@@ -1690,7 +1690,7 @@ impl PicassoApp {
         if open {
             // The strip's filters as a toolbar: which Day, then narrowing
             // chips, then Done.
-            let days = self.db.trip_days(trip_id);
+            let days = self.days_of(trip_id);
             let shown = match day {
                 DayFilter::Day(id) => days.iter().find(|d| d.id == id).map(super::trips::day_name).unwrap_or_default(),
                 _ => tr("All days").to_string(),

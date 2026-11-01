@@ -10,15 +10,16 @@ make bench PICASSO_BENCH_PHOTOS=500000 PICASSO_BENCH_FILES=10000
 make bench-check                                              # small run that fails past the limits, as CI runs it
 ```
 
-The benchmark (`src/bench.rs`) is a test that `cargo test` skips. It runs in three parts:
+The benchmark (`src/bench.rs`) is a test that `cargo test` skips. It runs in four parts:
 
 - **Catalog:** writes `PICASSO_BENCH_PHOTOS` photos into a new library, then times opening it and the queries the window makes: listing the library by date and by name, starred photos, the folder tree, one folder, searches, the list a rescan compares against, and duplicate candidates.
 - **Trip:** puts `PICASSO_BENCH_TRIP` photos (default 10,000), taken over a year, in a Trip in a library of their own. It times adding them, keeping their capture times, **Suggest days** making 365 Days, and **Suggest places**. It also times the check for changes the Trips view makes each frame, the queries it makes again once the library has changed (the Days, the photos without a Day, the review counts and a filter's count), listing the Trip and one Day, a Story made from all 365 Days, and the list of Trips. One photo in 50 has no time-zone offset, so the review counts aren't empty.
 - **Files:** makes `PICASSO_BENCH_FILES` 1600×1200 JPEGs once in `target/bench-photos-<n>`, then scans them with the same indexer the app uses, rescans with nothing changed, makes a thumbnail of each on the app's number of thumbnail threads, and opens one photo for the viewer.
+- **Publication:** makes a Story of the first `PICASSO_BENCH_ASSETS` of those photos (default 300) in galleries of 20. It times exporting it as a web page at the default size, then rendering and sending it at **Low** resolution to a stand-in for a WordPress site that answers at once, so the time is Picasso's own, and publishing it again with nothing changed. The photos repeat every 200, and a photo with the same bytes is sent once, so 300 photos make 200 uploads.
 
 It also reports the peak memory of the process after each part (macOS and Linux).
 
-`make bench-check` sets `PICASSO_BENCH_CHECK=1` with 20,000 rows and 500 files. A result past its limit fails the run. The limits are loose, because CI machines are slow and shared: one second for opening the library and for each query, 50 ms for the Trips view's queries after a change, 5 or 10 seconds for each whole-Trip job, at least 200 photos a second for the scan and 20 for thumbnails, half a second to open a photo, and 400 MB of memory. They catch large regressions only; compare against the baselines below for anything finer.
+`make bench-check` sets `PICASSO_BENCH_CHECK=1` with 20,000 rows and 500 files. A result past its limit fails the run. The limits are loose, because CI machines are slow and shared: one second for opening the library and for each query, 50 ms for the Trips view's queries after a change, 5 or 10 seconds for each whole-Trip job, at least 200 photos a second for the scan, 20 for thumbnails, and 5 for exporting and for publishing, 2 seconds to publish again with nothing changed, half a second to open a photo, and 400 MB of memory. They catch large regressions only; compare against the baselines below for anything finer.
 
 ### Cold and warm cache
 
@@ -81,11 +82,21 @@ Apple M2 Max (12 cores, 32 GB), internal SSD, macOS, warm cache, release build o
 
 The Trip's numbers are the same with 20,000 or 100,000 other photos in the catalog, and peak memory doesn't grow past the catalog's. Keeping capture times measures the library's side only; reading them from the files is limited by the disk, like the scan. The Trips view keeps what it read until the library changes: a write of its own, or a commit by the scanner. Between changes, a frame costs only the 0.9 µs check, and the 3.2 ms of queries come once after each change.
 
+| Publication of 300 photos (1600×1200) | after 0.9.6 |
+| --- | ---: |
+| Export as a web page at 1600 px | 2.31 s (130 photos/s) |
+| Render and send at Low resolution | 4.42 s (68 photos/s) |
+| Sent to the site (200 uploads) | 13.0 MB |
+| Publish it again with nothing changed | 2.1 ms |
+| Peak memory after publishing | 252 MB |
+
+Both render three photos at a time, as exporting photos from the Library does. Each holds its full-size image while it is made, so memory grows with the photos' size, not their number. With 91 camera photos of 3840×2560, one at a time exported 5 photos a second and peaked at 494 MB; three at a time export 16 a second and peak at 735 MB. A photo rendered earlier in the session to bytes the site has isn't rendered again, so publishing the Story again with nothing changed takes milliseconds, its time going to the site's answers. A real site adds its own time for each upload and request on top.
+
 The scan reads only the start of each file for its size, date, and camera, so it is limited by the disk far more than by the processor: expect it to be many times slower on a cold cache or a hard disk. Thumbnails are made after the scan, newest first, and the ones on screen go first.
 
 The first baseline found that making thumbnails held on to about 1 MB per photo: 4.7 GB after 2,000 photos. The JPEG decoder started a thread per color channel for every photo; it now shares one pool, and the same run peaks at 126 MB. `make bench-check` fails if that comes back.
 
-Add a row for each release that changes scanning, the catalog, Trips, or thumbnails, and note the machine when it differs.
+Add a row for each release that changes scanning, the catalog, Trips, thumbnails, exporting, or publishing, and note the machine when it differs.
 
 ## Storage
 

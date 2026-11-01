@@ -3,6 +3,8 @@
 //!
 //! - `PICASSO_BENCH_PHOTOS` (default 100000): catalog rows for the queries.
 //! - `PICASSO_BENCH_TRIP` (default 10000): photos in a Trip over 365 Days.
+//! - `PICASSO_BENCH_ASSETS` (default 300, at most the files): photos in one
+//!   Story, exported and published to a stand-in site.
 //! - `PICASSO_BENCH_FILES` (default 2000): photo files for the scan and
 //!   thumbnail timings, made once and kept in `target/bench-photos-<n>`.
 //! - `PICASSO_BENCH_CHECK=1` fails the run when a result is past its limit.
@@ -322,6 +324,115 @@ fn scan(report: &mut Report, count: usize) {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A WordPress site that takes every upload and post at once, counting the
+/// bytes rather than keeping them.
+#[derive(Default)]
+struct Site {
+    uploads: std::cell::Cell<i64>,
+    bytes: std::cell::Cell<usize>,
+}
+
+impl crate::wordpress::Http for Site {
+    fn send(&self, request: &crate::wordpress::Request) -> Result<crate::wordpress::Reply, crate::wordpress::Failure> {
+        let body = request.body.unwrap_or_default();
+        self.bytes.set(self.bytes.get() + body.len());
+        let url = request.url.to_url();
+        let reply = if url.ends_with("/wp/v2/media") {
+            let id = self.uploads.get() + 1;
+            self.uploads.set(id);
+            format!(r#"{{"id":{id},"source_url":"https://example.com/blog/{id}.jpg"}}"#)
+        } else if let Some(ids) = url.split("include=").nth(1) {
+            // Every upload asked about is still there.
+            let ids = ids.split('&').next().unwrap_or_default().replace("%2C", ",");
+            let found: Vec<String> = ids.split(',').map(|id| format!(r#"{{"id":{id},"source_url":"https://example.com/blog/{id}.jpg"}}"#)).collect();
+            format!("[{}]", found.join(","))
+        } else {
+            r#"{"id":7}"#.to_string()
+        };
+        Ok(crate::wordpress::Reply { status: 201, headers: Vec::new(), body: reply.into_bytes() })
+    }
+}
+
+/// A Story of `files` photos exported for the web, then rendered and sent
+/// to a site at Low resolution, as hundreds of photos for one post are.
+fn publication(report: &mut Report, files: &[PathBuf]) {
+    use crate::story_html::{self, Format, Progress, Profile, Words};
+    use crate::trip::{Block, MediaUse, Story, StoryBlock};
+    let count = files.len();
+    let story = Story {
+        id: 1,
+        trip_id: 1,
+        title: "A year".into(),
+        subtitle: String::new(),
+        introduction: String::new(),
+        conclusion: String::new(),
+        author: String::new(),
+        show_date: false,
+        cover: Some(1),
+        cover_crop: crate::trip::CoverCrop::default(),
+        template: crate::trip::DEFAULT_TEMPLATE.into(),
+        archived: false,
+        finished: false,
+        revision: 1,
+        updated_at: 0,
+    };
+    let media: Vec<MediaUse> = (1..=count as i64).map(MediaUse::new).collect();
+    let blocks: Vec<StoryBlock> = media.chunks(20).map(|chunk| StoryBlock::new(Block::Gallery(chunk.to_vec()))).collect();
+    let sources: std::collections::HashMap<i64, story_html::Source> =
+        files.iter().enumerate().map(|(index, path)| (index as i64 + 1, Some((path.clone(), crate::edit::Settings::default(), 0)))).collect();
+    let words = Words { lang: "en", untitled: "Untitled story".into(), unavailable: "Photo unavailable".into(), contents: "Contents".into() };
+    let page = story_html::Page { story: &story, dates: None, blocks: &blocks, sources: &sources, words: &words, map: None, profiles: &std::collections::HashMap::new() };
+    let dir = scratch("publication");
+    let started = Instant::now();
+    let (_, outcome) = story_html::export_story(&dir, "A year", Format::Html, Profile::default(), &page, &Progress::default()).unwrap();
+    assert_eq!(outcome, story_html::Outcome::default());
+    report.rate(&format!("Export a Story of {count} photos"), count, started.elapsed(), 5.0);
+
+    let job = crate::publish::Job {
+        api: crate::wordpress::tests::local_api(),
+        credentials: crate::wordpress::Credentials { user: "ana".into(), password: "abcd efgh".into() },
+        policy: crate::wordpress::Policy::default(),
+        story: story.clone(),
+        blocks: blocks.clone(),
+        sources: sources.clone(),
+        size: crate::upload::UploadSize::Low,
+        exif: false,
+        uploads: std::collections::HashMap::new(),
+        post_id: None,
+        fingerprint: String::new(),
+        overwrite: false,
+        pending_since: None,
+        publish: false,
+        schedule: None,
+        days: None,
+        allow_new: true,
+        map: None,
+        profiles: std::collections::HashMap::new(),
+        update_published: false,
+        terms: crate::db::PostTerms::default(),
+        renders: crate::publish::Renders::default(),
+    };
+    let site = Site::default();
+    let started = Instant::now();
+    let mut uploads = std::collections::HashMap::new();
+    let saved = crate::publish::run(&site, &job, &Progress::default(), &mut |event| {
+        if let crate::publish::Event::Uploaded { hash, media_id, url, .. } = event {
+            uploads.insert(hash, (media_id, url));
+        }
+    })
+    .unwrap();
+    let distinct: std::collections::HashSet<Vec<u8>> = files.iter().map(|path| std::fs::read(path).unwrap()).collect();
+    assert_eq!(saved.uploaded, distinct.len(), "one upload for each different photo; the same bytes go once");
+    report.rate(&format!("Render and send {count} photos at Low resolution"), count, started.elapsed(), 5.0);
+    report.add("Sent to the site", format!("{:.1} MB", site.bytes.get() as f64 / 1_048_576.0));
+
+    // Saved again with nothing changed: the photos the site has aren't rendered again.
+    let again = crate::publish::Job { uploads, ..job };
+    let saved = report.time_within("Publish it again with nothing changed", Duration::from_secs(2), || crate::publish::run(&site, &again, &Progress::default(), &mut |_| {}).unwrap());
+    assert_eq!((saved.uploaded, saved.reused), (0, distinct.len()), "nothing sent again");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 fn walk(dir: &Path) -> Vec<PathBuf> {
     let mut files = Vec::new();
     for entry in std::fs::read_dir(dir).unwrap().flatten() {
@@ -354,5 +465,11 @@ fn bench_large_library() {
     // Making thumbnails once held on to about 1 MB per photo; this limit
     // catches that coming back.
     report.memory("Peak memory after scan and thumbnails", 400.0);
+    let assets = size("PICASSO_BENCH_ASSETS", 300).min(size("PICASSO_BENCH_FILES", 2_000));
+    let mut files = walk(&photo_files(size("PICASSO_BENCH_FILES", 2_000)));
+    files.sort();
+    files.truncate(assets);
+    publication(&mut report, &files);
+    report.memory("Peak memory after publishing", 400.0);
     assert!(report.failures.is_empty(), "past the limits:\n{}", report.failures.join("\n"));
 }

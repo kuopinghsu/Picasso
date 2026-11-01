@@ -11,7 +11,7 @@ use chrono::{Local, NaiveDate, TimeZone};
 use eframe::egui::{self, Align, Key, Layout, Margin, Modifiers, RichText, Vec2};
 
 use crate::i18n::{tr, trf};
-use crate::trip::{shift_cameras, TripTrack, PlaceSuggestion, suggest_trips, Shot, TripCandidate, TripQuery, AddPreview, DayFilter, DaySource, DaySuggestion, MemberQuery, Review, Story, StoryFilter, Trip, TripDay, TripDraft, TripImpact, TripPlace, ResourceKind, TripResource};
+use crate::trip::{shift_cameras, Member, TripTrack, PlaceSuggestion, suggest_trips, Shot, TripCandidate, TripQuery, AddPreview, DayFilter, DaySource, DaySuggestion, MemberQuery, Review, Story, StoryFilter, Trip, TripDay, TripDraft, TripImpact, TripPlace, ResourceKind, TripResource};
 use crate::types::{format_day, Nav, Photo};
 
 use super::story::{story_name, Group};
@@ -32,6 +32,7 @@ pub(super) struct TripReads {
     track_choices: Option<Vec<(i64, String, Option<i64>)>>,
     resources: HashMap<i64, Vec<TripResource>>,
     covers: HashMap<i64, Option<Photo>>,
+    unavailable: HashMap<i64, Vec<Member>>,
 }
 
 impl PicassoApp {
@@ -74,7 +75,7 @@ impl PicassoApp {
         reads.places.entry(trip_id).or_insert_with(|| db.trip_places(trip_id)).clone()
     }
 
-    fn tracks_of(&mut self, trip_id: i64) -> Vec<TripTrack> {
+    pub(super) fn tracks_of(&mut self, trip_id: i64) -> Vec<TripTrack> {
         let (db, reads) = self.reads();
         reads.tracks.entry(trip_id).or_insert_with(|| db.trip_tracks(trip_id)).clone()
     }
@@ -87,6 +88,13 @@ impl PicassoApp {
     fn resources_of(&mut self, trip_id: i64) -> Vec<TripResource> {
         let (db, reads) = self.reads();
         reads.resources.entry(trip_id).or_insert_with(|| db.trip_resources(trip_id)).clone()
+    }
+
+    /// The first of the Trip's members no longer in the library.
+    fn unavailable_of(&mut self, trip_id: i64) -> Vec<Member> {
+        let query = MemberQuery { unavailable: true, ..MemberQuery::default() };
+        let (db, reads) = self.reads();
+        reads.unavailable.entry(trip_id).or_insert_with(|| db.trip_members(trip_id, &query, 0, UNAVAILABLE_SHOWN)).clone()
     }
 
     fn cover_of(&mut self, trip_id: i64) -> Option<Photo> {
@@ -1081,8 +1089,8 @@ impl PicassoApp {
         let trip_id = dialog.trip_id;
         let error = dialog.error.clone();
         let query = MemberQuery { unavailable: true, ..MemberQuery::default() };
-        let members = self.db.trip_members(trip_id, &query, 0, UNAVAILABLE_SHOWN);
-        let total = self.db.count_trip_members(trip_id, &query);
+        let members = self.unavailable_of(trip_id);
+        let total = self.members_counted(trip_id, query);
         let mut close = false;
         let mut locate: Option<i64> = None;
         let response = egui::Modal::new(egui::Id::unique("trip-unavailable")).frame(about::dialog_frame()).show(ctx, |ui| {

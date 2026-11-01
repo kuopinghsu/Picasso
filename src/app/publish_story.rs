@@ -724,6 +724,7 @@ impl PicassoApp {
             profiles: page.profiles,
             update_published: update && (by_day || earlier.as_ref().is_some_and(|publication| publication.remote_status != "draft")),
             terms,
+            renders: self.publish_renders.clone(),
         };
         let progress = self.start_story_job();
         let (story_id, site_id, revision, label) = (job.story.id, site.id, job.story.revision, site.label.clone());

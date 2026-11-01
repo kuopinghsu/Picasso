@@ -9,7 +9,9 @@
 //! deleted, and a post that is no longer a draft is never changed.
 
 use std::collections::HashMap;
+use std::path::Path;
 use std::sync::atomic::Ordering;
+use std::sync::{Arc, Mutex};
 
 use crate::gutenberg::{self, RouteMap, Unsupported, Uploaded};
 use crate::story_html::{MapTiles, Progress, Source};
@@ -64,6 +66,41 @@ pub struct Job {
     /// The site's categories and tags chosen for the post; none chosen of
     /// either leaves the post's own on the site as they are.
     pub terms: crate::db::PostTerms,
+    /// What photos rendered to earlier, shared and added to by each job.
+    pub renders: Renders,
+}
+
+/// What photos rendered to in this session, by [`render_key`]: the hash and
+/// length of their bytes. A photo whose bytes the site already has isn't
+/// rendered again to learn them. Kept in memory only, so a newer Picasso,
+/// which may render differently, starts afresh.
+#[derive(Clone, Default)]
+pub struct Renders(Arc<Mutex<HashMap<String, (String, u64)>>>);
+
+/// Photos [`Renders`] keeps before it starts again.
+const RENDERS_KEPT: usize = 20_000;
+
+impl Renders {
+    fn get(&self, key: &str) -> Option<(String, u64)> {
+        self.0.lock().ok()?.get(key).cloned()
+    }
+
+    fn keep(&self, key: String, hash: &str, bytes: u64) {
+        let Ok(mut kept) = self.0.lock() else { return };
+        if kept.len() >= RENDERS_KEPT {
+            kept.clear();
+        }
+        kept.insert(key, (hash.to_string(), bytes));
+    }
+}
+
+/// What a photo's upload is made from: its file as it is now, its edit and
+/// turn, and how it is sent. `None` when the file can't be looked at.
+fn render_key(path: &Path, settings: &crate::edit::Settings, rotation: i32, size: UploadSize, exif: bool, crop: Option<crate::trip::CoverCrop>) -> Option<String> {
+    let meta = std::fs::metadata(path).ok()?;
+    let modified = meta.modified().ok()?.duration_since(std::time::UNIX_EPOCH).ok()?.as_nanos();
+    let what = format!("{}\n{}\n{modified}\n{settings:?}\n{rotation}\n{size:?}\n{exif}\n{crop:?}", path.display(), meta.len());
+    Some(upload::hash(what.as_bytes()))
 }
 
 /// What the job learns that the library should keep at once.
@@ -73,7 +110,7 @@ pub enum Event {
     Uploaded { hash: String, size: UploadSize, media_id: i64, url: String, details: String },
     /// An upload recorded before is no longer on the site.
     Gone { hash: String },
-    /// Every photo is rendered: this many different ones, of these bytes in
+    /// Every photo is rendered, or known: this many different ones, of these bytes in
     /// all, are what may be sent, before anything is.
     Prepared { photos: usize, bytes: u64 },
     /// A draft is about to be made for the Story; until it is confirmed, one
@@ -297,26 +334,26 @@ pub fn run(http: &dyn Http, job: &Job, progress: &Progress, report: &mut dyn FnM
     order.extend(job.story.cover_key().filter(|key| *key < 0));
     order.sort_unstable();
     // Every photo is rendered before any is sent, to a folder of its own,
-    // so the bytes to send are known first and none is held in memory.
+    // so the bytes to send are known first and none is held in memory. One
+    // that rendered before to bytes the site has is only rendered if sent.
     progress.total.store(order.len() * 2 + 1, Ordering::Relaxed);
     let staging = Staging::new(job.story.id);
+    let made = crate::image_io::render_all(&order, |&media_id| {
+        if progress.cancel.load(Ordering::Relaxed) {
+            return Err(Stopped::Cancelled { uploaded: 0 });
+        }
+        let (hash, bytes) = match rendered_before(job, media_id) {
+            Some(known) => known,
+            None => render_photo(job, media_id, &staging, 0)?,
+        };
+        progress.done.fetch_add(1, Ordering::Relaxed);
+        Ok((media_id, hash, bytes))
+    })?;
     let mut rendered: Vec<(i64, String)> = Vec::new();
     let mut sizes: HashMap<String, u64> = HashMap::new();
-    for &media_id in &order {
-        if progress.cancel.load(Ordering::Relaxed) {
-            return Err(Stopped::Cancelled { uploaded });
-        }
-        let Some((path, settings, rotation)) = job.sources.get(&media_id.abs()).cloned().flatten() else {
-            return Err(Stopped::Photo { media_id: media_id.abs(), uploaded });
-        };
-        let crop = (media_id < 0).then_some(job.story.cover_crop);
-        let photo = upload::render(&path, &settings, rotation, job.size, job.exif, crop).map_err(|_| Stopped::Photo { media_id: media_id.abs(), uploaded })?;
-        if !sizes.contains_key(&photo.hash) {
-            std::fs::write(staging.path(&photo.hash), &photo.bytes).map_err(|_| Stopped::Photo { media_id, uploaded })?;
-            sizes.insert(photo.hash.clone(), photo.bytes.len() as u64);
-        }
-        rendered.push((media_id, photo.hash));
-        progress.done.fetch_add(1, Ordering::Relaxed);
+    for (media_id, hash, bytes) in made {
+        sizes.insert(hash.clone(), bytes);
+        rendered.push((media_id, hash));
     }
     report(Event::Prepared { photos: sizes.len(), bytes: sizes.values().sum() });
     // Each photo's first description in the Story goes with its upload.
@@ -344,11 +381,22 @@ pub fn run(http: &dyn Http, job: &Job, progress: &Progress, report: &mut dyn FnM
             progress.done.fetch_add(1, Ordering::Relaxed);
             continue;
         }
-        let bytes = std::fs::read(staging.path(&hash)).map_err(|_| Stopped::Photo { media_id, uploaded })?;
+        let so_far = uploaded;
+        let mut bytes = || {
+            if let Ok(bytes) = std::fs::read(staging.path(&hash)) {
+                return Ok(bytes);
+            }
+            // Not rendered, as the site had these bytes; rendered now that it may not.
+            let failed = Stopped::Photo { media_id: media_id.abs(), uploaded: so_far };
+            match render_photo(job, media_id, &staging, so_far)? {
+                (now, _) if now == hash => std::fs::read(staging.path(&hash)).map_err(|_| failed),
+                _ => Err(failed),
+            }
+        };
         let alt = alts.get(&media_id).copied().unwrap_or_default();
         let file = job.sources.get(&media_id).cloned().flatten().and_then(|(path, ..)| path.file_stem().map(|stem| stem.to_string_lossy().into_owned()));
         let stem = upload_name(&job.story.title, file.as_deref().unwrap_or_default(), &hash);
-        let item = place(&client, job, &bytes, &hash, &stem, alt, &known, &mut uploaded, &mut reused, report)?;
+        let item = place(&client, job, &mut bytes, &hash, &stem, alt, &known, &mut uploaded, &mut reused, report)?;
         by_hash.insert(hash, item.clone());
         media.insert(media_id, item);
         progress.done.fetch_add(1, Ordering::Relaxed);
@@ -367,7 +415,7 @@ pub fn run(http: &dyn Http, job: &Job, progress: &Progress, report: &mut dyn FnM
             let hash = upload::hash(&bytes);
             let item = match by_hash.get(&hash) {
                 Some(same) => same.clone(),
-                None => place(&client, job, &bytes, &hash, &upload_name(&job.story.title, "route", &hash), "", &known, &mut uploaded, &mut reused, report)?,
+                None => place(&client, job, &mut || Ok(bytes.clone()), &hash, &upload_name(&job.story.title, "route", &hash), "", &known, &mut uploaded, &mut reused, report)?,
             };
             by_hash.insert(hash, item.clone());
             maps.insert(block.uid.clone(), RouteMap { uploaded: item, credit: tiles.source.attribution() });
@@ -664,12 +712,43 @@ pub fn upload_name(title: &str, file: &str, hash: &str) -> String {
     parts.join("-")
 }
 
+/// The hash and length of what photo `media_id` rendered to before, when the
+/// site has those bytes, so it needn't be rendered again.
+fn rendered_before(job: &Job, media_id: i64) -> Option<(String, u64)> {
+    let (path, settings, rotation) = job.sources.get(&media_id.abs()).cloned().flatten()?;
+    let crop = (media_id < 0).then_some(job.story.cover_crop);
+    let key = render_key(&path, &settings, rotation, job.size, job.exif, crop)?;
+    job.renders.get(&key).filter(|(hash, _)| job.uploads.contains_key(hash))
+}
+
+/// Renders photo `media_id` into `staging` under the hash of its bytes, and
+/// keeps what it became in the job's [`Renders`]. Returns the hash and length.
+fn render_photo(job: &Job, media_id: i64, staging: &Staging, uploaded: usize) -> Result<(String, u64), Stopped> {
+    let failed = || Stopped::Photo { media_id: media_id.abs(), uploaded };
+    let (path, settings, rotation) = job.sources.get(&media_id.abs()).cloned().flatten().ok_or_else(failed)?;
+    let crop = (media_id < 0).then_some(job.story.cover_crop);
+    let key = render_key(&path, &settings, rotation, job.size, job.exif, crop);
+    let photo = upload::render(&path, &settings, rotation, job.size, job.exif, crop).map_err(|_| failed())?;
+    // The same bytes from two photos are written by whichever comes first.
+    match std::fs::OpenOptions::new().write(true).create_new(true).open(staging.path(&photo.hash)) {
+        Ok(mut file) => std::io::Write::write_all(&mut file, &photo.bytes).map_err(|_| failed())?,
+        Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(_) => return Err(failed()),
+    }
+    let bytes = photo.bytes.len() as u64;
+    if let Some(key) = key {
+        job.renders.keep(key, &photo.hash, bytes);
+    }
+    Ok((photo.hash, bytes))
+}
+
 /// A confirmed upload of these bytes that is still on the site, or the
 /// bytes uploaded now, reported as each happens. Only an upload made now is
 /// given `alt`: one already on the site may be in other posts. `stem` names
 /// it, and must be the same for the same bytes, as a lost upload is found by it.
+/// `bytes` is asked for only when they are sent.
 #[allow(clippy::too_many_arguments)]
-fn place(client: &Client, job: &Job, bytes: &[u8], hash: &str, stem: &str, alt: &str, known: &HashMap<i64, Media>, uploaded: &mut usize, reused: &mut usize, report: &mut dyn FnMut(Event)) -> Result<Uploaded, Stopped> {
+fn place(client: &Client, job: &Job, bytes: &mut dyn FnMut() -> Result<Vec<u8>, Stopped>, hash: &str, stem: &str, alt: &str, known: &HashMap<i64, Media>, uploaded: &mut usize, reused: &mut usize, report: &mut dyn FnMut(Event)) -> Result<Uploaded, Stopped> {
     let site = |failure: Failure, uploaded: usize| Stopped::Site { failure, uploaded };
     if let Some((id, url)) = job.uploads.get(hash) {
         let now = match known.get(id) {
@@ -687,7 +766,8 @@ fn place(client: &Client, job: &Job, bytes: &[u8], hash: &str, stem: &str, alt: 
         }
         report(Event::Gone { hash: hash.to_string() });
     }
-    let sent = match client.upload_media(&job.api, &job.credentials, bytes, &format!("{stem}.jpg")) {
+    let bytes = bytes()?;
+    let sent = match client.upload_media(&job.api, &job.credentials, &bytes, &format!("{stem}.jpg")) {
         Ok(sent) => sent,
         // Sent but not answered: the upload is found by its name, as the same
         // bytes are always named the same; any of them is these bytes.
@@ -765,6 +845,7 @@ mod tests {
             profiles: HashMap::new(),
             update_published: false,
             terms: crate::db::PostTerms::default(),
+            renders: Renders::default(),
         }
     }
 
@@ -902,6 +983,60 @@ mod tests {
             .answer_to("POST", &format!("{POSTS}/7"), 200, &[], r#"{"id":7}"#);
         run(&fake, &again, &Progress::default(), &mut |_| {}).unwrap();
         assert!(!fake.bodies.borrow().iter().any(|(key, _)| *key == alt), "an upload already on the site may be in other posts");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_photo_the_site_has_is_not_rendered_again_until_it_must_be_sent() {
+        let dir = temp_dir("renders");
+        let first = job(&dir, None, HashMap::new());
+        let fake = Fake::default()
+            .answer_to("POST", MEDIA, 201, &[], r#"{"id":41,"source_url":"https://example.com/blog/a.jpg"}"#)
+            .answer_to("POST", POSTS, 201, &[], r#"{"id":7}"#);
+        let mut events = Vec::new();
+        run(&fake, &first, &Progress::default(), &mut |event| events.push(event)).unwrap();
+        let Some(Event::Uploaded { hash, .. }) = events.iter().find(|event| matches!(event, Event::Uploaded { .. })).cloned() else { panic!("{events:?}") };
+        let known = HashMap::from([(hash.clone(), (41, "https://example.com/blog/a.jpg".to_string()))]);
+        let again = Job { uploads: known, post_id: Some(7), ..first.clone() };
+
+        // The file can no longer be read as a photo, though it looks the same:
+        // publishing again works only because it isn't rendered.
+        let path = dir.join("a.png");
+        let original = std::fs::read(&path).unwrap();
+        let modified = std::fs::metadata(&path).unwrap().modified().unwrap();
+        let keep_looks = |bytes: &[u8]| {
+            std::fs::write(&path, bytes).unwrap();
+            std::fs::File::options().write(true).open(&path).unwrap().set_modified(modified).unwrap();
+        };
+        keep_looks(&vec![0; original.len()]);
+        let still_there = || {
+            Fake::default()
+                .answer(&format!("{POSTS}/7?context=edit"), 200, &[], r#"{"status":"draft"}"#)
+                .answer(&format!("{MEDIA}?include=41&per_page=100&context=edit&_fields=id,source_url,mime_type,media_details"), 200, &[], r#"[{"id":41,"source_url":"https://example.com/blog/a.jpg"}]"#)
+                .answer_to("POST", &format!("{POSTS}/7"), 200, &[], r#"{"id":7}"#)
+        };
+        let mut events = Vec::new();
+        let saved = run(&still_there(), &again, &Progress::default(), &mut |event| events.push(event)).unwrap();
+        assert_eq!((saved.uploaded, saved.reused, saved.media.clone()), (0, 1, vec![41]));
+        assert!(matches!(&events[..], [Event::Prepared { photos: 1, bytes }] if *bytes > 0), "its size is still known: {events:?}");
+
+        // Another edit is another picture, which must be rendered.
+        let mut edited = again.clone();
+        let mut brighter = Settings::default();
+        brighter.set(crate::edit::Control::from_key("light.exposure").unwrap(), 0.5);
+        edited.sources.insert(11, Some((path.clone(), brighter, 0)));
+        assert!(matches!(run(&still_there(), &edited, &Progress::default(), &mut |_| {}), Err(Stopped::Photo { media_id: 11, .. })));
+
+        // Gone from the site: rendered now, the same bytes as before, and sent.
+        keep_looks(&original);
+        let lost = Fake::default()
+            .answer(&format!("{POSTS}/7?context=edit"), 200, &[], r#"{"status":"draft"}"#)
+            .answer_to("POST", MEDIA, 201, &[], r#"{"id":52,"source_url":"https://example.com/blog/b.jpg"}"#)
+            .answer_to("POST", &format!("{POSTS}/7"), 200, &[], r#"{"id":7}"#);
+        let mut events = Vec::new();
+        let saved = run(&lost, &again, &Progress::default(), &mut |event| events.push(event)).unwrap();
+        assert_eq!((saved.uploaded, saved.reused, saved.media.clone()), (1, 0, vec![52]));
+        assert!(events.iter().any(|event| matches!(event, Event::Uploaded { hash: sent, media_id: 52, .. } if *sent == hash)), "{events:?}");
         let _ = std::fs::remove_dir_all(dir);
     }
 

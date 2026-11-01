@@ -16,8 +16,6 @@ use crate::worker::UiEvent;
 use super::editor::{EXPORT_EDGES, EXPORT_FORMATS};
 use super::{about, theme, Modal, PicassoApp};
 
-/// Photos exported at the same time; each holds a full-size image.
-const EXPORT_THREADS: usize = 3;
 /// How long the status bar keeps the note about a finished export.
 const KEEP_NOTE_FOR: Duration = Duration::from_secs(120);
 
@@ -254,7 +252,7 @@ impl PicassoApp {
                     send(false);
                 });
             };
-            match rayon::ThreadPoolBuilder::new().num_threads(EXPORT_THREADS).build() {
+            match rayon::ThreadPoolBuilder::new().num_threads(crate::image_io::RENDER_THREADS).build() {
                 Ok(pool) => pool.install(run),
                 Err(_) => run(),
             }

@@ -275,6 +275,21 @@ pub fn write_whole(path: &Path, bytes: &[u8]) -> Result<(), String> {
     })
 }
 
+/// Photos rendered at the same time for an export or an upload; each holds
+/// a full-size image while it is made.
+pub const RENDER_THREADS: usize = 3;
+
+/// `job` for each of `items` on [`RENDER_THREADS`] threads, in the order of
+/// `items`. The first error stops the photos not yet begun.
+pub fn render_all<T: Sync, R: Send, E: Send>(items: &[T], job: impl Fn(&T) -> Result<R, E> + Sync) -> Result<Vec<R>, E> {
+    use rayon::prelude::*;
+    let run = || items.par_iter().with_max_len(1).map(&job).collect();
+    match rayon::ThreadPoolBuilder::new().num_threads(RENDER_THREADS).thread_name(|index| format!("picasso-render-{index}")).build() {
+        Ok(pool) => pool.install(run),
+        Err(_) => run(),
+    }
+}
+
 /// JPEG bytes of `rgba` with the alpha channel dropped.
 pub fn encode_jpeg(rgba: &ImageBuffer<Rgba<u8>, Vec<u8>>, quality: u8) -> Result<Vec<u8>, String> {
     let rgb = DynamicImage::ImageRgba8(rgba.clone()).into_rgb8();
@@ -911,6 +926,36 @@ fn dms_to_deg(values: &[exif::Rational]) -> Option<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn photos_render_a_few_at_a_time_in_order_and_an_error_stops_the_rest() {
+        use std::sync::atomic::AtomicUsize;
+        let (running, most) = (AtomicUsize::new(0), AtomicUsize::new(0));
+        let items: Vec<usize> = (0..40).collect();
+        let doubled = render_all(&items, |&n| -> Result<usize, ()> {
+            let now = running.fetch_add(1, Ordering::SeqCst) + 1;
+            most.fetch_max(now, Ordering::SeqCst);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            running.fetch_sub(1, Ordering::SeqCst);
+            Ok(n * 2)
+        });
+        assert_eq!(doubled, Ok((0..40).map(|n| n * 2).collect()));
+        assert!(most.load(Ordering::SeqCst) > 1, "more than one at a time");
+        assert!(most.load(Ordering::SeqCst) <= RENDER_THREADS, "never more than {RENDER_THREADS} at a time");
+
+        let begun = AtomicUsize::new(0);
+        let failed = render_all(&items, |&n| {
+            begun.fetch_add(1, Ordering::SeqCst);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            if n == 0 {
+                Err("unreadable")
+            } else {
+                Ok(n)
+            }
+        });
+        assert_eq!(failed, Err("unreadable"));
+        assert!(begun.load(Ordering::SeqCst) < items.len(), "photos not begun are left");
+    }
 
     fn heif_box(kind: &[u8; 4], body: &[u8]) -> Vec<u8> {
         let mut out = ((body.len() + 8) as u32).to_be_bytes().to_vec();

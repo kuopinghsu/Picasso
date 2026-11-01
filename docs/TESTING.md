@@ -35,7 +35,7 @@ The last line puts every photo in a folder of your own and its subfolders (HEIC,
 | WordPress publishing | `src/wordpress.rs`, `src/publish.rs`, `src/gutenberg.rs`, `src/upload.rs`, `src/db/sites.rs` | Finding the site's API, including in a subdirectory and without pretty permalinks. HTTPS only, except a local site in development. Credentials never follow a redirect to another origin. Typed errors for a blocked API, a wrong password, refusals and network failures. An upload over the site's limit is named and not sent again. Reads and refused requests are retried, and a write whose answer was lost is never resent. A lost upload or draft is found by its exact name. Every block kind has its core block. Upload sizes are 2048 px at quality 85 or 1280 px at quality 80, never enlarged, keeping only how the photo was taken. A draft is changed in place. A post edited on the site is left alone unless replacing was chosen. A post becomes public only when that was confirmed. Scheduling uses the site's own clock. Day posts are made once and linked. A post's record outlives its Story. The same photo at another size is a new upload, never the larger one reused, and a photo that fails to render stops the job before anything is sent. A new draft saved beside an edited or public post never changes that post, and the new draft and each Day post keep their own post. |
 | Credentials | `src/keychain.rs` | A secret goes to the system's store and comes back. Without a store it lasts the session. A store that refuses is an error, never a quiet fallback. The library keeps only a reference, naming the account and site. |
 | Place names and similar photos | `src/geocode.rs`, `src/burst.rs` | Positions sent for a name are rounded to about 100 m, and a cached answer is used offline. A burst is photos close in time and alike. |
-| Performance | `src/bench.rs` | Catalog queries, scanning, thumbnails, and memory, with limits in CI. |
+| Performance | `src/bench.rs` | Catalog queries, a year-long Trip, scanning, thumbnails, exporting and publishing a 300-photo Story, and memory, with limits in CI. |
 
 CI runs the tests (`cargo test --release --locked`, the command `make test` runs) on Windows and Linux, each on x64 and Arm64 machines, and on macOS, and `make bench-check` on both Linux machines. It installs, starts, and removes the `.deb` on Ubuntu 22.04, and starts the AppImage on AlmaLinux 8, the oldest system it supports, and Ubuntu 24.04, for both processors. It also builds the User Guide as PDF in both languages with `make guide-pdf`, which fails when a character is in none of the fonts. Like the x64 ones, the Arm packages still need the checks below on a real machine, since CI draws without a graphics card.
 
@@ -84,7 +84,7 @@ CI runs the same tests on Windows and Linux (x64 and Arm64) and macOS. That buil
 
 ### Export failures and Trips at scale, on top of `bc1d0a6`
 
-Run on 2026-11-01 on the same machine, an Apple M2 Max. With these tests and the later ones in the coverage table above, `make test` gives 393 passed and 1 ignored; `make lint`, `make bench-check`, `make check-docs` and `make guide` are clean.
+Run on 2026-11-01 on the same machine, an Apple M2 Max. With these tests and the later ones in the coverage table above, `make test` gives 395 passed and 1 ignored; `make lint`, `make bench-check`, `make check-docs` and `make guide` are clean.
 
 | What | How | Result |
 | --- | --- | --- |
@@ -93,6 +93,7 @@ Run on 2026-11-01 on the same machine, an Apple M2 Max. With these tests and the
 | A write failing partway, as on a full disk | A test makes the page's file impossible to replace after the photos are written | An error, and no manifest claims the export is whole. The free-space check before an export is tested through its estimate, not on a full disk |
 | 20 photos with edits and RAW | Plain landscape and portrait photos, one turned in the library, one cropped and brightened, one with a Unicode file name, and a darkened TIFF-based raw file with an embedded preview, through HTML and Markdown | Every photo shown once, every link relative and inside the folder, sizes as expected, no EXIF, originals' checksums unchanged |
 | Trips at scale | `make bench`: 100,000 catalog photos and a 10,000-photo Trip over 365 Days | Every step well under its limit. The Trips view's queries take 3.2 ms; it now keeps their answers until the library changes, checked in 0.9 µs a frame. Numbers are in `docs/PERFORMANCE.md` |
+| Hundreds of publication assets | `make bench`: a Story of 300 photos in galleries of 20, exported as a web page, then rendered and sent at Low resolution to a stand-in site | Export 130 photos/s, publishing 68 photos/s, rendering three photos at a time (one at a time: 43 and 23); each different photo uploaded once (200 uploads, 13 MB); publishing again with nothing changed 2.1 ms, as no photo is rendered again; peak memory 252 MB. A real site's upload time comes on top |
 
 ### Tried by hand
 

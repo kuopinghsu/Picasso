@@ -216,24 +216,28 @@ pub fn write_story(folder: &Path, format: Format, profile: Profile, input: &Page
     }
     order.sort_by_key(|(id, _)| *id);
     progress.total.store(order.len(), Ordering::Relaxed);
-    let mut read = Vec::new();
-    for (media_id, source) in order {
+    // Every file as it is before any is read, whichever is rendered first.
+    let before: HashMap<i64, Stamp> = order.iter().filter_map(|(media_id, source)| Some((*media_id, stamp(&source.as_ref()?.0)))).collect();
+    let made = crate::image_io::render_all(&order, |&(media_id, source)| {
         if progress.cancel.load(Ordering::Relaxed) {
-            return Err(CANCELLED.into());
+            return Err(CANCELLED.to_string());
         }
         progress.done.fetch_add(1, Ordering::Relaxed);
-        let Some((path, settings, rotation)) = source else { continue };
-        let before = stamp(path);
+        let Some((path, settings, rotation)) = source else { return Ok(None) };
         // A photo that can't be read is shown as unavailable, never left out.
-        let Ok(rgba) = crate::edit::render_edited(path, settings, *rotation, Some(profile.edge)) else { continue };
+        let Ok(rgba) = crate::edit::render_edited(path, settings, *rotation, Some(profile.edge)) else { return Ok(None) };
         let rgba = if media_id < 0 { crop_cover(&rgba, story.cover_crop) } else { rgba };
         let bytes = crate::image_io::encode_jpeg(&rgba, profile.quality.clamp(1, 100))?;
         let file = format!("images/{}.jpg", key(&bytes));
         crate::image_io::write_whole(&folder.join(&file), &bytes)?;
+        Ok(Some((media_id, path, WebImage { file, width: rgba.width(), height: rgba.height() })))
+    })?;
+    let mut read = Vec::new();
+    for (media_id, path, image) in made.into_iter().flatten() {
         if media_id > 0 {
-            read.push((media_id, path, before));
+            read.push((media_id, path, before.get(&media_id).copied().flatten()));
         }
-        images.insert(media_id, WebImage { file, width: rgba.width(), height: rgba.height() });
+        images.insert(media_id, image);
     }
     // Each route on its map, as a picture like the photos.
     let mut maps = HashMap::new();

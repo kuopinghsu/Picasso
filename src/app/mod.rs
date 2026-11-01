@@ -257,6 +257,7 @@ pub struct PicassoApp {
     albums: Vec<crate::types::Album>,
     /// Active Trips, then archived ones.
     trips: Vec<crate::trip::Trip>,
+    trip_reads: trips::TripReads,
     /// The Story being edited, shown in place of its Trip's photos.
     story: Option<story::StoryEditor>,
     /// The archived Trips are listed in the side bar.
@@ -593,6 +594,7 @@ impl PicassoApp {
             tree_open: HashMap::new(),
             albums: Vec::new(),
             trips: Vec::new(),
+            trip_reads: trips::TripReads::default(),
             story: None,
             show_archived_trips: false,
             trip_filter: crate::trip::MemberQuery::default(),

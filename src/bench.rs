@@ -219,7 +219,12 @@ fn trip(report: &mut Report, count: usize) {
     assert_eq!(suggestion.new_days, 365, "a Day for each date");
     let days = db.trip_days(trip_id);
     let filtered = MemberQuery { starred: true, ..MemberQuery::default() };
-    // The Trips view asks these each time it draws a frame.
+    // The Trips view keeps these until the library changes, which it checks each frame.
+    let started = Instant::now();
+    for _ in 0..1000 {
+        db.change_stamp();
+    }
+    report.add("Check the library for changes (each frame)", format!("{:.1} µs", started.elapsed().as_secs_f64() * 1000.0));
     report.time_within(&format!("Trip header: {} Days, counts, review", days.len()), Duration::from_millis(50), || {
         db.trip_days(trip_id);
         db.count_trip_members(trip_id, &MemberQuery { day: DayFilter::Unassigned, ..MemberQuery::default() });

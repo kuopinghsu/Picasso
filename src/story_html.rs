@@ -1575,6 +1575,48 @@ mod tests {
     }
 
     #[test]
+    fn an_export_keeps_what_it_started_with_and_the_next_one_shows_the_changes() {
+        let root = std::env::temp_dir().join(format!("picasso-export-pinned-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let out = root.join("out");
+        std::fs::create_dir_all(&out).unwrap();
+        let file = root.join("a.jpg");
+        photo(1, 3000, 2000).save(&file).unwrap();
+        let (story, words) = (story(), words());
+        let page_of = |text: &str, settings: Settings| {
+            let blocks = vec![StoryBlock::new(Block::Paragraph(text.into())), StoryBlock::new(Block::Photo(MediaUse::new(1))), StoryBlock::new(Block::Photo(MediaUse::new(2)))];
+            let sources = HashMap::from([(1, Some((file.clone(), settings.clone(), 0))), (2, Some((file.clone(), settings, 0)))]);
+            (blocks, sources)
+        };
+        let shown = |folder: &Path| {
+            let html = std::fs::read_to_string(folder.join("index.html")).unwrap();
+            let manifest: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(folder.join("manifest.json")).unwrap()).unwrap();
+            let first = &manifest["photos"][0];
+            (html.contains("Before"), html.contains("After"), (first["width"].as_u64().unwrap(), first["height"].as_u64().unwrap()))
+        };
+        let (blocks, sources) = page_of("Before", Settings::default());
+        let started = Page { story: &story, dates: None, blocks: &blocks, sources: &sources, words: &words, map: None, profiles: &HashMap::new() };
+        let progress = Progress::default();
+        let mut cropped = Settings::default();
+        cropped.set(crate::edit::Control::CROP_RIGHT, 0.5);
+        let (first, next) = std::thread::scope(|scope| {
+            let running = scope.spawn(|| export_story(&out, "Kyoto", Format::Html, Profile::default(), &started, &progress).unwrap().0);
+            // The text and the photo's crop change while it runs; the next export is made of those.
+            while progress.done.load(Ordering::Relaxed) < 1 && !running.is_finished() {
+                std::thread::yield_now();
+            }
+            let (blocks, sources) = page_of("After", cropped);
+            let changed = Page { story: &story, dates: None, blocks: &blocks, sources: &sources, words: &words, map: None, profiles: &HashMap::new() };
+            let first = running.join().unwrap();
+            (first, export_story(&out, "Kyoto", Format::Html, Profile::default(), &changed, &Progress::default()).unwrap().0)
+        });
+        assert_ne!(first, next, "a new folder");
+        assert_eq!(shown(&first), (true, false, (1600, 1067)), "the first export as it started");
+        assert_eq!(shown(&next), (false, true, (1200, 1600)), "the next one with the new text and crop");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn a_write_that_fails_is_an_error_not_a_shorter_page() {
         // As when the disk fills up: the photos are written, the page can't be.
         let folder = std::env::temp_dir().join(format!("picasso-export-full-{}", std::process::id()));

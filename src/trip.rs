@@ -226,7 +226,7 @@ pub struct Trip {
 }
 
 /// Which Trips a list shows.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub struct TripQuery {
     /// Archived Trips instead of active ones.
     pub archived: bool,
@@ -403,7 +403,7 @@ pub struct DayAssignment {
 
 /// Which members of a Trip a list, a count, or a batch action covers. The
 /// same query serves all three, so they always agree.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct MemberQuery {
     pub day: DayFilter,
     pub starred: bool,
@@ -419,7 +419,7 @@ pub struct MemberQuery {
 }
 
 /// Members used by the Trip's Stories.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum StoryFilter {
     #[default]
     Any,
@@ -429,7 +429,7 @@ pub enum StoryFilter {
     Story(i64),
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum DayFilter {
     #[default]
     Any,

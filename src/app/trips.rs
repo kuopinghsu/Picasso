@@ -3,6 +3,7 @@
 //! the line about a Trip above its photos. `docs/TRAVEL.md` describes the
 //! model; the library operations are in `src/db/trips.rs`.
 
+use std::collections::HashMap;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
@@ -10,11 +11,89 @@ use chrono::{Local, NaiveDate, TimeZone};
 use eframe::egui::{self, Align, Key, Layout, Margin, Modifiers, RichText, Vec2};
 
 use crate::i18n::{tr, trf};
-use crate::trip::{shift_cameras, PlaceSuggestion, suggest_trips, Shot, TripCandidate, TripQuery, AddPreview, DayFilter, DaySource, DaySuggestion, MemberQuery, Review, Story, StoryFilter, Trip, TripDay, TripDraft, TripImpact, TripPlace, ResourceKind, TripResource};
-use crate::types::{format_day, Nav};
+use crate::trip::{shift_cameras, TripTrack, PlaceSuggestion, suggest_trips, Shot, TripCandidate, TripQuery, AddPreview, DayFilter, DaySource, DaySuggestion, MemberQuery, Review, Story, StoryFilter, Trip, TripDay, TripDraft, TripImpact, TripPlace, ResourceKind, TripResource};
+use crate::types::{format_day, Nav, Photo};
 
 use super::story::{story_name, Group};
 use super::{about, theme, tree_section, Glyph, Modal, PicassoApp, UiEvent};
+
+/// What the Trips pages read from the library, kept until the library
+/// changes, so drawing a frame doesn't query it again.
+#[derive(Default)]
+pub(super) struct TripReads {
+    stamp: Option<(u64, i64)>,
+    trips: HashMap<TripQuery, Vec<Trip>>,
+    days: HashMap<i64, Vec<TripDay>>,
+    stories: HashMap<i64, Vec<Story>>,
+    counts: HashMap<(i64, MemberQuery), i64>,
+    review: HashMap<i64, Vec<(Review, usize)>>,
+    places: HashMap<i64, Vec<TripPlace>>,
+    tracks: HashMap<i64, Vec<TripTrack>>,
+    track_choices: Option<Vec<(i64, String, Option<i64>)>>,
+    resources: HashMap<i64, Vec<TripResource>>,
+    covers: HashMap<i64, Option<Photo>>,
+}
+
+impl PicassoApp {
+    /// [`TripReads`], emptied first if the library changed since they were read.
+    fn reads(&mut self) -> (&crate::db::Database, &mut TripReads) {
+        let stamp = Some(self.db.change_stamp());
+        if self.trip_reads.stamp != stamp {
+            self.trip_reads = TripReads { stamp, ..TripReads::default() };
+        }
+        (&self.db, &mut self.trip_reads)
+    }
+
+    fn trips_listed(&mut self, query: &TripQuery) -> Vec<Trip> {
+        let (db, reads) = self.reads();
+        reads.trips.entry(query.clone()).or_insert_with(|| db.trips(query)).clone()
+    }
+
+    pub(super) fn days_of(&mut self, trip_id: i64) -> Vec<TripDay> {
+        let (db, reads) = self.reads();
+        reads.days.entry(trip_id).or_insert_with(|| db.trip_days(trip_id)).clone()
+    }
+
+    fn stories_of(&mut self, trip_id: i64) -> Vec<Story> {
+        let (db, reads) = self.reads();
+        reads.stories.entry(trip_id).or_insert_with(|| db.stories(trip_id)).clone()
+    }
+
+    fn members_counted(&mut self, trip_id: i64, query: MemberQuery) -> i64 {
+        let (db, reads) = self.reads();
+        *reads.counts.entry((trip_id, query)).or_insert_with(|| db.count_trip_members(trip_id, &query))
+    }
+
+    fn review_of(&mut self, trip_id: i64) -> Vec<(Review, usize)> {
+        let (db, reads) = self.reads();
+        reads.review.entry(trip_id).or_insert_with(|| db.review_counts(trip_id)).clone()
+    }
+
+    fn places_of(&mut self, trip_id: i64) -> Vec<TripPlace> {
+        let (db, reads) = self.reads();
+        reads.places.entry(trip_id).or_insert_with(|| db.trip_places(trip_id)).clone()
+    }
+
+    fn tracks_of(&mut self, trip_id: i64) -> Vec<TripTrack> {
+        let (db, reads) = self.reads();
+        reads.tracks.entry(trip_id).or_insert_with(|| db.trip_tracks(trip_id)).clone()
+    }
+
+    fn track_choices(&mut self) -> Vec<(i64, String, Option<i64>)> {
+        let (db, reads) = self.reads();
+        reads.track_choices.get_or_insert_with(|| db.track_choices()).clone()
+    }
+
+    fn resources_of(&mut self, trip_id: i64) -> Vec<TripResource> {
+        let (db, reads) = self.reads();
+        reads.resources.entry(trip_id).or_insert_with(|| db.trip_resources(trip_id)).clone()
+    }
+
+    fn cover_of(&mut self, trip_id: i64) -> Option<Photo> {
+        let (db, reads) = self.reads();
+        reads.covers.entry(trip_id).or_insert_with(|| db.trip_cover_photo(trip_id).and_then(|id| db.photo(id))).clone()
+    }
+}
 
 /// Creating a Trip, from the selected photos or empty, or changing one.
 pub(super) struct TripDialog {
@@ -196,7 +275,7 @@ impl PicassoApp {
     pub(super) fn trips_page(&mut self, ui: &mut egui::Ui) {
         const CARD: Vec2 = Vec2::new(260.0, 250.0);
         let query = TripQuery { archived: self.show_archived_trips, search: self.search.trim().to_string() };
-        let trips = self.db.trips(&query);
+        let trips = self.trips_listed(&query);
         let mut open: Option<i64> = None;
         let mut archive: Option<(i64, bool)> = None;
         let mut edit: Option<i64> = None;
@@ -252,7 +331,7 @@ impl PicassoApp {
                     }
                     let cover = egui::Rect::from_min_size(rect.min, Vec2::new(rect.width(), 150.0)).shrink(6.0);
                     painter.rect_filled(cover, 6, theme::placeholder());
-                    if let Some(photo) = self.db.trip_cover_photo(trip.id).and_then(|id| self.db.photo(id)) {
+                    if let Some(photo) = self.cover_of(trip.id) {
                         self.ensure_thumb(photo.id, &photo.path);
                         if let Some((texture, w, h)) = self.thumb_texture(photo.id) {
                             theme::paint_image_rounded(&painter, &texture, cover, theme::cover_uv(w, h), photo.rotation, 6.0);
@@ -279,7 +358,7 @@ impl PicassoApp {
                     if !place.is_empty() {
                         line(place.join(" · "), 12.5, theme::muted());
                     }
-                    let tracks = self.db.trip_tracks(trip.id).len();
+                    let tracks = self.tracks_of(trip.id).len();
                     let count = |n: usize, one: &'static str, many: &'static str| trf(if n == 1 { one } else { many }, &[&n]);
                     let counts = [
                         super::photo_count(trip.members as usize),
@@ -496,7 +575,7 @@ impl PicassoApp {
             if unavailable.on_hover_text(tr("Photos that are no longer in the library. They stay in the trip.")).clicked() {
                 filter.unavailable = !filter.unavailable;
             }
-            let stories: Vec<Story> = self.db.stories(trip_id);
+            let stories: Vec<Story> = self.stories_of(trip_id);
             if let StoryFilter::Story(id) = filter.story {
                 if !stories.iter().any(|story| story.id == id) {
                     filter.story = StoryFilter::Any;
@@ -528,7 +607,7 @@ impl PicassoApp {
                 });
             }
             if filter != MemberQuery::default() {
-                let shown = self.db.count_trip_members(trip_id, &filter);
+                let shown = self.members_counted(trip_id, filter);
                 ui.label(RichText::new(trf("{} of {}", &[&shown, &trip_members])).size(13.0).color(theme::muted()));
             }
             if ui.button(tr("Similar photos…")).on_hover_text(tr("Find photos taken close together that look alike, such as bursts, to choose from")).clicked() {
@@ -538,13 +617,13 @@ impl PicassoApp {
         if similar {
             self.show_similar(ui.ctx(), trip_id);
         }
-        let days = self.db.trip_days(trip_id);
+        let days = self.days_of(trip_id);
         if let DayFilter::Day(id) = filter.day {
             if !days.iter().any(|day| day.id == id) {
                 filter.day = DayFilter::Any;
             }
         }
-        let unassigned = self.db.count_trip_members(trip_id, &MemberQuery { day: DayFilter::Unassigned, ..MemberQuery::default() });
+        let unassigned = self.members_counted(trip_id, MemberQuery { day: DayFilter::Unassigned, ..MemberQuery::default() });
         let mut edit_day: Option<TripDay> = None;
         let mut delete_day: Option<i64> = None;
         let mut move_day: Option<(usize, usize)> = None;
@@ -609,7 +688,7 @@ impl PicassoApp {
                     egui::Popup::menu(&more).show(|ui| day_actions(ui, index));
                 }
             }
-            let review = self.db.review_counts(trip_id);
+            let review = self.review_of(trip_id);
             let to_review: usize = review.iter().map(|(_, count)| count).sum();
             if to_review > 0 || filter.day == DayFilter::Review {
                 let chip = ui.selectable_label(filter.day == DayFilter::Review, trf("Needs review ({})", &[&to_review]));
@@ -696,7 +775,7 @@ impl PicassoApp {
     /// The Stories in one line above the photos, however many there are:
     /// the one last worked on, a new one, and the way to all of them.
     fn stories_line(&mut self, ui: &mut egui::Ui, trip_id: i64, days: &[TripDay]) {
-        let stories = self.db.stories(trip_id);
+        let stories = self.stories_of(trip_id);
         let latest = stories.iter().filter(|story| !story.archived).max_by_key(|story| story.updated_at);
         let mut open: Option<i64> = None;
         let mut all = false;
@@ -922,8 +1001,8 @@ impl PicassoApp {
     /// The library's GPS tracks linked to the Trip, each to the whole Trip
     /// or to one of its Days. Shown once the library has a track.
     fn tracks_row(&mut self, ui: &mut egui::Ui, trip_id: i64, days: &[TripDay]) {
-        let linked = self.db.trip_tracks(trip_id);
-        let choices = self.db.track_choices();
+        let linked = self.tracks_of(trip_id);
+        let choices = self.track_choices();
         if linked.is_empty() && choices.is_empty() {
             return;
         }
@@ -1301,7 +1380,7 @@ impl PicassoApp {
     /// The Trip's Places as chips that show their photos, and Suggest
     /// places with how far apart and how long between photos a Place spans.
     fn places_row(&mut self, ui: &mut egui::Ui, trip_id: i64, filter: &mut MemberQuery) {
-        let places = self.db.trip_places(trip_id);
+        let places = self.places_of(trip_id);
         if filter.place.is_some_and(|id| !places.iter().any(|place| place.id == id)) {
             filter.place = None;
         }
@@ -1405,7 +1484,7 @@ impl PicassoApp {
     /// The Trip's documents, links, notes, and track files: each opens on a
     /// click, and its menu edits, locates, or deletes it.
     fn resources_row(&mut self, ui: &mut egui::Ui, trip_id: i64) {
-        let resources = self.db.trip_resources(trip_id);
+        let resources = self.resources_of(trip_id);
         let mut edit: Option<TripResource> = None;
         let mut locate: Option<i64> = None;
         let mut delete: Option<i64> = None;

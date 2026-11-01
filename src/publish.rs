@@ -600,6 +600,38 @@ fn draft_post(post: gutenberg::Post, terms: &crate::db::PostTerms) -> DraftPost 
     DraftPost { title: post.title, excerpt: post.excerpt, content: post.content, featured: post.featured, categories: ids(&terms.categories), tags: ids(&terms.tags), publish: false, schedule: None }
 }
 
+/// The post a save goes to, as the publishing dialog settled it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Target {
+    /// The post changed in place; none makes a new draft.
+    pub earlier: Option<crate::db::Publication>,
+    /// Changing it was chosen though it is edited on the site or public.
+    pub update: bool,
+    /// A new draft may be made though a post with the Story's title is on the site.
+    pub allow_new: bool,
+}
+
+/// Where a save of Story `story_id` on site `site_id` goes. `earlier` is the
+/// post the library knows; `update` is the user's answer when it is edited
+/// on the site or public: change it (`Some(true)`) or save a new draft
+/// beside it, which then takes its place in the library and never changes
+/// it. `found` is a post with the Story's title the library has no record
+/// of, and `adopt` the answer to taking it up.
+pub fn target(story_id: i64, site_id: i64, size: UploadSize, earlier: Option<crate::db::Publication>, update: Option<bool>, found: Option<i64>, adopt: Option<bool>) -> Target {
+    let update = update == Some(true);
+    let earlier = earlier.filter(|publication| (publication.remote_status == "draft" && !publication.changed_on_site) || update);
+    let allow_new = found.is_none() || adopt == Some(false);
+    match found.filter(|_| adopt == Some(true)) {
+        // Taken up: changed in place, keeping its status.
+        Some(post_id) => Target {
+            earlier: Some(crate::db::Publication { story_id, site_id, post_id, remote_status: "publish".into(), size: size.code().into(), revision: 0, synced_at: 0, fingerprint: String::new(), changed_on_site: false }),
+            update: true,
+            allow_new,
+        },
+        None => Target { earlier, update, allow_new },
+    }
+}
+
 /// An upload's name, without its extension: the Story's title and the
 /// photo's file name, so the site's media library is readable, then part of
 /// the bytes' digest, so the same bytes are always named the same and others
@@ -1071,6 +1103,98 @@ mod tests {
         cancelled.cancel.store(true, Ordering::Relaxed);
         assert_eq!(run(&fake, &job(&dir, None, HashMap::new()), &cancelled, &mut |_| {}), Err(Stopped::Cancelled { uploaded: 0 }));
         assert!(fake.bodies.borrow().is_empty());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_new_draft_beside_an_edited_or_public_post_never_changes_it() {
+        let earlier = |status: &str, changed_on_site: bool| crate::db::Publication {
+            story_id: 3,
+            site_id: 1,
+            post_id: 7,
+            remote_status: status.into(),
+            size: "low".into(),
+            revision: 1,
+            synced_at: 1,
+            fingerprint: "ab".into(),
+            changed_on_site,
+        };
+        let to = |earlier: crate::db::Publication, update: Option<bool>| target(3, 1, UploadSize::Low, Some(earlier), update, None, None);
+        assert_eq!(to(earlier("draft", false), None).earlier.map(|post| post.post_id), Some(7), "an untouched draft is changed in place");
+        for (status, changed) in [("draft", true), ("publish", false)] {
+            let new = to(earlier(status, changed), Some(false));
+            assert_eq!((new.earlier, new.update, new.allow_new), (None, false, true), "{status}: a new draft");
+            let replace = to(earlier(status, changed), Some(true));
+            assert_eq!((replace.earlier.map(|post| post.post_id), replace.update), (Some(7), true), "{status}: changed as chosen");
+        }
+        let adopted = target(3, 1, UploadSize::Low, None, None, Some(30), Some(true));
+        assert_eq!((adopted.earlier.map(|post| (post.post_id, post.remote_status)), adopted.update, adopted.allow_new), (Some((30, "publish".to_string())), true, false));
+        let beside = target(3, 1, UploadSize::Low, None, None, Some(30), Some(false));
+        assert_eq!((beside.earlier, beside.allow_new), (None, true));
+
+        // The new draft is made without a word to post 7.
+        let dir = temp_dir("copy");
+        let chosen = to(earlier("draft", true), Some(false));
+        let copy = Job { overwrite: chosen.update, ..job(&dir, chosen.earlier.map(|post| post.post_id), HashMap::new()) };
+        let fake = Fake::default()
+            .answer_to("POST", MEDIA, 201, &[], r#"{"id":41,"source_url":"https://example.com/blog/a.jpg"}"#)
+            .answer_to("POST", POSTS, 201, &[], r#"{"id":9}"#);
+        assert_eq!(run(&fake, &copy, &Progress::default(), &mut |_| {}).map(|saved| saved.post_id), Ok(9));
+        assert!(!fake.asked.borrow().iter().any(|(url, _)| url.contains("/posts/7")));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// The photos the job sent, decoded.
+    fn sent_photos(fake: &Fake) -> Vec<(u32, u32)> {
+        let bodies = fake.bodies.borrow();
+        let sent = bodies.iter().filter(|(key, _)| key.starts_with("POST") && key.ends_with("/media"));
+        sent.map(|(_, body)| image::load_from_memory(body).unwrap()).map(|image| (image.width(), image.height())).collect()
+    }
+
+    #[test]
+    fn a_photo_at_another_size_is_uploaded_again_never_reused() {
+        let dir = temp_dir("sizes");
+        let large = dir.join("large.jpg");
+        image::RgbImage::from_fn(3000, 2000, |x, y| image::Rgb([(x / 12) as u8, (y / 8) as u8, 90])).save(&large).unwrap();
+        let sized = |size: UploadSize, post_id: Option<i64>, uploads: HashMap<String, (i64, String)>| {
+            let mut job = job(&dir, post_id, uploads);
+            job.sources.insert(11, Some((large.clone(), Settings::default(), 0)));
+            Job { size, ..job }
+        };
+        let fake = Fake::default()
+            .answer_to("POST", MEDIA, 201, &[], r#"{"id":41,"source_url":"https://example.com/blog/standard.jpg"}"#)
+            .answer_to("POST", POSTS, 201, &[], r#"{"id":7}"#);
+        let mut events = Vec::new();
+        run(&fake, &sized(UploadSize::Standard, None, HashMap::new()), &Progress::default(), &mut |event| events.push(event)).unwrap();
+        assert_eq!(sent_photos(&fake), [(2048, 1365)]);
+        let Some(Event::Uploaded { hash, .. }) = events.into_iter().find(|event| matches!(event, Event::Uploaded { .. })) else { panic!() };
+
+        // The same Story at Low resolution: its own upload, and the post uses it.
+        let known = HashMap::from([(hash, (41, "https://example.com/blog/standard.jpg".to_string()))]);
+        let fake = Fake::default()
+            .answer(&format!("{POSTS}/7?context=edit"), 200, &[], r#"{"status":"draft"}"#)
+            .answer_to("POST", MEDIA, 201, &[], r#"{"id":42,"source_url":"https://example.com/blog/low.jpg"}"#)
+            .answer_to("POST", &format!("{POSTS}/7"), 200, &[], r#"{"id":7}"#);
+        let saved = run(&fake, &sized(UploadSize::Low, Some(7), known), &Progress::default(), &mut |_| {}).unwrap();
+        assert_eq!((saved.uploaded, saved.reused, saved.media), (1, 0, vec![42]));
+        assert_eq!(sent_photos(&fake), [(1280, 853)]);
+        let bodies = fake.bodies.borrow();
+        let post: serde_json::Value = serde_json::from_slice(&bodies.last().unwrap().1).unwrap();
+        assert_eq!(post["featured_media"], 42);
+        assert!(!post["content"].as_str().unwrap().contains("standard.jpg"), "the larger upload isn't used");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_photo_that_fails_to_render_stops_before_anything_is_sent() {
+        let dir = temp_dir("render");
+        let damaged = dir.join("damaged.jpg");
+        std::fs::write(&damaged, b"\xFF\xD8\xFF\xE0 not a whole photo").unwrap();
+        let mut failing = job(&dir, Some(7), HashMap::from([("an-earlier-render".to_string(), (41, "https://example.com/blog/a.jpg".to_string()))]));
+        failing.sources.insert(11, Some((damaged, Settings::default(), 0)));
+        let fake = Fake::default().answer(&format!("{POSTS}/7?context=edit"), 200, &[], r#"{"status":"draft"}"#);
+        assert_eq!(run(&fake, &failing, &Progress::default(), &mut |_| {}), Err(Stopped::Photo { media_id: 11, uploaded: 0 }));
+        assert!(fake.bodies.borrow().is_empty(), "no upload, no earlier upload in its place, and the draft unchanged");
         let _ = std::fs::remove_dir_all(dir);
     }
 }

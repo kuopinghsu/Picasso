@@ -81,10 +81,15 @@ section of this file as the release notes.
   duplicates, safe requests are retried with backoff, and each job is kept under History.
 - For developers: `make bench` also times a 10,000-photo Trip over 365 Days, and tests
   cover a photo changing during an export, a folder that refuses writing, a failed write,
-  and a 20-photo export with edited JPEG and raw photos.
+  a 20-photo export with edited JPEG and raw photos, an edit made while exporting, a new
+  upload when the photo size changes, saving a new draft beside an edited post, and a
+  library read while it is being written.
 
 ### Changed
 
+- The Trips pages read the library again only after it changes, instead of on every
+  frame they draw. The READMEs describe Trips, Stories and WordPress publishing, and
+  list them in what backups keep.
 - Local macOS builds are signed with a self-signed `Picasso Development` certificate that
   `make sign-identity` makes once; release builds from CI stay signed ad hoc.
 - Reorganized the English and Traditional Chinese READMEs around the project overview,

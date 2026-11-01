@@ -13,12 +13,12 @@ make bench-check                                              # small run that f
 The benchmark (`src/bench.rs`) is a test that `cargo test` skips. It runs in three parts:
 
 - **Catalog:** writes `PICASSO_BENCH_PHOTOS` photos into a new library, then times opening it and the queries the window makes: listing the library by date and by name, starred photos, the folder tree, one folder, searches, the list a rescan compares against, and duplicate candidates.
-- **Trip:** puts `PICASSO_BENCH_TRIP` photos (default 10,000), taken over a year, in a Trip in a library of their own. It times adding them, keeping their capture times, **Suggest days** making 365 Days, and **Suggest places**. It also times the queries the Trips view makes each time it draws a frame (the Days, the photos without a Day, the review counts and a filter's count), listing the Trip and one Day, a Story made from all 365 Days, and the list of Trips. One photo in 50 has no time-zone offset, so the review counts aren't empty.
+- **Trip:** puts `PICASSO_BENCH_TRIP` photos (default 10,000), taken over a year, in a Trip in a library of their own. It times adding them, keeping their capture times, **Suggest days** making 365 Days, and **Suggest places**. It also times the check for changes the Trips view makes each frame, the queries it makes again once the library has changed (the Days, the photos without a Day, the review counts and a filter's count), listing the Trip and one Day, a Story made from all 365 Days, and the list of Trips. One photo in 50 has no time-zone offset, so the review counts aren't empty.
 - **Files:** makes `PICASSO_BENCH_FILES` 1600×1200 JPEGs once in `target/bench-photos-<n>`, then scans them with the same indexer the app uses, rescans with nothing changed, makes a thumbnail of each on the app's number of thumbnail threads, and opens one photo for the viewer.
 
 It also reports the peak memory of the process after each part (macOS and Linux).
 
-`make bench-check` sets `PICASSO_BENCH_CHECK=1` with 20,000 rows and 500 files. A result past its limit fails the run. The limits are loose, because CI machines are slow and shared: one second for opening the library and for each query, 50 ms for the Trips view's queries for one frame, 5 or 10 seconds for each whole-Trip job, at least 200 photos a second for the scan and 20 for thumbnails, half a second to open a photo, and 400 MB of memory. They catch large regressions only; compare against the baselines below for anything finer.
+`make bench-check` sets `PICASSO_BENCH_CHECK=1` with 20,000 rows and 500 files. A result past its limit fails the run. The limits are loose, because CI machines are slow and shared: one second for opening the library and for each query, 50 ms for the Trips view's queries after a change, 5 or 10 seconds for each whole-Trip job, at least 200 photos a second for the scan and 20 for thumbnails, half a second to open a photo, and 400 MB of memory. They catch large regressions only; compare against the baselines below for anything finer.
 
 ### Cold and warm cache
 
@@ -70,7 +70,8 @@ Apple M2 Max (12 cores, 32 GB), internal SSD, macOS, warm cache, release build o
 | Add the photos to the Trip | 109 ms |
 | Keep their capture times | 113 ms |
 | Suggest days (makes 365 Days) | 105 ms |
-| The Trips view's queries for one frame | 3.2 ms |
+| The Trips view's check for changes, each frame | 0.9 µs |
+| The Trips view's queries after a change | 3.2 ms |
 | List the Trip's photos | 12.9 ms |
 | Open one Day | 0.1 ms |
 | Starred photos of the Trip | 2.2 ms |
@@ -78,7 +79,7 @@ Apple M2 Max (12 cores, 32 GB), internal SSD, macOS, warm cache, release build o
 | A Story from all 365 Days | 53.6 ms |
 | List Trips | 1.0 ms |
 
-The Trip's numbers are the same with 20,000 or 100,000 other photos in the catalog, and peak memory doesn't grow past the catalog's. Keeping capture times measures the library's side only; reading them from the files is limited by the disk, like the scan. The Trips view's 3.2 ms for each frame is a fifth of a 60 Hz frame. It is fine at this size, but it's the first thing to cache if Trips grow much larger.
+The Trip's numbers are the same with 20,000 or 100,000 other photos in the catalog, and peak memory doesn't grow past the catalog's. Keeping capture times measures the library's side only; reading them from the files is limited by the disk, like the scan. The Trips view keeps what it read until the library changes: a write of its own, or a commit by the scanner. Between changes, a frame costs only the 0.9 µs check, and the 3.2 ms of queries come once after each change.
 
 The scan reads only the start of each file for its size, date, and camera, so it is limited by the disk far more than by the processor: expect it to be many times slower on a cold cache or a hard disk. Thumbnails are made after the scan, newest first, and the ones on screen go first.
 

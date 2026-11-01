@@ -590,6 +590,32 @@ mod tests {
     }
 
     #[test]
+    fn a_new_draft_and_each_day_post_keep_their_own_post() {
+        let (db, _, _) = library("publication-outputs");
+        let site_id = db.save_site(&site("https://example.com", "ana")).unwrap();
+        let trip = db.create_trip(&crate::trip::TripDraft::new("Spain", "Europe/Madrid")).unwrap();
+        let story = db.create_story(trip, "Granada").unwrap();
+        let post = |post_id: i64, revision: i64| Publication { story_id: story, site_id, post_id, remote_status: "draft".into(), size: "low".into(), revision, synced_at: revision, fingerprint: String::new(), changed_on_site: false };
+        db.save_publication(&Publication { changed_on_site: true, ..post(7, 1) }).unwrap();
+        // Saved as a new draft beside the post edited on the site: the new one
+        // is the Story's post from now on; post 7 is never changed again.
+        db.save_publication(&post(9, 2)).unwrap();
+        assert_eq!(db.publication(story, site_id), Some(post(9, 2)));
+
+        // Then by Day: an index and a post per Day, each under its own key.
+        db.save_day_post("index", &post(20, 3)).unwrap();
+        db.save_day_post("day:a1", &post(21, 3)).unwrap();
+        db.save_day_post("day:b2", &post(22, 3)).unwrap();
+        // A later save changes the same posts, and the main post stays as it was.
+        db.save_day_post("day:a1", &post(21, 4)).unwrap();
+        let mut days = db.day_posts(story, site_id);
+        days.sort_by(|a, b| a.0.cmp(&b.0));
+        let ids: Vec<(&str, i64, i64)> = days.iter().map(|(key, found)| (key.as_str(), found.post_id, found.revision)).collect();
+        assert_eq!(ids, [("day:a1", 21, 4), ("day:b2", 22, 3), ("index", 20, 3)]);
+        assert_eq!(db.publication(story, site_id), Some(post(9, 2)));
+    }
+
+    #[test]
     fn uploads_and_posts_are_remembered_per_site() {
         let (db, _, _) = library("publications");
         let site_id = db.save_site(&site("https://example.com", "ana")).unwrap();

@@ -125,6 +125,14 @@ impl Database {
 
     /// A read-only connection for queries on another thread. The schema is
     /// left to the connection [`Database::open`] made.
+    /// Changes whenever the library may have changed: a row written through
+    /// this connection, or a commit by another, such as the scanner's.
+    /// Reading it doesn't touch the disk.
+    pub fn change_stamp(&self) -> (u64, i64) {
+        let others = self.conn.prepare_cached("PRAGMA data_version").and_then(|mut statement| statement.query_row([], |row| row.get(0))).unwrap_or(-1);
+        (self.conn.total_changes(), others)
+    }
+
     pub fn open_reader(path: &Path) -> Result<Self, String> {
         let flags = OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX;
         let conn = Connection::open_with_flags(path, flags).map_err(|err| err.to_string())?;
@@ -1851,6 +1859,68 @@ mod tests {
             snapshot.sort();
             assert_eq!(snapshot, expected, "{dir}");
         }
+    }
+
+    #[test]
+    fn a_reader_sees_whole_writes_and_is_never_held_up_by_one() {
+        let dir = temp_dir("reader-writer");
+        let path = dir.join("t.db");
+        let db = Database::open(&path).unwrap();
+        let folder = dir.join("pics");
+        std::fs::create_dir_all(&folder).unwrap();
+        let id = db.add_folder(&folder).unwrap();
+        let folder = folder.canonicalize().unwrap();
+        let batch = |start: usize| -> Vec<ScanRecord> { (start..start + 50).map(|n| record(id, &folder, &format!("{n:04}.jpg"), 10)).collect() };
+        db.write_batch(&batch(0)).unwrap();
+        let reader = Database::open_reader(&path).unwrap();
+        let count = || reader.photos(&Nav::Library, "", Sort::Name).len();
+
+        // A write still open: the reader answers at once, with what was there before.
+        db.conn.execute_batch("BEGIN IMMEDIATE").unwrap();
+        db.conn.execute("UPDATE photos SET caption = 'half done'", []).unwrap();
+        let started = std::time::Instant::now();
+        assert_eq!(count(), 50);
+        assert!(started.elapsed() < std::time::Duration::from_secs(1), "not held up by the open write");
+        assert!(reader.photos(&Nav::Library, "half done", Sort::Name).is_empty());
+        db.conn.execute_batch("ROLLBACK").unwrap();
+
+        // Batches written while it reads on another thread: each read sees whole batches.
+        std::thread::scope(|scope| {
+            let writing = scope.spawn(move || {
+                for start in (50..1000).step_by(50) {
+                    db.write_batch(&batch(start)).unwrap();
+                }
+            });
+            let mut seen = Vec::new();
+            while !writing.is_finished() {
+                seen.push(count());
+            }
+            writing.join().unwrap();
+            assert!(seen.iter().all(|n| n % 50 == 0), "{seen:?}");
+            assert!(seen.windows(2).all(|pair| pair[0] <= pair[1]), "never fewer than before");
+        });
+        assert_eq!(count(), 1000);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_change_stamp_moves_with_every_write_and_only_then() {
+        let dir = temp_dir("change-stamp");
+        let path = dir.join("t.db");
+        let db = Database::open(&path).unwrap();
+        let folder = dir.join("pics");
+        std::fs::create_dir_all(&folder).unwrap();
+        let stamp = db.change_stamp();
+        db.photos(&Nav::Library, "", Sort::Name);
+        assert_eq!(db.change_stamp(), stamp, "a read changes nothing");
+        let id = db.add_folder(&folder).unwrap();
+        let mine = db.change_stamp();
+        assert_ne!(mine, stamp, "a write of its own");
+        // Another connection, as the scanner has, writes and commits.
+        let other = Database::open(&path).unwrap();
+        other.write_batch(&[record(id, &folder.canonicalize().unwrap(), "a.jpg", 10)]).unwrap();
+        assert_ne!(db.change_stamp(), mine, "a commit by another connection");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

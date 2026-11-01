@@ -672,16 +672,7 @@ impl PicassoApp {
         let exif = dialog.exif;
         let terms = dialog.terms.clone();
         let publish = publish && start;
-        // A new draft beside a published post replaces the record of it here, never the post.
-        let update = dialog.update == Some(true);
-        let earlier = earlier.filter(|publication| (publication.remote_status == "draft" && !publication.changed_on_site) || update);
-        // Taking up the post found on the site: changed in place, keeping its status.
-        let adopted = found.filter(|_| dialog.adopt == Some(true));
-        let allow_new = found.is_none() || dialog.adopt == Some(false);
-        let (earlier, update) = match adopted {
-            Some(post_id) => (Some(Publication { story_id, site_id: site.id, post_id, remote_status: "publish".into(), size: size.code().into(), revision: 0, synced_at: 0, fingerprint: String::new(), changed_on_site: false }), true),
-            None => (earlier, update),
-        };
+        let publish::Target { earlier, update, allow_new } = publish::target(story_id, site.id, size, earlier, dialog.update, found, dialog.adopt);
         match self.start_publishing(ctx, &site, size, exif, terms, earlier, if by_day { day_replace } else { update }, publish, schedule, allow_new, by_day) {
             Ok(()) => {
                 self.modal = Modal::None;

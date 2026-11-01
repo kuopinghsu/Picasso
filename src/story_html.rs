@@ -92,7 +92,7 @@ pub struct Page<'a> {
 
 /// How far a page's photos are, shared with the thread making them, and
 /// a way to stop it.
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct Progress {
     pub done: AtomicUsize,
     pub total: AtomicUsize,
@@ -283,6 +283,35 @@ fn stamp(path: &Path) -> Stamp {
     Some((meta.len(), meta.modified().ok()?))
 }
 
+/// What a page is made from, as a key: the Story's words and settings, its
+/// blocks, the dates shown, and each photo's file, edit and rotation with
+/// the file's size and modification time. Saving the Story unchanged keeps
+/// the key; any change that would show on the page changes it.
+pub fn content_key(page: &Page) -> String {
+    let story = Story { revision: 0, updated_at: 0, archived: false, finished: false, ..page.story.clone() };
+    let mut sources: Vec<_> = page.sources.iter().collect();
+    sources.sort_by_key(|(media_id, _)| **media_id);
+    let photos: Vec<String> = sources
+        .into_iter()
+        .map(|(media_id, source)| match source {
+            Some((path, settings, rotation)) => format!("{media_id}\n{}\n{:?}\n{settings:?}\n{rotation}", path.display(), stamp(path)),
+            None => format!("{media_id}\nunavailable"),
+        })
+        .collect();
+    let words = page.words;
+    let what = format!(
+        "{story:?}\n{:?}\n{:?}\n{}\n{}\n{}\n{}\n{}",
+        page.dates,
+        page.blocks,
+        words.lang,
+        words.untitled,
+        words.unavailable,
+        words.contents,
+        photos.join("\n")
+    );
+    crate::upload::hash(what.as_bytes())
+}
+
 /// What the page was made from: the Story revision, the profile, and for
 /// each photo its media reference, the file it became, and the size and
 /// modification time of its source. No paths, names, or camera details.
@@ -351,6 +380,40 @@ pub const CANCELLED: &str = "cancelled";
 /// The reason [`write_story`] gives when a photo's file changed while it ran.
 pub const SOURCE_CHANGED: &str = "source changed";
 
+/// Removes what exports of `name` into `parent` left when Picasso was
+/// stopped while writing them, as by a crash or a power cut. An export still
+/// being written by another Picasso is left alone.
+fn remove_abandoned(parent: &Path, name: &str) {
+    let prefix = format!(".{name}.partial-");
+    let Ok(entries) = std::fs::read_dir(parent) else { return };
+    for entry in entries.flatten() {
+        let file_name = entry.file_name();
+        let Some(pid) = file_name.to_str().and_then(|file| file.strip_prefix(&prefix)).and_then(|pid| pid.parse::<u32>().ok()) else { continue };
+        if pid != std::process::id() && abandoned(pid, &entry.path()) {
+            let _ = std::fs::remove_dir_all(entry.path());
+        }
+    }
+}
+
+/// Whether what process `pid` was writing at `path` was left for good: the process is gone or, where that can't be asked, the folder
+/// hasn't changed for a day.
+pub(crate) fn abandoned(pid: u32, path: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        let _ = path;
+        let Ok(pid) = libc::pid_t::try_from(pid) else { return false };
+        // SAFETY: signal 0 sends nothing; it only asks whether the process exists.
+        let asked = unsafe { libc::kill(pid, 0) };
+        asked != 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = pid;
+        let age = std::fs::metadata(path).and_then(|meta| meta.modified()).ok().and_then(|modified| modified.elapsed().ok());
+        age.is_some_and(|age| age > std::time::Duration::from_secs(24 * 3600))
+    }
+}
+
 /// Exports the Story into a new folder named `name` in `parent` (or
 /// `name 2`, `name 3`, … when that is taken), so nothing there is ever
 /// replaced. It is written under a hidden name first and renamed once
@@ -363,6 +426,7 @@ pub fn export_story(parent: &Path, name: &str, format: Format, profile: Profile,
         .unwrap_or_else(|| parent.join(&name));
     let staging = parent.join(format!(".{name}.partial-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&staging);
+    remove_abandoned(parent, &name);
     let written = write_story(&staging, format, profile, page, progress)
         .and_then(|(_, outcome)| std::fs::rename(&staging, &target).map(|()| outcome).map_err(|err| err.to_string()));
     match written {
@@ -377,17 +441,38 @@ pub fn export_story(parent: &Path, name: &str, format: Format, profile: Profile,
 /// A folder name from a Story title: no path separators or characters
 /// that some systems refuse, and never empty or hidden.
 pub fn folder_name(title: &str) -> String {
-    let cleaned: String = title
+    let cleaned: String = portable_name(title).chars().take(80).collect();
+    let cleaned = cleaned.trim_end_matches(['.', ' ']);
+    if cleaned.is_empty() {
+        "Story".into()
+    } else {
+        cleaned.into()
+    }
+}
+
+/// Windows' device names, which no file or folder may have there, whatever
+/// its extension.
+const DEVICE_NAMES: [&str; 22] = [
+    "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9", "LPT1", "LPT2", "LPT3", "LPT4",
+    "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+];
+
+/// `name` as a file or folder name every system takes as it is: characters
+/// Windows or macOS keep out of names become spaces, a leading dot and a
+/// trailing dot or space go, and a Windows device name, as in `CON` or
+/// `aux.jpg`, gets `_` after it.
+pub fn portable_name(name: &str) -> String {
+    let cleaned: String = name
         .chars()
         .map(|c| if c.is_control() || matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') { ' ' } else { c })
         .collect();
     let cleaned = cleaned.split_whitespace().collect::<Vec<_>>().join(" ");
-    let cleaned = cleaned.trim_start_matches('.').trim();
-    let cleaned: String = cleaned.chars().take(80).collect();
-    if cleaned.is_empty() {
-        "Story".into()
+    let cleaned = cleaned.trim_start_matches('.').trim_end_matches(['.', ' ']).trim();
+    let stem = cleaned.split('.').next().unwrap_or_default();
+    if DEVICE_NAMES.iter().any(|device| device.eq_ignore_ascii_case(stem)) {
+        format!("{stem}_{}", &cleaned[stem.len()..])
     } else {
-        cleaned
+        cleaned.to_string()
     }
 }
 
@@ -1055,8 +1140,26 @@ figure.route img{border-radius:4px}
 ";
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
+
+    #[test]
+    fn names_from_titles_and_files_work_on_every_system() {
+        assert_eq!(folder_name("Madrid: Day 1 / 2025?"), "Madrid Day 1 2025");
+        assert_eq!(folder_name("Con"), "Con_");
+        assert_eq!(folder_name("Trip."), "Trip");
+        assert_eq!(folder_name("..."), "Story");
+        assert_eq!(folder_name("京都の春"), "京都の春");
+        assert_eq!(folder_name(&format!("{}.b", "a".repeat(79))), "a".repeat(79), "no dot left at the end once shortened");
+        assert_eq!(portable_name("aux.jpg"), "aux_.jpg");
+        assert_eq!(portable_name("com1.tar.gz"), "com1_.tar.gz");
+        assert_eq!(portable_name("LPT9"), "LPT9_");
+        assert_eq!(portable_name("a:b.jpg"), "a b.jpg");
+        assert_eq!(portable_name("photo. "), "photo");
+        for kept in ["Console.jpg", "COM10.jpg", "nul-trip.jpg", "IMG_0001.JPG", "Día 1.heic"] {
+            assert_eq!(portable_name(kept), kept);
+        }
+    }
 
     fn story() -> Story {
         Story {
@@ -1392,7 +1495,7 @@ mod tests {
     /// A TIFF-based raw file from a camera no decoder knows, as some
     /// cameras write them: its first directory points at a JPEG preview,
     /// and a second one at the sensor data.
-    fn raw_with_preview(jpeg: &[u8], width: u32, height: u32) -> Vec<u8> {
+    pub(crate) fn raw_with_preview(jpeg: &[u8], width: u32, height: u32) -> Vec<u8> {
         let entry = |tag: u16, kind: u16, value: u32| {
             let mut bytes = tag.to_le_bytes().to_vec();
             bytes.extend(kind.to_le_bytes());
@@ -1541,6 +1644,33 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn an_export_cut_short_by_a_crash_is_cleared_by_the_next_and_earlier_ones_stay() {
+        let parent = std::env::temp_dir().join(format!("picasso-export-crash-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&parent);
+        std::fs::create_dir_all(parent.join("Kyoto")).unwrap();
+        std::fs::write(parent.join("Kyoto/index.html"), "the earlier export").unwrap();
+        // One left by a Picasso that has stopped, and one another Picasso is still writing.
+        let mut ended = std::process::Command::new("true").spawn().unwrap();
+        ended.wait().unwrap();
+        let crashed = parent.join(format!(".Kyoto.partial-{}", ended.id()));
+        let running = parent.join(format!(".Kyoto.partial-{}", std::os::unix::process::parent_id()));
+        for staging in [&crashed, &running] {
+            std::fs::create_dir_all(staging.join("images")).unwrap();
+            std::fs::write(staging.join("images/half.jpg"), "half written").unwrap();
+        }
+        let (story, words, sources) = (story(), words(), HashMap::new());
+        let blocks = [StoryBlock::new(Block::Paragraph("Hello".into()))];
+        let page = Page { story: &story, dates: None, blocks: &blocks, sources: &sources, words: &words, map: None, profiles: &HashMap::new() };
+        let (folder, _) = export_story(&parent, "Kyoto", Format::Html, Profile::default(), &page, &Progress::default()).unwrap();
+        assert_eq!(folder, parent.join("Kyoto 2"));
+        assert!(!crashed.exists(), "what a stopped export left is cleared");
+        assert!(running.join("images/half.jpg").is_file(), "an export still being written is left alone");
+        assert_eq!(std::fs::read_to_string(parent.join("Kyoto/index.html")).unwrap(), "the earlier export");
+        let _ = std::fs::remove_dir_all(&parent);
+    }
+
     #[test]
     fn a_photo_changed_while_exporting_stops_it_and_leaves_nothing() {
         use std::io::Write as _;
@@ -1617,6 +1747,41 @@ mod tests {
         assert_ne!(first, next, "a new folder");
         assert_eq!(shown(&first), (true, false, (1600, 1067)), "the first export as it started");
         assert_eq!(shown(&next), (false, true, (1200, 1600)), "the next one with the new text and crop");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn an_export_is_out_of_date_once_what_the_page_shows_changes_and_not_before() {
+        let root = std::env::temp_dir().join(format!("picasso-export-key-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let file = root.join("a.jpg");
+        photo(1, 300, 200).save(&file).unwrap();
+        let (story, words) = (story(), words());
+        let blocks = vec![StoryBlock::new(Block::Paragraph("Before".into())), StoryBlock::new(Block::Photo(MediaUse::new(1)))];
+        let sources = HashMap::from([(1, Some((file.clone(), Settings::default(), 0)))]);
+        let key = |story: &Story, blocks: &[StoryBlock], sources: &HashMap<i64, Source>| {
+            content_key(&Page { story, dates: None, blocks, sources, words: &words, map: None, profiles: &HashMap::new() })
+        };
+        let exported = key(&story, &blocks, &sources);
+
+        let saved = Story { revision: story.revision + 1, updated_at: 99, finished: true, ..story.clone() };
+        assert_eq!(key(&saved, &blocks, &sources), exported, "saved again, or marked finished, it shows the same");
+
+        let mut edited = blocks.clone();
+        edited[0].block = Block::Paragraph("After".into());
+        assert_ne!(key(&story, &edited, &sources), exported, "new text");
+        assert_ne!(key(&Story { title: "Elsewhere".into(), ..story.clone() }, &blocks, &sources), exported, "a new title");
+        let framed = Story { cover: Some(1), cover_crop: crate::trip::CoverCrop([0, 0, 10_000, 5_000]), ..story.clone() };
+        assert_ne!(key(&framed, &blocks, &sources), exported, "the cover framed");
+        let mut cropped = Settings::default();
+        cropped.set(crate::edit::Control::CROP_RIGHT, 0.5);
+        assert_ne!(key(&story, &blocks, &HashMap::from([(1, Some((file.clone(), cropped, 0)))])), exported, "the photo's crop");
+        assert_ne!(key(&story, &blocks, &HashMap::from([(1, Some((file.clone(), Settings::default(), 90)))])), exported, "the photo turned");
+        assert_ne!(key(&story, &blocks, &HashMap::from([(1, None)])), exported, "the photo unavailable");
+        assert_eq!(key(&story, &blocks, &sources), exported);
+        photo(2, 300, 201).save(&file).unwrap();
+        assert_ne!(key(&story, &blocks, &sources), exported, "the photo's file replaced");
         let _ = std::fs::remove_dir_all(&root);
     }
 

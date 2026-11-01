@@ -61,8 +61,8 @@ CREATE TABLE IF NOT EXISTS publication_media (
     media_id INTEGER NOT NULL,
     PRIMARY KEY (story_id, site_id, media_id)
 );
--- Each publishing job as it ended, for looking back: nothing secret, only
--- what happened. The newest PUBLISH_LOG_KEPT are kept.
+-- Each publishing job from when it starts, for looking back: nothing secret,
+-- only what happened. The newest PUBLISH_LOG_KEPT are kept.
 CREATE TABLE IF NOT EXISTS publish_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     story_id INTEGER NOT NULL,
@@ -110,15 +110,16 @@ pub(super) fn upgrade(db: &Database) -> Result<(), String> {
 /// Publishing jobs kept in `publish_log`; older ones are dropped.
 const PUBLISH_LOG_KEPT: i64 = 1000;
 
-/// One publishing job as it ended.
+/// One publishing job, as it ended or as far as it got.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PublishJob {
     pub story_id: i64,
     pub site_id: i64,
     pub started_at: i64,
+    /// When it ended, or when its last upload landed while it ran.
     pub ended_at: i64,
     /// How it ended, such as "saved", "published" or "cancelled"
-    /// (`publish::outcome_code`).
+    /// (`publish::outcome_code`), or `publish::RUNNING` until it does.
     pub outcome: String,
     pub post_id: Option<i64>,
     pub uploaded: usize,
@@ -349,8 +350,10 @@ impl Database {
         tx.commit().map_err(|err| err.to_string())
     }
 
-    /// Keeps how a publishing job ended, dropping the oldest beyond [`PUBLISH_LOG_KEPT`].
-    pub fn record_publish_job(&self, job: &PublishJob) -> Result<(), String> {
+    /// Keeps a publishing job, dropping the oldest beyond [`PUBLISH_LOG_KEPT`].
+    /// A job is kept as it starts, as `publish::RUNNING`, so one cut short by
+    /// a crash or a power cut stays in the log. Returns its row.
+    pub fn record_publish_job(&self, job: &PublishJob) -> Result<i64, String> {
         let tx = self.conn.unchecked_transaction().map_err(|err| err.to_string())?;
         tx.execute(
             "INSERT INTO publish_log(story_id, site_id, started_at, ended_at, outcome, post_id, uploaded, reused, size, revision)
@@ -358,8 +361,29 @@ impl Database {
             params![job.story_id, job.site_id, job.started_at, job.ended_at, job.outcome, job.post_id, job.uploaded as i64, job.reused as i64, job.size, job.revision],
         )
         .map_err(|err| err.to_string())?;
+        let id = tx.last_insert_rowid();
         tx.execute("DELETE FROM publish_log WHERE id <= (SELECT MAX(id) FROM publish_log) - ?1", [PUBLISH_LOG_KEPT]).map_err(|err| err.to_string())?;
-        tx.commit().map_err(|err| err.to_string())
+        tx.commit().map_err(|err| err.to_string())?;
+        Ok(id)
+    }
+
+    /// Counts an upload of job `id` the moment the site confirms it.
+    pub fn count_publish_upload(&self, id: i64) -> Result<(), String> {
+        self.conn
+            .execute("UPDATE publish_log SET uploaded = uploaded + 1, ended_at = ?2 WHERE id = ?1", params![id, unix_now()])
+            .map(|_| ())
+            .map_err(|err| err.to_string())
+    }
+
+    /// Keeps how job `id` ended.
+    pub fn finish_publish_job(&self, id: i64, job: &PublishJob) -> Result<(), String> {
+        self.conn
+            .execute(
+                "UPDATE publish_log SET ended_at = ?2, outcome = ?3, post_id = ?4, uploaded = ?5, reused = ?6 WHERE id = ?1",
+                params![id, job.ended_at, job.outcome, job.post_id, job.uploaded as i64, job.reused as i64],
+            )
+            .map(|_| ())
+            .map_err(|err| err.to_string())
     }
 
     /// The Story's publishing jobs on the site, newest first.
@@ -647,7 +671,23 @@ mod tests {
         db.record_publish_job(&job).unwrap();
         db.record_publish_job(&PublishJob { outcome: "saved".into(), post_id: Some(7), ..job.clone() }).unwrap();
         let jobs = db.publish_jobs(3, site_id);
-        assert_eq!((jobs.len(), jobs[0].outcome.as_str(), jobs[1].clone()), (2, "saved", job));
+        assert_eq!((jobs.len(), jobs[0].outcome.as_str(), jobs[1].clone()), (2, "saved", job.clone()));
+
+        // Kept as it starts, each upload counted as it lands: one cut short
+        // still says what reached the site, and one that ends says how.
+        let running = PublishJob { outcome: crate::publish::RUNNING.into(), uploaded: 0, ended_at: 10, ..job.clone() };
+        let cut = db.record_publish_job(&running).unwrap();
+        db.count_publish_upload(cut).unwrap();
+        db.count_publish_upload(cut).unwrap();
+        let newest = db.publish_jobs(3, site_id).remove(0);
+        assert_eq!((newest.outcome.as_str(), newest.uploaded, newest.started_at), (crate::publish::RUNNING, 2, 10));
+        assert!(newest.ended_at >= 10, "when the last upload landed");
+        let ended = db.record_publish_job(&running).unwrap();
+        db.count_publish_upload(ended).unwrap();
+        db.finish_publish_job(ended, &PublishJob { outcome: "saved".into(), post_id: Some(7), uploaded: 1, reused: 3, ended_at: 30, ..running.clone() }).unwrap();
+        let jobs = db.publish_jobs(3, site_id);
+        assert_eq!((jobs[0].outcome.as_str(), jobs[0].post_id, jobs[0].uploaded, jobs[0].reused, jobs[0].ended_at), ("saved", Some(7), 1, 3, 30));
+        assert_eq!((jobs[1].outcome.as_str(), jobs[1].uploaded), (crate::publish::RUNNING, 2), "the one cut short stays as it was");
 
         // A draft about to be made, kept from its earliest moment until confirmed.
         assert_eq!(db.pending_draft(3, site_id), None);

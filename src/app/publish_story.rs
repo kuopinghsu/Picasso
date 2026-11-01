@@ -4,6 +4,8 @@
 //! chosen from the site's own, and asks for approval before anything is
 //! uploaded; the job runs in `src/publish.rs`.
 
+use std::sync::Arc;
+
 use crossbeam_channel::Receiver;
 use eframe::egui::{self, Margin, RichText};
 
@@ -526,8 +528,14 @@ impl PicassoApp {
                 let history = site.as_ref().map(|site| self.db.publish_jobs(story_id, site.id)).unwrap_or_default();
                 if !history.is_empty() {
                     egui::CollapsingHeader::new(RichText::new(tr("History")).color(theme::muted())).id_salt("publish-history").show(ui, |ui| {
-                        for job in history.iter().take(HISTORY_SHOWN) {
-                            note(ui, &format!("{} · {} · {}", local_time(job.ended_at), outcome_name(&job.outcome), trf("{} photos uploaded, {} already there", &[&job.uploaded, &job.reused])));
+                        for (index, job) in history.iter().take(HISTORY_SHOWN).enumerate() {
+                            // Only the newest can still be running, and only while this Picasso runs it.
+                            let outcome = if job.outcome == publish::RUNNING && !(index == 0 && site.as_ref().is_some_and(|site| publishing_now(&self.publishing, story_id, site.id))) {
+                                tr("Stopped before it finished").to_string()
+                            } else {
+                                outcome_name(&job.outcome)
+                            };
+                            note(ui, &format!("{} · {} · {}", local_time(job.ended_at), outcome, trf("{} photos uploaded, {} already there", &[&job.uploaded, &job.reused])));
                         }
                     });
                 }
@@ -691,6 +699,9 @@ impl PicassoApp {
 
     #[allow(clippy::too_many_arguments)]
     fn start_publishing(&mut self, ctx: &egui::Context, site: &Site, size: UploadSize, exif: bool, terms: PostTerms, earlier: Option<Publication>, update: bool, publish: bool, schedule: Option<chrono::NaiveDateTime>, allow_new: bool, by_day: bool) -> Result<(), String> {
+        if self.story.as_ref().is_some_and(|editor| self.is_publishing(editor.story.id, site.id)) {
+            return Err(tr("This story is still being published to this site. Try again once that has finished.").into());
+        }
         let (api, credentials, policy) = connection(&self.vault, site)?;
         if !self.save_story() {
             return Err(tr("The story couldn't be saved").into());
@@ -728,17 +739,36 @@ impl PicassoApp {
         };
         let progress = self.start_story_job();
         let (story_id, site_id, revision, label) = (job.story.id, site.id, job.story.revision, site.label.clone());
+        let started_at = unix_now();
+        let running = crate::db::PublishJob {
+            story_id,
+            site_id,
+            started_at,
+            ended_at: started_at,
+            outcome: publish::RUNNING.into(),
+            post_id: job.post_id,
+            uploaded: 0,
+            reused: 0,
+            size: size.code().into(),
+            revision,
+        };
+        let log = self.db.record_publish_job(&running).ok();
+        let alive = Arc::new(());
+        self.publishing.insert((story_id, site_id), Arc::downgrade(&alive));
         let events = self.events_tx.clone();
         let ctx = ctx.clone();
+        let unread = page.unread;
         let _ = std::thread::Builder::new().name("picasso-publish".into()).spawn(move || {
-            let started_at = unix_now();
+            let _alive = alive;
+            let mut job = job;
+            super::story::read_profiles(&mut job.profiles, unread);
             let network = Network::new();
             let run = if job.days.is_some() { publish::run_days } else { publish::run };
             let outcome = run(&network, &job, &progress, &mut |event| {
-                let _ = events.send(UiEvent::PublishProgress(site_id, event));
+                let _ = events.send(UiEvent::PublishProgress(site_id, log, event));
                 ctx.request_repaint();
             });
-            let finished = Finished { story_id, site_id, site: label, size, revision, started_at, outcome };
+            let finished = Finished { story_id, site_id, site: label, size, revision, started_at, log, job: progress, outcome };
             let _ = events.send(UiEvent::StoryPublished(Box::new(finished)));
             ctx.request_repaint();
         });
@@ -746,9 +776,15 @@ impl PicassoApp {
     }
 
     /// Keeps what the job learned the moment it did, so a retry reuses it.
-    pub(super) fn on_publish_progress(&mut self, site_id: i64, event: Event) {
+    pub(super) fn on_publish_progress(&mut self, site_id: i64, log: Option<i64>, event: Event) {
         let kept = match event {
-            Event::Uploaded { hash, size, media_id, url, details } => self.db.record_upload(site_id, &hash, size.code(), media_id, &url, &details),
+            Event::Uploaded { hash, size, media_id, url, details } => {
+                let kept = self.db.record_upload(site_id, &hash, size.code(), media_id, &url, &details);
+                if let Some(id) = log {
+                    let _ = self.db.count_publish_upload(id);
+                }
+                kept
+            }
             Event::Gone { hash } => self.db.forget_upload(site_id, &hash),
             Event::Creating { story_id, since } => self.db.set_pending_draft(story_id, site_id, since),
             Event::Part { story_id, revision, key, post } => {
@@ -775,9 +811,15 @@ impl PicassoApp {
         }
     }
 
+    /// Whether this Picasso is publishing Story `story_id` to site `site_id`.
+    pub(super) fn is_publishing(&self, story_id: i64, site_id: i64) -> bool {
+        publishing_now(&self.publishing, story_id, site_id)
+    }
+
     pub(super) fn on_story_published(&mut self, finished: Finished) {
-        self.end_story_job(finished.story_id);
-        let Finished { story_id, site_id, site, size, revision, started_at, outcome } = finished;
+        self.end_story_job(&finished.job);
+        let Finished { story_id, site_id, site, size, revision, started_at, log, outcome, .. } = finished;
+        self.publishing.remove(&(story_id, site_id));
         let (uploaded, reused) = publish::counts(&outcome);
         let logged = crate::db::PublishJob {
             story_id,
@@ -791,7 +833,10 @@ impl PicassoApp {
             size: size.code().into(),
             revision,
         };
-        let _ = self.db.record_publish_job(&logged);
+        let _ = match log {
+            Some(id) => self.db.finish_publish_job(id, &logged),
+            None => self.db.record_publish_job(&logged).map(|_| ()),
+        };
         self.activity = match outcome {
             // Each post was recorded as it was saved; the index opens.
             Ok(saved) if saved.days > 0 => {
@@ -892,12 +937,19 @@ const PREVIEW_EDGE: f32 = 40.0;
 const HISTORY_SHOWN: usize = 5;
 
 /// How a job ended (`publish::outcome_code`), in words.
+/// Whether the job publishing Story `story_id` to site `site_id`, if any,
+/// still has its thread.
+fn publishing_now(publishing: &std::collections::HashMap<(i64, i64), std::sync::Weak<()>>, story_id: i64, site_id: i64) -> bool {
+    publishing.get(&(story_id, site_id)).is_some_and(|alive| alive.strong_count() > 0)
+}
+
 fn outcome_name(code: &str) -> String {
     match code.split(':').next().unwrap_or_default() {
         "published" => tr("Published").into(),
         "saved" => tr("Saved as a draft").into(),
         "updated" => tr("Updated").into(),
         "cancelled" => tr("Cancelled").into(),
+        publish::RUNNING => tr("Running").into(),
         "site" => tr("The site stopped it").into(),
         "photo unavailable" => tr("A photo was unavailable").into(),
         "unsupported block" => tr("A block can't be published").into(),

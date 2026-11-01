@@ -431,8 +431,8 @@ pub fn icon_button(ui: &mut egui::Ui, icon: Icon, enabled: bool, selected: bool)
 /// as measured last frame under `id`, they go on a line of their own, so a
 /// narrow window or a long translation never lays them over the title.
 pub fn end_actions<R>(ui: &mut egui::Ui, id: &str, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
-    let key = egui::Id::unique(("end-actions", id));
-    let needed = ui.ctx().data(|data| data.get_temp::<f32>(key)).unwrap_or(0.0);
+    let key = actions_key(id);
+    let needed = trailing_width(ui.ctx(), id);
     // A wrapping row offers its whole width to a layout; only what is
     // after the cursor is free.
     if ui.max_rect().right() - ui.cursor().min.x < needed {
@@ -462,8 +462,8 @@ pub fn end_actions<R>(ui: &mut egui::Ui, id: &str, add: impl FnOnce(&mut egui::U
 /// They start as far from the end as they were wide last frame, as
 /// measured under `id`.
 pub fn trailing<R>(ui: &mut egui::Ui, id: &str, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
-    let key = egui::Id::unique(("end-actions", id));
-    let needed = ui.ctx().data(|data| data.get_temp::<f32>(key)).unwrap_or(0.0);
+    let key = actions_key(id);
+    let needed = trailing_width(ui.ctx(), id);
     let top = ui.cursor().min;
     let right = ui.max_rect().right();
     let left = (right - needed).max(top.x);
@@ -512,6 +512,28 @@ pub fn named(response: egui::Response, name: &str) -> egui::Response {
     let enabled = response.enabled();
     response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, name));
     response.on_hover_text(name)
+}
+
+/// Names a drop-down list that shows only its choice, for screen readers,
+/// which read `shown` as its value.
+pub fn name_picker(response: &egui::Response, name: &str, shown: String) {
+    let enabled = response.enabled();
+    response.widget_info(|| {
+        let mut info = egui::WidgetInfo::labeled(egui::Role::ComboBox, enabled, name);
+        info.current_text_value = Some(shown.clone());
+        info
+    });
+}
+
+/// How wide the actions [`trailing`] or [`end_actions`] put under `id` were
+/// last frame.
+pub fn trailing_width(ctx: &egui::Context, id: &str) -> f32 {
+    ctx.data(|data| data.get_temp::<f32>(actions_key(id))).unwrap_or(0.0)
+}
+
+/// Where the width of the actions under `id` is remembered.
+fn actions_key(id: &str) -> egui::Id {
+    egui::Id::unique(("end-actions", id))
 }
 
 fn icon_label(icon: Icon) -> &'static str {

@@ -229,6 +229,10 @@ pub struct Finished {
     pub revision: i64,
     /// When the job started (Unix seconds).
     pub started_at: i64,
+    /// Its row in the publishing log, kept since it started.
+    pub log: Option<i64>,
+    /// The job's own progress, which tells it from any started since.
+    pub job: std::sync::Arc<crate::story_html::Progress>,
     pub outcome: Result<Saved, Stopped>,
 }
 
@@ -257,6 +261,10 @@ pub fn sync_state(publication: Option<&crate::db::Publication>, revision: i64, p
         Some(_) => SyncState::Clean,
     }
 }
+
+/// What the publishing log keeps for a job until it ends; one that never
+/// ended was cut short, as by a crash or a power cut.
+pub const RUNNING: &str = "running";
 
 /// How a job ended, in a word or two for the library's publishing log;
 /// a site's failure is named by its kind, which holds nothing secret.
@@ -602,6 +610,7 @@ impl Staging {
     fn new(story_id: i64) -> Self {
         static JOBS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let job = JOBS.fetch_add(1, Ordering::Relaxed);
+        Staging::remove_abandoned(&std::env::temp_dir());
         let dir = std::env::temp_dir().join(format!("picasso-publish-{}-{story_id}-{job}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::create_dir_all(&dir);
@@ -610,6 +619,19 @@ impl Staging {
 
     fn path(&self, hash: &str) -> std::path::PathBuf {
         self.0.join(format!("{hash}.jpg"))
+    }
+
+    /// Removes the folders in `temp` of jobs cut short by a crash or a power
+    /// cut; those of another running Picasso are left alone.
+    fn remove_abandoned(temp: &Path) {
+        let Ok(entries) = std::fs::read_dir(temp) else { return };
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let pid = name.to_str().and_then(|name| name.strip_prefix("picasso-publish-")).and_then(|rest| rest.split('-').next()).and_then(|pid| pid.parse::<u32>().ok());
+            if pid.is_some_and(|pid| pid != std::process::id() && crate::story_html::abandoned(pid, &entry.path())) {
+                let _ = std::fs::remove_dir_all(entry.path());
+            }
+        }
     }
 }
 
@@ -986,6 +1008,26 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn photos_staged_by_a_job_cut_short_are_cleared_by_the_next() {
+        let temp = temp_dir("staging-left");
+        let mut ended = std::process::Command::new("true").spawn().unwrap();
+        ended.wait().unwrap();
+        let crashed = temp.join(format!("picasso-publish-{}-3-0", ended.id()));
+        let running = temp.join(format!("picasso-publish-{}-3-0", std::os::unix::process::parent_id()));
+        let other = temp.join("picasso-publish-notes");
+        for dir in [&crashed, &running, &other] {
+            std::fs::create_dir_all(dir).unwrap();
+            std::fs::write(dir.join("a.jpg"), "rendered").unwrap();
+        }
+        Staging::remove_abandoned(&temp);
+        assert!(!crashed.exists(), "a stopped job's photos are cleared");
+        assert!(running.join("a.jpg").is_file(), "a running Picasso's are left alone");
+        assert!(other.join("a.jpg").is_file(), "anything else is left alone");
+        let _ = std::fs::remove_dir_all(temp);
+    }
+
     #[test]
     fn a_photo_the_site_has_is_not_rendered_again_until_it_must_be_sent() {
         let dir = temp_dir("renders");
@@ -1330,6 +1372,122 @@ mod tests {
         let fake = Fake::default().answer(&format!("{POSTS}/7?context=edit"), 200, &[], r#"{"status":"draft"}"#);
         assert_eq!(run(&fake, &failing, &Progress::default(), &mut |_| {}), Err(Stopped::Photo { media_id: 11, uploaded: 0 }));
         assert!(fake.bodies.borrow().is_empty(), "no upload, no earlier upload in its place, and the draft unchanged");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// The quantization tables of a JPEG: what its quality was set to.
+    fn quantization(jpeg: &[u8]) -> Vec<u8> {
+        let (mut at, mut tables) = (2, Vec::new());
+        while at + 4 <= jpeg.len() && jpeg[at] == 0xFF && jpeg[at + 1] != 0xDA {
+            let len = usize::from(u16::from_be_bytes([jpeg[at + 2], jpeg[at + 3]]));
+            if jpeg[at + 1] == 0xDB {
+                tables.extend(&jpeg[at + 4..at + 2 + len]);
+            }
+            at += 2 + len;
+        }
+        tables
+    }
+
+    #[test]
+    fn each_size_sends_every_kind_of_photo_upright_fitted_at_its_quality_with_only_how_it_was_taken() {
+        use exif::{Field, In, Tag, Value};
+        let dir = temp_dir("both-sizes");
+        let gradient = |w: u32, h: u32| image::RgbImage::from_fn(w, h, move |x, y| image::Rgb([(x * 255 / w) as u8, (y * 255 / h) as u8, 90]));
+
+        // Turned in the camera: stored wide, shown tall, with where it was
+        // taken and the camera's serial number.
+        let field = |tag, value| Field { tag, ifd_num: In::PRIMARY, value };
+        let ascii = |text: &str| Value::Ascii(vec![text.as_bytes().to_vec()]);
+        let mut writer = exif::experimental::Writer::new();
+        let fields = [
+            field(Tag::Orientation, Value::Short(vec![6])),
+            field(Tag::Model, ascii("X-T5")),
+            field(Tag::BodySerialNumber, ascii("SERIAL-123")),
+            field(Tag::GPSLatitudeRef, ascii("N")),
+            field(Tag::GPSLatitude, Value::Rational(vec![(37, 1).into(), (10, 1).into(), (0, 1).into()])),
+        ];
+        fields.iter().for_each(|field| writer.push_field(field));
+        let mut tiff = std::io::Cursor::new(Vec::new());
+        writer.write(&mut tiff, false).unwrap();
+        let tiff = tiff.into_inner();
+        let mut app1 = vec![0xFF, 0xE1];
+        app1.extend(u16::try_from(2 + 6 + tiff.len()).unwrap().to_be_bytes());
+        app1.extend(b"Exif\0\0");
+        app1.extend(tiff);
+        let stored = crate::image_io::encode_jpeg(&image::DynamicImage::ImageRgb8(gradient(3000, 2000)).to_rgba8(), 92).unwrap();
+        let turned = dir.join("turned.jpg");
+        std::fs::write(&turned, [&stored[..2], &app1, &stored[2..]].concat()).unwrap();
+
+        let tall = dir.join("tall.png");
+        gradient(1500, 2600).save(&tall).unwrap();
+        let small = dir.join("small.png");
+        gradient(900, 600).save(&small).unwrap();
+        let wide = dir.join("wide.jpg");
+        gradient(3000, 2000).save(&wide).unwrap();
+        let mut left_half = Settings::default();
+        left_half.set_crop([0.0, 0.0, 0.5, 1.0]);
+        let preview = crate::image_io::encode_jpeg(&image::DynamicImage::ImageRgb8(gradient(2400, 1600)).to_rgba8(), 90).unwrap();
+        let raw = dir.join("raw.3fr");
+        std::fs::write(&raw, crate::story_html::tests::raw_with_preview(&preview, 2400, 1600)).unwrap();
+
+        let source = crate::photo_info::read_exif(&turned).unwrap();
+        assert!(source.get_field(Tag::GPSLatitude, In::PRIMARY).is_some() && source.get_field(Tag::BodySerialNumber, In::PRIMARY).is_some());
+        let at = |quality| quantization(&crate::image_io::encode_jpeg(&RgbaImage::from_pixel(8, 8, Rgba([1, 2, 3, 255])), quality).unwrap());
+        assert!(!at(85).is_empty() && at(85) != at(80), "the two qualities can be told apart in the bytes");
+
+        let originals = [&turned, &tall, &small, &wide, &raw];
+        let checksums = |paths: &[&std::path::PathBuf]| paths.iter().map(|path| crate::upload::hash(&std::fs::read(path).unwrap())).collect::<Vec<_>>();
+        let before = checksums(&originals);
+        let top_half = crate::trip::CoverCrop([0, 0, 10_000, 5_000]);
+
+        for size in UploadSize::ALL {
+            let mut job = job(&dir, None, HashMap::new());
+            job.sources = HashMap::from([
+                (1, Some((turned.clone(), Settings::default(), 0))),
+                (2, Some((tall.clone(), Settings::default(), 0))),
+                (3, Some((small.clone(), Settings::default(), 0))),
+                (4, Some((wide.clone(), left_half.clone(), 0))),
+                (5, Some((raw.clone(), Settings::default(), 0))),
+            ]);
+            job.blocks = vec![
+                StoryBlock::new(Block::Photo(MediaUse::new(1))),
+                StoryBlock::new(Block::Gallery(vec![MediaUse::new(2), MediaUse::new(3), MediaUse::new(4)])),
+                StoryBlock::new(Block::Photo(MediaUse::new(5))),
+            ];
+            job.story.cover = Some(2);
+            job.story.cover_crop = top_half;
+            let job = Job { size, ..job };
+            let fake = Fake::default()
+                .answer_to("POST", MEDIA, 201, &[], r#"{"id":41,"source_url":"https://example.com/blog/a.jpg"}"#)
+                .answer_to("POST", POSTS, 201, &[], r#"{"id":7}"#);
+            run(&fake, &job, &Progress::default(), &mut |_| {}).unwrap();
+
+            let fit = |w, h| crate::upload::fitted(w, h, size);
+            let (tall_w, tall_h) = fit(1500, 2600);
+            let cover = crate::story_html::crop_cover(&RgbaImage::new(tall_w, tall_h), top_half).dimensions();
+            let mut expected = vec![fit(2000, 3000), (tall_w, tall_h), (900, 600), fit(1500, 2000), fit(2400, 1600), cover];
+            let mut sent = sent_photos(&fake);
+            expected.sort();
+            sent.sort();
+            assert_eq!(sent, expected, "{size:?}: upright, within {} px, never enlarged, cropped as edited and as framed", size.edge());
+            assert!(sent.iter().all(|&(w, h)| w.max(h) <= size.edge()));
+
+            let tables = at(size.quality());
+            let bodies = fake.bodies.borrow();
+            let uploads: Vec<&Vec<u8>> = bodies.iter().filter(|(key, _)| key.starts_with("POST") && key.ends_with("/media")).map(|(_, body)| body).collect();
+            assert_eq!(uploads.len(), 6);
+            for body in &uploads {
+                assert_eq!(quantization(body), tables, "{size:?}: encoded at quality {}", size.quality());
+                let has = |marker: &[u8]| body.windows(marker.len()).any(|window| window == marker);
+                assert!(!has(b"SERIAL-123"), "no serial number is sent");
+                let exif = exif::Reader::new().read_from_container(&mut std::io::Cursor::new(body)).ok();
+                let field = |tag| exif.as_ref().and_then(|exif| exif.get_field(tag, In::PRIMARY)).is_some();
+                assert!(!field(Tag::Orientation) && !field(Tag::GPSLatitude) && !field(Tag::GPSLatitudeRef) && !field(Tag::BodySerialNumber));
+            }
+            let camera = uploads.iter().filter(|body| body.windows(4).any(|window| window == b"X-T5")).count();
+            assert_eq!(camera, 1, "the camera that took it is kept, on its photo alone");
+        }
+        assert_eq!(checksums(&originals), before, "the originals are never written");
         let _ = std::fs::remove_dir_all(dir);
     }
 }

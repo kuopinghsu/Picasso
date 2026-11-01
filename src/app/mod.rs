@@ -8,6 +8,8 @@ mod editor_panel;
 mod editor_stage;
 mod export;
 mod frame_stats;
+#[cfg(test)]
+pub(crate) mod headless;
 mod geotagging;
 mod help;
 mod library;
@@ -138,6 +140,8 @@ enum Modal {
     Resource(trips::ResourceDialog),
     /// Delete Story (id, name)?
     DeleteStory(i64, String),
+    /// Quitting while the open Story couldn't be saved.
+    UnsavedStory,
     ExportStory(story::ExportDialog),
     PublishStory(publish_story::PublishDialog),
     Help,
@@ -260,6 +264,12 @@ pub struct PicassoApp {
     trip_reads: trips::TripReads,
     /// What photos rendered to for publishing in this session.
     publish_renders: crate::publish::Renders,
+    /// Stories being published, with their site, so the publishing log tells
+    /// a job still running from one cut short. The job's thread holds what
+    /// each points to, so one that ends without a word stops counting.
+    publishing: HashMap<(i64, i64), std::sync::Weak<()>>,
+    /// Each Story's last export in this session, by Story.
+    story_exports: HashMap<i64, story::LastExport>,
     /// The Story being edited, shown in place of its Trip's photos.
     story: Option<story::StoryEditor>,
     /// The archived Trips are listed in the side bar.
@@ -486,7 +496,12 @@ pub fn start(ctx: &egui::Context, args: Vec<PathBuf>) -> Box<dyn eframe::App> {
 
 impl PicassoApp {
     fn new(ctx: &egui::Context, args: Vec<PathBuf>) -> Result<Self, String> {
-        let (data_dir, cache) = db::app_dirs();
+        Self::open(ctx, args, db::app_dirs(), &db::config_dir())
+    }
+
+    /// The app on the library in `data_dir`, with thumbnails and map tiles in
+    /// `cache` and `settings.json` in `config_dir`.
+    fn open(ctx: &egui::Context, args: Vec<PathBuf>, (data_dir, cache): (PathBuf, PathBuf), config_dir: &Path) -> Result<Self, String> {
         let _ = std::fs::create_dir_all(&data_dir);
         let track_recovery = track_editor::read_recovery(&data_dir);
         let track_keeper = track_editor::Keeper::new(&data_dir);
@@ -509,7 +524,7 @@ impl PicassoApp {
                 }
             });
         }
-        let mut config = Config::load(&db::config_dir(), &database);
+        let mut config = Config::load(config_dir, &database);
         FileType::set_enabled(&config.file_types());
         let theme_mode = ThemeMode::from_code(config.text("theme").unwrap_or_default());
         theme::apply(ctx, theme_mode.is_dark(system_dark(ctx)));
@@ -598,6 +613,8 @@ impl PicassoApp {
             trips: Vec::new(),
             trip_reads: trips::TripReads::default(),
             publish_renders: crate::publish::Renders::default(),
+            publishing: HashMap::new(),
+            story_exports: HashMap::new(),
             story: None,
             show_archived_trips: false,
             trip_filter: crate::trip::MemberQuery::default(),
@@ -963,9 +980,14 @@ impl PicassoApp {
 
     fn pump(&mut self, ctx: &egui::Context) {
         self.pump_loads();
-        for _ in 0..16 {
+        let mut handled = 0;
+        while handled < 16 {
             match self.events.try_recv() {
-                Ok(event) => self.on_event(event, ctx),
+                Ok(event) if self.unseen_thumb(&event) => {}
+                Ok(event) => {
+                    self.on_event(event, ctx);
+                    handled += 1;
+                }
                 Err(TryRecvError::Empty) | Err(TryRecvError::Disconnected) => break,
             }
         }
@@ -985,6 +1007,21 @@ impl PicassoApp {
                 ctx.request_repaint_after(wait.saturating_sub(self.last_reload.elapsed()));
             }
         }
+    }
+
+    /// Whether `event` is a thumbnail of a photo no longer on screen. It is
+    /// dropped without being uploaded, so a fast scroll doesn't keep decoded
+    /// images queued for photos scrolled past, and asked for again when drawn.
+    /// The texture it would have replaced goes too, as it may show the file
+    /// as it was before a scan found it changed.
+    fn unseen_thumb(&mut self, event: &UiEvent) -> bool {
+        let UiEvent::Thumb { id, .. } = event else { return false };
+        let shown = self.thumb_drawn.contains(id) || self.thumb_wanted.lock().map_or(true, |wanted| wanted.contains(id));
+        if !shown {
+            self.thumb_waiting.remove(id);
+            self.thumbs.map.remove(id);
+        }
+        !shown
     }
 
     fn on_event(&mut self, event: UiEvent, ctx: &egui::Context) {
@@ -1132,9 +1169,11 @@ impl PicassoApp {
             UiEvent::DaysSuggested { trip_id, outcome } => self.on_days_suggested(trip_id, outcome),
             UiEvent::PlacesSuggested { trip_id, outcome } => self.on_places_suggested(trip_id, outcome),
             UiEvent::PlaceNamed { place_id, outcome } => self.on_place_named(place_id, outcome),
-            UiEvent::StoryPreviewed(story_id, outcome) => self.on_story_previewed(story_id, outcome),
-            UiEvent::StoryExported(story_id, outcome) => self.on_story_exported(story_id, outcome),
-            UiEvent::PublishProgress(site_id, event) => self.on_publish_progress(site_id, event),
+            UiEvent::StoryPreviewed(job, outcome) => self.on_story_previewed(&job, outcome),
+            UiEvent::StoryExported(story_id, job, content, outcome) => self.on_story_exported(story_id, &job, content, outcome),
+            UiEvent::StoryContent(story_id, asked, content) => self.on_story_content(story_id, asked, content),
+            UiEvent::RouteProfile(story_id, source, profile) => self.on_route_profile(story_id, source, profile),
+            UiEvent::PublishProgress(site_id, log, event) => self.on_publish_progress(site_id, log, event),
             UiEvent::StoryPublished(done) => self.on_story_published(*done),
             UiEvent::TripPackaged(outcome) => self.on_trip_packaged(outcome),
             UiEvent::TripUnpacked(outcome) => self.on_trip_unpacked(*outcome),
@@ -1551,7 +1590,8 @@ impl PicassoApp {
                 self.modal = Modal::About;
             }
             ui.add_space(24.0);
-            let search_w = (ui.available_width() - 320.0).clamp(160.0, 420.0);
+            // The field's margins and a gap before the actions at the end.
+            let search_w = (ui.available_width() - theme::trailing_width(ui.ctx(), "top-bar") - 48.0).clamp(160.0, 420.0);
             let search_id = egui::Id::unique("search");
             self.search_keys(ui, search_id);
             let response = ui.add(
@@ -1561,6 +1601,8 @@ impl PicassoApp {
                     .margin(egui::Margin::symmetric(12, 6))
                     .desired_width(search_w),
             );
+            // Named before the tooltip, which would otherwise name it.
+            ui.ctx().accesskit_node_builder(response.id, |node| node.set_label(tr("Search photos")));
             let response = response.on_hover_text(format!("{}\n\n{}", tr(SEARCH_HINT), tr(SEARCH_TRIP_HINT)));
             if std::mem::take(&mut self.focus_search) {
                 response.request_focus();
@@ -1616,12 +1658,12 @@ impl PicassoApp {
                 }
                 let help = ui.button("     ");
                 theme::paint_help_icon(ui.painter(), help.rect.center(), theme::text());
-                if help.on_hover_text(tr("Help & Shortcuts (F1)")).clicked() {
+                if theme::named(help, tr("Help & Shortcuts (F1)")).clicked() {
                     self.modal = Modal::Help;
                 }
                 let gear = ui.button("     ");
                 theme::paint_settings_icon(ui.painter(), gear.rect.center(), theme::text());
-                if gear.on_hover_text(tr("Settings")).clicked() {
+                if theme::named(gear, tr("Settings")).clicked() {
                     self.open_settings(ui.ctx());
                 }
             });
@@ -1673,6 +1715,8 @@ impl PicassoApp {
                     ui.label(egui::RichText::new("▮").size(16.0).color(theme::muted()));
                     let mut size = self.thumb_size;
                     let response = ui.add(egui::Slider::new(&mut size, MIN_THUMB..=MAX_THUMB).show_value(false));
+                    response.widget_info(|| egui::WidgetInfo::slider(true, f64::from(size), tr("Thumbnail size")));
+                    let response = response.on_hover_text(tr("Thumbnail size"));
                     ui.label(egui::RichText::new("▮").size(10.0).color(theme::muted()));
                     self.set_thumb_size(size, &response);
                     ui.add_space(12.0);
@@ -1694,16 +1738,17 @@ impl PicassoApp {
         let fit = (room / (THUMB.x + ui.spacing().item_spacing.x)).floor().clamp(0.0, 16.0) as usize;
         ui.label(egui::RichText::new(tr("Photo Tray")).strong().size(12.0).color(theme::muted()));
         let mut rest = ui.cursor().min.x - start;
-        let held: Vec<(i64, String, i32)> = self
+        let held: Vec<(i64, String, String, i32)> = self
             .tray_indices(fit)
             .into_iter()
             .filter_map(|index| self.photos.get(index))
-            .map(|photo| (photo.id, photo.path.clone(), photo.rotation))
+            .map(|photo| (photo.id, photo.path.clone(), photo.filename.clone(), photo.rotation))
             .collect();
         let extra = self.selection.len().saturating_sub(held.len());
-        for (id, path, rotation) in &held {
+        for (id, path, name, rotation) in &held {
             self.ensure_thumb(*id, path);
             let (rect, response) = ui.allocate_exact_size(THUMB, egui::Sense::click());
+            response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, name));
             if let Some((texture, w, h)) = self.thumb_texture(*id) {
                 theme::paint_image_rounded(ui.painter(), &texture, rect, theme::cover_uv(w, h), *rotation, 5.0);
             } else {
@@ -1851,6 +1896,8 @@ impl PicassoApp {
         let width = ui.available_width();
         let (rect, response) = ui.allocate_exact_size(Vec2::new(width, 30.0), egui::Sense::click());
         let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
+        let name = count.map_or_else(|| label.to_owned(), |count| format!("{label}, {count}"));
+        response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, &name));
         if selected {
             ui.painter().rect_filled(rect, theme::RADIUS, theme::select());
         } else if response.hovered() {
@@ -2046,6 +2093,7 @@ impl PicassoApp {
             Modal::PlaceDetails(_) => self.place_modal(ctx),
             Modal::Resource(_) => self.resource_modal(ctx),
             Modal::DeleteStory(..) => self.delete_story_modal(ctx),
+            Modal::UnsavedStory => self.unsaved_story_modal(ctx),
             Modal::ExportStory(_) => self.export_story_modal(ctx),
             Modal::PublishStory(_) => self.publish_story_modal(ctx),
             Modal::Settings => self.settings_modal(ctx),

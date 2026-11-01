@@ -264,6 +264,11 @@ fn tree_line(ui: &mut egui::Ui, row: &Row, selected: bool) -> (egui::Response, b
     let width = ui.available_width();
     let (rect, response) = ui.allocate_exact_size(Vec2::new(width, 28.0), egui::Sense::click());
     let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
+    let name = format!("{}, {}", row.label, row.count);
+    response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, &name));
+    if let Some(open) = row.open {
+        ui.ctx().accesskit_node_builder(response.id, |node| node.set_expanded(open));
+    }
     let painter = ui.painter();
     if selected {
         painter.rect_filled(rect, theme::RADIUS, theme::select());

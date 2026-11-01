@@ -39,7 +39,13 @@ pub(super) struct RenameDialog {
     /// Whether the window was closed during the renaming; it closes once
     /// the renaming is done, so no file is left with a temporary name.
     quit: bool,
+    /// The folder being read on another thread.
+    listing: Option<Receiver<Listing>>,
 }
+
+/// A folder's photos, by name, and the other names in it, or why the library
+/// couldn't be read; and the renamings it lists.
+type Listing = (Result<(Vec<rename::File>, Vec<String>), String>, Result<Vec<rename::Batch>, String>);
 
 /// The pattern, date format, and time offset a plan was made from, and what
 /// becomes of each file.
@@ -62,24 +68,20 @@ enum Purpose {
 
 impl PicassoApp {
     pub(super) fn open_renamer(&mut self, dir: &str) {
-        let (files, others) = folder_files(&self.db, dir);
-        let (history, message) = match rename::history(Path::new(dir)) {
-            Ok(history) => (history, None),
-            Err(err) => (Vec::new(), Some((err, true))),
-        };
         self.modal = Modal::Rename(RenameDialog {
             dir: dir.to_string(),
-            files,
-            others,
+            files: Vec::new(),
+            others: Vec::new(),
             pattern: self.config.text("rename_pattern").unwrap_or(rename::PATTERN).to_string(),
             date_format: self.config.text("rename_date_format").unwrap_or(rename::DATE_FORMAT).to_string(),
             shift: String::new(),
             plan: None,
-            history,
-            message,
+            history: Vec::new(),
+            message: None,
             scanning: self.scans > 0,
             job: None,
             quit: false,
+            listing: Some(list_folder(self.data_dir.join("picasso.db"), dir.to_string())),
         });
     }
 
@@ -105,12 +107,40 @@ impl PicassoApp {
             }
         }
         let scanning = self.scans > 0;
+        let db_path = self.data_dir.join("picasso.db");
         let Modal::Rename(dialog) = &mut self.modal else { return };
         if dialog.scanning && !scanning {
-            (dialog.files, dialog.others) = folder_files(&self.db, &dialog.dir);
-            dialog.plan = None;
+            dialog.listing = Some(list_folder(db_path, dialog.dir.clone()));
         }
         dialog.scanning = scanning;
+        match dialog.listing.as_ref().map(Receiver::try_recv) {
+            Some(Ok((listed, history))) => {
+                match listed {
+                    Ok((files, others)) => (dialog.files, dialog.others) = (files, others),
+                    Err(err) => {
+                        (dialog.files, dialog.others) = (Vec::new(), Vec::new());
+                        dialog.message = Some((trf("Couldn't read the folder: {}", &[&err]), true));
+                    }
+                }
+                match history {
+                    Ok(history) => dialog.history = history,
+                    Err(err) => dialog.message = Some((err, true)),
+                }
+                dialog.plan = None;
+                dialog.listing = None;
+            }
+            Some(Err(TryRecvError::Disconnected)) => {
+                (dialog.files, dialog.others) = (Vec::new(), Vec::new());
+                dialog.message = Some((tr("Couldn't read the folder.").into(), true));
+                dialog.plan = None;
+                dialog.listing = None;
+            }
+            Some(Err(TryRecvError::Empty)) | None => {}
+        }
+        let reading = dialog.listing.is_some();
+        if reading {
+            ctx.request_repaint_after(Duration::from_millis(100));
+        }
         let inputs = [dialog.pattern.clone(), dialog.date_format.clone(), dialog.shift.clone()];
         if dialog.plan.as_ref().is_none_or(|(made_from, _)| *made_from != inputs) {
             let plan = rename::plan(&dialog.pattern, &dialog.date_format, &dialog.shift, &dialog.files, &dialog.others);
@@ -152,6 +182,13 @@ impl PicassoApp {
                 });
                 ui.separator();
                 let renames = match dialog.plan.as_ref().map(|(_, plan)| plan) {
+                    _ if reading => {
+                        ui.horizontal(|ui| {
+                            ui.add(egui::Spinner::new());
+                            ui.label(RichText::new(tr("Reading the folder…")).color(theme::muted()));
+                        });
+                        0
+                    }
                     Some(Ok(outcomes)) => preview(ui, &dialog.files, outcomes),
                     Some(Err(message)) => {
                         ui.label(RichText::new(message).color(theme::DANGER));
@@ -176,7 +213,7 @@ impl PicassoApp {
                     }
                     if let Some(last) = dialog.history.last() {
                         let hint = trf("Put back the names {} files had before {}", &[&last.files.len(), &last.at]);
-                        let mut button = ui.add_enabled(!scanning && !working, egui::Button::new(tr("Undo"))).on_hover_text(hint);
+                        let mut button = ui.add_enabled(!scanning && !working && !reading, egui::Button::new(tr("Undo"))).on_hover_text(hint);
                         if scanning {
                             button = button.on_disabled_hover_text(wait);
                         }
@@ -279,8 +316,7 @@ impl PicassoApp {
             })
         });
         if let Err(err) = result {
-            (dialog.files, dialog.others) = folder_files(&self.db, &dialog.dir);
-            dialog.plan = None;
+            dialog.listing = Some(list_folder(self.data_dir.join("picasso.db"), dialog.dir.clone()));
             dialog.message = Some((trf("Couldn't rename the files: {}", &[&err]), true));
             return;
         }
@@ -324,9 +360,7 @@ impl PicassoApp {
     /// means the list couldn't be written.
     fn renamed(&mut self, message: String, remember: bool, failed: bool) {
         let Modal::Rename(dialog) = &mut self.modal else { return };
-        (dialog.files, dialog.others) = folder_files(&self.db, &dialog.dir);
-        dialog.plan = None;
-        dialog.history = rename::history(Path::new(&dialog.dir)).unwrap_or_default();
+        dialog.listing = Some(list_folder(self.data_dir.join("picasso.db"), dialog.dir.clone()));
         if remember {
             self.config.set("rename_pattern", dialog.pattern.clone());
             self.config.set("rename_date_format", dialog.date_format.clone());
@@ -388,6 +422,17 @@ fn keyword_hint(keyword: &str) -> &'static str {
     }
 }
 
+/// Reads the folder `dir` and its listed renamings on another thread, with a
+/// connection of its own to the library at `db_path`.
+fn list_folder(db_path: PathBuf, dir: String) -> Receiver<Listing> {
+    let (sender, receiver) = mpsc::channel();
+    let _ = std::thread::Builder::new().name("picasso-rename-list".into()).spawn(move || {
+        let listed = crate::db::Database::open_reader(&db_path).map(|db| folder_files(&db, &dir));
+        let _ = sender.send((listed, rename::history(Path::new(&dir))));
+    });
+    receiver
+}
+
 /// The library's photos directly in `dir` that are there on disk, by name,
 /// each with the files that go with it, and the names of everything else in
 /// the folder.
@@ -414,4 +459,45 @@ fn folder_files(db: &crate::db::Database, dir: &str) -> (Vec<rename::File>, Vec<
     let others = on_disk.iter().filter(|name| !names.contains(name.as_str())).cloned().collect();
     let others = rename::attach(&mut files, others);
     (files, others)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_folder_is_read_on_another_thread_with_its_own_connection() {
+        let dir = std::env::temp_dir().join(format!("picasso-rename-list-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let pics = dir.join("pics");
+        std::fs::create_dir_all(&pics).unwrap();
+        for name in ["b.jpg", "a.jpg", "a.xmp", "notes.txt"] {
+            std::fs::write(pics.join(name), b"x").unwrap();
+        }
+        let library = dir.join("picasso.db");
+        let db = crate::db::Database::open(&library).unwrap();
+        let folder_id = db.add_folder(&pics).unwrap();
+        for name in ["a.jpg", "b.jpg", "gone.jpg"] {
+            db.conn_for_tests()
+                .execute(
+                    "INSERT INTO photos(folder_id, path, filename) VALUES (?1, ?2, ?3)",
+                    rusqlite::params![folder_id, pics.join(name).to_string_lossy(), name],
+                )
+                .unwrap();
+        }
+        let listing = list_folder(library, pics.to_string_lossy().into_owned());
+        let (listed, history) = listing.recv_timeout(Duration::from_secs(10)).unwrap();
+        let (files, others) = listed.unwrap();
+        let names: Vec<&str> = files.iter().map(|file| file.name.as_str()).collect();
+        assert_eq!(names, ["a.jpg", "b.jpg"], "photos on disk, by name; one no longer there is left out");
+        assert_eq!(files[0].companions, ["a.xmp"]);
+        assert_eq!(others, ["notes.txt"]);
+        assert!(history.unwrap().is_empty());
+
+        let unreadable = list_folder(dir.join("missing.db"), pics.to_string_lossy().into_owned());
+        let (listed, _) = unreadable.recv_timeout(Duration::from_secs(10)).unwrap();
+        assert!(listed.is_err(), "a library that can't be opened is reported, not shown as an empty folder");
+        drop(db);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

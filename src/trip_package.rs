@@ -407,9 +407,10 @@ pub fn file_hash(path: &Path) -> Option<String> {
 
 /// Writes the photos of the package at `path` into `folder`, which is made
 /// if needed, all but those in `skip`, and then its tracks, all but those
-/// with a [`PackTrack::path`] already, setting it for the others. A name
-/// already taken there gets " 2", " 3", … so nothing is replaced. Returns
-/// each written photo's path by key.
+/// with a [`PackTrack::path`] already, setting it for the others. Names are
+/// made ones this system takes, as one made elsewhere may not be, and a
+/// name already taken there, in any case, gets " 2", " 3", … so nothing is
+/// replaced. Returns each written photo's path by key.
 pub fn extract_photos(
     path: &Path,
     package: &mut Package,
@@ -423,6 +424,7 @@ pub fn extract_photos(
     let mut file = File::open(path).map_err(io)?;
     file.seek(SeekFrom::Start(start)).map_err(io)?;
     let mut written = HashMap::new();
+    let mut taken = names_in(folder);
     progress.total.store(package.photos.len(), Ordering::Relaxed);
     for photo in &package.photos {
         progress.done.fetch_add(1, Ordering::Relaxed);
@@ -434,7 +436,7 @@ pub fn extract_photos(
             file.seek(SeekFrom::Current(size as i64)).map_err(io)?;
             continue;
         }
-        let target = free_name(folder, &photo.name);
+        let target = free_name(folder, &photo.name, &mut taken);
         let mut out = BufWriter::new(File::create(&target).map_err(io)?);
         let copied = std::io::copy(&mut (&mut file).take(size), &mut out).map_err(io)?;
         out.flush().map_err(io)?;
@@ -448,7 +450,7 @@ pub fn extract_photos(
             file.seek(SeekFrom::Current(track.size as i64)).map_err(io)?;
             continue;
         }
-        let target = free_name(folder, &track.file);
+        let target = free_name(folder, &track.file, &mut taken);
         let mut out = BufWriter::new(File::create(&target).map_err(io)?);
         let copied = std::io::copy(&mut (&mut file).take(track.size), &mut out).map_err(io)?;
         out.flush().map_err(io)?;
@@ -460,21 +462,35 @@ pub fn extract_photos(
     Ok(written)
 }
 
-fn free_name(folder: &Path, name: &str) -> PathBuf {
+/// The names in `folder`, in lower case.
+fn names_in(folder: &Path) -> HashSet<String> {
+    let Ok(entries) = std::fs::read_dir(folder) else { return HashSet::new() };
+    entries.flatten().map(|entry| entry.file_name().to_string_lossy().to_lowercase()).collect()
+}
+
+/// A path in `folder` for `name` under a name not yet in `taken`, the
+/// folder's names in lower case, which it then joins. Names that differ
+/// only in letter case are one name on Windows and macOS, so they never
+/// share a folder, whatever system it is written on.
+fn free_name(folder: &Path, name: &str, taken: &mut HashSet<String>) -> PathBuf {
+    let name = crate::story_html::portable_name(name);
+    let name = if name.is_empty() { "photo".to_string() } else { name };
+    let name = name.as_str();
     let (stem, ext) = name.rsplit_once('.').unwrap_or((name, ""));
-    (1..)
+    let free = (1..)
         .map(|n| {
-            let name = if n == 1 {
+            if n == 1 {
                 name.to_string()
             } else if ext.is_empty() {
                 format!("{stem} {n}")
             } else {
                 format!("{stem} {n}.{ext}")
-            };
-            folder.join(name)
+            }
         })
-        .find(|path| !path.exists())
-        .unwrap_or_else(|| folder.join(name))
+        .find(|name| !taken.contains(&name.to_lowercase()) && !folder.join(name).exists())
+        .unwrap_or_else(|| name.to_string());
+    taken.insert(free.to_lowercase());
+    folder.join(free)
 }
 
 #[cfg(test)]
@@ -596,6 +612,40 @@ mod tests {
         assert!(read_package(&write("newer", &newer, b"abc")).unwrap_err().contains("newer"));
         std::fs::write(dir.join("text"), b"hello").unwrap();
         assert!(read_package(&dir.join("text")).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn names_from_another_system_are_each_written_under_one_this_system_takes() {
+        let dir = std::env::temp_dir().join(format!("picasso-package-names-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut package = package();
+        // Made on Linux, which takes all of these.
+        for (photo, (name, size)) in package.photos.iter_mut().zip([("IMG_1.jpg", 1), ("img_1.JPG", 2), ("a:b.jpg", 3)]) {
+            (photo.name, photo.size) = (name.into(), Some(size));
+        }
+        package.tracks = vec![PackTrack { name: "Walk".into(), file: "CON.gpx".into(), size: 4, ..PackTrack::default() }];
+        let mut bytes = MAGIC.to_vec();
+        let text = header(&package).to_string();
+        bytes.extend((text.len() as u64).to_le_bytes());
+        bytes.extend(text.as_bytes());
+        bytes.extend(b"abbcccdddd");
+        let path = dir.join("names.picassotrip");
+        std::fs::write(&path, bytes).unwrap();
+
+        let (mut read, start) = read_package(&path).unwrap();
+        let folder = dir.join("photos");
+        let files = extract_photos(&path, &mut read, start, &folder, &HashSet::new(), &Progress::default()).unwrap();
+        let contents: Vec<Vec<u8>> = [11, 12, 13].iter().map(|key| std::fs::read(&files[key]).unwrap()).collect();
+        assert_eq!(contents, [b"a".to_vec(), b"bb".to_vec(), b"ccc".to_vec()], "each photo keeps its own bytes");
+        let names: Vec<String> = [11, 12, 13].iter().map(|key| files[key].file_name().unwrap().to_string_lossy().into_owned()).collect();
+        let distinct: HashSet<String> = names.iter().map(|name| name.to_lowercase()).collect();
+        assert_eq!(distinct.len(), 3, "no two names differ only in case: {names:?}");
+        assert_eq!(names[2], "a b.jpg");
+        let track = read.tracks[0].path.as_ref().unwrap();
+        assert_eq!(track.file_name().unwrap(), "CON_.gpx");
+        assert_eq!(std::fs::read(track).unwrap(), b"dddd");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

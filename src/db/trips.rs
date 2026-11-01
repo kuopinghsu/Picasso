@@ -678,15 +678,7 @@ impl Database {
     /// Adds an empty Day after the Trip's last one.
     pub fn add_trip_day(&self, trip_id: i64, day: Option<NaiveDate>, title: &str) -> Result<i64, String> {
         let tx = self.conn.unchecked_transaction().map_err(sql_err)?;
-        check_trip(&tx, trip_id)?;
-        tx.execute(
-            "INSERT INTO trip_days(trip_id, position, day, title)
-             VALUES(?1, (SELECT coalesce(max(position), -1) + 1 FROM trip_days WHERE trip_id = ?1), ?2, ?3)",
-            params![trip_id, day_text(day), title.trim()],
-        )
-        .map_err(sql_err)?;
-        let id = tx.last_insert_rowid();
-        touch_trip(&tx, trip_id)?;
+        let id = insert_day(&tx, trip_id, day, title)?;
         tx.commit().map_err(sql_err)?;
         Ok(id)
     }
@@ -1048,34 +1040,7 @@ impl Database {
     pub fn move_to_day(&self, trip_id: i64, day_id: Option<i64>, media_ids: &[i64], source: DaySource) -> Result<Vec<DayAssignment>, String> {
         let before = self.day_assignments(trip_id, media_ids);
         let tx = self.conn.unchecked_transaction().map_err(sql_err)?;
-        if let Some(day_id) = day_id {
-            let owner: Option<i64> =
-                tx.query_row("SELECT trip_id FROM trip_days WHERE id = ?1", [day_id], |row| row.get(0)).optional().map_err(sql_err)?;
-            if owner != Some(trip_id) {
-                return Err(format!("day {day_id} is not in trip {trip_id}"));
-            }
-        }
-        let mut next: i64 = tx
-            .query_row("SELECT coalesce(max(day_position), -1) + 1 FROM trip_media WHERE day_id IS ?1", [day_id], |row| row.get(0))
-            .map_err(sql_err)?;
-        let mut moved = Vec::new();
-        {
-            let mut update = tx
-                .prepare(
-                    "UPDATE trip_media SET day_id = ?3, day_source = ?4, day_position = ?5, review = CASE WHEN ?6 = 0 THEN 0 ELSE review END
-                     WHERE trip_id = ?1 AND media_id = ?2 AND (?6 = 0 OR day_source != 2)",
-                )
-                .map_err(sql_err)?;
-            let code = if day_id.is_some() { source.code() } else { 0 };
-            let suggestion = source == DaySource::Suggested;
-            for assignment in before {
-                if update.execute(params![trip_id, assignment.media_id, day_id, code, next, suggestion]).map_err(sql_err)? > 0 {
-                    next += 1;
-                    moved.push(assignment);
-                }
-            }
-        }
-        touch_trip(&tx, trip_id)?;
+        let moved = move_members(&tx, trip_id, day_id, before, source)?;
         tx.commit().map_err(sql_err)?;
         Ok(moved)
     }
@@ -1365,23 +1330,27 @@ impl Database {
                 }
             }
         }
+        // All of it or, if anything fails partway, none: no Days half made.
         let days = self.trip_days(trip_id);
+        let tx = self.conn.unchecked_transaction().map_err(sql_err)?;
         for (date, members) in by_date {
             let day_id = match days.iter().find(|day| day.day == Some(date)) {
                 Some(day) => day.id,
                 None => {
                     outcome.new_days += 1;
-                    self.add_trip_day(trip_id, Some(date), "")?
+                    insert_day(&tx, trip_id, Some(date), "")?
                 }
             };
-            outcome.assigned += self.move_to_day(trip_id, Some(day_id), &members, DaySource::Suggested)?.len();
+            outcome.assigned += move_members(&tx, trip_id, Some(day_id), self.day_assignments(trip_id, &members), DaySource::Suggested)?.len();
         }
-        self.move_to_day(trip_id, None, &unsure, DaySource::Suggested)?;
-        for (media_id, code) in reasons {
-            self.conn
-                .execute("UPDATE trip_media SET review = ?3 WHERE trip_id = ?1 AND media_id = ?2", params![trip_id, media_id, code])
-                .map_err(sql_err)?;
+        move_members(&tx, trip_id, None, self.day_assignments(trip_id, &unsure), DaySource::Suggested)?;
+        {
+            let mut mark = tx.prepare("UPDATE trip_media SET review = ?3 WHERE trip_id = ?1 AND media_id = ?2").map_err(sql_err)?;
+            for (media_id, code) in reasons {
+                mark.execute(params![trip_id, media_id, code]).map_err(sql_err)?;
+            }
         }
+        tx.commit().map_err(sql_err)?;
         outcome.review = review.into_iter().collect();
         outcome.review.sort_by_key(|(reason, _)| *reason as u8);
         Ok(outcome)
@@ -1590,22 +1559,25 @@ impl Database {
     pub fn save_story_details(&self, story: &Story, revision: i64) -> Result<i64, String> {
         let tx = self.conn.unchecked_transaction().map_err(sql_err)?;
         let next = next_revision(&tx, story.id, revision)?;
-        tx.execute(
-            "UPDATE stories SET title = ?2, subtitle = ?3, author = ?4, show_date = ?5, template = ?6, finished = ?7, introduction = ?8, conclusion = ?9, cover_crop = ?10 WHERE id = ?1",
-            params![
-                story.id,
-                story.title.trim(),
-                story.subtitle.trim(),
-                story.author.trim(),
-                story.show_date,
-                story.template,
-                story.finished,
-                story.introduction.trim(),
-                story.conclusion.trim(),
-                story.cover_crop.to_text()
-            ],
-        )
-        .map_err(sql_err)?;
+        write_details(&tx, story)?;
+        tx.commit().map_err(sql_err)?;
+        Ok(next)
+    }
+
+    /// Saves the Story's details, its cover when `cover_changed`, and its
+    /// blocks as one change: all of it, or nothing when any part fails, so a
+    /// save that fails can be tried again as it was. Fails without a change
+    /// if the Story was saved since `revision`. Returns its new revision.
+    pub fn save_story(&self, story: &Story, cover_changed: bool, blocks: &[StoryBlock], revision: i64) -> Result<i64, String> {
+        let tx = self.conn.unchecked_transaction().map_err(sql_err)?;
+        let next = next_revision(&tx, story.id, revision)?;
+        write_details(&tx, story)?;
+        if cover_changed {
+            tx.execute("UPDATE stories SET cover_ref = ?2 WHERE id = ?1", params![story.id, story.cover]).map_err(sql_err)?;
+        }
+        tx.execute("DELETE FROM story_blocks WHERE story_id = ?1", [story.id]).map_err(sql_err)?;
+        write_blocks(&tx, story.id, blocks)?;
+        tx.execute(UNUSED_REFS, []).map_err(sql_err)?;
         tx.commit().map_err(sql_err)?;
         Ok(next)
     }
@@ -1657,6 +1629,73 @@ fn insert_story(tx: &Transaction, trip_id: i64, title: &str) -> Result<i64, Stri
     let id = tx.last_insert_rowid();
     touch_trip(tx, trip_id)?;
     Ok(id)
+}
+
+/// Adds a Day after the Trip's last one, as part of `tx`.
+fn insert_day(tx: &Connection, trip_id: i64, day: Option<NaiveDate>, title: &str) -> Result<i64, String> {
+    check_trip(tx, trip_id)?;
+    tx.execute(
+        "INSERT INTO trip_days(trip_id, position, day, title)
+         VALUES(?1, (SELECT coalesce(max(position), -1) + 1 FROM trip_days WHERE trip_id = ?1), ?2, ?3)",
+        params![trip_id, day_text(day), title.trim()],
+    )
+    .map_err(sql_err)?;
+    let id = tx.last_insert_rowid();
+    touch_trip(tx, trip_id)?;
+    Ok(id)
+}
+
+/// Moves the members found as `before` to `day_id`, or out of any Day, at
+/// its end. A suggestion leaves members the user placed where they are.
+fn move_members(tx: &Connection, trip_id: i64, day_id: Option<i64>, before: Vec<DayAssignment>, source: DaySource) -> Result<Vec<DayAssignment>, String> {
+    if let Some(day_id) = day_id {
+        let owner: Option<i64> = tx.query_row("SELECT trip_id FROM trip_days WHERE id = ?1", [day_id], |row| row.get(0)).optional().map_err(sql_err)?;
+        if owner != Some(trip_id) {
+            return Err(format!("day {day_id} is not in trip {trip_id}"));
+        }
+    }
+    let mut next: i64 = tx
+        .query_row("SELECT coalesce(max(day_position), -1) + 1 FROM trip_media WHERE day_id IS ?1", [day_id], |row| row.get(0))
+        .map_err(sql_err)?;
+    let mut moved = Vec::new();
+    {
+        let mut update = tx
+            .prepare(
+                "UPDATE trip_media SET day_id = ?3, day_source = ?4, day_position = ?5, review = CASE WHEN ?6 = 0 THEN 0 ELSE review END
+                 WHERE trip_id = ?1 AND media_id = ?2 AND (?6 = 0 OR day_source != 2)",
+            )
+            .map_err(sql_err)?;
+        let code = if day_id.is_some() { source.code() } else { 0 };
+        let suggestion = source == DaySource::Suggested;
+        for assignment in before {
+            if update.execute(params![trip_id, assignment.media_id, day_id, code, next, suggestion]).map_err(sql_err)? > 0 {
+                next += 1;
+                moved.push(assignment);
+            }
+        }
+    }
+    touch_trip(tx, trip_id)?;
+    Ok(moved)
+}
+
+fn write_details(tx: &Transaction, story: &Story) -> Result<(), String> {
+    tx.execute(
+        "UPDATE stories SET title = ?2, subtitle = ?3, author = ?4, show_date = ?5, template = ?6, finished = ?7, introduction = ?8, conclusion = ?9, cover_crop = ?10 WHERE id = ?1",
+        params![
+            story.id,
+            story.title.trim(),
+            story.subtitle.trim(),
+            story.author.trim(),
+            story.show_date,
+            story.template,
+            story.finished,
+            story.introduction.trim(),
+            story.conclusion.trim(),
+            story.cover_crop.to_text()
+        ],
+    )
+    .map_err(sql_err)?;
+    Ok(())
 }
 
 /// Checks that the Story is still at `revision`, and moves it to the next.
@@ -2568,6 +2607,80 @@ mod tests {
     }
 
     #[test]
+    fn two_cameras_in_different_zones_meet_on_the_trips_days() {
+        let (db, _, _, ids) = photos("trip-two-cameras", &["phone.jpg", "camera.jpg", "old.jpg", "no-gps.jpg"]);
+        let trip_id = db.create_trip(&TripDraft::new("Madrid", "Europe/Madrid")).unwrap();
+        let refs = db.add_to_trip(trip_id, &ids).unwrap();
+        let captures = [
+            // The phone keeps local time and says so.
+            Capture::Clock { clock: at("2025-07-01 23:30:00"), offset: Some(2 * 3600) },
+            // A camera left on Taipei time, which it records: the same evening in Madrid.
+            Capture::Clock { clock: at("2025-07-02 05:45:00"), offset: Some(8 * 3600) },
+            // An older camera on Taipei time that records no offset.
+            Capture::Clock { clock: at("2025-07-02 05:50:00"), offset: None },
+            // Taken the next morning, without GPS: Days don't need a location.
+            Capture::Clock { clock: at("2025-07-02 09:00:00"), offset: Some(2 * 3600) },
+        ];
+        for ((media_id, _, modified_at), capture) in db.captures_to_read(trip_id).into_iter().zip(captures) {
+            db.store_capture(media_id, capture, modified_at);
+        }
+        let first = db.suggest_days(trip_id).unwrap();
+        assert_eq!(first.review, [(Review::NoOffset, 1)], "a clock without an offset waits for the user");
+        let days = db.trip_days(trip_id);
+        let dates: Vec<_> = days.iter().map(|day| day.day.map(|d| d.to_string())).collect();
+        assert_eq!(dates, [Some("2025-07-01".into()), Some("2025-07-02".into())]);
+        assert_eq!(in_day(&db, trip_id, days[0].id), [refs[0], refs[1]], "two cameras' offsets, one evening");
+        assert_eq!(in_day(&db, trip_id, days[1].id), [refs[3]]);
+
+        // Said to be on Trip time, the old camera lands six hours late, on the next Day;
+        // Adjust date moves its photos back by the difference, and they join the evening.
+        let mut draft = TripDraft::new("Madrid", "Europe/Madrid");
+        draft.trip_time = true;
+        db.update_trip(trip_id, &draft).unwrap();
+        db.suggest_days(trip_id).unwrap();
+        let sorted = |mut ids: Vec<i64>| {
+            ids.sort_unstable();
+            ids
+        };
+        assert_eq!(sorted(in_day(&db, trip_id, days[1].id)), sorted(vec![refs[2], refs[3]]));
+        db.shift_taken(&[ids[2]], -6 * 3600);
+        let settled = db.suggest_days(trip_id).unwrap();
+        assert!(settled.review.is_empty());
+        assert_eq!(sorted(in_day(&db, trip_id, days[0].id)), sorted(vec![refs[0], refs[1], refs[2]]));
+        assert_eq!(db.trip_days(trip_id).len(), 2, "no Day twice");
+    }
+
+    #[test]
+    fn a_suggestion_cut_short_makes_no_days_and_the_next_makes_them_all() {
+        let (db, _, _, ids) = photos("trip-suggest-cut", &["a.jpg", "b.jpg", "c.jpg"]);
+        let trip_id = trip(&db, "Taipei");
+        let refs = db.add_to_trip(trip_id, &ids).unwrap();
+        let captures = [
+            Capture::Clock { clock: at("2026-03-01 12:00:00"), offset: Some(8 * 3600) },
+            Capture::Clock { clock: at("2026-03-02 12:00:00"), offset: Some(8 * 3600) },
+            Capture::Missing,
+        ];
+        for ((media_id, _, modified_at), capture) in db.captures_to_read(trip_id).into_iter().zip(captures) {
+            db.store_capture(media_id, capture, modified_at);
+        }
+        // The last write, marking the photo without a time for review, fails.
+        db.conn
+            .execute_batch("CREATE TEMP TRIGGER cut_short BEFORE UPDATE OF review ON trip_media WHEN NEW.review != 0 BEGIN SELECT RAISE(ABORT, 'disk full'); END;")
+            .unwrap();
+        let failed = db.suggest_days(trip_id);
+        assert!(failed.as_ref().is_err_and(|err| err.contains("disk full")), "{failed:?}");
+        assert!(db.trip_days(trip_id).is_empty(), "no Days half made");
+        assert!(all(&db, trip_id).iter().all(|member| member.day_id.is_none()), "no photo moved");
+        assert!(db.review_counts(trip_id).is_empty());
+
+        db.conn.execute_batch("DROP TRIGGER cut_short;").unwrap();
+        let done = db.suggest_days(trip_id).unwrap();
+        assert_eq!((done.assigned, done.new_days, done.review.clone()), (2, 2, vec![(Review::NoTime, 1)]));
+        let days = db.trip_days(trip_id);
+        assert_eq!((in_day(&db, trip_id, days[0].id), in_day(&db, trip_id, days[1].id)), (vec![refs[0]], vec![refs[1]]));
+    }
+
+    #[test]
     fn days_do_not_depend_on_the_computers_time_zone() {
         // Capture times are stored as clock readings and offsets, and Days
         // are counted in the Trip's zone, so nothing here reads the local zone.
@@ -2578,6 +2691,35 @@ mod tests {
         assert_eq!(read_capture_row(1, Some("2026-10-25 01:30:00".into()), Some(3600), None), capture);
         assert_eq!(read_capture_row(2, None, None, Some(5)), Capture::Utc(5));
         assert_eq!(read_capture_row(0, None, None, None), Capture::Unread);
+    }
+
+    #[test]
+    fn a_story_save_cut_short_changes_nothing_and_is_tried_again_as_it_was() {
+        let dir = temp_dir("story-save-cut");
+        let db = Database::open(&dir.join("picasso.db")).unwrap();
+        let trip_id = trip(&db, "Kyoto");
+        let id = db.create_story(trip_id, "Before").unwrap();
+        let paragraph = |text: &str| StoryBlock::new(Block::Paragraph(text.into()));
+        let revision = db.save_story_blocks(id, 1, &[paragraph("Kept")]).unwrap();
+        let mut story = db.story(id).unwrap();
+        story.title = "After".into();
+        let blocks = [paragraph("One"), paragraph("Two")];
+
+        // The second block can't be written, as on a full disk.
+        db.conn.execute_batch("CREATE TEMP TRIGGER cut_short AFTER INSERT ON story_blocks WHEN NEW.position > 0 BEGIN SELECT RAISE(ABORT, 'disk full'); END;").unwrap();
+        let failed = db.save_story(&story, false, &blocks, revision);
+        assert!(failed.as_ref().is_err_and(|err| err.contains("disk full")), "{failed:?}");
+        let now = db.story(id).unwrap();
+        assert_eq!((now.title.as_str(), now.revision), ("Before", revision), "the title isn't saved without its blocks");
+        let texts = |db: &Database| db.story_blocks(id).into_iter().map(|block| block.block).collect::<Vec<_>>();
+        assert_eq!(texts(&db), [Block::Paragraph("Kept".into())]);
+
+        // Once it can be written, the same save goes through: no conflict with itself.
+        db.conn.execute_batch("DROP TRIGGER cut_short;").unwrap();
+        assert_eq!(db.save_story(&story, false, &blocks, revision), Ok(revision + 1));
+        assert_eq!(db.story(id).unwrap().title, "After");
+        assert_eq!(texts(&db), [Block::Paragraph("One".into()), Block::Paragraph("Two".into())]);
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

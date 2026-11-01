@@ -1,7 +1,7 @@
 //! The Story editor: a Trip's narrative as an ordered list of blocks, with
 //! undo and redo for the session and autosave to the library.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -85,6 +85,8 @@ pub(super) struct StoryEditor {
     /// Each route source's elevation, read from its track files once:
     /// a track's path, or "" for all the Trip's tracks.
     profiles: HashMap<String, Option<crate::elevation::Profile>>,
+    /// Route sources whose elevation is being read.
+    reading: HashSet<String>,
     /// The preview or export being made, to show how far it is and stop it.
     job: Option<Arc<story_html::Progress>>,
     /// The block to scroll to on the next frame.
@@ -104,6 +106,8 @@ pub(super) struct StoryEditor {
     /// Edits asked for between frames, as by Escape, made with the next
     /// frame's own so they are saved and undone like them.
     queued: Vec<Action>,
+    /// Quitting without the changes that couldn't be saved was chosen.
+    leaving: bool,
 }
 
 /// A frame for the cover being chosen: its shape (an index of
@@ -294,11 +298,71 @@ pub(super) struct PageJob {
     words: story_html::Words,
     pub(super) map: story_html::MapTiles,
     pub(super) profiles: HashMap<String, crate::elevation::Profile>,
+    /// Route blocks, by id, whose elevation the editor hasn't read yet, with
+    /// their track files.
+    pub(super) unread: Vec<(String, Vec<std::path::PathBuf>)>,
+}
+
+/// The elevation along the tracks in `paths`, read from their files.
+fn profile_of(paths: &[std::path::PathBuf]) -> Option<crate::elevation::Profile> {
+    crate::elevation::profile_of(&paths.iter().map(std::path::PathBuf::as_path).collect::<Vec<_>>())
+}
+
+/// Reads the elevation of the `unread` Route blocks into `profiles`, on the
+/// job's own thread.
+pub(super) fn read_profiles(profiles: &mut HashMap<String, crate::elevation::Profile>, unread: Vec<(String, Vec<std::path::PathBuf>)>) {
+    for (uid, paths) in unread {
+        if let Some(profile) = profile_of(&paths) {
+            profiles.insert(uid, profile);
+        }
+    }
 }
 
 impl PageJob {
+    /// Reads what the editor hadn't yet: call on the job's thread.
+    pub(super) fn read_profiles(&mut self) {
+        read_profiles(&mut self.profiles, std::mem::take(&mut self.unread));
+    }
+
     pub(super) fn page(&self) -> story_html::Page<'_> {
         story_html::Page { story: &self.story, dates: self.dates.as_deref(), blocks: &self.blocks, sources: &self.sources, words: &self.words, map: Some(&self.map), profiles: &self.profiles }
+    }
+}
+
+/// A Story's last export: where it went, what it was made from, and
+/// whether the Story has changed since.
+pub(super) struct LastExport {
+    folder: std::path::PathBuf,
+    content: String,
+    stale: bool,
+    /// The revision and library state last compared with the export.
+    compared: Option<(i64, (u64, i64))>,
+    /// The newest comparison asked for; an answer to an older one is dropped.
+    asked: u64,
+}
+
+impl LastExport {
+    /// An export just made from `content`, replacing `earlier`, whose
+    /// comparisons still under way are then dropped.
+    fn new(folder: std::path::PathBuf, content: String, earlier: Option<&LastExport>) -> Self {
+        Self { folder, content, stale: false, compared: None, asked: earlier.map_or(0, |earlier| earlier.asked + 1) }
+    }
+
+    /// The number of a comparison to make, if the Story's revision or the
+    /// library has changed since the last one.
+    fn ask(&mut self, now: (i64, (u64, i64))) -> Option<u64> {
+        if self.compared == Some(now) {
+            return None;
+        }
+        self.compared = Some(now);
+        self.asked += 1;
+        Some(self.asked)
+    }
+
+    fn answer(&mut self, asked: u64, content: &str) {
+        if asked == self.asked {
+            self.stale = content != self.content;
+        }
     }
 }
 
@@ -437,6 +501,7 @@ impl PicassoApp {
             typing: None,
             photos: HashMap::new(),
             profiles: HashMap::new(),
+            reading: HashSet::new(),
             job: None,
             reveal: None,
             picking: None,
@@ -446,6 +511,7 @@ impl PicassoApp {
             framing: None,
             choosing_cover: false,
             queued: Vec::new(),
+            leaving: false,
         });
     }
 
@@ -462,39 +528,20 @@ impl PicassoApp {
     /// Writes the open Story's unsaved changes. Returns whether all is saved.
     pub(super) fn save_story(&mut self) -> bool {
         let Some(editor) = &mut self.story else { return true };
-        if editor.unsaved.is_none() {
-            return true;
-        }
-        let id = editor.story.id;
-        let saved = self
-            .db
-            .save_story_details(&editor.story, editor.story.revision)
-            .and_then(|revision| {
-                if editor.story.cover == editor.saved_cover {
-                    Ok(revision)
-                } else {
-                    self.db.set_story_cover(id, editor.story.cover, revision)
-                }
-            })
-            .and_then(|revision| self.db.save_story_blocks(id, revision, &editor.blocks));
-        match saved {
-            Ok(revision) => {
-                editor.story.revision = revision;
-                editor.saved_cover = editor.story.cover;
-                editor.unsaved = None;
-                editor.error = None;
-                true
-            }
-            Err(err) => {
-                editor.error = Some(err);
-                false
-            }
-        }
+        save(&self.db, editor)
     }
 
-    /// Saves the open Story once its changes are due.
+    /// Saves the open Story once its changes are due, and before Picasso
+    /// quits: a Story that can't be saved holds the quit back to ask.
     pub(super) fn autosave_story(&mut self, ctx: &egui::Context) {
         let Some(editor) = &self.story else { return };
+        if !editor.leaving && ctx.input(|input| input.viewport().close_requested()) {
+            if !self.save_story() {
+                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                self.modal = Modal::UnsavedStory;
+            }
+            return;
+        }
         if editor.due() {
             self.save_story();
         } else if editor.unsaved.is_some() && editor.error.is_none() {
@@ -534,9 +581,12 @@ impl PicassoApp {
     }
 
     pub(super) fn story_ui(&mut self, ui: &mut egui::Ui) {
+        self.compare_with_last_export(ui.ctx());
         let Some(editor) = &self.story else { return };
         let before = editor.snapshot();
         let trip_title = self.trip_title(editor.story.trip_id);
+        let last_export = self.story_exports.get(&editor.story.id).map(|last| (last.folder.clone(), last.stale));
+        let mut open_export = None;
         let mut back = false;
         let mut undo = false;
         let mut redo = false;
@@ -589,6 +639,21 @@ impl PicassoApp {
             let words = story_words(editor);
             let minutes = words.div_ceil(WORDS_A_MINUTE).max(1);
             ui.label(RichText::new(trf("{} words · {} min read", &[&words, &minutes])).size(13.0).color(theme::muted()));
+            if let Some((folder, stale)) = &last_export {
+                let (label, hint) = if *stale {
+                    (tr("Changed since the export"), trf("The export in {} shows the story as it was. Click to export it again.", &[&folder.display()]))
+                } else {
+                    (tr("Exported"), trf("The export in {} shows the story as it is now. Click to open its folder.", &[&folder.display()]))
+                };
+                let link = egui::Button::new(RichText::new(label).size(13.0).color(theme::muted())).frame(false);
+                if ui.add(link).on_hover_text(hint).clicked() {
+                    if *stale {
+                        export = true;
+                    } else {
+                        open_export = Some(folder.clone());
+                    }
+                }
+            }
             if editor.error.is_some() && tool_button(ui, true, tr("Try again")).clicked() {
                 retry = true;
             }
@@ -784,6 +849,9 @@ impl PicassoApp {
         if export {
             self.ask_export_story();
         }
+        if let Some(folder) = open_export {
+            let _ = open::that(&folder);
+        }
         if publish {
             self.ask_publish_story();
         }
@@ -798,20 +866,20 @@ impl PicassoApp {
         if !self.save_story() {
             return;
         }
-        let Some(job) = self.story_job() else { return };
+        let Some(mut job) = self.story_job() else { return };
         let progress = self.start_story_job();
-        let story_id = job.story.id;
         let folder = self.cache_dir.join("story-preview").join(job.story.id.to_string());
         let events = self.events_tx.clone();
         let ctx = ctx.clone();
         let _ = std::thread::Builder::new().name("picasso-preview".into()).spawn(move || {
+            job.read_profiles();
             // The folder is the preview's own; an earlier preview is replaced.
             let _ = std::fs::remove_dir_all(&folder);
             let outcome = story_html::write_story(&folder, story_html::Format::Html, story_html::Profile::default(), &job.page(), &progress).and_then(|(index, outcome)| {
                 open::that(&index).map_err(|err| err.to_string())?;
                 Ok(outcome)
             });
-            let _ = events.send(UiEvent::StoryPreviewed(story_id, outcome));
+            let _ = events.send(UiEvent::StoryPreviewed(progress, outcome));
             ctx.request_repaint();
         });
     }
@@ -825,9 +893,10 @@ impl PicassoApp {
         progress
     }
 
-    /// Marks the job of Story `story_id` as over, if that Story is still open.
-    pub(super) fn end_story_job(&mut self, story_id: i64) {
-        if let Some(editor) = self.story.as_mut().filter(|editor| editor.story.id == story_id) {
+    /// Marks `job` as over, if the open Story is still showing it: a job left
+    /// running when its Story was closed never ends one started since.
+    pub(super) fn end_story_job(&mut self, job: &Arc<story_html::Progress>) {
+        if let Some(editor) = self.story.as_mut().filter(|editor| editor.job.as_ref().is_some_and(|shown| Arc::ptr_eq(shown, job))) {
             editor.job = None;
         }
     }
@@ -850,32 +919,59 @@ impl PicassoApp {
             contents: tr("Contents").into(),
         };
         let map = story_html::MapTiles { source: self.map_source, key: self.carto_key.clone(), cache: self.cache_dir.clone() };
-        let mut profiles = HashMap::new();
+        let (mut profiles, mut unread) = (HashMap::new(), Vec::new());
         for block in &blocks {
             let Block::Route { source, route, .. } = &block.block else { continue };
-            if let Some(profile) = self.route_profile(source).filter(|_| !route.is_empty()) {
-                profiles.insert(block.uid.clone(), profile);
+            if route.is_empty() {
+                continue;
+            }
+            match self.story.as_ref()?.profiles.get(source) {
+                Some(Some(profile)) => {
+                    profiles.insert(block.uid.clone(), profile.clone());
+                }
+                Some(None) => {}
+                None => unread.push((block.uid.clone(), self.route_paths(story.trip_id, source))),
             }
         }
-        Some(PageJob { story, blocks, sources, dates, words, map, profiles })
+        Some(PageJob { story, blocks, sources, dates, words, map, profiles, unread })
     }
 
-    /// The elevation of a route drawn from `source`, the one track's path or
-    /// "" for all the Trip's tracks, read once while the Story is open.
-    fn route_profile(&mut self, source: &str) -> Option<crate::elevation::Profile> {
+    /// The track files a route drawn from `source` comes from: the one
+    /// track's path, or for "" all the Trip's tracks.
+    fn route_paths(&self, trip_id: i64, source: &str) -> Vec<std::path::PathBuf> {
+        if source.is_empty() {
+            self.db.trip_tracks(trip_id).into_iter().filter(|link| link.track_id.is_some()).map(|link| link.path.into()).collect()
+        } else {
+            vec![source.into()]
+        }
+    }
+
+    /// The elevation of a route drawn from `source`, read once while the
+    /// Story is open, on another thread: `None` until it has been read.
+    fn route_profile(&mut self, source: &str, ctx: &egui::Context) -> Option<crate::elevation::Profile> {
         let editor = self.story.as_ref()?;
         if let Some(known) = editor.profiles.get(source) {
             return known.clone();
         }
-        let paths: Vec<String> = if source.is_empty() {
-            self.db.trip_tracks(editor.story.trip_id).into_iter().filter(|link| link.track_id.is_some()).map(|link| link.path).collect()
-        } else {
-            vec![source.to_string()]
-        };
-        let paths: Vec<&std::path::Path> = paths.iter().map(std::path::Path::new).collect();
-        let profile = crate::elevation::profile_of(&paths);
-        self.story.as_mut()?.profiles.insert(source.to_string(), profile.clone());
-        profile
+        if editor.reading.contains(source) {
+            return None;
+        }
+        let (story_id, paths) = (editor.story.id, self.route_paths(editor.story.trip_id, source));
+        self.story.as_mut()?.reading.insert(source.to_string());
+        let (source, events, ctx) = (source.to_string(), self.events_tx.clone(), ctx.clone());
+        let _ = std::thread::Builder::new().name("picasso-elevation".into()).spawn(move || {
+            let profile = profile_of(&paths);
+            let _ = events.send(UiEvent::RouteProfile(story_id, source, profile));
+            ctx.request_repaint();
+        });
+        None
+    }
+
+    pub(super) fn on_route_profile(&mut self, story_id: i64, source: String, profile: Option<crate::elevation::Profile>) {
+        if let Some(editor) = self.story.as_mut().filter(|editor| editor.story.id == story_id) {
+            editor.reading.remove(&source);
+            editor.profiles.insert(source, profile);
+        }
     }
 
     /// The Export dialog, with the settings of the last Story export.
@@ -1053,24 +1149,30 @@ impl PicassoApp {
         if !self.save_story() {
             return;
         }
-        let Some(job) = self.story_job() else { return };
+        let Some(mut job) = self.story_job() else { return };
         let progress = self.start_story_job();
         let story_id = job.story.id;
         let name = story_name(&job.story);
         let events = self.events_tx.clone();
         let ctx = ctx.clone();
         let _ = std::thread::Builder::new().name("picasso-story-export".into()).spawn(move || {
+            job.read_profiles();
+            let content = story_html::content_key(&job.page());
             let outcome = story_html::export_story(&parent, &name, format, profile, &job.page(), &progress)
                 .inspect(|(folder, _)| {
                     let _ = open::that(folder);
                 });
-            let _ = events.send(UiEvent::StoryExported(story_id, outcome));
+            let _ = events.send(UiEvent::StoryExported(story_id, progress, content, outcome));
             ctx.request_repaint();
         });
     }
 
-    pub(super) fn on_story_exported(&mut self, story_id: i64, outcome: Result<(std::path::PathBuf, story_html::Outcome), String>) {
-        self.end_story_job(story_id);
+    pub(super) fn on_story_exported(&mut self, story_id: i64, job: &Arc<story_html::Progress>, content: String, outcome: Result<(std::path::PathBuf, story_html::Outcome), String>) {
+        self.end_story_job(job);
+        if let Ok((folder, _)) = &outcome {
+            let last = LastExport::new(folder.clone(), content, self.story_exports.get(&story_id));
+            self.story_exports.insert(story_id, last);
+        }
         self.activity = match outcome {
             Err(err) if err == story_html::CANCELLED => tr("Export cancelled. Nothing was written.").into(),
             Err(err) if err == story_html::SOURCE_CHANGED => tr("A photo changed while the story was being written. Nothing was written; try again.").into(),
@@ -1083,8 +1185,31 @@ impl PicassoApp {
         };
     }
 
-    pub(super) fn on_story_previewed(&mut self, story_id: i64, outcome: Result<story_html::Outcome, String>) {
-        self.end_story_job(story_id);
+    /// Compares the open Story with its last export after the Story is saved
+    /// or the library changes, reading the photos' files on another thread.
+    fn compare_with_last_export(&mut self, ctx: &egui::Context) {
+        let Some(editor) = self.story.as_ref().filter(|editor| editor.unsaved.is_none() && editor.job.is_none()) else { return };
+        let story_id = editor.story.id;
+        let revision = editor.story.revision;
+        let now = (revision, self.db.change_stamp());
+        let Some(asked) = self.story_exports.get_mut(&story_id).and_then(|last| last.ask(now)) else { return };
+        let Some(job) = self.story_job() else { return };
+        let events = self.events_tx.clone();
+        let ctx = ctx.clone();
+        let _ = std::thread::Builder::new().name("picasso-story-compare".into()).spawn(move || {
+            let _ = events.send(UiEvent::StoryContent(story_id, asked, story_html::content_key(&job.page())));
+            ctx.request_repaint();
+        });
+    }
+
+    pub(super) fn on_story_content(&mut self, story_id: i64, asked: u64, content: String) {
+        if let Some(last) = self.story_exports.get_mut(&story_id) {
+            last.answer(asked, &content);
+        }
+    }
+
+    pub(super) fn on_story_previewed(&mut self, job: &Arc<story_html::Progress>, outcome: Result<story_html::Outcome, String>) {
+        self.end_story_job(job);
         self.activity = match outcome {
             Err(err) if err == story_html::CANCELLED => tr("Preview cancelled").into(),
             Err(err) if err == story_html::SOURCE_CHANGED => tr("A photo changed while the story was being written. Nothing was written; try again.").into(),
@@ -1484,7 +1609,7 @@ impl PicassoApp {
         let mut chosen: Option<(String, Vec<Vec<[i32; 2]>>)> = None;
         if let Some(Block::Route { route, source, .. }) = self.story.as_ref().map(|editor| &editor.blocks[index].block) {
             let (route, source) = (route.clone(), source.clone());
-            let profile = self.route_profile(&source);
+            let profile = self.route_profile(&source, ui.ctx());
             self.route_drawing(ui, &route, profile.as_deref(), width);
             let open = self.story.as_ref().is_some_and(|editor| editor.active.as_deref() == Some(uid));
             if open || route.is_empty() {
@@ -1492,14 +1617,10 @@ impl PicassoApp {
             }
         }
         // Only the Trip's links allowed to be published are offered.
-        let shareable: Vec<crate::trip::TripResource> = match self.story.as_ref() {
-            Some(editor) if matches!(editor.blocks[index].block, Block::Link { .. }) => self
-                .db
-                .trip_resources(editor.story.trip_id)
-                .into_iter()
-                .filter(|resource| resource.kind == crate::trip::ResourceKind::Link && resource.publish)
-                .collect(),
-            _ => Vec::new(),
+        let link_trip = self.story.as_ref().filter(|editor| matches!(editor.blocks[index].block, Block::Link { .. })).map(|editor| editor.story.trip_id);
+        let shareable: Vec<crate::trip::TripResource> = match link_trip {
+            Some(trip_id) => self.resources_of(trip_id).into_iter().filter(|resource| resource.kind == crate::trip::ResourceKind::Link && resource.publish).collect(),
+            None => Vec::new(),
         };
         let Some(editor) = &mut self.story else { return };
         // Empty captions show on the chosen block only, so pointing at
@@ -1962,6 +2083,47 @@ impl PicassoApp {
         if let Some((texture, w, h)) = self.thumb_texture(photo.id) {
             let uv = if fill { theme::cover_uv(w, h) } else { Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)) };
             theme::paint_image_rounded(&painter, &texture, rect, uv, photo.rotation, 4.0);
+        }
+    }
+
+    pub(super) fn unsaved_story_modal(&mut self, ctx: &egui::Context) {
+        let Some(editor) = &mut self.story else {
+            self.modal = Modal::None;
+            return;
+        };
+        let (mut close, mut retry, mut quit) = (false, false, false);
+        let reason = editor.error.clone().unwrap_or_default();
+        let response = egui::Modal::new(egui::Id::unique("unsaved-story")).frame(about::dialog_frame()).show(ctx, |ui| {
+            ui.set_width(420.0);
+            about::title_bar(ui, &self.logo, tr("The story couldn't be saved"), &mut close);
+            egui::Frame::new().inner_margin(Margin::symmetric(20, 14)).show(ui, |ui| {
+                ui.label(tr("If you quit now, the changes since the last save are lost."));
+                ui.label(RichText::new(trf("Couldn't save: {}", &[&reason])).color(theme::muted()));
+                ui.add_space(6.0);
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if ui.add(theme::primary_button(tr("Try again"))).clicked() {
+                        retry = true;
+                    }
+                    if ui.button(tr("Keep editing")).clicked() {
+                        close = true;
+                    }
+                    if ui.add(theme::danger_button(tr("Quit anyway"))).clicked() {
+                        quit = true;
+                    }
+                });
+            });
+        });
+        if quit {
+            editor.leaving = true;
+            self.modal = Modal::None;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        } else if retry {
+            if self.save_story() {
+                self.modal = Modal::None;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+        } else if close || response.should_close() {
+            self.modal = Modal::None;
         }
     }
 
@@ -2965,6 +3127,27 @@ fn texture_uv([left, top, right, bottom]: [f32; 4], rotation: i32) -> Rect {
     Rect::from_min_max(Pos2::new(u0, v0), Pos2::new(u1, v1))
 }
 
+/// Writes the editor's unsaved changes to `db`. Returns whether all is
+/// saved; when not, the changes stay in the editor with the reason.
+fn save(db: &crate::db::Database, editor: &mut StoryEditor) -> bool {
+    if editor.unsaved.is_none() {
+        return true;
+    }
+    match db.save_story(&editor.story, editor.story.cover != editor.saved_cover, &editor.blocks, editor.story.revision) {
+        Ok(revision) => {
+            editor.story.revision = revision;
+            editor.saved_cover = editor.story.cover;
+            editor.unsaved = None;
+            editor.error = None;
+            true
+        }
+        Err(err) => {
+            editor.error = Some(err);
+            false
+        }
+    }
+}
+
 fn apply(editor: &mut StoryEditor, action: Action) {
     let blocks = &mut editor.blocks;
     match action {
@@ -3379,6 +3562,7 @@ mod tests {
             typing: None,
             photos: HashMap::new(),
             profiles: HashMap::new(),
+            reading: HashSet::new(),
             job: None,
             reveal: None,
             picking: None,
@@ -3388,6 +3572,7 @@ mod tests {
             framing: None,
             choosing_cover: false,
             queued: Vec::new(),
+            leaving: false,
         }
     }
 
@@ -3715,5 +3900,152 @@ mod tests {
         assert_eq!(editor.story.revision, 4);
         assert!(editor.unsaved.is_some());
         assert!(!editor.due(), "not saved in the middle of an edit");
+    }
+
+    #[test]
+    fn a_block_from_a_newer_picasso_outlives_this_editor_and_a_restart() {
+        let dir = std::env::temp_dir().join(format!("picasso-story-newer-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("library.db");
+        let db = crate::db::Database::open(&path).unwrap();
+        let trip_id = db.create_trip(&crate::trip::TripDraft::new("Kyoto", "Asia/Tokyo")).unwrap();
+        let story_id = db.create_story(trip_id, "Kyoto").unwrap();
+        let newer = Block::read("paragraph", crate::trip::BLOCK_VERSION + 1, r#"{"text":"hi","style":"lead"}"#, Vec::new());
+        let written: Vec<StoryBlock> = [Block::Paragraph("Before".into()), newer, Block::Paragraph("After".into())].into_iter().map(StoryBlock::new).collect();
+        db.save_story_blocks(story_id, 1, &written).unwrap();
+
+        // Opened as `open_story` opens it, twice: here and in another window
+        // still showing the Story as it was.
+        let open = |db: &crate::db::Database| {
+            let mut editor = editor(Vec::new());
+            editor.story = db.story(story_id).unwrap();
+            editor.saved_cover = editor.story.cover;
+            editor.blocks = db.story_blocks(story_id);
+            editor
+        };
+        let mut editor = open(&db);
+        let mut elsewhere = open(&db);
+        let kept = editor.blocks[1].clone();
+        assert!(matches!(kept.block, Block::Unknown { .. }));
+
+        // Typed around, joined from either side, moved, removed and undone.
+        if let Block::Paragraph(text) = &mut editor.blocks[0].block {
+            text.push_str(", edited");
+        }
+        apply(&mut editor, Action::Merge(1));
+        apply(&mut editor, Action::Merge(2));
+        assert_eq!(editor.blocks.len(), 3, "nothing is joined to or from it");
+        apply(&mut editor, Action::Move(1, 0));
+        let before = editor.snapshot();
+        apply(&mut editor, Action::Remove(0));
+        assert!(editor.blocks.iter().all(|block| block.uid != kept.uid));
+        editor.restore(before);
+        assert!(editor.unsaved.is_some());
+        let revision = db.save_story(&editor.story, false, &editor.blocks, editor.story.revision).unwrap();
+        editor.story.revision = revision;
+
+        // The other window, saving what it still shows, is refused.
+        elsewhere.blocks.retain(|block| block.uid != kept.uid);
+        assert!(db.save_story(&elsewhere.story, false, &elsewhere.blocks, elsewhere.story.revision).is_err());
+
+        drop(db);
+        let db = crate::db::Database::open(&path).unwrap();
+        let blocks = db.story_blocks(story_id);
+        assert_eq!(blocks[0], kept, "the same block, id, version and stored words, where it was moved");
+        assert_eq!((blocks[0].block.version(), blocks[0].block.payload()), (crate::trip::BLOCK_VERSION + 1, r#"{"text":"hi","style":"lead"}"#.to_string()));
+        assert_eq!(blocks[1..].iter().map(|block| block.block.clone()).collect::<Vec<_>>(), [Block::Paragraph("Before, edited".into()), Block::Paragraph("After".into())]);
+        assert_eq!(db.story(story_id).unwrap().revision, revision);
+        drop(db);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_story_is_saved_after_a_pause_or_within_seconds_and_a_failed_save_keeps_it_open() {
+        let dir = std::env::temp_dir().join(format!("picasso-story-save-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("library.db");
+        let db = crate::db::Database::open(&path).unwrap();
+        let trip_id = db.create_trip(&crate::trip::TripDraft::new("Kyoto", "Asia/Tokyo")).unwrap();
+        let story_id = db.create_story(trip_id, "Kyoto").unwrap();
+        let mut editor = editor(Vec::new());
+        editor.story = db.story(story_id).unwrap();
+
+        editor.story.title = "Kyoto in July".into();
+        editor.touch();
+        assert!(!editor.due(), "not while typing");
+        let now = Instant::now();
+        editor.unsaved = Some((now - SAVE_PAUSE, now - SAVE_PAUSE));
+        assert!(editor.due(), "after a pause");
+        editor.unsaved = Some((now - SAVE_WITHIN, now));
+        assert!(editor.due(), "within seconds of the first change, even while typing on");
+
+        // A library that can't be written, as on a full or read-only disk.
+        let reader = crate::db::Database::open_reader(&path).unwrap();
+        assert!(!save(&reader, &mut editor), "so closing the Story or quitting is held back");
+        assert!(editor.error.is_some() && editor.unsaved.is_some(), "the change stays, with the reason");
+        assert_eq!(editor.story.revision, 1);
+        assert!(!editor.due(), "not tried again on its own, only by Try again or another edit");
+
+        // Picasso stopping now: the library has the Story as last saved.
+        drop((reader, db));
+        let db = crate::db::Database::open(&path).unwrap();
+        assert_eq!(db.story(story_id).unwrap().title, "Kyoto");
+
+        // Try again.
+        editor.error = None;
+        assert!(save(&db, &mut editor));
+        assert!(editor.unsaved.is_none() && editor.error.is_none());
+        assert_eq!(editor.story.revision, 2);
+        assert!(save(&db, &mut editor), "nothing left to save");
+        drop(db);
+        let db = crate::db::Database::open(&path).unwrap();
+        let saved = db.story(story_id).unwrap();
+        assert_eq!((saved.title.as_str(), saved.revision), ("Kyoto in July", 2), "and after a restart");
+        drop(db);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_routes_elevation_not_read_yet_is_read_by_the_job_not_left_out() {
+        let dir = std::env::temp_dir().join(format!("picasso-story-elevation-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let track = dir.join("climb.gpx");
+        let points: String = (0..20).map(|n| format!(r#"<trkpt lat="35.0{n:02}" lon="135.7"><ele>{}</ele></trkpt>"#, 100 + n * 10)).collect();
+        std::fs::write(&track, format!(r#"<?xml version="1.0"?><gpx version="1.1" creator="test"><trk><trkseg>{points}</trkseg></trk></gpx>"#)).unwrap();
+        let flat = dir.join("missing.gpx");
+
+        let mut profiles = HashMap::new();
+        read_profiles(&mut profiles, vec![("climb".into(), vec![track]), ("gone".into(), vec![flat])]);
+        let climb = profiles.get("climb").expect("read on the job's thread");
+        assert!(climb.len() >= 2 && climb.first().unwrap()[1] < climb.last().unwrap()[1], "{climb:?}");
+        assert!(!profiles.contains_key("gone"), "a track that can't be read draws its route alone");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_last_export_is_compared_after_each_change_and_only_the_newest_answer_counts() {
+        let mut last = LastExport::new("/out/Kyoto".into(), "made".into(), None);
+        let saved = (4, (10, 1));
+        let first = last.ask(saved).expect("compared once after the export");
+        assert_eq!(last.ask(saved), None, "not again until something changes");
+        last.answer(first, "made");
+        assert!(!last.stale, "nothing that shows has changed");
+
+        let older = last.ask((5, (11, 1))).unwrap();
+        let newer = last.ask((5, (12, 1))).unwrap();
+        last.answer(newer, "changed");
+        last.answer(older, "made");
+        assert!(last.stale, "an answer to an older comparison is dropped");
+
+        // Exported again: what an earlier comparison finds no longer counts.
+        let mut again = LastExport::new("/out/Kyoto 2".into(), "changed".into(), Some(&last));
+        again.answer(newer, "made");
+        assert!(!again.stale);
+        let fresh = again.ask((6, (13, 1))).unwrap();
+        again.answer(fresh, "changed");
+        assert!(!again.stale, "the new export shows the Story as it is");
     }
 }

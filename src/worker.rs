@@ -191,11 +191,18 @@ pub enum UiEvent {
         outcome: Result<crate::geocode::PlaceNames, String>,
     },
     /// A Story's preview was written and opened, or why not.
-    StoryPreviewed(i64, Result<crate::story_html::Outcome, String>),
-    /// A Story was exported to a new folder, or why not.
-    StoryExported(i64, Result<(std::path::PathBuf, crate::story_html::Outcome), String>),
-    /// A Story's publishing learned something to keep at once, on site `.0`.
-    PublishProgress(i64, crate::publish::Event),
+    StoryPreviewed(std::sync::Arc<crate::story_html::Progress>, Result<crate::story_html::Outcome, String>),
+    /// Story `.0` was exported to a new folder by job `.1`, or why not, with
+    /// the key of what the export was made from.
+    StoryExported(i64, std::sync::Arc<crate::story_html::Progress>, String, Result<(std::path::PathBuf, crate::story_html::Outcome), String>),
+    /// The key of what Story `.0` is made from now, for comparison `.1`.
+    StoryContent(i64, u64, String),
+    /// The elevation along route source `.1` of Story `.0`, read from its
+    /// track files.
+    RouteProfile(i64, String, Option<crate::elevation::Profile>),
+    /// A Story's publishing learned something to keep at once, on site `.0`,
+    /// for the job in row `.1` of the publishing log.
+    PublishProgress(i64, Option<i64>, crate::publish::Event),
     /// A Story's draft was saved on a site, or why not.
     StoryPublished(Box<crate::publish::Finished>),
     /// A Trip package was saved, with how many photos were unavailable, or why not.
@@ -1386,7 +1393,7 @@ mod tests {
     struct Library {
         dir: PathBuf,
         indexer: Indexer,
-        _commands: Sender<Command>,
+        commands: Sender<Command>,
         events: Receiver<UiEvent>,
     }
 
@@ -1414,7 +1421,7 @@ mod tests {
                 backfilled: true,
                 not_tracks: RefCell::new(HashMap::new()),
             };
-            Library { dir, indexer, _commands: command_tx, events: event_rx }
+            Library { dir, indexer, commands: command_tx, events: event_rx }
         }
 
         fn add(&self, folder: &str, photos: &[&str]) -> i64 {
@@ -1478,6 +1485,84 @@ mod tests {
         assert_eq!(after["pics/holiday/b.png"], before["pics/trip/b.png"]);
         assert_eq!(lib.caption(a), "beach");
         assert_eq!(lib.indexer.db.photo(a).unwrap().filename, "a.png");
+    }
+
+    /// A Trip of `photos` with a Story showing the first; returns both.
+    fn trip_with_story(db: &Database, photos: &[i64]) -> (i64, i64) {
+        use crate::trip::{Block, MediaUse, StoryBlock, TripDraft};
+        let trip = db.create_trip(&TripDraft::new("Coast", "Europe/Lisbon")).unwrap();
+        let refs = db.add_to_trip(trip, photos).unwrap();
+        let story = db.create_story(trip, "Coast").unwrap();
+        db.save_story_blocks(story, 1, &[StoryBlock::new(Block::Photo(MediaUse::new(refs[0])))]).unwrap();
+        (trip, story)
+    }
+
+    /// Each member of the Trip with whether its photo is in the library, and the Story's blocks.
+    fn trip_state(db: &Database, trip: i64, story: i64) -> (Vec<(i64, bool)>, Vec<crate::trip::Block>) {
+        let members = db.trip_members(trip, &crate::trip::MemberQuery::default(), 0, 100);
+        let blocks = db.story_blocks(story).into_iter().map(|block| block.block).collect();
+        (members.into_iter().map(|member| (member.media_id, member.photo_id.is_some())).collect(), blocks)
+    }
+
+    #[test]
+    fn an_unplugged_drive_keeps_its_photos_trips_and_stories_until_it_is_back() {
+        let mut lib = Library::new("unplugged");
+        let folder = lib.add("drive/pics", &["a.png", "sub/b.png"]);
+        lib.scan(folder);
+        let before = lib.photos();
+        let (trip, story) = trip_with_story(&lib.indexer.db, &[before["drive/pics/a.png"], before["drive/pics/sub/b.png"]]);
+        let state = trip_state(&lib.indexer.db, trip, story);
+        assert!(state.0.iter().all(|(_, there)| *there));
+
+        // The drive goes, with the place it was mounted, as an unplugged disk or a dropped share does.
+        std::fs::rename(lib.dir.join("drive"), lib.dir.join("away")).unwrap();
+        lib.scan(folder);
+        assert_eq!(lib.photos(), before, "nothing leaves the library");
+        assert!(lib.indexer.db.pending_folders().is_empty(), "its pending flag is left as it was");
+        assert_eq!(trip_state(&lib.indexer.db, trip, story), state, "the Trip and its Story are as they were");
+
+        std::fs::rename(lib.dir.join("away"), lib.dir.join("drive")).unwrap();
+        lib.scan(folder);
+        assert_eq!(lib.photos(), before, "the same photos, not new ones");
+        assert!(lib.indexer.db.pending_folders().is_empty());
+        assert_eq!(trip_state(&lib.indexer.db, trip, story), state);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_file_that_would_never_answer_is_passed_over_by_the_scan() {
+        let mut lib = Library::new("never-answers");
+        let folder = lib.add("pics", &["a.png"]);
+        crate::app::headless::named_pipe(&lib.dir.join("pics/stuck.jpg"));
+        lib.scan(folder);
+        assert_eq!(lib.photos().into_keys().collect::<Vec<_>>(), ["pics/a.png"]);
+    }
+
+    #[test]
+    fn a_scan_stopped_partway_keeps_what_it_had_not_reached() {
+        let mut lib = Library::new("scan-stopped");
+        let folder = lib.add("pics", &["a.png", "b.png"]);
+        lib.scan(folder);
+        let before = lib.photos();
+        let (trip, story) = trip_with_story(&lib.indexer.db, &[before["pics/a.png"], before["pics/b.png"]]);
+        let state = trip_state(&lib.indexer.db, trip, story);
+
+        // A photo deleted on disk, then Picasso closed as the scan starts.
+        std::fs::remove_file(lib.dir.join("pics/b.png")).unwrap();
+        lib.indexer.db.set_scan_pending(folder, true);
+        lib.commands.send(Command::Stop).unwrap();
+        assert!(matches!(lib.indexer.scan_folder(folder), Outcome::Stopped));
+        assert_eq!(lib.photos(), before, "a scan that didn't finish removes nothing");
+        assert_eq!(lib.indexer.db.pending_folders(), [folder], "and continues next time");
+        assert_eq!(trip_state(&lib.indexer.db, trip, story), state);
+
+        // The next whole scan sees the deletion; the Trip keeps the photo as unavailable.
+        lib.scan(folder);
+        assert_eq!(lib.photos().into_keys().collect::<Vec<_>>(), ["pics/a.png"]);
+        assert!(lib.indexer.db.pending_folders().is_empty());
+        let (members, blocks) = trip_state(&lib.indexer.db, trip, story);
+        assert_eq!(members.iter().map(|(_, there)| *there).collect::<Vec<_>>(), [true, false]);
+        assert_eq!(blocks, state.1, "the Story keeps its blocks");
     }
 
     #[test]

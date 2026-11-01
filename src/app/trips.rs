@@ -85,7 +85,7 @@ impl PicassoApp {
         reads.track_choices.get_or_insert_with(|| db.track_choices()).clone()
     }
 
-    fn resources_of(&mut self, trip_id: i64) -> Vec<TripResource> {
+    pub(super) fn resources_of(&mut self, trip_id: i64) -> Vec<TripResource> {
         let (db, reads) = self.reads();
         reads.resources.entry(trip_id).or_insert_with(|| db.trip_resources(trip_id)).clone()
     }
@@ -679,7 +679,7 @@ impl PicassoApp {
                     }
                 }
                 let shown = current.map_or_else(|| trf("{} days", &[&days.len()]), |index| label(&days[index]));
-                egui::ComboBox::from_id_salt(("trip-day", trip_id)).selected_text(shown).height(360.0).show_ui(ui, |ui| {
+                let picker = egui::ComboBox::from_id_salt(("trip-day", trip_id)).selected_text(shown.clone()).height(360.0).show_ui(ui, |ui| {
                     for (index, day) in days.iter().enumerate() {
                         let text = format!("{}  {}", index + 1, label(day));
                         if ui.selectable_label(current == Some(index), text).clicked() {
@@ -687,6 +687,7 @@ impl PicassoApp {
                         }
                     }
                 });
+                theme::name_picker(&picker.response, tr("Days"), shown);
                 let next = ui.add_enabled(current.is_none_or(|index| index + 1 < days.len()), egui::Button::new("▶"));
                 if theme::named(next, tr("Next day")).clicked() {
                     filter.day = DayFilter::Day(days[current.map_or(0, |index| index + 1)].id);
@@ -1432,13 +1433,14 @@ impl PicassoApp {
             } else {
                 let current = places.iter().position(|place| filter.place == Some(place.id));
                 let shown = current.map_or_else(|| trf("{} places", &[&places.len()]), label);
-                egui::ComboBox::from_id_salt(("trip-place", trip_id)).selected_text(shown).height(360.0).show_ui(ui, |ui| {
+                let picker = egui::ComboBox::from_id_salt(("trip-place", trip_id)).selected_text(shown.clone()).height(360.0).show_ui(ui, |ui| {
                     for (index, place) in places.iter().enumerate() {
                         if ui.selectable_label(current == Some(index), format!("{}  {}", index + 1, label(index))).clicked() {
                             filter.place = Some(place.id);
                         }
                     }
                 });
+                theme::name_picker(&picker.response, tr("Places"), shown);
                 if let Some(index) = current {
                     let more = theme::named(ui.button("⋯"), tr("Edit, move, or delete this place"));
                     egui::Popup::menu(&more).show(|ui| actions(ui, index));

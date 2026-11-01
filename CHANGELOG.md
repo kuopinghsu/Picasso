@@ -7,6 +7,8 @@ section of this file as the release notes.
 
 ### Added
 
+- After a Story is exported, its bar says Exported, which opens the folder, and Changed
+  since the export once the Story or one of its photos changes, which exports it again.
 - Suggest days and Suggest places show how many photos' times they have read, with
   Cancel; times already read are kept, so the next run reads only the rest.
 - Frame a Story's cover: choose a shape, fixed or free to drag to any shape, and the
@@ -79,12 +81,17 @@ section of this file as the release notes.
   is made.
 - Uploads of the same bytes are reused, interrupted or lost requests are recovered without
   duplicates, safe requests are retried with backoff, and each job is kept under History.
-- For developers: `make bench` also times a 10,000-photo Trip over 365 Days and exporting
-  and publishing a 300-photo Story, and tests
+- For developers: `make bench` also times a 10,000-photo Trip over 365 Days, with the median
+  and 95th percentile of the Trips view's queries and of the window's frames while
+  scrolling that Trip, and exporting and publishing a 300-photo Story, and tests
   cover a photo changing during an export, a folder that refuses writing, a failed write,
   a 20-photo export with edited JPEG and raw photos, an edit made while exporting, a new
-  upload when the photo size changes, saving a new draft beside an edited post, and a
-  library read while it is being written.
+  upload when the photo size changes, the bytes sent at each upload size, saving a new draft beside an edited post, a
+  library read while it is being written, and a file that never answers when it is scanned or opened.
+  A test draws the library, the Trips page, a Trip and a Story at the default and smallest
+  window sizes, at 1× and 2×, in light and dark, and fails on a control with no name for
+  screen readers or one past the window's edge; it also checks that Tab reaches the
+  controls by name.
 
 ### Changed
 
@@ -92,9 +99,17 @@ section of this file as the release notes.
   from the Library does: about three times faster, for more memory while they run.
   Publishing a Story again doesn't render the photos the site already has, unless
   their file or edit changed since they were rendered while Picasso was open.
+- A Story is saved as one change, so a save that fails keeps nothing and Try again
+  saves it as it was. What an export or a publishing job cut short by a crash had
+  staged is removed by the next one, and a publishing job cut short shows in History as stopped
+  before it finished, with the photos that reached the site. Suggest days makes its Days
+  and places the photos as one change, so one that fails leaves the Trip as it was, and
+  takes less than half the time.
 - The Trips pages read the library again only after it changes, instead of on every
   frame they draw. The READMEs describe Trips, Stories and WordPress publishing, and
   list them in what backups keep.
+- Rename files… reads the folder on another thread, so a large folder doesn't hold up
+  the window; Rename and Undo wait until it has been read.
 - Local macOS builds are signed with a self-signed `Picasso Development` certificate that
   `make sign-identity` makes once; release builds from CI stay signed ad hoc.
 - Reorganized the English and Traditional Chinese READMEs around the project overview,
@@ -108,6 +123,28 @@ section of this file as the release notes.
 
 ### Fixed
 
+- Screen readers now name the sidebar's items and folders, with their counts and whether
+  they are chosen or open; photos in the grid and the tray, by file name; the timeline
+  beside the grid, with the month in view; the Help and Settings buttons; the thumbnail
+  size slider; the sort menu; and a Trip's lists of days and places. The search field is
+  named Search photos instead of by its whole tooltip.
+- At the smallest window size, the Settings button no longer falls off the end of the top bar.
+- Trip packages and exported Story folders use names every system can write: characters
+  Windows doesn't allow become spaces, names such as CON or AUX get an underscore, and
+  photos whose names differ only in case are each written under a name of their own.
+- Scrolling quickly through thousands of photos no longer holds on to their thumbnails:
+  a long fling through a 10,000-photo Trip could take over 1 GB of memory, and now stays
+  under 250 MB.
+- The Story editor no longer pauses while it reads the track files of a route map
+  for its elevation chart; they are read in the background, and the chart appears when
+  they are.
+- Quitting while the open Story can't be saved, as on a full disk, no longer loses its
+  latest changes without a word: Picasso asks first, with Try again, Keep editing and Quit
+  anyway.
+- A Story closed while it was being published, then opened and published to the same site
+  again, no longer starts a second job beside the first; it waits until the first has
+  finished. A preview, export or publishing job left running when its Story was closed no
+  longer ends the progress of one started since.
 - Renaming, deleting or moving a photo or a folder of photos on disk now shows in the library
   and the folder list while Picasso is open, as soon as the scan lists the change and while it
   goes on reading new photos: moved and renamed photos keep their stars, captions, albums, edits, Trips and Stories, and photos of a

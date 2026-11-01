@@ -7,6 +7,9 @@
 //!   Story, exported and published to a stand-in site.
 //! - `PICASSO_BENCH_FILES` (default 2000): photo files for the scan and
 //!   thumbnail timings, made once and kept in `target/bench-photos-<n>`.
+//! - `PICASSO_BENCH_FRAMES` (default 600): frames, at 60 Hz, to scroll a Trip
+//!   of `PICASSO_BENCH_TRIP` small photo files from top to bottom, made once
+//!   and kept in `target/bench-trip-photos-<n>`.
 //! - `PICASSO_BENCH_CHECK=1` fails the run when a result is past its limit.
 //!   The limits are loose enough for a slow CI machine and catch only large
 //!   regressions; `make bench-check` runs a small library with them.
@@ -63,6 +66,28 @@ impl Report {
         out
     }
 
+    /// Runs `run` `runs` times and reports the median and the 95th
+    /// percentile, failing a checked run when the 95th is over `limit`.
+    fn spread<T>(&mut self, label: &str, runs: usize, limit: Duration, mut run: impl FnMut() -> T) -> T {
+        let mut times = Vec::with_capacity(runs);
+        let mut out = None;
+        for _ in 0..runs.max(1) {
+            let started = Instant::now();
+            out = Some(run());
+            times.push(started.elapsed());
+        }
+        self.spread_of(label, &mut times, "runs", limit);
+        out.expect("run at least once")
+    }
+
+    /// The median and 95th percentile of `times`, failing a checked run when
+    /// the 95th is over `limit`.
+    fn spread_of(&mut self, label: &str, times: &mut [Duration], unit: &str, limit: Duration) {
+        let (median, p95) = percentiles(times);
+        self.add(label, format!("median {} · p95 {} ({} {unit})", format_duration(median), format_duration(p95), times.len()));
+        self.limit(label, p95 > limit, format!("p95 {}, the limit is {}", format_duration(p95), format_duration(limit)));
+    }
+
     fn rate(&mut self, label: &str, count: usize, elapsed: Duration, at_least: f64) {
         let rate = count as f64 / elapsed.as_secs_f64();
         self.add(label, format!("{} ({rate:.0} photos/s)", format_duration(elapsed)));
@@ -93,6 +118,13 @@ fn format_duration(duration: Duration) -> String {
     } else {
         format!("{:.1} ms", duration.as_secs_f64() * 1000.0)
     }
+}
+
+/// The median and 95th percentile of `times`, nearest rank; zero for none.
+fn percentiles(times: &mut [Duration]) -> (Duration, Duration) {
+    times.sort();
+    let at = |share: f64| times.get(((times.len() as f64 * share).ceil() as usize).max(1) - 1).copied().unwrap_or_default();
+    (at(0.5), at(0.95))
 }
 
 /// Most memory the process has held, in MB.
@@ -227,29 +259,35 @@ fn trip(report: &mut Report, count: usize) {
         db.change_stamp();
     }
     report.add("Check the library for changes (each frame)", format!("{:.1} µs", started.elapsed().as_secs_f64() * 1000.0));
-    report.time_within(&format!("Trip header: {} Days, counts, review", days.len()), Duration::from_millis(50), || {
+    report.spread(&format!("Trip header: {} Days, counts, review", days.len()), 50, Duration::from_millis(50), || {
         db.trip_days(trip_id);
         db.count_trip_members(trip_id, &MemberQuery { day: DayFilter::Unassigned, ..MemberQuery::default() });
         db.review_counts(trip_id);
         db.count_trip_members(trip_id, &filtered);
     });
-    let all = report.time_within("List the Trip's photos, oldest first", second, || db.trip_photos(trip_id, &MemberQuery::default(), Sort::DateOldest));
+    let all = report.spread("List the Trip's photos, oldest first", 20, second, || db.trip_photos(trip_id, &MemberQuery::default(), Sort::DateOldest));
     assert_eq!(all.len(), count);
     let middle = MemberQuery { day: DayFilter::Day(days[days.len() / 2].id), ..MemberQuery::default() };
-    report.time_within("Open one Day", second, || db.trip_photos(trip_id, &middle, Sort::DateOldest));
-    report.time_within("Starred photos of the Trip", second, || db.trip_photos(trip_id, &filtered, Sort::DateOldest));
+    report.spread("Open one Day", 50, Duration::from_millis(100), || db.trip_photos(trip_id, &middle, Sort::DateOldest));
+    report.spread("Starred photos of the Trip", 20, second, || db.trip_photos(trip_id, &filtered, Sort::DateOldest));
     report.time_within("Suggest Places", 10 * second, || db.suggest_places(trip_id, 300.0, 3 * 3_600).unwrap());
     let day_ids: Vec<i64> = days.iter().map(|day| day.id).collect();
     report.time_within("A Story from all 365 Days", 5 * second, || {
         db.create_story_from_days(trip_id, "A year", &day_ids, |date| date.to_string()).unwrap()
     });
-    report.time_within("List Trips", second, || db.trips(&TripQuery::default()));
+    report.spread("List Trips", 50, Duration::from_millis(100), || db.trips(&TripQuery::default()));
     let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// Photo files kept between runs, so each run reads the same files.
 fn photo_files(count: usize) -> PathBuf {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("target").join(format!("bench-photos-{count}"));
+    made_photos("bench-photos", count, 1600, 1200)
+}
+
+/// `count` JPEGs of `width` × `height` in `target/<name>-<count>`, in
+/// folders of 100, made on the first run.
+fn made_photos(name: &str, count: usize, width: u32, height: u32) -> PathBuf {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("target").join(format!("{name}-{count}"));
     let done = root.join(".complete");
     if done.exists() {
         return root;
@@ -259,11 +297,62 @@ fn photo_files(count: usize) -> PathBuf {
         let dir = root.join(format!("{:03}", index / 100));
         std::fs::create_dir_all(&dir).unwrap();
         let shade = (index % 200) as u8;
-        let image = RgbaImage::from_fn(1600, 1200, |x, y| Rgba([(x / 7) as u8 ^ shade, (y / 5) as u8, shade, 255]));
+        let image = RgbaImage::from_fn(width, height, |x, y| Rgba([(x / 7) as u8 ^ shade, (y / 5) as u8, shade, 255]));
         std::fs::write(dir.join(format!("IMG_{index:05}.jpg")), image_io::encode_jpeg(&image, 85).unwrap()).unwrap();
     });
     std::fs::write(done, b"").unwrap();
     root
+}
+
+/// The window scrolling a Trip of `count` photos over 365 Days from top to
+/// bottom, drawn by the app without a window.
+fn trip_scroll(report: &mut Report, count: usize, frames: usize) {
+    use crate::trip::{Capture, TripDraft};
+    const START: i64 = 1_735_660_800;
+    const TAIPEI: i64 = 8 * 3_600;
+    let photos = report.time(&format!("Make {count} small Trip photos (first run only)"), || made_photos("bench-trip-photos", count, 480, 320));
+    let mut files = walk(&photos);
+    files.sort();
+    let (library, db) = crate::app::headless::Scratch::new(scratch("frames"));
+    let folder_id = db.add_folder(&photos).unwrap();
+    let step = 365 * 86_400 / count.max(1) as i64;
+    // Each file as the scanner records it, so the scan at startup skips it.
+    for (start, chunk) in files.chunks(1000).enumerate() {
+        let batch: Vec<ScanRecord> = chunk
+            .iter()
+            .enumerate()
+            .map(|(offset, path)| {
+                let index = start * 1000 + offset;
+                let meta = std::fs::metadata(path).unwrap();
+                let mut row = record(folder_id, &photos, index);
+                row.photo.path = path.to_string_lossy().into_owned();
+                row.photo.filename = path.file_name().unwrap().to_string_lossy().into_owned();
+                (row.photo.width, row.photo.height) = (480, 320);
+                row.photo.bytes = meta.len();
+                row.photo.modified_at = image_io::file_mtime(&meta);
+                row.photo.taken_at = START + index as i64 * step;
+                row
+            })
+            .collect();
+        db.write_batch(&batch).unwrap();
+    }
+    let ids: Vec<i64> = db.photos(&Nav::Library, "", Sort::DateOldest).iter().map(|photo| photo.id).collect();
+    let trip_id = db.create_trip(&TripDraft::new("A year", "Asia/Taipei")).unwrap();
+    for (index, id) in db.add_to_trip(trip_id, &ids).unwrap().into_iter().enumerate() {
+        let taken = START + index as i64 * step;
+        let clock = chrono::DateTime::from_timestamp(taken + TAIPEI, 0).unwrap().naive_utc();
+        db.store_capture(id, Capture::Clock { clock, offset: Some(TAIPEI as i32) }, taken);
+    }
+    db.suggest_days(trip_id).unwrap();
+    drop(db);
+    let mut scrolled = crate::app::headless::scroll_trip(&library, trip_id, files.len(), frames);
+    assert!(scrolled.reached_end, "the scroll didn't reach the Trip's last photo");
+    assert!(scrolled.thumbs_shown > 0, "no thumbnail was shown while scrolling slowly");
+    for (how, times) in [("fling to the bottom", &mut scrolled.fling), ("back up slowly", &mut scrolled.slow)] {
+        report.spread_of(&format!("Trip of {}, {how}: frame", files.len()), times, "frames", Duration::from_millis(50));
+        let late = times.iter().filter(|time| time.as_secs_f64() > 1.0 / 60.0).count();
+        report.add("  frames over 16.7 ms", format!("{late} of {}", times.len()));
+    }
 }
 
 fn wait_for_scan(events: &crossbeam_channel::Receiver<UiEvent>) {
@@ -461,6 +550,8 @@ fn bench_large_library() {
     report.memory("Peak memory after the catalog", 400.0);
     trip(&mut report, size("PICASSO_BENCH_TRIP", 10_000));
     report.memory("Peak memory after the Trip", 400.0);
+    trip_scroll(&mut report, size("PICASSO_BENCH_TRIP", 10_000), size("PICASSO_BENCH_FRAMES", 600));
+    report.memory("Peak memory after scrolling the Trip", 400.0);
     scan(&mut report, size("PICASSO_BENCH_FILES", 2_000));
     // Making thumbnails once held on to about 1 MB per photo; this limit
     // catches that coming back.
@@ -472,4 +563,15 @@ fn bench_large_library() {
     publication(&mut report, &files);
     report.memory("Peak memory after publishing", 400.0);
     assert!(report.failures.is_empty(), "past the limits:\n{}", report.failures.join("\n"));
+}
+
+#[test]
+fn the_spread_is_the_median_and_the_95th_percentile_by_nearest_rank() {
+    let mut times: Vec<Duration> = (1..=100).rev().map(Duration::from_millis).collect();
+    assert_eq!(percentiles(&mut times), (Duration::from_millis(50), Duration::from_millis(95)));
+    let mut one = [Duration::from_millis(7)];
+    assert_eq!(percentiles(&mut one), (Duration::from_millis(7), Duration::from_millis(7)));
+    let mut twenty: Vec<Duration> = (1..=20).map(Duration::from_millis).collect();
+    assert_eq!(percentiles(&mut twenty).1, Duration::from_millis(19), "with 20 runs, the 95th is the second slowest");
+    assert_eq!(percentiles(&mut []), (Duration::ZERO, Duration::ZERO));
 }

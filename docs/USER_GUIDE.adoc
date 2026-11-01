@@ -257,6 +257,7 @@ For a file with no date in it, that is the date the file last changed; use *Adju
 It changes only the names and isn't kept for next time; to fix the dates Picasso shows as well, use *Adjust date…* instead.
 
 The list shows every file's new name before anything changes.
+While Picasso reads the folder, the list says *Reading the folder…*, and *Rename* and *Undo* wait until it is done.
 A name that can't be used, such as one without the file's extension or with a `:`, is shown in red, and that file keeps its name.
 A file already named by the pattern keeps its name, so renaming twice changes nothing.
 *Rename* renames all the files or, if one can't be renamed, none of them; the photos keep their stars, captions, albums, edits, and places.
@@ -645,6 +646,8 @@ Videos and photos without a date are left out.
 
 *New story* starts a *Blank story*, one made from the selected photos, or one made *From the trip's days* or *From one day*, with a heading for each Day and its photos in order.
 The Story opens in place of the Trip's photos and is saved as you type; the bar at the top shows *Saving…* and then *Saved*.
+If a save fails, as when the disk is full, nothing of it is kept and the bar says so; *Try again* saves everything since the last save.
+Quitting saves the Story first; if that fails, Picasso asks before quitting, with *Try again*, *Keep editing* and *Quit anyway*.
 An empty Story offers *Start writing*, *Add photos*, which adds a gallery with the Trip's photos open to pick from, and *Add a route map*.
 
 * Type in a paragraph; kbd:[Enter] starts a new one. Typing `/` in an empty paragraph lists the blocks, such as `/heading` or `/grid 3x2`.
@@ -673,6 +676,9 @@ The template changes how the page looks, never its content: *Photography Journal
 *Export…* writes the Story as a web page or Markdown, with its photos, into a new folder; choose the photo size and JPEG quality.
 Exported photos are rendered with your edits and carry no camera details or location.
 Before export, Picasso lists anything that needs attention, such as missing photos, missing alt text or low-resolution photos, with a link to each.
+After an export, the bar above the Story says *Exported*; click it to open the folder.
+Once the Story or one of its photos changes, it says *Changed since the export* instead; click it to export again.
+Picasso remembers the last export until it quits.
 
 === Publishing to WordPress
 
@@ -688,6 +694,8 @@ Locations are never sent, and Picasso never takes a post down; do that in WordPr
 Saving again updates the same draft.
 A post edited on the site since is not replaced unless you choose so, and an interrupted job resumes without uploading the same photos twice.
 *History* lists the last attempts.
+A job cut short because Picasso or the computer stopped shows as *Stopped before it finished*, with the photos that reached the site; publish again to finish it.
+A Story is published to a site one job at a time: closing the Story leaves its job running, and publishing it to that site again waits until the job has finished.
 
 === Moving, archiving and deleting Trips
 

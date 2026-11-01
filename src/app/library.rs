@@ -49,7 +49,7 @@ pub(super) struct CachedLayout {
 
 pub(super) struct GridLayout {
     rows: Vec<GridRow>,
-    height: f32,
+    pub height: f32,
     pub cols: usize,
     /// Width of a tile's image, which fills the row.
     tile: f32,
@@ -391,6 +391,11 @@ impl PicassoApp {
         let handle_span = (handle_top - grow)..=(handle_bottom + grow);
 
         let response = ui.interact(rect, egui::Id::unique("date-strip"), Sense::click_and_drag());
+        response.widget_info(|| {
+            let mut info = egui::WidgetInfo::labeled(egui::Role::Slider, true, tr("Timeline"));
+            info.current_text_value = Some(crate::types::format_month(year_now, marks[current].month));
+            info
+        });
         if response.drag_started() {
             let origin = ui.input(|input| input.pointer.press_origin()).map(|pos| pos.y);
             self.strip_glide = None;
@@ -732,17 +737,17 @@ impl PicassoApp {
                     self.select_starred();
                 }
                 let mut sort = self.sort;
-                egui::ComboBox::from_id_salt("sort")
-                    .selected_text(tr(match sort {
-                        Sort::DateNewest => "Sort by Date",
-                        Sort::DateOldest => "Sort by Date, oldest",
-                        Sort::Name => "Sort by Name",
-                    }))
-                    .show_ui(ui, |ui| {
-                        ui.selectable_value(&mut sort, Sort::DateNewest, tr("Sort by Date"));
-                        ui.selectable_value(&mut sort, Sort::DateOldest, tr("Sort by Date, oldest"));
-                        ui.selectable_value(&mut sort, Sort::Name, tr("Sort by Name"));
-                    });
+                let shown = tr(match sort {
+                    Sort::DateNewest => "Sort by Date",
+                    Sort::DateOldest => "Sort by Date, oldest",
+                    Sort::Name => "Sort by Name",
+                });
+                let picker = egui::ComboBox::from_id_salt("sort").selected_text(shown).show_ui(ui, |ui| {
+                    ui.selectable_value(&mut sort, Sort::DateNewest, tr("Sort by Date"));
+                    ui.selectable_value(&mut sort, Sort::DateOldest, tr("Sort by Date, oldest"));
+                    ui.selectable_value(&mut sort, Sort::Name, tr("Sort by Name"));
+                });
+                theme::name_picker(&picker.response, shown, shown.to_owned());
                 if sort != self.sort {
                     self.sort = sort;
                     self.reload_view();
@@ -807,6 +812,7 @@ impl PicassoApp {
         let response = ui
             .interact(rect, egui::Id::unique(("photo", photo.id)), Sense::click())
             .on_hover_cursor(egui::CursorIcon::PointingHand);
+        response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, &photo.filename));
         let painter = ui.painter();
         if response.hovered() {
             painter.add(theme::card_shadow().as_shape(image_rect, THUMB_RADIUS));

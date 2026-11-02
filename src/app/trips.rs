@@ -1022,6 +1022,7 @@ impl PicassoApp {
         }
         let mut link: Option<(i64, Option<i64>)> = None;
         let mut unlink: Option<i64> = None;
+        let mut geotag = false;
         labelled_row(ui, tr("Tracks"), |ui| {
             for track in &linked {
                 let day = track.day_id.and_then(|id| days.iter().find(|day| day.id == id));
@@ -1079,7 +1080,18 @@ impl PicassoApp {
                     button.on_hover_text(tr("Link a GPS track from the library to this trip. The track itself stays where it is."));
                 }
             }
+            if linked.iter().any(|track| track.track_id.is_some())
+                && ui
+                    .button(tr("Geotag photos…"))
+                    .on_hover_text(tr("Give the trip's photos the places its tracks were at when they were taken"))
+                    .clicked()
+            {
+                geotag = true;
+            }
         });
+        if geotag {
+            self.open_trip_geotag(trip_id);
+        }
         if let Some((track_id, day_id)) = link {
             if let Err(err) = self.db.link_trip_track(trip_id, track_id, day_id) {
                 self.activity = err;
@@ -1521,7 +1533,8 @@ impl PicassoApp {
                     }
                 }
                 chip.context_menu(|ui| {
-                    if resource.kind != ResourceKind::Note && ui.add_enabled(!missing, egui::Button::new(tr("Open"))).clicked() {
+                    let open = (resource.kind != ResourceKind::Note).then(|| ui.add_enabled(!missing, egui::Button::new(tr("Open"))));
+                    if open.is_some_and(|open| open.on_disabled_hover_text(tr("The file isn't where it was. Click the resource to find it.")).clicked()) {
                         let _ = open::that(&resource.reference);
                         ui.close();
                     }
@@ -2183,7 +2196,7 @@ fn row_label(ui: &mut egui::Ui, text: &str) {
 
 /// What adding photos to a Trip will do.
 /// A Place's name, else its local name, else its number in the Trip.
-fn place_name(place: &TripPlace, index: usize) -> String {
+pub(super) fn place_name(place: &TripPlace, index: usize) -> String {
     if !place.name.is_empty() {
         return place.name.clone();
     }

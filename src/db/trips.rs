@@ -698,6 +698,19 @@ impl Database {
     }
 
     /// Deletes a Day. Its members stay in the Trip, without a Day.
+    /// The Trip's members at a Place, as (media reference, Place id, the
+    /// number of its Day counted from 1 in the Trip's order, or 0 without one).
+    pub fn member_places(&self, trip_id: i64) -> Vec<(i64, i64, i64)> {
+        self.map_rows(
+            "SELECT tm.media_id, tm.place_id,
+                    (SELECT COUNT(*) FROM trip_days d2 WHERE d2.trip_id = d.trip_id AND d2.position <= d.position)
+             FROM trip_media tm LEFT JOIN trip_days d ON d.id = tm.day_id
+             WHERE tm.trip_id = ?1 AND tm.place_id IS NOT NULL",
+            [trip_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+    }
+
     /// The Trip's Places in order, each with how many members are at it.
     pub fn trip_places(&self, trip_id: i64) -> Vec<TripPlace> {
         self.map_rows(
@@ -1821,6 +1834,8 @@ mod tests {
         let places = db.trip_places(trip_id);
         assert_eq!(places.iter().map(|place| place.members).collect::<Vec<_>>(), vec![2, 2]);
         let near = places.iter().find(|place| place.lat == 38.0).unwrap().id;
+        let days: Vec<i64> = db.member_places(trip_id).iter().filter(|(_, place, _)| *place == near).map(|(.., day)| *day).collect();
+        assert_eq!(days, [0, 0], "two members at the Place, neither in a Day yet");
         let filtered = MemberQuery { place: Some(near), ..MemberQuery::default() };
         assert_eq!(db.count_trip_members(trip_id, &filtered), 2);
 

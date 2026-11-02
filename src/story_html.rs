@@ -850,12 +850,93 @@ const ROUTE_INK: [u8; 3] = [0x1f, 0x7a, 0x7a];
 /// had, so the page draws the route on its own. A `profile` is drawn in
 /// its bottom-right corner.
 pub fn route_map(route: &[Vec<[i32; 2]>], tiles: &MapTiles, profile: Option<&[[f32; 2]]>) -> Option<image::RgbaImage> {
+    let (width, height) = ROUTE_SIZE;
+    let (view, shape) = crate::trip::route_shape(route, width, height, ROUTE_PAD)?;
+    let scale = ROUTE_SCALE as f32;
+    let mut pixmap = map_picture(&view, tiles)?;
+    let mut line = tiny_skia::PathBuilder::new();
+    for segment in &shape {
+        for (n, [x, y]) in segment.iter().enumerate() {
+            if n == 0 {
+                line.move_to(x * scale, y * scale);
+            } else {
+                line.line_to(x * scale, y * scale);
+            }
+        }
+    }
+    let line = line.finish()?;
+    let (white, ink) = (paint([255, 255, 255]), paint(ROUTE_INK));
+    let stroke = |width: f32| tiny_skia::Stroke { width: width * scale, line_cap: tiny_skia::LineCap::Round, line_join: tiny_skia::LineJoin::Round, ..Default::default() };
+    pixmap.stroke_path(&line, &white, &stroke(7.0), tiny_skia::Transform::identity(), None);
+    pixmap.stroke_path(&line, &ink, &stroke(4.0), tiny_skia::Transform::identity(), None);
+    let ends = [shape.first().and_then(|segment| segment.first()), shape.last().and_then(|segment| segment.last())];
+    for (n, [x, y]) in ends.into_iter().flatten().enumerate() {
+        let Some(dot) = tiny_skia::PathBuilder::from_circle(x * scale, y * scale, 6.0 * scale) else { continue };
+        pixmap.fill_path(&dot, if n == 0 { &ink } else { &white }, tiny_skia::FillRule::Winding, tiny_skia::Transform::identity(), None);
+        pixmap.stroke_path(&dot, if n == 0 { &white } else { &ink }, &stroke(3.0), tiny_skia::Transform::identity(), None);
+    }
+    if let Some(profile) = profile {
+        crate::elevation::draw(&mut pixmap, profile, scale, ROUTE_INK);
+    }
+    let (w, h) = (pixmap.width(), pixmap.height());
+    image::RgbaImage::from_raw(w, h, pixmap.take())
+}
+
+/// The closest a map of places comes in, so a single place shows its town.
+const PLACES_MAX_ZOOM: u8 = 13;
+
+/// Places, each `(lat, lon)`, as numbered pins on the map tiles of
+/// `tiles`, in the order given, from 1. `None` as for [`route_map`].
+pub fn places_map(places: &[(f64, f64)], tiles: &MapTiles) -> Option<image::RgbaImage> {
+    let points: Vec<[i32; 2]> = places.iter().map(|(lat, lon)| [(lat * 1e5).round() as i32, (lon * 1e5).round() as i32]).collect();
+    let (width, height) = ROUTE_SIZE;
+    let (mut view, mut shape) = crate::trip::route_shape(&[points], width, height, ROUTE_PAD * 2.0)?;
+    if view.zoom > PLACES_MAX_ZOOM {
+        let shrink = f64::from(1u32 << (view.zoom - PLACES_MAX_ZOOM));
+        let (half_w, half_h) = (width / 2.0, height / 2.0);
+        for [x, y] in shape.iter_mut().flatten() {
+            *x = half_w + (*x - half_w) / shrink as f32;
+            *y = half_h + (*y - half_h) / shrink as f32;
+        }
+        view = crate::trip::RouteView { zoom: PLACES_MAX_ZOOM, x: view.x / shrink, y: view.y / shrink };
+    }
+    let scale = ROUTE_SCALE as f32;
+    let mut pixmap = map_picture(&view, tiles)?;
+    let (white, ink) = (paint([255, 255, 255]), paint(ROUTE_INK));
+    let ring = tiny_skia::Stroke { width: 2.5 * scale, ..Default::default() };
+    // The first place is drawn last, so it stays on top where pins overlap.
+    let pins: Vec<[f32; 2]> = shape.into_iter().flatten().collect();
+    for (n, [x, y]) in pins.into_iter().enumerate().rev() {
+        let (x, y) = (x * scale, y * scale);
+        let Some(pin) = tiny_skia::PathBuilder::from_circle(x, y, 12.0 * scale) else { continue };
+        pixmap.fill_path(&pin, &ink, tiny_skia::FillRule::Winding, tiny_skia::Transform::identity(), None);
+        pixmap.stroke_path(&pin, &white, &ring, tiny_skia::Transform::identity(), None);
+        let (number, size) = ((n + 1).to_string(), 15.0 * scale);
+        let left = x - crate::elevation::text_width(&number, size) / 2.0;
+        // The interface's font is light; written twice, a hair apart, it reads at a glance.
+        for nudge in [-0.4, 0.4] {
+            crate::elevation::text(&mut pixmap, &number, left + nudge * scale, y + size * 0.35, size, [255, 255, 255]);
+        }
+    }
+    let (w, h) = (pixmap.width(), pixmap.height());
+    image::RgbaImage::from_raw(w, h, pixmap.take())
+}
+
+fn paint([r, g, b]: [u8; 3]) -> tiny_skia::Paint<'static> {
+    let mut paint = tiny_skia::Paint::default();
+    paint.set_color_rgba8(r, g, b, 255);
+    paint.anti_alias = true;
+    paint
+}
+
+/// The map tiles of `tiles` around `view`, [`ROUTE_SCALE`] times as sharp
+/// as [`ROUTE_SIZE`], one zoom closer than `view`. `None` when the source
+/// needs a key it doesn't have or no tile could be had.
+fn map_picture(view: &crate::trip::RouteView, tiles: &MapTiles) -> Option<tiny_skia::Pixmap> {
     if tiles.source.needs_key() && tiles.key.trim().is_empty() {
         return None;
     }
     let (width, height) = ROUTE_SIZE;
-    let (view, shape) = crate::trip::route_shape(route, width, height, ROUTE_PAD)?;
-    let scale = ROUTE_SCALE as f32;
     let (w, h) = (width as u32 * ROUTE_SCALE, height as u32 * ROUTE_SCALE);
     let zoom = view.zoom + 1;
     let (left, top) = (view.x * f64::from(ROUTE_SCALE) - f64::from(w) / 2.0, view.y * f64::from(ROUTE_SCALE) - f64::from(h) / 2.0);
@@ -881,38 +962,7 @@ pub fn route_map(route: &[Vec<[i32; 2]>], tiles: &MapTiles, profile: Option<&[[f
     if !any {
         return None;
     }
-    let mut pixmap = tiny_skia::Pixmap::from_vec(picture.into_raw(), tiny_skia::IntSize::from_wh(w, h)?)?;
-    let mut line = tiny_skia::PathBuilder::new();
-    for segment in &shape {
-        for (n, [x, y]) in segment.iter().enumerate() {
-            if n == 0 {
-                line.move_to(x * scale, y * scale);
-            } else {
-                line.line_to(x * scale, y * scale);
-            }
-        }
-    }
-    let line = line.finish()?;
-    let paint = |[r, g, b]: [u8; 3]| {
-        let mut paint = tiny_skia::Paint::default();
-        paint.set_color_rgba8(r, g, b, 255);
-        paint.anti_alias = true;
-        paint
-    };
-    let (white, ink) = (paint([255, 255, 255]), paint(ROUTE_INK));
-    let stroke = |width: f32| tiny_skia::Stroke { width: width * scale, line_cap: tiny_skia::LineCap::Round, line_join: tiny_skia::LineJoin::Round, ..Default::default() };
-    pixmap.stroke_path(&line, &white, &stroke(7.0), tiny_skia::Transform::identity(), None);
-    pixmap.stroke_path(&line, &ink, &stroke(4.0), tiny_skia::Transform::identity(), None);
-    let ends = [shape.first().and_then(|segment| segment.first()), shape.last().and_then(|segment| segment.last())];
-    for (n, [x, y]) in ends.into_iter().flatten().enumerate() {
-        let Some(dot) = tiny_skia::PathBuilder::from_circle(x * scale, y * scale, 6.0 * scale) else { continue };
-        pixmap.fill_path(&dot, if n == 0 { &ink } else { &white }, tiny_skia::FillRule::Winding, tiny_skia::Transform::identity(), None);
-        pixmap.stroke_path(&dot, if n == 0 { &white } else { &ink }, &stroke(3.0), tiny_skia::Transform::identity(), None);
-    }
-    if let Some(profile) = profile {
-        crate::elevation::draw(&mut pixmap, profile, scale, ROUTE_INK);
-    }
-    image::RgbaImage::from_raw(w, h, pixmap.take())
+    tiny_skia::Pixmap::from_vec(picture.into_raw(), tiny_skia::IntSize::from_wh(w, h)?)
 }
 
 fn figure(media: &MediaUse, images: &HashMap<i64, WebImage>, words: &Words, class: &str, outcome: &mut Outcome) -> String {
@@ -1144,6 +1194,36 @@ pub(crate) mod tests {
     use super::*;
 
     #[test]
+    fn places_are_numbered_pins_on_their_map_seen_from_town_height() {
+        let cache = std::env::temp_dir().join(format!("picasso-places-map-{}", std::process::id()));
+        // A single place is seen from the closest zoom allowed, drawn one closer and twice as sharp.
+        let (lat, lon) = (37.1773, -3.5986);
+        let zoom = PLACES_MAX_ZOOM + 1;
+        let (x, y) = crate::geo::latlon_to_world(lat, lon, zoom);
+        let (tile_x, tile_y) = ((x / crate::geo::TILE_PX) as u32, (y / crate::geo::TILE_PX) as u32);
+        let side = crate::geo::TILE_PX as u32;
+        let grey = image::RgbaImage::from_pixel(side, side, image::Rgba([200, 200, 200, 255]));
+        for tx in tile_x - 4..=tile_x + 4 {
+            for ty in tile_y - 3..=tile_y + 3 {
+                let path = cache.join(format!("tiles/{zoom}/{tx}/{ty}.png"));
+                std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                grey.save(&path).unwrap();
+            }
+        }
+        let tiles = MapTiles { source: crate::geo::MapSource::OpenStreetMap, key: String::new(), cache: cache.clone() };
+        let map = places_map(&[(lat, lon)], &tiles).unwrap();
+        let (w, h) = (map.width(), map.height());
+        assert_eq!((w, h), (ROUTE_SIZE.0 as u32 * ROUTE_SCALE, ROUTE_SIZE.1 as u32 * ROUTE_SCALE));
+        assert_eq!(map.get_pixel(4, 4).0, [200, 200, 200, 255], "the tiles");
+        let [r, g, b] = ROUTE_INK;
+        assert_eq!(map.get_pixel(w / 2 - 18, h / 2).0, [r, g, b, 255], "the pin, in the middle");
+        let white = (w / 2 - 10..w / 2 + 10).flat_map(|x| (h / 2 - 14..h / 2 + 14).map(move |y| (x, y))).filter(|&(x, y)| map.get_pixel(x, y).0[..3].iter().all(|&c| c > 220)).count();
+        assert!(white > 20, "its number, in white: {white} pixels");
+        assert!(places_map(&[], &tiles).is_none());
+        let _ = std::fs::remove_dir_all(cache);
+    }
+
+    #[test]
     fn names_from_titles_and_files_work_on_every_system() {
         assert_eq!(folder_name("Madrid: Day 1 / 2025?"), "Madrid Day 1 2025");
         assert_eq!(folder_name("Con"), "Con_");
@@ -1316,6 +1396,37 @@ pub(crate) mod tests {
         assert!(html.contains("<figcaption>Fushimi</figcaption>"));
         assert!(html.contains("<div class=\"missing\">Photo unavailable</div>"));
         assert!(html.contains("<p class=\"byline\">Ana</p>"), "the author alone without dates");
+    }
+
+    #[test]
+    fn repeated_problems_are_counted_once_each_and_go_away_once_repaired() {
+        let photo = Path::new(env!("CARGO_MANIFEST_DIR")).join("images/banner.jpg");
+        let mut blocks = vec![
+            StoryBlock::new(Block::Photo(MediaUse::new(1))),
+            StoryBlock::new(Block::Gallery(vec![MediaUse::new(2), MediaUse::new(3)])),
+            StoryBlock::new(Block::Photo(MediaUse::new(3))),
+        ];
+        let mut sources = HashMap::from([(1, Some((photo.clone(), Settings::default(), 0))), (2, None), (3, None)]);
+        let (mut story, words) = (story(), words());
+        story.cover = Some(1);
+        let check = preflight(&Page { story: &story, dates: None, blocks: &blocks, sources: &sources, words: &words, map: None, profiles: &HashMap::new() });
+        assert_eq!((check.missing, check.first[0], check.no_alt, check.first[1]), (3, Some(1), 1, Some(0)), "one line for each kind, pointing at its first block");
+        assert!(check.blocked(false));
+
+        // The files are found again and every photo described: checked again, nothing is left.
+        for media_id in [2, 3] {
+            sources.insert(media_id, Some((photo.clone(), Settings::default(), 0)));
+        }
+        for block in &mut blocks {
+            match &mut block.block {
+                Block::Photo(media) => media.alt = "Harbor".into(),
+                Block::Gallery(media) => media.iter_mut().for_each(|media| media.alt = "Boats".into()),
+                _ => {}
+            }
+        }
+        let check = preflight(&Page { story: &story, dates: None, blocks: &blocks, sources: &sources, words: &words, map: None, profiles: &HashMap::new() });
+        assert_eq!((check.missing, check.no_alt, check.first[0], check.first[1]), (0, 0, None, None));
+        assert!(!check.blocked(false));
     }
 
     #[test]

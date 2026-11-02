@@ -151,11 +151,12 @@ Pass photo folders to the executable, or use the geotag command to match photos 
 ```sh
 picasso ~/Pictures ~/Photos
 picasso --version
-picasso geotag track.gpx ~/Pictures/Trip --offset +01:00 --dry-run
+picasso geotag day1.gpx day2.gpx ~/Pictures/Trip --offset +01:00 --dry-run
+picasso geotag --from-photos ~/Pictures/Trip --dry-run
 picasso geotag --help
 ```
 
-The geotag example previews matches without writing changes. Remove the dry-run option to save locations in the library and `.picasso-geotags.json` files beside the photos. Set the offset to the camera clock’s UTC offset.
+The geotag examples preview matches without writing changes: the first from two tracks, the second from the photos that have GPS. Remove the dry-run option to save locations in the library and `.picasso-geotags.json` files beside the photos. Set the offset to the camera clock’s UTC offset; the preview names a better one when it would place more photos.
 
 ## Configuration and data
 

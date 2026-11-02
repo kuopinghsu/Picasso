@@ -109,8 +109,8 @@ pub fn draw(pixmap: &mut tiny_skia::Pixmap, profile: &[[f32; 2]], scale: f32, in
     }
     let size = 12.0 * scale;
     let label_x = left + PAD * scale;
-    text(pixmap, &meters(high), label_x, y0 + size * 0.8, size);
-    text(pixmap, &meters(low), label_x, y1, size);
+    text(pixmap, &meters(high), label_x, y0 + size * 0.8, size, TEXT);
+    text(pixmap, &meters(low), label_x, y1, size, TEXT);
 }
 
 /// A height as the chart labels it.
@@ -133,9 +133,16 @@ fn rounded(x: f32, y: f32, w: f32, h: f32, r: f32) -> Option<tiny_skia::Path> {
     path.finish()
 }
 
-/// Writes `words` with its baseline at `baseline`, in the interface's own
-/// font, laid on what is there.
-fn text(pixmap: &mut tiny_skia::Pixmap, words: &str, x: f32, baseline: f32, size: f32) {
+/// How wide `words` are at `size`, in the font [`text`] writes in.
+pub(crate) fn text_width(words: &str, size: f32) -> f32 {
+    let Ok(font) = FontRef::try_from_slice(epaint_default_fonts::UBUNTU_LIGHT) else { return 0.0 };
+    let scaled = font.as_scaled(PxScale::from(size));
+    words.chars().map(|c| scaled.h_advance(scaled.glyph_id(c))).sum()
+}
+
+/// Writes `words` in `ink` with its baseline at `baseline`, in the
+/// interface's own font, laid on what is there.
+pub(crate) fn text(pixmap: &mut tiny_skia::Pixmap, words: &str, x: f32, baseline: f32, size: f32, ink: [u8; 3]) {
     let Ok(font) = FontRef::try_from_slice(epaint_default_fonts::UBUNTU_LIGHT) else { return };
     let scaled = font.as_scaled(PxScale::from(size));
     let (width, height) = (pixmap.width() as i32, pixmap.height() as i32);
@@ -156,7 +163,7 @@ fn text(pixmap: &mut tiny_skia::Pixmap, words: &str, x: f32, baseline: f32, size
                 let at = (py as usize * width as usize + px as usize) * 4;
                 let coverage = coverage.clamp(0.0, 1.0);
                 // The map picture is opaque, so the colour is blended as is.
-                for (channel, ink) in data[at..at + 3].iter_mut().zip(TEXT) {
+                for (channel, ink) in data[at..at + 3].iter_mut().zip(ink) {
                     *channel = (f32::from(*channel) * (1.0 - coverage) + f32::from(ink) * coverage).round() as u8;
                 }
             });

@@ -1,0 +1,24 @@
+/* VoyageLight geotag boxes in the story and Journey editors. */
+.vl-geo-reading { display: block; margin: 4px 0 10px; color: #00703c; }
+.vl-geo-reading.is-error { color: #b32d2e; }
+.vl-geo-problems .notice { margin: 8px 0; }
+.vl-geo-problems li { margin-left: 1.2em; list-style: disc; overflow-wrap: anywhere; }
+.vl-geo-picker { margin-top: 14px; }
+.vl-geo-panel { padding: 10px 12px; border: 1px solid #dcdcde; background: #f6f7f7; }
+.vl-geo-panel[hidden], .vl-geo-add[hidden], .vl-trip-table-wrap[hidden], .vl-trip-actions [hidden] { display: none; }
+.vl-geo-results { margin: 4px 0 8px; }
+.vl-geo-results li { margin: 0 0 4px; }
+.vl-geo-results .button-link { text-align: left; }
+.vl-geo-search-status:empty, .vl-geo-map-status:empty { display: none; }
+.vl-geo-map { position: relative; z-index: 0; height: 380px; margin: 8px 0; border: 1px solid #c3c4c7; background: #e8eef0; }
+.vl-geo-add { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 8px 0; }
+.vl-trip-table-wrap { overflow-x: auto; margin: 8px 0; }
+.vl-trip-table { min-width: 760px; }
+.vl-trip-table td { vertical-align: top; }
+.vl-trip-table input[type="text"] { width: 100%; }
+.vl-trip-table th:first-child { width: 5em; }
+.vl-trip-table select { width: 100%; max-width: 16em; }
+.vl-trip-table tr.is-error td { background: #fcf0f1; }
+.vl-trip-table .vl-geo-reading { margin: 2px 0 0; font-size: 12px; }
+.vl-trip-table .vl-row-actions { white-space: nowrap; width: 7.5em; }
+.vl-trip-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 8px 0 12px; }

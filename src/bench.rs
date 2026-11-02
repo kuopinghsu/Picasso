@@ -500,6 +500,8 @@ fn publication(report: &mut Report, files: &[PathBuf]) {
         update_published: false,
         terms: crate::db::PostTerms::default(),
         renders: crate::publish::Renders::default(),
+        places: None,
+        journey: None,
     };
     let site = Site::default();
     let started = Instant::now();

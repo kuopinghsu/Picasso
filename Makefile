@@ -47,7 +47,7 @@ endif
 .DEFAULT_GOAL := release
 
 .PHONY: help release debug run run-stats version check lint test corpus bench bench-check check-docs deny ci \
-	sign-identity notices release-notes guide guide-pdf appimage install uninstall world-map clean
+	sign-identity notices release-notes guide guide-pdf theme appimage install uninstall world-map clean
 
 # Each target's `##` text is what `make help` prints; `##@` starts a section.
 help: ## List the targets and the variables they take
@@ -158,8 +158,9 @@ guide: ## Build the User Guide as HTML in target/guide (needs asciidoctor)
 # The same as PDF, as CI publishes it. The themes in docs/ take the Chinese and
 # symbols from Droid Sans Fallback and DejaVu Sans, looked for in GUIDE_FONTS:
 # on Debian and Ubuntu, gem install asciidoctor-pdf, then
-# sudo apt install fonts-droid-fallback fonts-dejavu-core. A character no font
-# has fails the build.
+# sudo apt install fonts-droid-fallback fonts-dejavu-core. Elsewhere, set
+# GUIDE_FONTS to the folders holding DroidSansFallbackFull.ttf and
+# DejaVuSans.ttf, separated by ";". A character no font has fails the build.
 GUIDE_FONTS ?= /usr/share/fonts/truetype/droid;/usr/share/fonts/truetype/dejavu
 # --verbose, because asciidoctor-pdf reports a missing character only then.
 GUIDE_PDF = asciidoctor-pdf --verbose --failure-level=WARN -a pdf-themesdir=docs \
@@ -168,6 +169,14 @@ GUIDE_PDF = asciidoctor-pdf --verbose --failure-level=WARN -a pdf-themesdir=docs
 guide-pdf: ## Build the User Guide as PDF in target/guide (needs asciidoctor-pdf)
 	$(GUIDE_PDF) -a pdf-theme=guide docs/USER_GUIDE.adoc
 	$(GUIDE_PDF) -a pdf-theme=guide-zh-TW docs/USER_GUIDE_zh-TW.adoc
+
+# The optional WordPress theme in wordpress/voyagelight and the Picasso Places
+# plugin in wordpress/picasso-places, as the ZIPs that Upload Theme and Upload
+# Plugin take. Fails if a text lacks a translation or the plugin's copy of a
+# file shared with the theme differs from the theme's.
+theme: ## Build the optional WordPress theme and plugin ZIPs in target/theme
+	$(PYTHON) scripts/build-theme.py --check
+	$(PYTHON) scripts/build-theme.py
 
 # Linux AppImage for this machine (x86_64 or aarch64) in dist/, the same AppDir
 # as the CI AppImage job.

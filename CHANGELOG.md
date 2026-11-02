@@ -81,6 +81,20 @@ section of this file as the release notes.
   is made.
 - Uploads of the same bytes are reused, interrupted or lost requests are recovered without
   duplicates, safe requests are retried with backoff, and each job is kept under History.
+- Publishing can show a Story's Places: off until ticked, with Places to leave out, exact or
+  to about 1 km, and named in the confirmation; Day posts show their Day's Places. A site with
+  the VoyageLight theme or the Picasso Places plugin shows them on its own map; with any other
+  theme they go at the end of the post, as a map picture with numbered pins and a list linked
+  to OpenStreetMap. Link to the trip's Journey makes a Journey page for the Trip and links each
+  post to it; the dialog reads what the site supports, and a site without Journeys saves the
+  posts without one instead of stopping.
+- Picasso Places, a WordPress plugin in `wordpress/picasso-places` built by `make theme`, gives
+  any theme the VoyageLight theme's place fields, Journeys, editor boxes and maps.
+- Geotag from GPS track takes several tracks at once, lists the tracks beside the folder,
+  and can use photos that have GPS, such as a phone's, in place of a track. Check shows
+  which photos would get a place before anything is written, and names a camera time zone
+  that would place more of them. A Trip's Tracks row has Geotag photos… for its own photos
+  and tracks. `picasso geotag` takes several tracks, or `--from-photos`.
 - For developers: `make bench` also times a 10,000-photo Trip over 365 Days, with the median
   and 95th percentile of the Trips view's queries and of the window's frames while
   scrolling that Trip, and exporting and publishing a 300-photo Story, and tests
@@ -88,10 +102,16 @@ section of this file as the release notes.
   a 20-photo export with edited JPEG and raw photos, an edit made while exporting, a new
   upload when the photo size changes, the bytes sent at each upload size, saving a new draft beside an edited post, a
   library read while it is being written, and a file that never answers when it is scanned or opened.
-  A test draws the library, the Trips page, a Trip and a Story at the default and smallest
+  A test draws the library, the Trips page, a Trip, a Story, the Geotag dialog for a
+  folder and for a Trip, and Publish to WordPress with its Places at the default and smallest
   window sizes, at 1× and 2×, in light and dark, and fails on a control with no name for
   screen readers or one past the window's edge; it also checks that Tab reaches the
   controls by name.
+- An optional WordPress theme for travel sites, VoyageLight, in `wordpress/voyagelight`:
+  `make theme` builds the ZIP to upload. Its start page and pages are in English, or in
+  Traditional Chinese when the site's language is 繁體中文. Its fonts are part of it, and
+  maps load only when a reader asks. Photos sent with Keep camera details show them under
+  the photo. Picasso still publishes to any theme.
 
 ### Changed
 
@@ -130,6 +150,15 @@ section of this file as the release notes.
   named Search photos instead of by its whole tooltip.
 - At the smallest window size, the Settings button no longer falls off the end of the top bar,
   and a Trip's All stories link moves to the next line whole instead of breaking in two.
+- Shortcuts such as S, Delete and F1 no longer stop working once Tab has moved the keyboard
+  to a button; they wait only while you type in a text field. On a photo reached with Tab,
+  the arrow keys move the selection and the keyboard with it, and Enter opens the photo.
+  Help lists Tab and Enter or Space for moving between and using controls.
+- Remove from Trip and Remove from Album say on hover how many photos they take out and
+  that the photos stay in the library, and in any Story that uses them; Delete album says
+  its photos stay. A greyed-out Geotag, Open on a missing resource, and Single photo or
+  Gallery for a block that can't be laid out that way say why. The track editor's mark
+  for unsaved changes says so on hover and to screen readers.
 - An empty photo strip in the Story editor says why: every photo is already in the story,
   none is starred, the day has none, or the Trip has none yet, and which filter to turn off.
   A stopped photo export says how many photos weren't exported. An empty Trip in the

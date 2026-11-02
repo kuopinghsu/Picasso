@@ -708,13 +708,18 @@ impl PicassoApp {
                         self.arrange_menu(ui);
                         self.day_menu(ui);
                     }
-                    if matches!(self.nav, Nav::Trip(_)) && ui.button(tr("Remove from Trip")).clicked() {
-                        self.remove_selection_from_trip();
+                    let count = self.selection.len();
+                    if matches!(self.nav, Nav::Trip(_)) {
+                        let remove = ui.button(tr("Remove from Trip"));
+                        let scope = trf("Take the {} selected photos out of the trip, with their days. They stay in your library and in any story that uses them.", &[&count]);
+                        if remove.on_hover_text(scope).clicked() {
+                            self.remove_selection_from_trip();
+                        }
                     }
                     self.album_menu(ui);
                     if matches!(self.nav, Nav::Album(_)) {
                         let remove = theme::icon_button(ui, theme::Icon::RemoveFromAlbum, true, false);
-                        if remove.on_hover_text(tr("Remove from Album")).clicked() {
+                        if remove.on_hover_text(trf("Take the {} selected photos out of the album. They stay in your library.", &[&count])).clicked() {
                             self.remove_selection_from_album();
                         }
                     }
@@ -813,6 +818,15 @@ impl PicassoApp {
             .interact(rect, egui::Id::unique(("photo", photo.id)), Sense::click())
             .on_hover_cursor(egui::CursorIcon::PointingHand);
         response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, &photo.filename));
+        if self.focus_photo == Some(photo.id) {
+            self.focus_photo = None;
+            response.request_focus();
+        }
+        if response.has_focus() {
+            self.photo_focus = Some((response.id, photo.id));
+            let arrows = egui::EventFilter { horizontal_arrows: true, vertical_arrows: true, ..Default::default() };
+            ui.memory_mut(|memory| memory.set_focus_lock_filter(response.id, arrows));
+        }
         let painter = ui.painter();
         if response.hovered() {
             painter.add(theme::card_shadow().as_shape(image_rect, THUMB_RADIUS));

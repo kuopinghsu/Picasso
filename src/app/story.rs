@@ -3442,17 +3442,17 @@ fn layout_menu(ui: &mut egui::Ui, index: usize, uid: &str, count: usize, grid: O
         None => Shape::Photo,
     };
     let combo = egui::ComboBox::from_id_salt(("block-layout", uid)).selected_text(shown).height(360.0).show_ui(ui, |ui| {
-        let mut choice = |ui: &mut egui::Ui, shape: Shape, text: String, fits: bool| {
-            if ui.add_enabled(fits, egui::Button::selectable(current == shape, text)).clicked() {
+        let mut choice = |ui: &mut egui::Ui, shape: Shape, text: String, fits: bool, why: &str| {
+            if ui.add_enabled(fits, egui::Button::selectable(current == shape, text)).on_disabled_hover_text(why).clicked() {
                 actions.push(Action::Arrange(index, shape));
             }
         };
-        choice(ui, Shape::Photo, tr("Single photo").into(), count == 1);
-        choice(ui, Shape::Gallery, tr("Gallery").into(), count >= 2);
+        choice(ui, Shape::Photo, tr("Single photo").into(), count == 1, tr("For a block with one photo"));
+        choice(ui, Shape::Gallery, tr("Gallery").into(), count >= 2, tr("For a block with two photos or more"));
         ui.separator();
         for (columns, rows) in GRID_LAYOUTS {
             let text = format!("{}  ·  {}", trf("Grid {} × {}", &[&columns, &rows]), trf("{} photos", &[&(columns * rows)]));
-            choice(ui, Shape::Grid(columns, rows), text, true);
+            choice(ui, Shape::Grid(columns, rows), text, true, "");
         }
     });
     combo.response.on_hover_text(tr("How this block's photos are laid out. Drag a photo onto another to put them together."));

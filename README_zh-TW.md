@@ -151,11 +151,12 @@ Picasso 會搜尋 `PATH`、應用程式資料夾、常見的 WinGet 與 Homebrew
 ```sh
 picasso ~/Pictures ~/Photos
 picasso --version
-picasso geotag track.gpx ~/Pictures/Trip --offset +01:00 --dry-run
+picasso geotag day1.gpx day2.gpx ~/Pictures/Trip --offset +01:00 --dry-run
+picasso geotag --from-photos ~/Pictures/Trip --dry-run
 picasso geotag --help
 ```
 
-地理標記範例只預覽比對結果，不寫入變更。移除預覽選項後，位置會儲存到資料庫及相片旁的 `.picasso-geotags.json` 檔案。時差請設定為相機時鐘相對於 UTC 的偏移量。
+地理標記範例只預覽比對結果，不寫入變更：第一個依兩個軌跡比對，第二個依有 GPS 的相片比對。移除預覽選項後，位置會儲存到資料庫及相片旁的 `.picasso-geotags.json` 檔案。時差請設定為相機時鐘相對於 UTC 的偏移量；若換一個時差能標記更多相片，預覽會指出該時差。
 
 ## 設定與資料
 

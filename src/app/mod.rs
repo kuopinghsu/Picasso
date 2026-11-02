@@ -74,7 +74,7 @@ const SEARCH_HINT: &str =
 const SEARCH_TRIP_HINT: &str =
     "For Trips, trip:, day:, place:, and story: find photos by part of a name, is:review those whose time needs review, and is:notrip those in no Trip. While searching, the Trip's own filters wait.";
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 enum Mode {
     Browse,
     View,
@@ -317,6 +317,11 @@ pub struct PicassoApp {
     grid_cols: usize,
     thumb_size: f32,
     scroll_to: Option<i64>,
+    /// The grid's photo that last had keyboard focus, and its widget, whose
+    /// arrow keys move the selection from it rather than the focus.
+    photo_focus: Option<(egui::Id, i64)>,
+    /// Photo the keyboard focus moves to when it is next drawn.
+    focus_photo: Option<i64>,
     /// Photo at the top of the Library grid, kept in the settings at exit
     /// and scrolled to on the next start.
     library_top: Option<i64>,
@@ -644,6 +649,8 @@ impl PicassoApp {
             grid_cols: 1,
             thumb_size: 144.0,
             scroll_to: None,
+            photo_focus: None,
+            focus_photo: None,
             library_top: None,
             jump_to: None,
             scroll_hint_at: None,
@@ -1369,9 +1376,15 @@ impl PicassoApp {
             }
             return;
         }
-        if ctx.egui_wants_keyboard_input() || !matches!(self.modal, Modal::None) || self.remove_asked.is_some() {
+        if ctx.text_edit_focused() || !matches!(self.modal, Modal::None) || self.remove_asked.is_some() {
             return;
         }
+        // A control reached with Tab takes Enter and Space as a click and the
+        // arrows to move on, except a photo of the grid, whose arrows move
+        // the selection and the focus with it.
+        let focused = ctx.memory(|memory| memory.focused());
+        let on_photo = self.photo_focus.filter(|(id, _)| focused == Some(*id)).map(|(_, photo)| photo);
+        let steer = focused.is_none() || on_photo.is_some();
         let command = |key| ctx.input_mut(|input| input.consume_key(Modifiers::COMMAND, key));
         if !self.editing && command(Key::F) {
             if self.mode == Mode::View {
@@ -1463,7 +1476,7 @@ impl PicassoApp {
                 self.set_tool(editor::Tool::Transform);
             }
             let framing = self.edit.as_ref().filter(|session| session.uncropped()).map(|session| session.tool);
-            if let Some(tool) = framing.filter(|_| plain(Key::Enter)) {
+            if let Some(tool) = framing.filter(|_| steer && plain(Key::Enter)) {
                 self.set_tool(tool);
             }
         }
@@ -1478,7 +1491,7 @@ impl PicassoApp {
             }
         }
         if self.mode == Mode::Browse {
-            if plain(Key::Enter) {
+            if steer && plain(Key::Enter) {
                 if let Some(index) = self.primary_index() {
                     self.open_at(index);
                 } else if !self.photos.is_empty() {
@@ -1486,33 +1499,35 @@ impl PicassoApp {
                 }
             }
             let cols = self.grid_cols.max(1) as isize;
-            if plain(Key::ArrowLeft) {
-                self.move_selection(-1);
-            }
-            if plain(Key::ArrowRight) {
-                self.move_selection(1);
-            }
-            if plain(Key::ArrowUp) {
-                self.move_selection(-cols);
-            }
-            if plain(Key::ArrowDown) {
-                self.move_selection(cols);
+            let step = [(Key::ArrowLeft, -1), (Key::ArrowRight, 1), (Key::ArrowUp, -cols), (Key::ArrowDown, cols)]
+                .into_iter()
+                .find(|(key, _)| steer && plain(*key));
+            if let Some((_, delta)) = step {
+                if let Some(photo) = on_photo.filter(|photo| self.photos.iter().any(|shown| shown.id == *photo)) {
+                    self.selection.clear();
+                    self.selection.insert(photo);
+                    self.anchor = Some(photo);
+                }
+                self.move_selection(delta);
+                if on_photo.is_some() {
+                    self.focus_photo = self.primary_index().and_then(|index| self.photos.get(index)).map(|photo| photo.id);
+                }
             }
             if plain(Key::Delete) && !self.selection.is_empty() {
                 let ids: Vec<i64> = self.selection.iter().copied().collect();
                 self.modal = Modal::trash(ids);
             }
         } else {
-            if plain(Key::ArrowLeft) {
+            if steer && plain(Key::ArrowLeft) {
                 self.viewer_step(-1);
             }
-            if plain(Key::ArrowRight) {
+            if steer && plain(Key::ArrowRight) {
                 self.viewer_step(1);
             }
-            if plain(Key::Home) {
+            if steer && plain(Key::Home) {
                 self.viewer_step(-(self.viewer_index as isize));
             }
-            if plain(Key::End) && !self.photos.is_empty() {
+            if steer && plain(Key::End) && !self.photos.is_empty() {
                 self.viewer_step((self.photos.len() - 1 - self.viewer_index) as isize);
             }
             if plain(Key::M) {
@@ -1520,7 +1535,7 @@ impl PicassoApp {
                     view.player.toggle_mute();
                 }
             }
-            if plain(Key::Space) {
+            if steer && plain(Key::Space) {
                 if let Some(view) = self.video.as_mut().filter(|_| self.slideshow.is_none()) {
                     view.player.toggle();
                 } else if self.slideshow.is_some() {
@@ -1867,7 +1882,7 @@ impl PicassoApp {
                     self.set_nav(Nav::Album(id));
                 }
                 response.context_menu(|ui| {
-                    if ui.button(tr("Delete album")).clicked() {
+                    if ui.button(tr("Delete album")).on_hover_text(tr("Its photos stay in your library")).clicked() {
                         self.db.delete_album(id);
                         if self.nav == Nav::Album(id) {
                             self.nav = Nav::Library;

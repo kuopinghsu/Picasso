@@ -58,6 +58,15 @@ jobs:
       - name: Docs
         run: python3 scripts/check-docs.py
 
+      - name: WordPress theme and plugin
+        run: |
+          set -euo pipefail
+          for f in wordpress/voyagelight/*.php wordpress/voyagelight/inc/*.php wordpress/picasso-places/*.php wordpress/picasso-places/inc/*.php wordpress/tests/*.php; do php -l "$f"; done
+          python3 scripts/build-theme.py --check
+          php wordpress/tests/geo-test.php
+          node wordpress/tests/geo-test.js
+          php wordpress/tests/plugin-guard-test.php
+
       - name: Check
         id: check
         run: |

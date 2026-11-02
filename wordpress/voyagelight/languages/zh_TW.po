@@ -1,0 +1,918 @@
+# Traditional Chinese (Taiwan) translation of the VoyageLight theme.
+# This file is distributed under the same license as the theme.
+msgid ""
+msgstr ""
+"Project-Id-Version: VoyageLight 1.6.0\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2026-11-02 13:52+0800\n"
+"PO-Revision-Date: 2026-11-02 12:00+0800\n"
+"Last-Translator: Picasso\n"
+"Language-Team: Traditional Chinese\n"
+"Language: zh_TW\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=1; plural=0;\n"
+
+#: 404.php:5
+msgid "404 · OFF THE MAP"
+msgstr "404 · 地圖之外"
+
+#: 404.php:6
+msgid "This trail ends here."
+msgstr "這條路走到盡頭了。"
+
+#: 404.php:7
+msgid "The page you’re looking for may have moved."
+msgstr "你要找的頁面可能已經移動。"
+
+#: 404.php:8
+msgid "Return to homepage"
+msgstr "回到首頁"
+
+#: archive-vl_trip.php:5
+msgid "JOURNEY COLLECTIONS"
+msgstr "旅程彙整"
+
+#: archive-vl_trip.php:5 front-page.php:8 functions.php:495 header.php:31
+#: sidebar.php:17
+msgid "Journeys"
+msgstr "旅程"
+
+#: archive-vl_trip.php:5
+msgid ""
+"Explore full travel routes, day-by-day itineraries, maps and related stories."
+msgstr "探索完整的旅行路線、每日行程、地圖與相關遊記。"
+
+#: archive-vl_trip.php:14
+msgid "No journeys published yet."
+msgstr "尚未發布任何旅程。"
+
+#: archive.php:6
+msgid "EXPLORE THE ARCHIVE"
+msgstr "瀏覽文章彙整"
+
+#: archive.php:15
+msgid "No stories in this collection yet."
+msgstr "這個分類還沒有文章。"
+
+#: comments.php:7
+msgid "Discussion"
+msgstr "留言討論"
+
+#: footer.php:3
+msgid "Travel stories, places, and the art of seeing."
+msgstr "旅行故事、地方風景，以及觀看世界的方式。"
+
+#: footer.php:4 functions.php:35
+msgid "Footer navigation"
+msgstr "頁尾選單"
+
+#: footer.php:11
+msgid "Powered by WordPress"
+msgstr "由 WordPress 技術支援"
+
+#: front-page.php:6
+msgid "Travel Stories"
+msgstr "旅行故事"
+
+#: front-page.php:6
+msgid "People, places & memories"
+msgstr "旅途中的人文風景"
+
+#: front-page.php:7 functions.php:103 sidebar.php:3
+msgid "Destinations"
+msgstr "目的地"
+
+#: front-page.php:7
+msgid "Browse by destination"
+msgstr "依國家與城市探索"
+
+#: front-page.php:8
+msgid "Day-by-day trip journals"
+msgstr "完整旅程與每日行程"
+
+#: front-page.php:9
+msgid "Travel Map"
+msgstr "旅遊地圖"
+
+#: front-page.php:9
+msgid "Explore places on a map"
+msgstr "從地圖探索景點"
+
+#: front-page.php:10
+msgid "Food & Culture"
+msgstr "美食與文化"
+
+#: front-page.php:10
+msgid "Local flavours & culture"
+msgstr "地方風味與文化"
+
+#: front-page.php:11
+msgid "Travel Guides"
+msgstr "實用指南"
+
+#: front-page.php:11
+msgid "Plan with useful notes"
+msgstr "旅行前的實用資訊"
+
+#: front-page.php:19
+msgid "TRAVEL · EXPLORE · SHARE"
+msgstr "旅行 · 探索 · 分享"
+
+#: front-page.php:20
+msgid "The world, through our journeys"
+msgstr "旅行，讓世界更精彩"
+
+#: front-page.php:21
+msgid "Stories, places and moments worth sharing."
+msgstr "分享旅程、文化與那些難忘的風景。"
+
+#: front-page.php:23 front-page.php:82
+msgid "Explore journeys"
+msgstr "探索旅程"
+
+#: front-page.php:24
+msgid "Read travel stories"
+msgstr "閱讀旅行故事"
+
+#: front-page.php:28
+msgid "Norwegian fjords · Demo photography"
+msgstr "挪威峽灣 · 預設示範照片"
+
+#: front-page.php:33
+msgid "Explore travel sections"
+msgstr "探索旅行分類"
+
+#: front-page.php:45 single-vl_trip.php:106
+msgid "TRAVEL JOURNAL"
+msgstr "旅行手記"
+
+#: front-page.php:46
+msgid "Latest travel stories"
+msgstr "最新旅行故事"
+
+#: front-page.php:47
+msgid "Places, people, and the moments worth remembering."
+msgstr "記錄旅途中遇見的風景、人文與難忘時刻。"
+
+#: front-page.php:49
+msgid "All stories ↗"
+msgstr "所有文章 ↗"
+
+#: front-page.php:62
+msgid "Eqi Glacier: A Close Encounter with the Icefjord"
+msgstr "Eqi 冰河與冰峽灣"
+
+#: front-page.php:62
+msgid "Greenland"
+msgstr "格陵蘭"
+
+#: front-page.php:62
+msgid "Travel stories"
+msgstr "旅行故事"
+
+#: front-page.php:63
+msgid "Under the Northern Lights"
+msgstr "追尋北極光"
+
+#: front-page.php:63
+msgid "Nordic"
+msgstr "北歐"
+
+#: front-page.php:63
+msgid "Nature & Scenery"
+msgstr "自然景觀"
+
+#: front-page.php:64
+msgid "Toledo: A City of History and Light"
+msgstr "托雷多的歷史與光影"
+
+#: front-page.php:64
+msgid "Spain"
+msgstr "西班牙"
+
+#: front-page.php:64
+msgid "Culture"
+msgstr "文化"
+
+#: front-page.php:65
+msgid "Tokyo: A Walk Through Spring"
+msgstr "東京春日散步"
+
+#: front-page.php:65
+msgid "Japan"
+msgstr "日本"
+
+#: front-page.php:65
+msgid "City Walks"
+msgstr "城市漫遊"
+
+#: front-page.php:66
+msgid "A Morning in the Baltic Old Town"
+msgstr "波羅的海古城的清晨"
+
+#: front-page.php:66
+msgid "Baltic"
+msgstr "波羅的海"
+
+#: front-page.php:66
+msgid "History & Culture"
+msgstr "歷史與文化"
+
+#: front-page.php:70
+msgid "SAMPLE"
+msgstr "示範"
+
+#: front-page.php:71
+msgid "Demo illustration. Publish your own story to replace this sample."
+msgstr "示範內容。發布自己的遊記後即可取代。"
+
+#: front-page.php:81
+msgid "ONE JOURNEY · MANY STORIES"
+msgstr "一趟旅程 · 許多故事"
+
+#: front-page.php:83
+msgid ""
+"Follow each trip day by day, with stops and stories together on one map."
+msgstr "依照每日行程探索景點、地圖與相關遊記。"
+
+#: front-page.php:85
+msgid "All journeys ↗"
+msgstr "所有旅程 ↗"
+
+#: front-page.php:95
+msgid ""
+"Publish your first Journey from the WordPress dashboard to show it here."
+msgstr "請先在 WordPress 後台建立旅程，旅程卡片就會顯示在這裡。"
+
+#: front-page.php:104
+msgid "DESTINATIONS & DISCOVERY"
+msgstr "探索目的地"
+
+#: front-page.php:105
+msgid "Featured destinations"
+msgstr "精選目的地"
+
+#: front-page.php:106
+msgid ""
+"Explore stories by country and region, then see where each place is on a map."
+msgstr "依照國家與地區探索旅行故事，並從地圖了解景點的位置。"
+
+#: front-page.php:133
+msgid "PLACE & CONTEXT"
+msgstr "地圖與位置"
+
+#: front-page.php:134
+msgid "Explore the travel map"
+msgstr "探索旅遊地圖"
+
+#: front-page.php:135
+msgid "See where places are, and how they relate to nearby destinations."
+msgstr "從地圖了解各地景點與鄰近目的地的相對位置。"
+
+#: front-page.php:141 functions.php:478 functions.php:485
+msgid "Travel atlas"
+msgstr "旅遊地圖"
+
+#: front-page.php:143
+msgid "Your travel atlas starts here."
+msgstr "從這裡開始建立旅行地圖。"
+
+#: front-page.php:144
+msgid ""
+"Give published travel posts a latitude and longitude to populate this map "
+"automatically."
+msgstr "替已發布的遊記設定經緯度，即可自動顯示在地圖上。"
+
+#: front-page.php:151
+msgid "COLLECTIONS"
+msgstr "旅行精選"
+
+#: front-page.php:152
+msgid "Every place has a story."
+msgstr "每個地方都有自己的故事。"
+
+#: front-page.php:153
+msgid ""
+"Follow the route, the local culture, and the little details along the way. "
+"Build a travel journal with your own voice."
+msgstr "記錄旅途路線、在地文化與值得珍藏的細節，寫下屬於自己的旅行故事。"
+
+#: front-page.php:154
+msgid "Explore the journal ↗"
+msgstr "閱讀旅行故事 ↗"
+
+#: front-page.php:156
+msgid "Illustrated cherry blossom scene"
+msgstr "櫻花風景插圖"
+
+#: functions.php:34 header.php:22
+msgid "Primary navigation"
+msgstr "主要選單"
+
+#: functions.php:46 header.php:37
+msgid "Dark"
+msgstr "深色"
+
+#: functions.php:47
+msgid "Light"
+msgstr "淺色"
+
+#: functions.php:48 functions.php:604
+msgid "Loading map…"
+msgstr "地圖載入中…"
+
+#: functions.php:49
+msgid "Retry loading the map"
+msgstr "重試載入地圖"
+
+#: functions.php:50 functions.php:605
+msgid "Unable to load the map. Check your connection or content blockers."
+msgstr "無法載入地圖，請檢查網路連線或內容封鎖設定。"
+
+#: functions.php:51 functions.php:625
+msgid "Place"
+msgstr "地點"
+
+#: functions.php:52 functions.php:458 single-vl_trip.php:90
+msgid "Read story ↗"
+msgstr "閱讀遊記 ↗"
+
+#: functions.php:53
+msgid "All stops"
+msgstr "全部景點"
+
+#. translators: %s: day number in a journey.
+#: functions.php:55 functions.php:624 functions.php:732
+#, php-format
+msgid "Day %s"
+msgstr "第 %s 天"
+
+#: functions.php:103 single.php:51
+msgid "Destination"
+msgstr "目的地"
+
+#: functions.php:115 sidebar.php:4
+msgid "Place types"
+msgstr "景點類型"
+
+#: functions.php:115 single.php:52
+msgid "Place type"
+msgstr "景點類型"
+
+#: functions.php:131
+msgid "VoyageLight homepage"
+msgstr "VoyageLight 首頁"
+
+#: functions.php:133
+msgid "Hero headline"
+msgstr "首頁主標題"
+
+#: functions.php:134
+msgid "Hero subtitle"
+msgstr "首頁副標題"
+
+#: functions.php:141
+msgid "Hero image"
+msgstr "首頁封面照片"
+
+#: functions.php:143
+msgid "Show camera details under photos"
+msgstr "在照片下方顯示相機資訊"
+
+#: functions.php:181
+msgid "Travel journal"
+msgstr "旅行手記"
+
+#: functions.php:183 functions.php:628
+msgid "Story"
+msgstr "遊記"
+
+#: functions.php:239
+msgid "There is no location."
+msgstr "沒有填寫位置。"
+
+#: functions.php:240
+msgid ""
+"Short links can’t be read without opening them. Open the link, then copy the "
+"full address from the browser’s address bar."
+msgstr "短網址必須開啟後才能讀取。請先開啟連結，再從瀏覽器網址列複製完整網址。"
+
+#: functions.php:241
+msgid ""
+"This link has no coordinates in it. Open the place on the map, then copy the "
+"address again."
+msgstr "這個連結裡沒有座標。請在地圖上開啟該地點，再重新複製網址。"
+
+#: functions.php:242
+msgid ""
+"Out of range: latitude goes from -90 to 90 and longitude from -180 to 180."
+msgstr "超出範圍：緯度須介於 -90 到 90，經度須介於 -180 到 180。"
+
+#: functions.php:243
+msgid "This is not a location the theme can read."
+msgstr "佈景主題無法讀取這個位置。"
+
+#: functions.php:244
+msgid "The place name is missing."
+msgstr "缺少地點名稱。"
+
+#: functions.php:245
+#. translators: %d: highest day number.
+msgid "The day must be a number from 1 to %d."
+msgstr "天數必須是 1 到 %d 的數字。"
+
+#: functions.php:256 functions.php:611
+msgid "These lines couldn’t be read and are not on the map:"
+msgstr "以下各行無法讀取，不會顯示在地圖上："
+
+#. translators: 1: line number, 2: the text of the line, 3: why it couldn't be read.
+#: functions.php:259 functions.php:613
+#, php-format
+msgid "Line %1$d: “%2$s” — %3$s"
+msgstr "第 %1$d 行：「%2$s」— %3$s"
+
+#: functions.php:268 functions.php:602
+msgid "Pick on map"
+msgstr "在地圖上選取"
+
+#: functions.php:269
+msgid ""
+"The map loads Leaflet from unpkg.com and map tiles from OpenStreetMap, which "
+"see your IP address."
+msgstr ""
+"地圖會從 unpkg.com 載入 Leaflet，並從 OpenStreetMap 載入圖磚，這些服務會看到"
+"你的 IP 位址。"
+
+#: functions.php:271
+msgid "Find a place"
+msgstr "搜尋地點"
+
+#: functions.php:273 searchform.php:6
+msgid "Search"
+msgstr "搜尋"
+
+#: functions.php:274
+msgid "Search by OpenStreetMap Nominatim"
+msgstr "搜尋服務由 OpenStreetMap Nominatim 提供"
+
+#: functions.php:274
+msgid "Pressing Search sends what you typed to it."
+msgstr "按下「搜尋」會把你輸入的文字傳送給這項服務。"
+
+#: functions.php:277
+msgid "A click on the map"
+msgstr "在地圖上點一下會"
+
+#: functions.php:278
+msgid "sets the story’s location"
+msgstr "設定遊記的位置"
+
+#: functions.php:279
+msgid "adds a route stop"
+msgstr "新增停留點"
+
+#: functions.php:282
+msgid "Place name"
+msgstr "地點名稱"
+
+#: functions.php:284 functions.php:622
+msgid "Day"
+msgstr "天數"
+
+#: functions.php:286
+msgid "Add stop"
+msgstr "新增停留點"
+
+#: functions.php:287
+msgid "Cancel"
+msgstr "取消"
+
+#: functions.php:288
+msgid "Click the map to set the location or add a stop. Drag a pin to move it."
+msgstr "點選地圖可設定位置或新增停留點；拖曳圖釘可移動位置。"
+
+#: functions.php:288
+msgid "Click the map to add a stop. Drag a pin to move it."
+msgstr "點選地圖可新增停留點；拖曳圖釘可移動位置。"
+
+#: functions.php:293
+msgid "VoyageLight · Geotag & Travel Map"
+msgstr "VoyageLight · 地理標記與旅遊地圖"
+
+#: functions.php:306 functions.php:626
+msgid "Location"
+msgstr "位置"
+
+#: functions.php:306
+msgid ""
+"Paste coordinates or a map link, such as 39.8628, -4.0273 or 39°51′46″N "
+"4°01′38″W. Links from Google Maps, Apple Maps and OpenStreetMap and geo: "
+"addresses work too. Leave it empty for no location."
+msgstr ""
+"貼上座標或地圖連結，例如 39.8628, -4.0273 或 39°51′46″N 4°01′38″W。也可以使"
+"用 Google 地圖、Apple 地圖、OpenStreetMap 的連結和 geo: 位址。留空表示不設定"
+"位置。"
+
+#. translators: 1: the location as typed, 2: why it couldn't be read.
+#: functions.php:311 functions.php:617
+#, php-format
+msgid "The location “%1$s” couldn’t be read: %2$s The saved location was kept."
+msgstr "無法讀取位置「%1$s」：%2$s 已保留原本儲存的位置。"
+
+#. translators: %s: latitude and longitude, such as 39.86280, -4.02730.
+#: functions.php:316 functions.php:609
+#, php-format
+msgid "Reads as %s"
+msgstr "讀取為 %s"
+
+#: functions.php:318 functions.php:607
+msgid "No location set."
+msgstr "尚未設定位置。"
+
+#: functions.php:322
+msgid ""
+"Short links such as maps.app.goo.gl can’t be read here: open the link, then "
+"copy the full address from the browser’s address bar."
+msgstr ""
+"這裡無法讀取 maps.app.goo.gl 之類的短網址：請先開啟連結，再從瀏覽器網址列複製"
+"完整網址。"
+
+#: functions.php:323
+msgid "Route stops"
+msgstr "停留點"
+
+#: functions.php:323
+msgid ""
+"One stop per line: Place name | location | short note. The location takes "
+"the same forms as above."
+msgstr "每行一個停留點：地點名稱 | 位置 | 簡短備註。位置的寫法與上方相同。"
+
+#: functions.php:324
+msgid "Starting point"
+msgstr "出發點"
+
+#: functions.php:326
+msgid ""
+"The map shows the stops in this order, joined by a straight line that is not "
+"a road or walking route. Publish only coordinates you are comfortable "
+"sharing. Empty coordinates mean no location."
+msgstr ""
+"地圖依此順序顯示停留點，並以直線連接；這條線不是道路或步行路線。請只公開願意"
+"分享的座標。座標留空表示沒有位置。"
+
+#: functions.php:462
+msgid "GEOGRAPHIC CONTEXT"
+msgstr "地理位置"
+
+#: functions.php:464
+msgid ""
+"See where the places are in relation to each other, and select a pin to read "
+"its note. Lines show the order of stops, not the actual route."
+msgstr ""
+"查看各地點的相對位置，點選圖釘即可閱讀備註。連線只表示停留順序，不代表實際路"
+"線。"
+
+#. translators: %d: number of places on the map.
+#: functions.php:467
+#, php-format
+msgid "Interactive map · %d place"
+msgid_plural "Interactive map · %d places"
+msgstr[0] "互動地圖 · %d 個地點"
+
+#: functions.php:468 single-vl_trip.php:57
+msgid "Load map"
+msgstr "載入地圖"
+
+#: functions.php:469
+msgid ""
+"Uses OpenStreetMap tiles and Leaflet from external services. Loading shares "
+"your IP address with them."
+msgstr ""
+"使用外部服務提供的 OpenStreetMap 圖資與 Leaflet。載入後，你的 IP 位址會傳送給"
+"這些服務。"
+
+#: functions.php:478 single.php:47
+msgid "Places in this story"
+msgstr "這篇遊記的地點"
+
+#: functions.php:496 functions.php:761
+msgid "Journey"
+msgstr "旅程"
+
+#: functions.php:497
+msgid "Add Journey"
+msgstr "新增旅程"
+
+#: functions.php:498
+msgid "Edit Journey"
+msgstr "編輯旅程"
+
+#: functions.php:528
+msgid "Journey itinerary & GeoTags"
+msgstr "旅程行程與地理標記"
+
+#: functions.php:529
+msgid "Related journey"
+msgstr "所屬旅程"
+
+#: functions.php:536
+msgid "One place per line:"
+msgstr "每行一個地點："
+
+#: functions.php:536
+msgid "Day | Place | location | short note | optional post ID"
+msgstr "天數 | 地點 | 位置 | 簡短備註 | 選填文章 ID"
+
+#: functions.php:536
+msgid ""
+"The location can be coordinates or a map link, as in a story’s Location "
+"field."
+msgstr "位置可以是座標或地圖連結，寫法與遊記的「位置」欄位相同。"
+
+#: functions.php:536
+msgid "The map uses these coordinates, not the photos’ EXIF."
+msgstr "地圖使用這裡輸入的座標，不讀取照片的 EXIF。"
+
+#: functions.php:538
+msgid "Arrive and explore"
+msgstr "抵達並四處走走"
+
+#: functions.php:540
+msgid ""
+"Day numbers set the order of the itinerary. Locations are shown to everyone. "
+"Dashed lines show the order of stops, not a route to follow. A post ID links "
+"a stop to a published story."
+msgstr ""
+"天數決定行程順序。位置所有訪客都看得到。虛線只表示停留順序，不是可依循的路"
+"線。填入文章 ID 可將停留點連結到已發布的遊記。"
+
+#: functions.php:603
+msgid "Hide map"
+msgstr "隱藏地圖"
+
+#: functions.php:606
+msgid "Story location"
+msgstr "遊記位置"
+
+#. translators: 1: most lines the box keeps, 2: most characters it keeps.
+#: functions.php:615
+#, php-format
+msgid ""
+"This box keeps at most %1$d lines and %2$d characters; the rest is not saved."
+msgstr "這個欄位最多保留 %1$d 行、%2$d 個字元，超出的部分不會儲存。"
+
+#: functions.php:618
+msgid "Saved. Some places couldn’t be read and are not on the map."
+msgstr "已儲存。部分地點無法讀取，不會顯示在地圖上。"
+
+#: functions.php:619
+msgid "Searching…"
+msgstr "搜尋中…"
+
+#: functions.php:620
+msgid "No places found."
+msgstr "找不到符合的地點。"
+
+#: functions.php:621
+msgid "The search failed. Check your connection and try again."
+msgstr "搜尋失敗，請檢查網路連線後再試一次。"
+
+#: functions.php:627
+msgid "Note"
+msgstr "備註"
+
+#: functions.php:629
+msgid "— No story —"
+msgstr "— 無遊記 —"
+
+#: functions.php:630
+msgid "Linked to this journey"
+msgstr "屬於這趟旅程"
+
+#: functions.php:631
+msgid "Other stories"
+msgstr "其他遊記"
+
+#: functions.php:632
+msgid "Order"
+msgstr "順序"
+
+#: functions.php:633
+msgid "Move up"
+msgstr "上移"
+
+#: functions.php:634
+msgid "Move down"
+msgstr "下移"
+
+#: functions.php:635
+msgid "Remove"
+msgstr "移除"
+
+#: functions.php:636
+msgid "Add row"
+msgstr "新增一列"
+
+#: functions.php:637
+msgid "Add stops from linked stories"
+msgstr "從所屬遊記加入停留點"
+
+#. translators: %d: number of rows added.
+#: functions.php:639
+#, php-format
+msgid "Rows added from linked stories: %d"
+msgstr "已從所屬遊記加入 %d 列"
+
+#: functions.php:640
+msgid "No linked story with a location is missing from the table."
+msgstr "有位置的所屬遊記都已在表格中。"
+
+#: functions.php:641
+msgid "Edit as text"
+msgstr "以文字編輯"
+
+#: functions.php:642
+msgid "Edit as rows"
+msgstr "以表格編輯"
+
+#: functions.php:680
+msgid "This story belongs to:"
+msgstr "這篇遊記屬於："
+
+#: functions.php:681
+msgid "— No journey —"
+msgstr "— 不屬於任何旅程 —"
+
+#: functions.php:685
+msgid "Published stories appear on their journey’s page."
+msgstr "已發布的遊記會顯示在所屬旅程的頁面上。"
+
+#. translators: %d: number of stops in a journey.
+#: functions.php:763
+#, php-format
+msgid "%d stop"
+msgid_plural "%d stops"
+msgstr[0] "%d 個停留點"
+
+#: header.php:14
+msgid "Skip to content"
+msgstr "跳至主要內容"
+
+#: header.php:21
+msgid "Toggle navigation"
+msgstr "切換選單"
+
+#: header.php:29
+msgid "Home"
+msgstr "首頁"
+
+#: header.php:30
+msgid "Stories"
+msgstr "旅行故事"
+
+#: header.php:37
+msgid "Toggle light or dark theme"
+msgstr "切換深色或淺色模式"
+
+#: index.php:3
+msgid "All stories"
+msgstr "所有文章"
+
+#: index.php:7
+msgid "JOURNAL"
+msgstr "旅行手記"
+
+#: index.php:16
+msgid "No stories published yet."
+msgstr "尚未發布任何文章。"
+
+#. translators: %s: the words searched for.
+#: search.php:6
+#, php-format
+msgid "Search results for: %s"
+msgstr "「%s」的搜尋結果"
+
+#: search.php:15
+msgid "No results found."
+msgstr "找不到符合的結果。"
+
+#: searchform.php:3
+msgid "Search the journal"
+msgstr "搜尋旅行手記"
+
+#: searchform.php:5
+msgid "Search stories, places…"
+msgstr "搜尋遊記、地點…"
+
+#: sidebar.php:2
+msgid "Travel categories"
+msgstr "旅行分類"
+
+#: single-vl_trip.php:19
+msgid "JOURNEY"
+msgstr "旅程專頁"
+
+#. translators: %d: number of days in a journey.
+#: single-vl_trip.php:26
+#, php-format
+msgid "%d day"
+msgid_plural "%d days"
+msgstr[0] "%d 天"
+
+#. translators: %d: number of places in a journey.
+#: single-vl_trip.php:28
+#, php-format
+msgid "%d place"
+msgid_plural "%d places"
+msgstr[0] "%d 個景點"
+
+#. translators: %d: number of stories linked to a journey.
+#: single-vl_trip.php:30
+#, php-format
+msgid "%d story"
+msgid_plural "%d stories"
+msgstr[0] "%d 篇遊記"
+
+#: single-vl_trip.php:42
+msgid "JOURNEY MAP"
+msgstr "旅程地圖"
+
+#: single-vl_trip.php:43
+msgid "Daily Stops & Map"
+msgstr "每日路線與景點"
+
+#: single-vl_trip.php:44
+msgid ""
+"See where each day’s stops are in relation to each other. Dashed lines show "
+"the order of visits, not a route to follow."
+msgstr "查看各日景點的相對位置。虛線僅表示停留順序，不代表實際交通路線。"
+
+#: single-vl_trip.php:47
+msgid "Select journey day"
+msgstr "選擇旅程日期"
+
+#: single-vl_trip.php:51
+msgid "All Days"
+msgstr "全部天數"
+
+#: single-vl_trip.php:54
+msgid "Journey map"
+msgstr "旅程地圖"
+
+#: single-vl_trip.php:56
+msgid "Interactive journey map"
+msgstr "互動旅程地圖"
+
+#: single-vl_trip.php:58
+msgid "Loading connects to the Leaflet CDN and OpenStreetMap tile services."
+msgstr "載入後會連線至 Leaflet CDN 與 OpenStreetMap 圖資服務。"
+
+#: single-vl_trip.php:69
+msgid "DAY BY DAY"
+msgstr "每日行程"
+
+#: single-vl_trip.php:70
+msgid "Itinerary"
+msgstr "行程"
+
+#: single-vl_trip.php:71
+msgid "Stops and notes in order. Select a linked story to read more."
+msgstr "依順序顯示停留地點與備註，點選連結即可閱讀詳細遊記。"
+
+#: single-vl_trip.php:98
+msgid ""
+"No itinerary stops yet. Add Day | Place | location in the Journey editor."
+msgstr "尚無行程景點，請在旅程編輯器輸入天數、地點與位置。"
+
+#: single-vl_trip.php:107
+msgid "Stories from this journey"
+msgstr "這趟旅程的旅行故事"
+
+#: single-vl_trip.php:118
+msgid "No linked travel stories yet. Choose this journey in a story’s editor."
+msgstr "尚無相關遊記，請在文章編輯器中指定所屬旅程。"
+
+#. translators: 1: author name, 2: minutes to read.
+#: single.php:18
+#, php-format
+msgid "By %1$s · %2$d min read"
+msgid_plural "By %1$s · %2$d min read"
+msgstr[0] "%1$s · 閱讀約 %2$d 分鐘"
+
+#: single.php:45
+msgid "PART OF A JOURNEY"
+msgstr "所屬旅程"
+
+#: single.php:53
+msgid "Tags"
+msgstr "標籤"
+
+#: single.php:71
+msgid "← Previous story"
+msgstr "← 上一篇"
+
+#: single.php:72
+msgid "Next story →"
+msgstr "下一篇 →"

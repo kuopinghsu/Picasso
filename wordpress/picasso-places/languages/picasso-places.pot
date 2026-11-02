@@ -1,0 +1,409 @@
+# This file is distributed under the same license as the Picasso Places plugin.
+msgid ""
+msgstr ""
+"Project-Id-Version: Picasso Places 1.0.0\n"
+"Report-Msgid-Bugs-To: \n"
+"Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
+"Language-Team: LANGUAGE <LL@li.org>\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"POT-Creation-Date: 2026-11-02T07:02:18+00:00\n"
+"PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
+"X-Generator: WP-CLI 2.12.0\n"
+"X-Domain: picasso-places\n"
+
+#. Plugin Name of the plugin
+#: picasso-places.php
+msgid "Picasso Places"
+msgstr ""
+
+#. Description of the plugin
+#: picasso-places.php
+msgid "Locations, route stops, maps and Journeys for travel stories, with any theme, including the fields Picasso publishes. It does nothing while the VoyageLight theme is active, which has them built in."
+msgstr ""
+
+#. Author of the plugin
+#: picasso-places.php
+msgid "Picasso"
+msgstr ""
+
+#: inc/editor.php:18
+msgid "There is no location."
+msgstr ""
+
+#: inc/editor.php:19
+msgid "Short links can’t be read without opening them. Open the link, then copy the full address from the browser’s address bar."
+msgstr ""
+
+#: inc/editor.php:20
+msgid "This link has no coordinates in it. Open the place on the map, then copy the address again."
+msgstr ""
+
+#: inc/editor.php:21
+msgid "Out of range: latitude goes from -90 to 90 and longitude from -180 to 180."
+msgstr ""
+
+#: inc/editor.php:22
+msgid "This is not a location that can be read."
+msgstr ""
+
+#: inc/editor.php:23
+msgid "The place name is missing."
+msgstr ""
+
+#: inc/editor.php:24
+#. translators: %d: highest day number.
+msgid "The day must be a number from 1 to %d."
+msgstr ""
+
+#: inc/editor.php:35
+#: inc/editor.php:262
+msgid "These lines couldn’t be read and are not on the map:"
+msgstr ""
+
+#. translators: 1: line number, 2: the text of the line, 3: why it couldn't be read.
+#: inc/editor.php:38
+#: inc/editor.php:264
+#, php-format
+msgid "Line %1$d: “%2$s” — %3$s"
+msgstr ""
+
+#: inc/editor.php:47
+#: inc/editor.php:253
+msgid "Pick on map"
+msgstr ""
+
+#: inc/editor.php:48
+msgid "The map loads Leaflet from unpkg.com and map tiles from OpenStreetMap, which see your IP address."
+msgstr ""
+
+#: inc/editor.php:50
+msgid "Find a place"
+msgstr ""
+
+#: inc/editor.php:52
+msgid "Search"
+msgstr ""
+
+#: inc/editor.php:53
+msgid "Search by OpenStreetMap Nominatim"
+msgstr ""
+
+#: inc/editor.php:53
+msgid "Pressing Search sends what you typed to it."
+msgstr ""
+
+#: inc/editor.php:56
+msgid "A click on the map"
+msgstr ""
+
+#: inc/editor.php:57
+msgid "sets the story’s location"
+msgstr ""
+
+#: inc/editor.php:58
+msgid "adds a route stop"
+msgstr ""
+
+#: inc/editor.php:61
+msgid "Place name"
+msgstr ""
+
+#: inc/editor.php:63
+#: inc/editor.php:273
+msgid "Day"
+msgstr ""
+
+#: inc/editor.php:65
+msgid "Add stop"
+msgstr ""
+
+#: inc/editor.php:66
+msgid "Cancel"
+msgstr ""
+
+#: inc/editor.php:67
+msgid "Click the map to set the location or add a stop. Drag a pin to move it."
+msgstr ""
+
+#: inc/editor.php:67
+msgid "Click the map to add a stop. Drag a pin to move it."
+msgstr ""
+
+#: inc/editor.php:72
+msgid "Geotag & Travel Map"
+msgstr ""
+
+#: inc/editor.php:73
+msgid "Journey itinerary & GeoTags"
+msgstr ""
+
+#: inc/editor.php:74
+msgid "Related journey"
+msgstr ""
+
+#: inc/editor.php:86
+#: inc/editor.php:277
+msgid "Location"
+msgstr ""
+
+#: inc/editor.php:86
+msgid "Paste coordinates or a map link, such as 39.8628, -4.0273 or 39°51′46″N 4°01′38″W. Links from Google Maps, Apple Maps and OpenStreetMap and geo: addresses work too. Leave it empty for no location."
+msgstr ""
+
+#. translators: 1: the location as typed, 2: why it couldn't be read.
+#: inc/editor.php:90
+#: inc/editor.php:268
+#, php-format
+msgid "The location “%1$s” couldn’t be read: %2$s The saved location was kept."
+msgstr ""
+
+#. translators: %s: latitude and longitude, such as 39.86280, -4.02730.
+#: inc/editor.php:95
+#: inc/editor.php:260
+#, php-format
+msgid "Reads as %s"
+msgstr ""
+
+#: inc/editor.php:97
+#: inc/editor.php:258
+msgid "No location set."
+msgstr ""
+
+#: inc/editor.php:101
+msgid "Short links such as maps.app.goo.gl can’t be read here: open the link, then copy the full address from the browser’s address bar."
+msgstr ""
+
+#: inc/editor.php:102
+msgid "Route stops"
+msgstr ""
+
+#: inc/editor.php:102
+msgid "One stop per line: Place name | location | short note. The location takes the same forms as above."
+msgstr ""
+
+#: inc/editor.php:103
+msgid "Starting point"
+msgstr ""
+
+#: inc/editor.php:105
+msgid "The map shows the stops in this order, joined by a straight line that is not a road or walking route. Publish only coordinates you are comfortable sharing. Empty coordinates mean no location."
+msgstr ""
+
+#: inc/editor.php:146
+msgid "One place per line:"
+msgstr ""
+
+#: inc/editor.php:146
+msgid "Day | Place | location | short note | optional post ID"
+msgstr ""
+
+#: inc/editor.php:146
+msgid "The location can be coordinates or a map link, as in a story’s Location field."
+msgstr ""
+
+#: inc/editor.php:146
+msgid "The map uses these coordinates, not the photos’ EXIF."
+msgstr ""
+
+#: inc/editor.php:148
+msgid "Arrive and explore"
+msgstr ""
+
+#: inc/editor.php:150
+msgid "Day numbers set the order of the itinerary. Locations are shown to everyone. Dashed lines show the order of stops, not a route to follow. A post ID links a stop to a published story."
+msgstr ""
+
+#: inc/editor.php:179
+msgid "This story belongs to:"
+msgstr ""
+
+#: inc/editor.php:180
+msgid "— No journey —"
+msgstr ""
+
+#: inc/editor.php:184
+msgid "Published stories appear on their journey’s page."
+msgstr ""
+
+#: inc/editor.php:254
+msgid "Hide map"
+msgstr ""
+
+#: inc/editor.php:255
+#: inc/front.php:19
+msgid "Loading map…"
+msgstr ""
+
+#: inc/editor.php:256
+#: inc/front.php:21
+msgid "Unable to load the map. Check your connection or content blockers."
+msgstr ""
+
+#: inc/editor.php:257
+msgid "Story location"
+msgstr ""
+
+#. translators: 1: most lines the box keeps, 2: most characters it keeps.
+#: inc/editor.php:266
+#, php-format
+msgid "This box keeps at most %1$d lines and %2$d characters; the rest is not saved."
+msgstr ""
+
+#: inc/editor.php:269
+msgid "Saved. Some places couldn’t be read and are not on the map."
+msgstr ""
+
+#: inc/editor.php:270
+msgid "Searching…"
+msgstr ""
+
+#: inc/editor.php:271
+msgid "No places found."
+msgstr ""
+
+#: inc/editor.php:272
+msgid "The search failed. Check your connection and try again."
+msgstr ""
+
+#. translators: %s: day number in a journey.
+#: inc/editor.php:275
+#: inc/places.php:170
+#, php-format
+msgid "Day %s"
+msgstr ""
+
+#: inc/editor.php:276
+#: inc/front.php:22
+msgid "Place"
+msgstr ""
+
+#: inc/editor.php:278
+msgid "Note"
+msgstr ""
+
+#: inc/editor.php:279
+msgid "Story"
+msgstr ""
+
+#: inc/editor.php:280
+msgid "— No story —"
+msgstr ""
+
+#: inc/editor.php:281
+msgid "Linked to this journey"
+msgstr ""
+
+#: inc/editor.php:282
+msgid "Other stories"
+msgstr ""
+
+#: inc/editor.php:283
+msgid "Order"
+msgstr ""
+
+#: inc/editor.php:284
+msgid "Move up"
+msgstr ""
+
+#: inc/editor.php:285
+msgid "Move down"
+msgstr ""
+
+#: inc/editor.php:286
+msgid "Remove"
+msgstr ""
+
+#: inc/editor.php:287
+msgid "Add row"
+msgstr ""
+
+#: inc/editor.php:288
+msgid "Add stops from linked stories"
+msgstr ""
+
+#. translators: %d: number of rows added.
+#: inc/editor.php:290
+#, php-format
+msgid "Rows added from linked stories: %d"
+msgstr ""
+
+#: inc/editor.php:291
+msgid "No linked story with a location is missing from the table."
+msgstr ""
+
+#: inc/editor.php:292
+msgid "Edit as text"
+msgstr ""
+
+#: inc/editor.php:293
+msgid "Edit as rows"
+msgstr ""
+
+#: inc/front.php:20
+msgid "Retry loading the map"
+msgstr ""
+
+#: inc/front.php:23
+#: inc/front.php:71
+msgid "Read story ↗"
+msgstr ""
+
+#: inc/front.php:60
+msgid "Load map"
+msgstr ""
+
+#: inc/front.php:61
+msgid "Uses OpenStreetMap tiles and Leaflet from external services. Loading shares your IP address with them."
+msgstr ""
+
+#: inc/front.php:83
+msgid "Places in this story"
+msgstr ""
+
+#. translators: %d: number of places on the map.
+#: inc/front.php:85
+#, php-format
+msgid "Interactive map · %d place"
+msgid_plural "Interactive map · %d places"
+msgstr[0] ""
+msgstr[1] ""
+
+#: inc/front.php:106
+msgid "Journey map"
+msgstr ""
+
+#: inc/front.php:107
+msgid "Interactive journey map"
+msgstr ""
+
+#: inc/front.php:108
+msgid "Itinerary"
+msgstr ""
+
+#: inc/front.php:125
+msgid "Stories from this journey"
+msgstr ""
+
+#. translators: %s: the journey's name, linked to its page.
+#: inc/front.php:142
+#, php-format
+msgid "Part of the journey %s"
+msgstr ""
+
+#: inc/places.php:121
+msgid "Journeys"
+msgstr ""
+
+#: inc/places.php:122
+msgid "Journey"
+msgstr ""
+
+#: inc/places.php:123
+msgid "Add Journey"
+msgstr ""
+
+#: inc/places.php:124
+msgid "Edit Journey"
+msgstr ""

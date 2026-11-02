@@ -516,9 +516,15 @@ Edits you haven't saved are kept a few seconds after each change, so if Picasso 
 If you carried a GPS logger or a phone app while shooting, Picasso can place your photos by matching their times to the track:
 
 . Right-click the folder in the folder tree and choose *Geotag from GPS track…*.
-. Choose the *GPS track* file (`.gpx`, `.kml`, or `.kmz`) and check the *Folder*.
-. Set the *Camera time zone*: the offset of the camera's clock from UTC, such as `+01:00`.
+In a Trip, click *Geotag photos…* beside its *Tracks* instead: the Trip's photos and tracks are already chosen.
+. Under *Places from*, keep *GPS tracks* and tick the tracks to use.
+The tracks beside the folder are listed; *Add tracks…* adds more `.gpx`, `.kml`, or `.kmz` files, such as one per day.
+Or choose *Photos that have GPS*: photos from a phone, say, mark where you were, and the others take places between them.
+. Check the *Folder*, and set the *Camera time zone*: the offset of the camera's clock from UTC, such as `+01:00`.
 Cameras usually keep local time without a time zone.
+. Click *Check* to see how many photos would get a place, and each photo's match under *Each photo*, without saving anything.
+When another time zone would place clearly more of them, Picasso names it; click *Use* to take it and check again.
+Photos that record their own time zone are not offered another unless you type a different one, and then the one they record comes first.
 . Click *Geotag*.
 
 Photos that already have GPS from the camera, or a pin you placed, keep their location.
@@ -527,12 +533,14 @@ Picasso writes the places to its library and to a `.picasso-geotags.json` file i
 The track must contain timestamps, and the photo times must overlap the track recording.
 If the camera recorded no time zone and you leave the offset blank, Picasso uses this computer’s time zone.
 For photos taken elsewhere, enter the offset used by the camera at the time of the trip.
+With *Photos that have GPS*, Picasso uses those among the photos and any others in the library taken within a day of them, each at the time zone it records.
 
-The same works from a terminal, and `--dry-run` shows what would happen without saving anything:
+The same works from a terminal, and `--dry-run` shows what would happen without saving anything.
+Give several tracks before the folder, or `--from-photos` instead of a track:
 
 [source,bash]
 ----
-picasso geotag track.gpx ~/Pictures/Trip --offset +01:00 --dry-run
+picasso geotag day1.gpx day2.gpx ~/Pictures/Trip --offset +01:00 --dry-run
 ----
 
 Remove `--dry-run` only after reviewing the matches.
@@ -689,7 +697,15 @@ The password is kept in the system's credential store, never in the library or i
 Choose the *Photo size* (*Standard web* or *Low resolution*), whether to *Keep camera details*, *Categories and tags*, and *By Day* to make an index post and one post per Day.
 The *Summary* lists what will change on the site before anything is sent.
 The post becomes public only with *Publish it once saved*, or *At a set time*, after a confirmation of what readers will see.
-Locations are never sent, and Picasso never takes a post down; do that in WordPress.
+Photos never carry where they were taken, and Picasso never takes a post down; do that in WordPress.
+
+Under *Places*, *Show places on the post's map* shows the Trip's Places where the Story's photos were taken.
+A site with the VoyageLight theme or the Picasso Places plugin, both in Picasso's `wordpress` folder, shows them on its own map; with any other theme, they go at the end of the post as a map picture with numbered pins and a list linked to OpenStreetMap, and the dialog says so.
+It is off until you tick it; untick a Place to leave it out, and choose *Exact* or *About 1 km*.
+Each Day post shows its Day's Places, and the confirmation names them before the post goes public.
+Ticking it off again takes them off the post on the next save.
+*Link to the trip's Journey* makes a Journey page for the Trip, as a draft the first time, and links the post to it; with places shown, the Journey lists where each Day went.
+Journeys need the VoyageLight theme or the Picasso Places plugin; on another site the option is turned off and the dialog says why.
 
 Saving again updates the same draft.
 A post edited on the site since is not replaced unless you choose so, and an interrupted job resumes without uploading the same photos twice.
@@ -829,6 +845,8 @@ Press kbd:[F1] or kbd:[?] to see every shortcut and mouse gesture in Picasso.
 |===
 | Key | Action
 
+| kbd:[Tab] / kbd:[Shift+Tab] | Move to the next or previous control
+| kbd:[Enter] / kbd:[Space] | Use the control the keyboard is on
 | kbd:[Enter] | Open the selected photo
 | kbd:[Esc] | Close the editor, go back, or leave the slideshow
 | Arrow keys | Move the selection, or go to the previous or next photo
@@ -859,6 +877,9 @@ Press kbd:[F1] or kbd:[?] to see every shortcut and mouse gesture in Picasso.
 | kbd:[F5] | Rescan
 | kbd:[F11] | Full screen
 |===
+
+On a photo reached with kbd:[Tab], the arrow keys move the selection and the keyboard with it, and kbd:[Enter] opens the photo.
+The shortcuts work wherever the keyboard is, except while you type in a text field.
 
 == Troubleshooting
 

@@ -192,7 +192,9 @@ pub(crate) fn named_pipe(path: &Path) {
 
 #[cfg(test)]
 mod tests {
+    use super::super::{Modal, Mode};
     use super::*;
+    use crate::i18n::tr;
     use crate::worker::UiEvent;
     use egui::accesskit::{Action, Node, Role, TreeUpdate};
 
@@ -232,8 +234,34 @@ mod tests {
         found
     }
 
+    fn key(key: egui::Key, modifiers: Modifiers) -> Event {
+        Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers }
+    }
+
     fn tab() -> Event {
-        Event::Key { key: egui::Key::Tab, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE }
+        key(egui::Key::Tab, Modifiers::NONE)
+    }
+
+    /// Presses `pressed` and draws the frame after, which shows what it did.
+    fn press(window: &mut Headless, pressed: egui::Key, modifiers: Modifiers) {
+        window.draw(vec![key(pressed, modifiers)]);
+        window.draw(Vec::new());
+    }
+
+    /// What the control with keyboard focus is called.
+    fn focused(window: &Headless) -> Option<String> {
+        let update = window.access.as_ref()?;
+        let (_, node) = update.nodes.iter().find(|(id, _)| *id == update.focus)?;
+        name(node).map(str::to_owned)
+    }
+
+    /// Presses Tab until the focus is on a control called `wanted`, at
+    /// most `presses` times; whether it got there.
+    fn tab_to(window: &mut Headless, presses: usize, wanted: impl Fn(&str) -> bool) -> bool {
+        (0..presses).any(|_| {
+            press(window, egui::Key::Tab, Modifiers::NONE);
+            focused(window).is_some_and(|name| wanted(&name))
+        })
     }
 
     /// What the control Tab moves to on each of `presses` presses is called,
@@ -328,6 +356,34 @@ mod tests {
         db.suggest_days(trip).unwrap();
         let days: Vec<i64> = db.trip_days(trip).iter().map(|day| day.id).collect();
         let (story, _) = db.create_story_from_days(trip, long, &days, |date| date.to_string()).unwrap();
+        // Two Places, a track beside the photos linked to the Trip, and a site whose posts show the Places.
+        db.set_pins(&ids[..6], 42.88, -8.54);
+        db.set_pins(&ids[6..], 41.38, 2.17);
+        db.suggest_places(trip, 300.0, 3 * 3600).unwrap();
+        let photo = &window.app.photos[0];
+        let gpx = Path::new(&photo.path).with_file_name("camino.gpx");
+        std::fs::write(&gpx, r#"<gpx><trk><name>Camino</name><trkseg><trkpt lat="42.88" lon="-8.54"><time>2025-07-01T08:00:00Z</time></trkpt><trkpt lat="42.9" lon="-8.5"><time>2025-07-01T09:00:00Z</time></trkpt></trkseg></trk></gpx>"#).unwrap();
+        let gpx_path = gpx.to_string_lossy().into_owned();
+        db.store_track(photo.folder_id, &gpx_path, 1, 0, &crate::track::Track::read(&gpx).unwrap()).unwrap();
+        let track = db.tracks().into_iter().find(|(.., path, _)| *path == gpx_path).unwrap().0;
+        db.link_trip_track(trip, track, None).unwrap();
+        let folder = Path::new(&photo.path).parent().unwrap().to_string_lossy().into_owned();
+        let site = crate::db::Site {
+            label: "Travel blog".into(),
+            site_url: "https://example.com".into(),
+            api_root: "https://example.com/wp-json/".into(),
+            user: "ana".into(),
+            secret_ref: "wordpress ana@https://example.com".into(),
+            account: "Ana".into(),
+            can_upload: true,
+            can_edit: true,
+            can_publish: true,
+            checked_at: Some(100),
+            ..crate::db::Site::default()
+        };
+        let site = db.save_site(&site).unwrap();
+        let shown = crate::db::PlaceChoice { places: true, rough: true, left_out: Vec::new(), journey: true };
+        db.save_place_choice(story, site, &shown).unwrap();
         window.app.library_dirty = true;
         window.app.selection.extend(ids.iter().take(2));
         window.ctx.enable_accesskit();
@@ -335,11 +391,24 @@ mod tests {
         // Each screen as it is now, with what was found on it.
         let walk = |window: &mut Headless, how: &str| {
             let mut found = Vec::new();
-            for screen in ["the library", "the Trips page", "a Trip", "a Story"] {
+            let screens = ["the library", "the Trips page", "a Trip", "a Story", "Geotag", "a Trip's Geotag", "Publish to WordPress"];
+            for screen in screens {
                 match screen {
                     "the library" => window.app.set_nav(Nav::Library),
                     "the Trips page" => window.app.set_nav(Nav::Trips),
                     "a Trip" => window.app.set_nav(Nav::Trip(trip)),
+                    "Geotag" => {
+                        window.app.set_nav(Nav::Library);
+                        window.app.open_geotag(&folder);
+                    }
+                    "a Trip's Geotag" => {
+                        window.app.set_nav(Nav::Trip(trip));
+                        window.app.open_trip_geotag(trip);
+                    }
+                    "Publish to WordPress" => {
+                        window.app.open_story(story);
+                        window.app.ask_publish_story();
+                    }
                     _ => {
                         window.app.open_story(story);
                     }
@@ -350,7 +419,24 @@ mod tests {
                 }
                 let tree = window.access.as_ref().expect("the tree");
                 found.extend(problems(tree, window.size.x).into_iter().map(|problem| format!("{screen}, {how}: {problem}")));
-                if screen == "a Story" {
+                if screens[4..].contains(&screen) {
+                    let opened = match &window.app.modal {
+                        Modal::Geotag(_) => "Geotag",
+                        Modal::PublishStory(_) => "Publish",
+                        _ => "nothing",
+                    };
+                    assert!(screen.contains(opened), "{screen}, {how}: {opened} open");
+                    let wanted = match screen {
+                        "Publish to WordPress" => [tr("Show places on the post's map"), tr("About 1 km"), tr("Link to the trip's Journey")],
+                        _ => [tr("Photos that have GPS"), tr("Add tracks…"), tr("Check")],
+                    };
+                    for wanted in wanted.iter().chain([&"camino.gpx"].into_iter().filter(|_| screen != "Publish to WordPress")) {
+                        let drawn = tree.nodes.iter().any(|(_, node)| name(node).is_some_and(|name| name.contains(wanted)));
+                        assert!(drawn, "{screen}, {how}: {wanted} is not drawn");
+                    }
+                    window.app.modal = Modal::None;
+                }
+                if matches!(screen, "a Story" | "Publish to WordPress") {
                     let _ = window.app.close_story();
                 }
             }
@@ -399,6 +485,242 @@ mod tests {
         for name in ["Search photos", "Settings", "Thumbnail size", "Library", "pics, 12", "Sort by Date", "IMG_000.jpg"] {
             assert!(reached.iter().any(|reached| reached == name), "Tab never reached {name}: {reached:?}");
         }
+    }
+
+    #[test]
+    fn the_library_a_trip_and_a_story_work_from_the_keyboard_alone() {
+        use crate::trip::{MemberQuery, TripDraft};
+        use egui::Key;
+        let (_scratch, mut window) = library("keys", 6);
+        let db = &window.app.db;
+        let trip = db.create_trip(&TripDraft::new("Coast", "Europe/Madrid")).unwrap();
+        let ids: Vec<i64> = window.app.photos.iter().map(|photo| photo.id).collect();
+        db.add_to_trip(trip, &ids).unwrap();
+        let day = db.add_trip_day(trip, None, "Arrival").unwrap();
+        db.create_story(trip, "Coast story").unwrap();
+        window.app.library_dirty = true;
+        window.ctx.enable_accesskit();
+        window.draw_until("the library", Duration::from_secs(10), |app| app.layout.is_some());
+        let file = |window: &Headless, index: usize| window.app.photos[index].filename.clone();
+
+        // With nothing focused the arrows choose a photo, S stars it, Enter
+        // opens it and Escape goes back; Delete asks before trashing.
+        press(&mut window, Key::ArrowRight, Modifiers::NONE);
+        assert_eq!(window.app.selection.len(), 1);
+        let chosen = window.app.primary_index().unwrap();
+        press(&mut window, Key::S, Modifiers::NONE);
+        assert!(window.app.photos[chosen].starred);
+        press(&mut window, Key::Enter, Modifiers::NONE);
+        assert_eq!((window.app.mode, window.app.viewer_index), (Mode::View, chosen));
+        press(&mut window, Key::ArrowRight, Modifiers::NONE);
+        assert_eq!(window.app.viewer_index, chosen + 1);
+        press(&mut window, Key::Escape, Modifiers::NONE);
+        assert_eq!(window.app.mode, Mode::Browse);
+        press(&mut window, Key::Delete, Modifiers::NONE);
+        assert!(matches!(window.app.modal, Modal::Trash { .. }));
+        press(&mut window, Key::Escape, Modifiers::NONE);
+        assert!(matches!(window.app.modal, Modal::None));
+        assert_eq!(window.app.photos.len(), 6, "nothing trashed");
+
+        // A photo reached with Tab: the arrows move the selection and the
+        // focus together, and the shortcuts still work.
+        let first = file(&window, 0);
+        assert!(tab_to(&mut window, 40, |name| name == first), "Tab reaches the first photo");
+        press(&mut window, Key::ArrowRight, Modifiers::NONE);
+        assert_eq!(window.app.primary_index(), Some(1));
+        assert_eq!(focused(&window), Some(file(&window, 1)), "the focus follows");
+        press(&mut window, Key::ArrowLeft, Modifiers::NONE);
+        assert_eq!(focused(&window), Some(file(&window, 0)));
+        press(&mut window, Key::ArrowRight, Modifiers::NONE);
+        assert_eq!(focused(&window), Some(file(&window, 1)));
+        let starred = window.app.photos[1].starred;
+        press(&mut window, Key::S, Modifiers::NONE);
+        assert_ne!(window.app.photos[1].starred, starred);
+        press(&mut window, Key::Enter, Modifiers::NONE);
+        assert_eq!((window.app.mode, window.app.viewer_index), (Mode::View, 1), "Enter opens the focused photo");
+        press(&mut window, Key::Escape, Modifiers::NONE);
+
+        // A button reached with Tab takes Enter, and F1 still opens Help.
+        assert!(tab_to(&mut window, 40, |name| name.starts_with(tr("All trips"))), "Tab reaches All trips");
+        press(&mut window, Key::F1, Modifiers::NONE);
+        assert!(matches!(window.app.modal, Modal::Help));
+        press(&mut window, Key::Escape, Modifiers::NONE);
+        assert!(matches!(window.app.modal, Modal::None));
+        assert!(tab_to(&mut window, 40, |name| name.starts_with(tr("All trips"))));
+        press(&mut window, Key::Enter, Modifiers::NONE);
+        assert_eq!(window.app.nav, Nav::Trips);
+        assert!(tab_to(&mut window, 40, |name| name == "Coast"), "Tab reaches the Trip's card");
+        press(&mut window, Key::Enter, Modifiers::NONE);
+        assert_eq!(window.app.nav, Nav::Trip(trip));
+
+        // In the Trip, Space chooses the focused photo, Alt+1 puts it in the
+        // first Day, and the Story opens and closes from its buttons.
+        window.draw_until("the Trip's photos", Duration::from_secs(10), |app| app.photos.len() == 6);
+        let first = file(&window, 0);
+        assert!(tab_to(&mut window, 60, |name| name == first), "Tab reaches the Trip's first photo");
+        press(&mut window, Key::Space, Modifiers::NONE);
+        assert_eq!(window.app.primary_index(), Some(0));
+        press(&mut window, Key::Num1, Modifiers::ALT);
+        let members = window.app.db.trip_members(trip, &MemberQuery::default(), 0, usize::MAX);
+        let photo = window.app.photos[0].id;
+        assert_eq!(members.iter().find(|member| member.photo_id == Some(photo)).and_then(|member| member.day_id), Some(day));
+        let open = crate::i18n::trf("Continue “{}”", &[&"Coast story"]);
+        assert!(tab_to(&mut window, 80, |name| name == open), "Tab reaches the Story");
+        press(&mut window, Key::Enter, Modifiers::NONE);
+        assert!(window.app.story_shown());
+        assert!(tab_to(&mut window, 40, |name| name.ends_with("Coast")), "Tab reaches the way back");
+        press(&mut window, Key::Enter, Modifiers::NONE);
+        assert!(!window.app.story_shown());
+    }
+
+    #[test]
+    fn a_selection_becomes_a_trip_its_photos_go_into_days_and_the_editor_gives_back_where_you_were() {
+        use crate::trip::{DayFilter, MemberQuery};
+        use egui::Key;
+        use std::collections::HashSet;
+        let (_scratch, mut window) = library("flows", 8);
+        window.ctx.enable_accesskit();
+        window.draw_until("the library", Duration::from_secs(10), |app| app.layout.is_some());
+
+        // Three photos, a click and a Shift-click, then Add to Trip ▸ New trip…
+        window.app.select_click(0, Modifiers::NONE);
+        window.app.select_click(2, Modifiers::SHIFT);
+        let chosen = window.app.selection_in_order();
+        assert_eq!(chosen.len(), 3);
+        window.app.add_photos_to_trip(None, chosen.clone());
+        window.draw(Vec::new());
+        window.draw(vec![Event::Text("Coast".into())]);
+        press(&mut window, Key::Tab, Modifiers::NONE);
+        window.draw(vec![Event::Text("+02:00".into())]);
+        assert!(tab_to(&mut window, 20, |name| name == tr("Create")), "Tab reaches Create");
+        press(&mut window, Key::Enter, Modifiers::NONE);
+        let Nav::Trip(trip) = window.app.nav else { panic!("the new Trip opens, not {:?}", window.app.nav) };
+        assert_eq!(window.app.db.trip(trip).map(|trip| (trip.title, trip.zone)), Some(("Coast".into(), "+02:00".into())));
+        window.draw_until("the Trip's photos", Duration::from_secs(10), |app| app.photos.len() == 3);
+        let ids: Vec<i64> = window.app.photos.iter().map(|photo| photo.id).collect();
+        assert_eq!(ids.iter().copied().collect::<HashSet<_>>(), chosen.iter().copied().collect(), "exactly the photos chosen");
+
+        // All three into the first Day at once, one of them into the second, and back.
+        let arrival = window.app.db.add_trip_day(trip, None, "Arrival").unwrap();
+        let coast = window.app.db.add_trip_day(trip, None, "Coast").unwrap();
+        window.app.reload();
+        window.draw(Vec::new());
+        let day_of = |window: &Headless, photo: i64| {
+            let members = window.app.db.trip_members(trip, &MemberQuery::default(), 0, usize::MAX);
+            members.iter().find(|member| member.photo_id == Some(photo)).and_then(|member| member.day_id)
+        };
+        press(&mut window, Key::A, Modifiers::COMMAND);
+        press(&mut window, Key::Num1, Modifiers::ALT);
+        assert!(ids.iter().all(|id| day_of(&window, *id) == Some(arrival)));
+        window.app.select_click(1, Modifiers::NONE);
+        press(&mut window, Key::Num2, Modifiers::ALT);
+        assert_eq!(day_of(&window, ids[1]), Some(coast));
+        press(&mut window, Key::Z, Modifiers::COMMAND);
+        assert_eq!(day_of(&window, ids[1]), Some(arrival), "undone");
+
+        // Showing the first Day, into the editor with one photo and out again:
+        // the same Trip, Day, selection and photo in view.
+        window.app.trip_filter.day = DayFilter::Day(arrival);
+        window.app.reload();
+        window.draw(Vec::new());
+        window.app.select_click(1, Modifiers::NONE);
+        let photo = window.app.photos[1].id;
+        press(&mut window, Key::E, Modifiers::NONE);
+        assert!(window.app.editing && window.app.mode == Mode::View);
+        press(&mut window, Key::Escape, Modifiers::NONE);
+        press(&mut window, Key::Escape, Modifiers::NONE);
+        assert_eq!((window.app.mode, window.app.nav.clone(), window.app.trip_filter.day), (Mode::Browse, Nav::Trip(trip), DayFilter::Day(arrival)));
+        assert_eq!(window.app.selection.iter().copied().collect::<Vec<_>>(), [photo]);
+
+        // To the Library and back: the Trip still shows the first Day.
+        window.app.set_nav(Nav::Library);
+        window.draw(Vec::new());
+        window.app.set_nav(Nav::Trip(trip));
+        assert_eq!(window.app.trip_filter.day, DayFilter::Day(arrival));
+    }
+
+    #[test]
+    fn a_trip_its_days_and_a_story_export_whole_after_a_restart_a_missing_photo_and_a_restore() {
+        use crate::story_html::{self, Format, Preflight, Profile, Progress};
+        use crate::trip::{Block, DaySource, TripDraft};
+        let (scratch, mut window) = library("offline", 4);
+        let pics = scratch.dir.join("pics");
+        let mut ids: Vec<i64> = window.app.photos.iter().map(|photo| photo.id).collect();
+        ids.sort_unstable();
+
+        // A Trip of the four photos over two Days, a Story from the Days, every photo described.
+        let db = &window.app.db;
+        let trip = db.create_trip(&TripDraft::new("Coast", "+02:00")).unwrap();
+        let members = db.add_to_trip(trip, &ids).unwrap();
+        let arrival = db.add_trip_day(trip, None, "Arrival").unwrap();
+        let harbor = db.add_trip_day(trip, None, "Harbor").unwrap();
+        db.move_to_day(trip, Some(arrival), &members[..1], DaySource::User).unwrap();
+        db.move_to_day(trip, Some(harbor), &members[1..], DaySource::User).unwrap();
+        let (story, _) = db.create_story_from_days(trip, "Coast story", &[arrival, harbor], |day| day.to_string()).unwrap();
+        let mut blocks = db.story_blocks(story);
+        for block in &mut blocks {
+            if let Block::Photo(media) = &mut block.block {
+                media.alt = "Sea".into();
+            }
+        }
+        db.save_story_blocks(story, db.story(story).unwrap().revision, &blocks).unwrap();
+
+        // What the Export button does once the Story is open, without opening the folder afterwards.
+        let out = scratch.dir.join("out");
+        std::fs::create_dir_all(&out).unwrap();
+        let export = |window: &mut Headless, skip_missing: bool| -> (Preflight, String, usize) {
+            window.app.reload();
+            window.app.set_nav(Nav::Trip(trip));
+            window.app.open_story(story);
+            let mut job = window.app.story_job().expect("the Story opens");
+            let check = story_html::preflight(&job.page());
+            assert_eq!(check.blocked(skip_missing), check.missing > 0 && !skip_missing);
+            job.read_profiles();
+            let (folder, outcome) = story_html::export_story(&out, "Coast story", Format::Html, Profile::default(), &job.page(), &Progress::default()).unwrap();
+            assert!(window.app.close_story());
+            (check, std::fs::read_to_string(folder.join("index.html")).unwrap(), outcome.missing)
+        };
+        let shown = |html: &str| html.matches("alt=\"Sea\"").count();
+        let (check, html, missing) = export(&mut window, false);
+        assert_eq!((check.missing, check.no_alt, missing, shown(&html)), (0, 0, 0, 4));
+        let (arrival_at, harbor_at) = (html.find("Arrival").unwrap(), html.find("Harbor").unwrap());
+        assert!(arrival_at < harbor_at, "the Days in their order");
+
+        // Picasso is quit and started again: the same Story exports the same way.
+        drop(window);
+        let mut window = scratch.open();
+        window.app.watcher = None;
+        window.settle(4, Duration::from_secs(60));
+        assert_eq!(window.app.db.story_blocks(story), blocks);
+        let (_, again, _) = export(&mut window, false);
+        assert_eq!(shown(&again), 4);
+
+        // A photo's file goes missing: it is named, waits for the user, and is shown as unavailable.
+        let gone = pics.join("IMG_003.jpg");
+        let bytes = std::fs::read(&gone).unwrap();
+        std::fs::remove_file(&gone).unwrap();
+        let (check, html, missing) = export(&mut window, true);
+        assert_eq!((check.missing, missing, shown(&html)), (1, 1, 3));
+        assert!(html.contains("Photo unavailable"));
+        std::fs::write(&gone, &bytes).unwrap();
+        let (check, html, _) = export(&mut window, false);
+        assert_eq!((check.missing, shown(&html)), (0, 4), "whole again once the file is back");
+
+        // A backup restored into an empty library brings back the Trip, its Days and the Story.
+        let backup = crate::backup::create(&scratch.data).unwrap();
+        drop(window);
+        let (restored, fresh) = Scratch::new(std::env::temp_dir().join(format!("picasso-headless-offline-restored-{}", std::process::id())));
+        drop(fresh);
+        crate::backup::stage_restore(&restored.data, &backup).unwrap();
+        let mut window = restored.open();
+        window.app.watcher = None;
+        window.settle(4, Duration::from_secs(60));
+        let days: Vec<String> = window.app.db.trip_days(trip).into_iter().map(|day| day.title).collect();
+        assert_eq!(days, ["Arrival", "Harbor"]);
+        assert_eq!(window.app.db.story_blocks(story), blocks);
+        let (check, restored_html, _) = export(&mut window, false);
+        assert_eq!((check.missing, shown(&restored_html)), (0, 4));
+        assert!(restored_html.find("Arrival") < restored_html.find("Harbor"));
     }
 
     /// Opens the named pipe at `path` for writing and closes it, so a reader

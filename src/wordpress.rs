@@ -249,7 +249,7 @@ impl Failure {
 /// One request to the site.
 #[derive(Clone, Debug)]
 pub struct Request<'b> {
-    /// "GET" or "POST": WordPress takes changes as POST.
+    /// "GET", "OPTIONS" or "POST": WordPress takes changes as POST.
     pub method: &'static str,
     pub url: SiteUrl,
     /// The Authorization header, sent only to the origin it was made for.
@@ -353,7 +353,7 @@ impl<'a> Client<'a> {
     /// do. A write whose answer was lost is never sent again here; the
     /// caller looks for what it made instead.
     fn send(&self, request: &Request) -> Result<Reply, Failure> {
-        let read = request.method == "GET";
+        let read = request.method != "POST";
         let mut tries = 1;
         loop {
             let result = self.http.send(request);
@@ -385,12 +385,18 @@ impl<'a> Client<'a> {
     /// GET `url`, following redirects within its origin. `auth` goes only
     /// to that origin; any redirect away from it is refused.
     fn get(&self, url: &SiteUrl, auth: Option<&Credentials>) -> Result<(SiteUrl, Reply), Failure> {
+        self.read("GET", url, auth)
+    }
+
+    /// [`Client::get`] with another method that changes nothing, such as
+    /// "OPTIONS".
+    fn read(&self, method: &'static str, url: &SiteUrl, auth: Option<&Credentials>) -> Result<(SiteUrl, Reply), Failure> {
         self.policy.check(url)?;
         let origin = url.origin();
         let header = auth.map(Credentials::header);
         let mut url = url.clone();
         for _ in 0..=MAX_REDIRECTS {
-            let request = Request { method: "GET", url: url.clone(), auth: header.clone(), headers: Vec::new(), body: None };
+            let request = Request { method, url: url.clone(), auth: header.clone(), headers: Vec::new(), body: None };
             let reply = self.send(&request)?;
             if !matches!(reply.status, 301 | 302 | 303 | 307 | 308) {
                 return Ok((url, reply));
@@ -629,8 +635,11 @@ impl Client<'_> {
     /// post keeps the ones it has on the site otherwise. Returns the post as
     /// the site keeps it.
     pub fn save_draft(&self, api: &Api, credentials: &Credentials, id: Option<i64>, post: &DraftPost) -> Result<PostSaved, Failure> {
-        let DraftPost { title, excerpt, content, featured, categories, tags, publish, schedule } = post;
+        let DraftPost { title, excerpt, content, featured, categories, tags, publish, schedule, date, meta } = post;
         let mut body = serde_json::json!({ "title": title, "excerpt": excerpt, "content": content, "featured_media": featured.unwrap_or(0) });
+        if let Some(meta) = meta {
+            body["meta"] = meta.clone();
+        }
         if let Some(categories) = categories {
             body["categories"] = Value::from(categories.clone());
         }
@@ -651,7 +660,13 @@ impl Client<'_> {
                 body["status"] = Value::from("future");
                 body["date"] = Value::from(at.format("%Y-%m-%dT%H:%M:00").to_string());
             }
-            (true, None) => body["status"] = Value::from("publish"),
+            (true, None) => {
+                body["status"] = Value::from("publish");
+                // A future date already on the post would put it back to scheduled.
+                if let Some(at) = date {
+                    body["date"] = Value::from(at.format("%Y-%m-%dT%H:%M:00").to_string());
+                }
+            }
             _ => {}
         }
         let url = api.route(&route, "");
@@ -661,7 +676,32 @@ impl Client<'_> {
         let post = reply.json().ok_or(Failure::BadReply)?;
         let id = post.get("id").and_then(Value::as_i64).ok_or(Failure::BadReply)?;
         let status = post.get("status").and_then(Value::as_str).unwrap_or_default().to_string();
-        Ok(PostSaved { id, fingerprint: fingerprint(&post), status })
+        // A site keeps only the fields its theme or plugins registered, and leaves the rest out of its answer.
+        let meta_kept = meta.as_ref().and_then(Value::as_object).is_none_or(|sent| {
+            let kept = post.get("meta").and_then(Value::as_object);
+            sent.keys().all(|key| kept.is_some_and(|kept| kept.contains_key(key)))
+        });
+        Ok(PostSaved { id, fingerprint: fingerprint(&post), status, meta_kept })
+    }
+
+    /// An item of another type, such as `/wp/v2/vl_trip/12`, as it is to
+    /// edit; `None` when the site has no such item.
+    pub fn read_item(&self, api: &Api, credentials: &Credentials, route: &str) -> Result<Option<Value>, Failure> {
+        let (_, reply) = self.get(&api.route(route, "context=edit"), Some(credentials))?;
+        if reply.status == 404 || reply.status == 410 {
+            return Ok(None);
+        }
+        checked(&reply)?;
+        reply.json().map(Some).ok_or(Failure::BadReply)
+    }
+
+    /// Makes or changes an item of another type, such as a Journey at
+    /// `/wp/v2/vl_trip`, and returns it as the site has it now.
+    pub fn write_item(&self, api: &Api, credentials: &Credentials, route: &str, body: &Value) -> Result<Value, Failure> {
+        let bytes = serde_json::to_vec(body).map_err(|_| Failure::BadReply)?;
+        let reply = self.post(&api.route(route, ""), credentials, vec![("Content-Type", "application/json".to_string())], &bytes)?;
+        checked(&reply)?;
+        reply.json().ok_or(Failure::BadReply)
     }
 
     /// The time now on the site's clock, in its time zone, read from the
@@ -680,6 +720,27 @@ impl Client<'_> {
         let sent = reply.header("date").next().and_then(|date| chrono::DateTime::parse_from_rfc2822(date).ok()).map_or_else(chrono::Utc::now, |date| date.with_timezone(&chrono::Utc));
         Ok(sent.naive_utc() + chrono::Duration::minutes((hours * 60.0).round() as i64))
     }
+
+    /// What the site keeps of a trip, read from the fields its posts take,
+    /// which anyone may read: the VoyageLight theme and the Picasso Places
+    /// plugin add them.
+    pub fn travel_support(&self, api: &Api) -> Result<TravelSupport, Failure> {
+        let (_, reply) = self.read("OPTIONS", &api.route("/wp/v2/posts", ""), None)?;
+        checked(&reply)?;
+        let schema = reply.json().ok_or(Failure::BadReply)?;
+        let meta = schema.pointer("/schema/properties/meta/properties").and_then(Value::as_object);
+        let has = |key: &str| meta.is_some_and(|meta| meta.contains_key(key));
+        Ok(TravelSupport { places: has("_vl_lat") && has("_vl_lon"), journeys: has("_vl_trip_id") })
+    }
+}
+
+/// What a site keeps of a trip besides its posts.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TravelSupport {
+    /// A post's Places, for the map its theme draws.
+    pub places: bool,
+    /// Journeys, which list a trip's posts and Places by Day.
+    pub journeys: bool,
 }
 
 /// A post as the site has it.
@@ -699,6 +760,8 @@ pub struct PostSaved {
     pub fingerprint: String,
     /// As the site gave it, such as "draft" or "future".
     pub status: String,
+    /// The site kept every field of [`DraftPost::meta`] sent.
+    pub meta_kept: bool,
 }
 
 /// What a post is saved with.
@@ -717,6 +780,12 @@ pub struct DraftPost {
     pub publish: bool,
     /// With `publish`, when it goes public instead, in the site's own time.
     pub schedule: Option<chrono::NaiveDateTime>,
+    /// With `publish` and no `schedule`, a site-local time that replaces a
+    /// future date. WordPress keeps that date and leaves the post scheduled.
+    pub date: Option<chrono::NaiveDateTime>,
+    /// Fields a theme or plugin registered, such as the VoyageLight
+    /// theme's `_vl_lat`; a field set to null is taken off. `None` sends none.
+    pub meta: Option<Value>,
 }
 
 /// The two kinds of term a post is filed under.
@@ -954,8 +1023,9 @@ impl Http for Network {
                 }
                 call.send(body.unwrap_or_default())
             }
-            _ => {
-                let mut call = self.agent.get(&url).header("Accept", "application/json");
+            (method, _) => {
+                let call = if method == "OPTIONS" { self.agent.options(&url) } else { self.agent.get(&url) };
+                let mut call = call.header("Accept", "application/json");
                 if let Some(auth) = &request.auth {
                     call = call.header("Authorization", auth);
                 }
@@ -1329,6 +1399,26 @@ pub(crate) mod tests {
             let expected = if offset == "5.5" { "2026-11-01 13:30" } else { "2026-11-01 05:00" };
             assert_eq!(now.format("%Y-%m-%d %H:%M").to_string(), expected);
         }
+    }
+
+    #[test]
+    fn what_a_site_keeps_of_a_trip_is_read_from_the_fields_its_posts_take() {
+        let api = local_api();
+        let posts = "https://example.com/blog/wp-json/wp/v2/posts";
+        let schema = |keys: &str| format!(r#"{{"schema":{{"properties":{{"meta":{{"properties":{{{keys}}}}}}}}}}}"#);
+        let support = |fake: &Fake| Client::new(fake, Policy::default()).travel_support(&api);
+        let travel = schema(r#""_vl_lat":{},"_vl_lon":{},"_vl_stops":{},"_vl_trip_id":{},"footnotes":{}"#);
+        let fake = Fake::default().answer_to("OPTIONS", posts, 200, &[], &travel);
+        assert_eq!(support(&fake), Ok(TravelSupport { places: true, journeys: true }));
+        assert_eq!(fake.asked.borrow()[0].1, None, "read without the password");
+        let fake = Fake::default().answer_to("OPTIONS", posts, 200, &[], &schema(r#""footnotes":{}"#));
+        assert_eq!(support(&fake), Ok(TravelSupport::default()));
+        let fake = Fake::default().answer_to("OPTIONS", posts, 200, &[], r#"{"schema":{"properties":{}}}"#);
+        assert_eq!(support(&fake), Ok(TravelSupport::default()));
+        // A read: tried again when the site falters.
+        let fake = Fake::default().answer_to("OPTIONS", posts, 503, &[], "");
+        assert_eq!(support(&fake), Err(Failure::Status(503)));
+        assert_eq!(fake.asked.borrow().len(), MAX_TRIES as usize);
     }
 
     #[test]

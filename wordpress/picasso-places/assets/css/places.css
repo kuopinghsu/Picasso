@@ -1,0 +1,22 @@
+/* Picasso Places after a post's content. Fonts and colours come from the theme; greys are translucent so they suit light and dark themes alike.
+   .picasso-places and .picasso-places-map are left alone: Picasso puts them on the map picture it adds to posts for sites without this plugin. */
+.picasso-places-section { margin-block: 2.5em; overflow-wrap: anywhere; }
+.picasso-places-section > h2 { margin-block: 1.5em .6em; }
+.picasso-places-frame { position: relative; z-index: 0; display: flex; flex-direction: column; justify-content: center; box-sizing: border-box; width: 100%; max-width: 100%; height: min(26rem, 70vh); min-height: 16rem; overflow: hidden; border: 1px solid rgba(128, 128, 128, .35); border-radius: 6px; background: rgba(128, 128, 128, .08); }
+.picasso-places-frame .vl-map-canvas { flex: 1; width: 100%; }
+.picasso-places-placeholder { display: flex; flex-direction: column; align-items: center; gap: .8em; padding: 1em; text-align: center; }
+.picasso-places-placeholder p { margin: 0; font-weight: 600; }
+.picasso-places-placeholder small { max-width: 32em; opacity: .8; }
+.picasso-places-load { cursor: pointer; font: inherit; }
+.picasso-places-load:disabled { cursor: progress; opacity: .7; }
+.picasso-places-frame .vl-map-error { margin: 0 1em 1em; text-align: center; }
+.picasso-places-frame .leaflet-container img { margin: 0; border-radius: 0; box-shadow: none; }
+.picasso-places-frame .leaflet-popup-content { color: #1d2327; font-family: inherit; }
+.picasso-places-frame .leaflet-popup-content a { color: #135e96; }
+.picasso-places-stops { margin-block: .8em 0; padding-inline-start: 1.6em; }
+.picasso-places-stops li + li { margin-top: .4em; }
+.picasso-places-day h3 { margin-block: 1.2em .3em; }
+.picasso-places-stories { padding-inline-start: 1.2em; }
+.picasso-places-journey-link { margin-block: 2em; padding-block: .6em; border-block: 1px solid rgba(128, 128, 128, .35); }
+.picasso-places-camera { display: block; margin-top: .15em; font-size: .8em; letter-spacing: .02em; opacity: .75; }
+.picasso-credits { margin-top: 2.5em; padding-top: .8em; border-top: 1px solid rgba(128, 128, 128, .35); font-size: .85em; line-height: 1.6; opacity: .8; }

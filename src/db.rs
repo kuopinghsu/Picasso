@@ -1,7 +1,7 @@
 //! SQLite catalog. The UI and the background indexer each open their own connection.
 
 mod sites;
-pub use sites::{PostTerms, Publication, PublishJob, Site};
+pub use sites::{PlaceChoice, PostTerms, Publication, PublishJob, Site};
 mod trips;
 
 use std::collections::{HashMap, HashSet};
@@ -1156,6 +1156,17 @@ impl Database {
                 self.map_rows(&sql, [], read_photo)
             }
         }
+    }
+
+    /// Photos with GPS from the camera taken from `first` to `last`, as
+    /// [`Photo::taken_at`] counts time, oldest first.
+    pub fn gps_photos_between(&self, first: i64, last: i64) -> Vec<Photo> {
+        let sql = format!(
+            "SELECT {PHOTO_COLS} FROM photos p
+             WHERE p.taken_at BETWEEN ?1 AND ?2 AND p.gps_lat IS NOT NULL AND p.gps_lon IS NOT NULL
+             ORDER BY p.taken_at"
+        );
+        self.map_rows(&sql, params![first, last], read_photo)
     }
 
     /// Id and path of every photo, newest first.

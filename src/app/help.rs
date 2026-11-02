@@ -21,6 +21,8 @@ const KEYBOARD: &[Section] = &[
             (&["F1", "?"], "Open or close help"),
             (&["Ctrl+,"], "Open settings"),
             (&["Esc"], "Close a dialog or go back"),
+            (&["Tab", "Shift+Tab"], "Move to the next or previous control"),
+            (&["Enter", "Space"], "Use the control the keyboard is on"),
             (&["F5"], "Rescan folders"),
             (&["F11"], "Fullscreen"),
             (&["Ctrl+F"], "Search photos"),
@@ -305,4 +307,23 @@ fn keycap(ui: &mut egui::Ui, text: &str) {
         .corner_radius(4)
         .inner_margin(Margin::symmetric(6, 2))
         .show(ui, |ui| ui.label(RichText::new(text).font(font).color(color)));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_heading_and_action_is_translated() {
+        // Shown through a variable, so the scan of `tr` calls in the source can't see them.
+        // Japanese, where no word stays as it is in English.
+        crate::i18n::set_for_thread(Some(crate::i18n::Lang::Japanese));
+        let mut missing = Vec::new();
+        for (heading, rows) in KEYBOARD.iter().chain(MOUSE) {
+            let texts = std::iter::once(*heading).chain(rows.iter().map(|(_, action)| *action));
+            missing.extend(texts.filter(|text| tr(text) == *text));
+        }
+        crate::i18n::set_for_thread(None);
+        assert!(missing.is_empty(), "{missing:?}");
+    }
 }

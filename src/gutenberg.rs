@@ -165,6 +165,38 @@ pub fn post(story: &Story, blocks: &[StoryBlock], media: &dyn Fn(i64) -> Option<
     Ok(Post { title: story.title.trim().to_string(), excerpt: story.subtitle.trim().to_string(), content: out.trim_end().to_string(), featured })
 }
 
+/// The places of a post, for a theme without a map of its own: under
+/// `heading`, the map picture with their numbered pins when there is one,
+/// then each place by its number, linked to it on OpenStreetMap.
+pub fn places(heading: &str, alt: &str, places: &[&crate::publish::MapPlace], map: Option<&RouteMap>) -> String {
+    if places.is_empty() {
+        return String::new();
+    }
+    let mut out = String::from("<!-- wp:group {\"className\":\"picasso-places\",\"layout\":{\"type\":\"constrained\"}} -->\n<div class=\"wp-block-group picasso-places\">");
+    let _ = write!(out, "<!-- wp:heading -->\n<h2 class=\"wp-block-heading\">{}</h2>\n<!-- /wp:heading -->\n\n", esc(heading));
+    if let Some(map) = map {
+        let attrs: Value = json!({ "id": map.uploaded.id, "sizeSlug": "large", "linkDestination": "none", "className": "picasso-places-map" });
+        let _ = write!(
+            out,
+            "<!-- wp:image {attrs} -->\n<figure class=\"wp-block-image size-large picasso-places-map\"><img src=\"{}\" alt=\"{}\" class=\"wp-image-{}\"/><figcaption class=\"wp-element-caption\"><small class=\"credit\">{}</small></figcaption></figure>\n<!-- /wp:image -->\n\n",
+            esc(&map.uploaded.url),
+            esc(alt),
+            map.uploaded.id,
+            esc(map.credit)
+        );
+    }
+    let items: Vec<String> = places
+        .iter()
+        .map(|place| {
+            let link = format!("https://www.openstreetmap.org/?mlat={0:.5}&mlon={1:.5}#map=15/{0:.5}/{1:.5}", place.lat, place.lon);
+            format!("<!-- wp:list-item -->\n<li><a href=\"{}\">{}</a></li>\n<!-- /wp:list-item -->", esc(&link), esc(place.name.trim()))
+        })
+        .collect();
+    let _ = write!(out, "<!-- wp:list {{\"ordered\":true}} -->\n<ol class=\"wp-block-list\">{}</ol>\n<!-- /wp:list -->", items.join("\n\n"));
+    out.push_str("</div>\n<!-- /wp:group -->");
+    out
+}
+
 /// Each part between blank lines as its own paragraph block, its lines
 /// kept with line breaks.
 fn paragraphs(out: &mut String, text: &str, class: Option<&str>) {

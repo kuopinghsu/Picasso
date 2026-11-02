@@ -9,13 +9,13 @@ use std::sync::Arc;
 use crossbeam_channel::Receiver;
 use eframe::egui::{self, Margin, RichText};
 
-use crate::db::{PostTerms, Publication, Site};
+use crate::db::{PlaceChoice, PostTerms, Publication, Site};
 use crate::i18n::{tr, trf};
-use crate::publish::{self, Event, Finished, Job, Stopped, SyncState};
+use crate::publish::{self, Event, Finished, Job, Journey, MapPlace, MapPlaces, Stopped, SyncState};
 use crate::story_html::{self, Preflight};
 use crate::types::{format_bytes, unix_now};
 use crate::upload::UploadSize;
-use crate::wordpress::{edit_link, Api, Client, Credentials, Failure, Network, Policy, SiteUrl, Taxonomy, Term};
+use crate::wordpress::{edit_link, Api, Client, Credentials, Failure, Network, Policy, SiteUrl, Taxonomy, Term, TravelSupport};
 use crate::worker::UiEvent;
 
 use super::publishing::failure_text;
@@ -70,6 +70,16 @@ pub(super) struct PublishDialog {
     excerpt: bool,
     cover: bool,
     error: String,
+    /// The Trip's Places the Story's photos were taken at, as (id, name), in the Trip's order.
+    story_places: Vec<(i64, String)>,
+    /// What the posts show of where it went, as chosen for the site.
+    places: PlaceChoice,
+    /// The Trip's title, for its Journey.
+    trip_title: String,
+    /// What the chosen site keeps of a trip, once read; read again for
+    /// another site.
+    travel: Option<TravelSupport>,
+    travel_reading: Option<Receiver<Result<TravelSupport, Failure>>>,
 }
 
 /// The site's own categories and tags, read when the person asks.
@@ -141,7 +151,50 @@ impl PicassoApp {
             transparent: job.sources.values().flatten().filter(|(path, ..)| crate::upload::has_transparency(path)).count(),
             routes: job.blocks.iter().filter(|block| matches!(block.block, crate::trip::Block::Route { .. })).count(),
             error: String::new(),
+            story_places: self.story_places(job.story.trip_id, job.sources.keys().copied()).into_iter().map(|(id, place)| (id, place.name)).collect(),
+            places: PlaceChoice::default(),
+            trip_title: self.db.trip(job.story.trip_id).map(|trip| trip.title).unwrap_or_default(),
+            travel: None,
+            travel_reading: None,
         });
+    }
+
+    /// The Trip's Places the photos `media` were taken at, by id, in the
+    /// Trip's order, each first visited on the Day it gives.
+    fn story_places(&self, trip_id: i64, media: impl Iterator<Item = i64>) -> Vec<(i64, MapPlace)> {
+        let media: std::collections::HashSet<i64> = media.collect();
+        let at: Vec<(i64, i64, i64)> = self.db.member_places(trip_id).into_iter().filter(|(media_id, ..)| media.contains(media_id)).collect();
+        let mut found = Vec::new();
+        for (index, place) in self.db.trip_places(trip_id).into_iter().enumerate() {
+            let days = at.iter().filter(|(_, place_id, _)| *place_id == place.id).map(|(.., day)| *day);
+            let Some(day) = days.clone().filter(|day| *day > 0).min().or_else(|| days.clone().next()) else { continue };
+            let name = super::trips::place_name(&place, index);
+            found.push((place.id, MapPlace { name, lat: place.lat, lon: place.lon, day }));
+        }
+        found
+    }
+
+    /// The Story's Places as its posts show them: the ones chosen, to about
+    /// a kilometre when asked.
+    fn map_places(&self, trip_id: i64, media: &[i64], choice: &PlaceChoice) -> MapPlaces {
+        let round = |degrees: f64| if choice.rough { (degrees * 100.0).round() / 100.0 } else { (degrees * 1e6).round() / 1e6 };
+        let mut places = MapPlaces::default();
+        let mut index_of = std::collections::HashMap::new();
+        for (id, place) in self.story_places(trip_id, media.iter().copied()) {
+            if choice.left_out.contains(&id) {
+                continue;
+            }
+            index_of.insert(id, places.places.len());
+            places.places.push(MapPlace { lat: round(place.lat), lon: round(place.lon), ..place });
+        }
+        places.heading = tr("Places").to_string();
+        places.map_alt = tr("A map of these places, numbered as in the list below").to_string();
+        for (media_id, place_id, _) in self.db.member_places(trip_id) {
+            if let Some(&index) = index_of.get(&place_id).filter(|_| media.contains(&media_id)) {
+                places.at.insert(media_id, index);
+            }
+        }
+        places
     }
 
     /// The size this Story was last saved to the site in, or the last one chosen.
@@ -180,8 +233,11 @@ impl PicassoApp {
         // Terms belong to one site: another site starts from what was chosen for it.
         if dialog.terms_site != dialog.site_id {
             dialog.terms = dialog.site_id.map(|site_id| self.db.post_terms(story_id, site_id)).unwrap_or_default();
+            dialog.places = dialog.site_id.map(|site_id| self.db.place_choice(story_id, site_id)).unwrap_or_default();
             dialog.terms_site = dialog.site_id;
             dialog.site_terms = SiteTerms::default();
+            dialog.travel = None;
+            dialog.travel_reading = site.as_ref().and_then(|site| read_travel(ctx, site));
             // As it went to that site last: by Day when its Day posts were saved after its one post.
             dialog.by_day = dialog.days > 0
                 && dialog.site_id.is_some_and(|site_id| {
@@ -189,6 +245,11 @@ impl PicassoApp {
                     let single = self.db.publication(story_id, site_id).map(|publication| publication.synced_at);
                     by_day.is_some_and(|by_day| single.is_none_or(|single| by_day >= single))
                 });
+        }
+        if let Some(Ok(result)) = dialog.travel_reading.as_ref().map(Receiver::try_recv) {
+            dialog.travel_reading = None;
+            // A site that won't say is offered everything; the job tells what it didn't keep.
+            dialog.travel = result.ok();
         }
         if let Some(Ok(result)) = dialog.site_terms.reading.as_ref().map(Receiver::try_recv) {
             dialog.site_terms.reading = None;
@@ -426,7 +487,7 @@ impl PicassoApp {
                             UploadSize::Low => (tr("Low resolution"), tr("Up to 1280 pixels on the longest side, JPEG quality 80. Smaller files; photos show less detail on large screens.")),
                         };
                         ui.horizontal(|ui| {
-                            egui::ComboBox::from_id_salt("publish-size").selected_text(name(dialog.size).0).show_ui(ui, |ui| {
+                            let combo = egui::ComboBox::from_id_salt("publish-size").selected_text(name(dialog.size).0).show_ui(ui, |ui| {
                                 for size in UploadSize::ALL {
                                     let (label, about) = name(size);
                                     if ui.add(egui::Button::selectable(dialog.size == size, label)).on_hover_text(about).clicked() {
@@ -434,6 +495,7 @@ impl PicassoApp {
                                     }
                                 }
                             });
+                            theme::name_picker(&combo.response, tr("Photo size"), name(dialog.size).0.to_string());
                             let estimate = crate::upload::estimated_bytes(&dialog.dimensions, dialog.size);
                             ui.label(RichText::new(trf("{} photos, about {} before upload", &[&dialog.check.photos, &format_bytes(estimate)])).color(theme::muted()));
                         });
@@ -463,6 +525,47 @@ impl PicassoApp {
                             note(ui, &trf("{} photos have transparent areas; they are shown on white, as JPEG keeps no transparency.", &[&dialog.transparent]));
                         }
                         ui.checkbox(&mut dialog.exif, tr("Keep camera details")).on_hover_text(tr("Camera and lens, focal length, aperture, shutter speed, ISO, and when the photo was taken. Never the location or serial numbers."));
+                    });
+                    ui.end_row();
+
+                    ui.label(RichText::new(tr("Places")).color(theme::muted()));
+                    ui.vertical(|ui| {
+                        if dialog.story_places.is_empty() {
+                            dialog.places.places = false;
+                        } else {
+                            ui.checkbox(&mut dialog.places.places, tr("Show places on the post's map")).on_hover_text(tr(
+                                "The trip's Places the story's photos were taken at, by name. A site with the VoyageLight theme or the Picasso Places plugin shows them on its own map; any other site gets them at the end of the post, as a map picture and a list. Each Day post shows its Day's. The photos themselves never carry where they were taken.",
+                            ));
+                        }
+                        if dialog.places.places {
+                            ui.indent("publish-places", |ui| {
+                                if dialog.travel.is_some_and(|travel| !travel.places) {
+                                    note(ui, tr("This site's theme has no map of its own, so the places go at the end of the post: a map picture with numbered pins, and a list linked to OpenStreetMap."));
+                                }
+                                for (id, name) in &dialog.story_places {
+                                    let mut shown = !dialog.places.left_out.contains(id);
+                                    if ui.checkbox(&mut shown, name).changed() {
+                                        dialog.places.left_out.retain(|left| left != id);
+                                        if !shown {
+                                            dialog.places.left_out.push(*id);
+                                        }
+                                    }
+                                }
+                                ui.horizontal(|ui| {
+                                    ui.radio_value(&mut dialog.places.rough, false, tr("Exact"));
+                                    ui.radio_value(&mut dialog.places.rough, true, tr("About 1 km"));
+                                });
+                            });
+                        }
+                        let journeys = journeys_kept(dialog);
+                        let mut off = false;
+                        let journey = if journeys { &mut dialog.places.journey } else { &mut off };
+                        ui.add_enabled(journeys, egui::Checkbox::new(journey, tr("Link to the trip's Journey"))).on_hover_text(tr(
+                            "A Journey page lists the trip's stories and, with places shown, where each Day went; the VoyageLight theme and the Picasso Places plugin make them. It is made as a draft the first time, and goes public when a story is published.",
+                        ));
+                        if !journeys {
+                            note(ui, tr("This site has no Journeys. The VoyageLight theme or the Picasso Places plugin adds them."));
+                        }
                     });
                     ui.end_row();
                 });
@@ -517,6 +620,21 @@ impl PicassoApp {
                         lines.push(trf("Categories: {}.", &[&if dialog.terms.categories.is_empty() { kept.to_string() } else { names(&dialog.terms.categories) }]));
                         let kept = if update { tr("kept as on the site") } else { tr("none") };
                         lines.push(trf("Tags: {}.", &[&if dialog.terms.tags.is_empty() { kept.to_string() } else { names(&dialog.terms.tags) }]));
+                        let shown = shown_places(dialog);
+                        let in_post = dialog.travel.is_some_and(|travel| !travel.places);
+                        lines.push(match (shown.is_empty(), dialog.places.rough, in_post) {
+                            (true, ..) => tr("Places on the map: none.").to_string(),
+                            (false, false, false) => trf("Places on the map: {}.", &[&shown.join(", ")]),
+                            (false, true, false) => trf("Places on the map, to about 1 km: {}.", &[&shown.join(", ")]),
+                            (false, false, true) => trf("Places, at the end of the post with a map picture: {}.", &[&shown.join(", ")]),
+                            (false, true, true) => trf("Places, at the end of the post with a map picture, to about 1 km: {}.", &[&shown.join(", ")]),
+                        });
+                        if dialog.places.journey && journeys_kept(dialog) {
+                            lines.push(match self.db.journey_post(self.story.as_ref().map_or(0, |editor| editor.story.trip_id), site.id) {
+                                Some(_) => trf("Journey: links the post to “{}”.", &[&dialog.trip_title]),
+                                None => trf("Journey: makes a draft Journey “{}” and links the post to it.", &[&dialog.trip_title]),
+                            });
+                        }
                         lines.push(if dialog.excerpt { tr("Excerpt: the subtitle.") } else { tr("Excerpt: none.") }.to_string());
                         lines.push(if dialog.cover { tr("Featured image: the cover.") } else { tr("Featured image: none.") }.to_string());
                         for line in lines {
@@ -621,6 +739,17 @@ impl PicassoApp {
                     ] {
                         ui.label(format!("• {line}"));
                     }
+                    let shown = shown_places(dialog);
+                    if !shown.is_empty() {
+                        let line = trf(
+                            if dialog.places.rough { "{} places on the post's map, to about 1 km: {}" } else { "{} places on the post's map: {}" },
+                            &[&shown.len(), &shown.join(", ")],
+                        );
+                        ui.label(format!("• {line}"));
+                    }
+                    if dialog.places.journey && journeys_kept(dialog) {
+                        ui.label(format!("• {}", trf("The Journey “{}”, which links to the trip's public stories", &[&dialog.trip_title])));
+                    }
                     note(ui, tr("Picasso never takes a post down; that is done in WordPress."));
                     ui.horizontal(|ui| {
                         start = ui.add(theme::primary_button(tr("Publish"))).clicked();
@@ -679,9 +808,11 @@ impl PicassoApp {
         let size = dialog.size;
         let exif = dialog.exif;
         let terms = dialog.terms.clone();
+        let places = dialog.places.clone();
+        let journeys = journeys_kept(dialog);
         let publish = publish && start;
         let publish::Target { earlier, update, allow_new } = publish::target(story_id, site.id, size, earlier, dialog.update, found, dialog.adopt);
-        match self.start_publishing(ctx, &site, size, exif, terms, earlier, if by_day { day_replace } else { update }, publish, schedule, allow_new, by_day) {
+        match self.start_publishing(ctx, &site, size, exif, terms, places, journeys, earlier, if by_day { day_replace } else { update }, publish, schedule, allow_new, by_day) {
             Ok(()) => {
                 self.modal = Modal::None;
                 self.publish_found = None;
@@ -698,7 +829,7 @@ impl PicassoApp {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn start_publishing(&mut self, ctx: &egui::Context, site: &Site, size: UploadSize, exif: bool, terms: PostTerms, earlier: Option<Publication>, update: bool, publish: bool, schedule: Option<chrono::NaiveDateTime>, allow_new: bool, by_day: bool) -> Result<(), String> {
+    fn start_publishing(&mut self, ctx: &egui::Context, site: &Site, size: UploadSize, exif: bool, terms: PostTerms, places: PlaceChoice, journeys: bool, earlier: Option<Publication>, update: bool, publish: bool, schedule: Option<chrono::NaiveDateTime>, allow_new: bool, by_day: bool) -> Result<(), String> {
         if self.story.as_ref().is_some_and(|editor| self.is_publishing(editor.story.id, site.id)) {
             return Err(tr("This story is still being published to this site. Try again once that has finished.").into());
         }
@@ -708,6 +839,24 @@ impl PicassoApp {
         }
         let Some(page) = self.story_job() else { return Err(tr("The story couldn't be saved").into()) };
         self.db.save_post_terms(page.story.id, site.id, &terms)?;
+        // Places sent before and not now are taken off the posts.
+        let before = self.db.place_choice(page.story.id, site.id);
+        self.db.save_place_choice(page.story.id, site.id, &places)?;
+        let trip_id = page.story.trip_id;
+        let media: Vec<i64> = page.sources.keys().copied().collect();
+        let map_places = match (places.places, before.places) {
+            (true, _) => Some(self.map_places(trip_id, &media, &places)),
+            (false, true) => Some(MapPlaces::default()),
+            (false, false) => None,
+        };
+        let journey = (places.journey && journeys).then(|| {
+            let trip = self.db.trip(trip_id);
+            Journey {
+                post_id: self.db.journey_post(trip_id, site.id),
+                title: trip.as_ref().map(|trip| trip.title.clone()).unwrap_or_default(),
+                description: trip.map(|trip| trip.description).unwrap_or_default(),
+            }
+        });
         let pending_since = if earlier.is_none() { self.db.pending_draft(page.story.id, site.id) } else { None };
         let days = by_day.then(|| {
             let known = self.db.day_posts(page.story.id, site.id);
@@ -736,6 +885,8 @@ impl PicassoApp {
             update_published: update && (by_day || earlier.as_ref().is_some_and(|publication| publication.remote_status != "draft")),
             terms,
             renders: self.publish_renders.clone(),
+            places: map_places,
+            journey,
         };
         let progress = self.start_story_job();
         let (story_id, site_id, revision, label) = (job.story.id, site.id, job.story.revision, site.label.clone());
@@ -801,6 +952,7 @@ impl PicassoApp {
                 };
                 self.db.save_day_post(&key, &publication)
             }
+            Event::Journey { trip_id, post_id } => self.db.set_journey_post(trip_id, site_id, post_id),
             Event::Prepared { photos, bytes } => {
                 self.activity = trf("{} photos ready, {} in all; sending those not on the site yet…", &[&photos, &format_bytes(bytes)]);
                 Ok(())
@@ -837,6 +989,18 @@ impl PicassoApp {
             Some(id) => self.db.finish_publish_job(id, &logged),
             None => self.db.record_publish_job(&logged).map(|_| ()),
         };
+        let mut notes = Vec::new();
+        if let Ok(saved) = &outcome {
+            if saved.places_dropped {
+                notes.push(tr("The site's theme doesn't keep places, so the post shows none.").to_string());
+            }
+            if saved.journey_skipped {
+                notes.push(tr("The site has no Journeys, so the posts were saved without one.").to_string());
+            }
+            if let Some(failure) = &saved.journey_error {
+                notes.push(trf("The Journey's places couldn't be written: {}", &[&failure_text(failure)]));
+            }
+        }
         self.activity = match outcome {
             // Each post was recorded as it was saved; the index opens.
             Ok(saved) if saved.days > 0 => {
@@ -923,7 +1087,18 @@ impl PicassoApp {
                 trf("The earlier draft is gone from {}. Save the draft again to make a new one.", &[&site])
             }
         };
+        for note in notes {
+            self.activity = format!("{} {note}", self.activity);
+        }
     }
+}
+
+/// The names of the Places the posts will show; none unless chosen.
+fn shown_places(dialog: &PublishDialog) -> Vec<String> {
+    if !dialog.places.places {
+        return Vec::new();
+    }
+    dialog.story_places.iter().filter(|(id, _)| !dialog.places.left_out.contains(id)).map(|(_, name)| name.clone()).collect()
 }
 
 /// The dialog's width in points: room for the label column and the photo preview.
@@ -1044,8 +1219,36 @@ fn connection(vault: &crate::keychain::Vault, site: &Site) -> Result<(Api, Crede
 
 /// Where post `post_id` opens in the site's editor.
 fn post_edit_link(site: &Site, post_id: i64) -> Option<String> {
+    Some(edit_link(&site_api(site)?, post_id))
+}
+
+/// The site's API as saved, for what anyone may read of it.
+fn site_api(site: &Site) -> Option<Api> {
     let (site_url, root) = (SiteUrl::parse(&site.site_url).ok()?, SiteUrl::parse(&site.api_root).ok()?);
-    Some(edit_link(&Api { site: site_url, root, name: String::new(), namespaces: Vec::new() }, post_id))
+    Some(Api { site: site_url, root, name: String::new(), namespaces: Vec::new() })
+}
+
+/// Reads what `site` keeps of a trip in the background, without its password.
+fn read_travel(ctx: &egui::Context, site: &Site) -> Option<Receiver<Result<TravelSupport, Failure>>> {
+    // Tests never reach a site.
+    if cfg!(test) {
+        return None;
+    }
+    let api = site_api(site)?;
+    let policy = Policy { development: api.site.scheme == "http" };
+    let (sender, receiver) = crossbeam_channel::bounded(1);
+    let ctx = ctx.clone();
+    std::thread::spawn(move || {
+        let network = Network::new();
+        let _ = sender.send(Client::new(&network, policy).travel_support(&api));
+        ctx.request_repaint();
+    });
+    Some(receiver)
+}
+
+/// Whether a Journey can be chosen: the site has Journeys, or hasn't said.
+fn journeys_kept(dialog: &PublishDialog) -> bool {
+    dialog.travel.is_none_or(|travel| travel.journeys)
 }
 
 /// The site's categories and tags to tick, those chosen shown first so they

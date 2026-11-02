@@ -95,6 +95,27 @@ CREATE TABLE IF NOT EXISTS publication_terms (
     name TEXT NOT NULL,
     PRIMARY KEY (story_id, site_id, taxonomy, term_id)
 );
+-- What a Story's posts on a site show of where it went, as chosen when
+-- publishing: its Places on each post's map when `places` is 1, to about a
+-- kilometre when `rough` is 1, but not the Places whose ids `left_out`
+-- lists by commas; and whether the posts link to the Trip's Journey.
+CREATE TABLE IF NOT EXISTS publication_places (
+    story_id INTEGER NOT NULL,
+    site_id INTEGER NOT NULL,
+    places INTEGER NOT NULL DEFAULT 0,
+    rough INTEGER NOT NULL DEFAULT 0,
+    left_out TEXT NOT NULL DEFAULT '',
+    journey INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (story_id, site_id)
+);
+-- A Trip's Journey on a site: a post of the VoyageLight theme's `vl_trip`
+-- type that lists the Trip's Stories and their Places by Day.
+CREATE TABLE IF NOT EXISTS publish_journeys (
+    trip_id INTEGER NOT NULL,
+    site_id INTEGER NOT NULL,
+    post_id INTEGER NOT NULL,
+    PRIMARY KEY (trip_id, site_id)
+);
 ";
 
 pub(super) fn upgrade(db: &Database) -> Result<(), String> {
@@ -250,6 +271,19 @@ const TAG: &str = "post_tag";
 pub struct PostTerms {
     pub categories: Vec<(i64, String)>,
     pub tags: Vec<(i64, String)>,
+}
+
+/// What a Story's posts on a site show of where it went; see `publication_places`.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PlaceChoice {
+    /// The Story's Places on each post's map.
+    pub places: bool,
+    /// Kept to about a kilometre.
+    pub rough: bool,
+    /// Places not shown, by id.
+    pub left_out: Vec<i64>,
+    /// The posts link to the Trip's Journey.
+    pub journey: bool,
 }
 
 /// A Story's post on a site, as last saved there.
@@ -474,6 +508,55 @@ impl Database {
         tx.commit().map_err(|err| err.to_string())
     }
 
+    /// What the Story's posts on the site show of where it went.
+    pub fn place_choice(&self, story_id: i64, site_id: i64) -> PlaceChoice {
+        self.conn
+            .query_row(
+                "SELECT places, rough, left_out, journey FROM publication_places WHERE story_id = ?1 AND site_id = ?2",
+                params![story_id, site_id],
+                |row| {
+                    let left_out: String = row.get(2)?;
+                    Ok(PlaceChoice {
+                        places: row.get(0)?,
+                        rough: row.get(1)?,
+                        left_out: left_out.split(',').filter_map(|id| id.trim().parse().ok()).collect(),
+                        journey: row.get(3)?,
+                    })
+                },
+            )
+            .optional()
+            .ok()
+            .flatten()
+            .unwrap_or_default()
+    }
+
+    pub fn save_place_choice(&self, story_id: i64, site_id: i64, choice: &PlaceChoice) -> Result<(), String> {
+        let left_out = choice.left_out.iter().map(i64::to_string).collect::<Vec<_>>().join(",");
+        self.conn
+            .execute(
+                "INSERT OR REPLACE INTO publication_places(story_id, site_id, places, rough, left_out, journey) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![story_id, site_id, choice.places, choice.rough, left_out, choice.journey],
+            )
+            .map(|_| ())
+            .map_err(|err| err.to_string())
+    }
+
+    /// The post of the Trip's Journey on the site, once made.
+    pub fn journey_post(&self, trip_id: i64, site_id: i64) -> Option<i64> {
+        self.conn
+            .query_row("SELECT post_id FROM publish_journeys WHERE trip_id = ?1 AND site_id = ?2", params![trip_id, site_id], |row| row.get(0))
+            .optional()
+            .ok()
+            .flatten()
+    }
+
+    pub fn set_journey_post(&self, trip_id: i64, site_id: i64, post_id: i64) -> Result<(), String> {
+        self.conn
+            .execute("INSERT OR REPLACE INTO publish_journeys(trip_id, site_id, post_id) VALUES (?1, ?2, ?3)", params![trip_id, site_id, post_id])
+            .map(|_| ())
+            .map_err(|err| err.to_string())
+    }
+
     /// Records the main post of a Story on a site, the moment the site confirmed it.
     pub fn save_publication(&self, publication: &Publication) -> Result<(), String> {
         self.save_output(publication, "main")
@@ -588,6 +671,23 @@ mod tests {
         db.delete_site(id).unwrap();
         assert_eq!(db.site(id), None);
         assert!(db.save_site(&Site { id, ..site("https://example.com", "ana") }).is_err(), "a removed site isn't saved by its old id");
+    }
+
+    #[test]
+    fn what_a_storys_posts_show_of_where_it_went_is_kept_per_site() {
+        let (db, _, _) = library("place-choice");
+        assert_eq!(db.place_choice(3, 1), PlaceChoice::default(), "nothing is shown until chosen");
+        let choice = PlaceChoice { places: true, rough: true, left_out: vec![4, 9], journey: true };
+        db.save_place_choice(3, 1, &choice).unwrap();
+        assert_eq!(db.place_choice(3, 1), choice);
+        assert_eq!(db.place_choice(3, 2), PlaceChoice::default(), "another site starts afresh");
+        db.save_place_choice(3, 1, &PlaceChoice::default()).unwrap();
+        assert_eq!(db.place_choice(3, 1), PlaceChoice::default());
+
+        assert_eq!(db.journey_post(5, 1), None);
+        db.set_journey_post(5, 1, 90).unwrap();
+        db.set_journey_post(5, 1, 91).unwrap();
+        assert_eq!((db.journey_post(5, 1), db.journey_post(5, 2)), (Some(91), None));
     }
 
     #[test]

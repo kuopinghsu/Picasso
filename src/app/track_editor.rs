@@ -1266,8 +1266,11 @@ fn track_header(ui: &mut egui::Ui, editor: &mut TrackEditor, close: &mut bool) {
                     ui.label(RichText::new(&editor.name).size(15.0).strong().color(theme::text()));
                     badge(ui, &format_badge(&editor.path.to_string_lossy()));
                     if editor.dirty {
-                        let (dot, _) = ui.allocate_exact_size(Vec2::splat(8.0), Sense::hover());
+                        let (dot, response) = ui.allocate_exact_size(Vec2::splat(8.0), Sense::hover());
                         ui.painter().circle_filled(dot.center(), 3.5, theme::accent());
+                        let unsaved = tr("Changes not saved yet");
+                        response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, unsaved));
+                        response.on_hover_text(unsaved);
                     }
                 });
                 let folder = editor.path.parent().map(|dir| folder_label(&dir.to_string_lossy())).unwrap_or_default();

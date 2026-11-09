@@ -1,9 +1,9 @@
 <?php
 get_header();
 ?>
-<main id="main" class="shell section content-layout">
+<main id="main" class="shell section<?php echo 'none' === vl_sidebar_position() ? '' : ' content-layout'; ?>">
 	<div class="content-main">
-		<div class="section-heading"><div><span class="eyebrow"><?php esc_html_e( 'EXPLORE THE ARCHIVE', 'voyagelight' ); ?></span><h1><?php the_archive_title(); ?></h1><?php the_archive_description( '<p>', '</p>' ); ?></div></div>
+		<div class="section-heading"><div><?php echo vl_breadcrumbs(); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- escaped in vl_breadcrumbs(). ?><span class="eyebrow"><?php esc_html_e( 'Explore the archive', 'voyagelight' ); ?></span><h1><?php the_archive_title(); ?></h1><?php the_archive_description( '<p>', '</p>' ); ?></div></div>
 		<div class="listing-grid">
 			<?php
 			if ( have_posts() ) {
@@ -18,7 +18,11 @@ get_header();
 		</div>
 		<?php the_posts_pagination(); ?>
 	</div>
-	<?php get_sidebar(); ?>
+	<?php
+	if ( 'none' !== vl_sidebar_position() ) {
+		get_sidebar();
+	}
+	?>
 </main>
 <?php
 get_footer();

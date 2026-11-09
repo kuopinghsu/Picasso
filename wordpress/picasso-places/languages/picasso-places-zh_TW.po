@@ -23,375 +23,380 @@ msgstr "Picasso Places"
 #. Description of the plugin
 #: picasso-places.php
 msgid "Locations, route stops, maps and Journeys for travel stories, with any theme, including the fields Picasso publishes. It does nothing while the VoyageLight theme is active, which has them built in."
-msgstr "為遊記提供位置、路線停留點、地圖與旅程，適用於任何佈景主題，也包含 Picasso 發布時使用的欄位。VoyageLight 佈景主題已內建這些功能，啟用該佈景主題時本外掛不做任何事。"
+msgstr "為遊記提供位置、路線停留點、地圖與旅程，適用於任何佈景主題，也包含 Picasso 發佈時使用的欄位。VoyageLight 佈景主題已內建這些功能，啟用該佈景主題時本外掛不做任何事。"
 
 #. Author of the plugin
 #: picasso-places.php
 msgid "Picasso"
 msgstr "Picasso"
 
-#: inc/editor.php:18
+#: inc/editor.php
 msgid "There is no location."
 msgstr "沒有填寫位置。"
 
-#: inc/editor.php:19
+#: inc/editor.php
 msgid "Short links can’t be read without opening them. Open the link, then copy the full address from the browser’s address bar."
 msgstr "短網址必須開啟後才能讀取。請先開啟連結，再從瀏覽器網址列複製完整網址。"
 
-#: inc/editor.php:20
+#: inc/editor.php
 msgid "This link has no coordinates in it. Open the place on the map, then copy the address again."
 msgstr "這個連結裡沒有座標。請在地圖上開啟該地點，再重新複製網址。"
 
-#: inc/editor.php:21
+#: inc/editor.php
 msgid "Out of range: latitude goes from -90 to 90 and longitude from -180 to 180."
 msgstr "超出範圍：緯度須介於 -90 到 90，經度須介於 -180 到 180。"
 
-#: inc/editor.php:22
+#: inc/editor.php
 msgid "This is not a location that can be read."
 msgstr "無法讀取這個位置。"
 
-#: inc/editor.php:23
+#: inc/editor.php
 msgid "The place name is missing."
 msgstr "缺少地點名稱。"
 
-#: inc/editor.php:24
 #. translators: %d: highest day number.
+#: inc/editor.php
+#, php-format
 msgid "The day must be a number from 1 to %d."
 msgstr "天數必須是 1 到 %d 的數字。"
 
-#: inc/editor.php:35 inc/editor.php:262
+#: inc/editor.php
 msgid "These lines couldn’t be read and are not on the map:"
 msgstr "以下各行無法讀取，不會顯示在地圖上："
 
 #. translators: 1: line number, 2: the text of the line, 3: why it couldn't be read.
-#: inc/editor.php:38 inc/editor.php:264
+#: inc/editor.php
 #, php-format
 msgid "Line %1$d: “%2$s” — %3$s"
 msgstr "第 %1$d 行：「%2$s」— %3$s"
 
-#: inc/editor.php:47 inc/editor.php:253
+#: inc/editor.php
 msgid "Pick on map"
 msgstr "在地圖上選取"
 
-#: inc/editor.php:48
-msgid "The map loads Leaflet from unpkg.com and map tiles from OpenStreetMap, which see your IP address."
-msgstr "地圖會從 unpkg.com 載入 Leaflet，並從 OpenStreetMap 載入圖磚，這些服務會看到你的 IP 位址。"
+#: inc/editor.php
+msgid "The map loads its tiles from OpenStreetMap, which sees your IP address."
+msgstr "地圖會從 OpenStreetMap 載入圖磚，該服務會看到你的 IP 位址。"
 
-#: inc/editor.php:50
+#: inc/editor.php
 msgid "Find a place"
 msgstr "搜尋地點"
 
-#: inc/editor.php:52
+#: inc/editor.php
 msgid "Search"
 msgstr "搜尋"
 
-#: inc/editor.php:53
+#: inc/editor.php
 msgid "Search by OpenStreetMap Nominatim"
 msgstr "搜尋服務由 OpenStreetMap Nominatim 提供"
 
-#: inc/editor.php:53
+#: inc/editor.php
 msgid "Pressing Search sends what you typed to it."
 msgstr "按下「搜尋」會把你輸入的文字傳送給這項服務。"
 
-#: inc/editor.php:56
+#: inc/editor.php
 msgid "A click on the map"
 msgstr "在地圖上點一下會"
 
-#: inc/editor.php:57
+#: inc/editor.php
 msgid "sets the story’s location"
 msgstr "設定遊記的位置"
 
-#: inc/editor.php:58
+#: inc/editor.php
 msgid "adds a route stop"
 msgstr "新增停留點"
 
-#: inc/editor.php:61
+#: inc/editor.php
 msgid "Place name"
 msgstr "地點名稱"
 
-#: inc/editor.php:63 inc/editor.php:273
+#: inc/editor.php
 msgid "Day"
 msgstr "天數"
 
-#: inc/editor.php:65
+#: inc/editor.php
 msgid "Add stop"
 msgstr "新增停留點"
 
-#: inc/editor.php:66
+#: inc/editor.php
 msgid "Cancel"
 msgstr "取消"
 
-#: inc/editor.php:67
+#: inc/editor.php
 msgid "Click the map to set the location or add a stop. Drag a pin to move it."
 msgstr "點選地圖可設定位置或新增停留點；拖曳圖釘可移動位置。"
 
-#: inc/editor.php:67
+#: inc/editor.php
 msgid "Click the map to add a stop. Drag a pin to move it."
 msgstr "點選地圖可新增停留點；拖曳圖釘可移動位置。"
 
-#: inc/editor.php:72
+#: inc/editor.php
 msgid "Geotag & Travel Map"
 msgstr "地理標記與旅遊地圖"
 
-#: inc/editor.php:73
+#: inc/editor.php
 msgid "Journey itinerary & GeoTags"
 msgstr "旅程行程與地理標記"
 
-#: inc/editor.php:74
+#: inc/editor.php
 msgid "Related journey"
 msgstr "所屬旅程"
 
-#: inc/editor.php:86 inc/editor.php:277
+#: inc/editor.php
 msgid "Location"
 msgstr "位置"
 
-#: inc/editor.php:86
+#: inc/editor.php
 msgid "Paste coordinates or a map link, such as 39.8628, -4.0273 or 39°51′46″N 4°01′38″W. Links from Google Maps, Apple Maps and OpenStreetMap and geo: addresses work too. Leave it empty for no location."
 msgstr "貼上座標或地圖連結，例如 39.8628, -4.0273 或 39°51′46″N 4°01′38″W。也可以使用 Google 地圖、Apple 地圖、OpenStreetMap 的連結和 geo: 位址。留空表示不設定位置。"
 
 #. translators: 1: the location as typed, 2: why it couldn't be read.
-#: inc/editor.php:90 inc/editor.php:268
+#: inc/editor.php
 #, php-format
 msgid "The location “%1$s” couldn’t be read: %2$s The saved location was kept."
 msgstr "無法讀取位置「%1$s」：%2$s 已保留原本儲存的位置。"
 
 #. translators: %s: latitude and longitude, such as 39.86280, -4.02730.
-#: inc/editor.php:95 inc/editor.php:260
+#: inc/editor.php
 #, php-format
 msgid "Reads as %s"
 msgstr "讀取為 %s"
 
-#: inc/editor.php:97 inc/editor.php:258
+#: inc/editor.php
 msgid "No location set."
 msgstr "尚未設定位置。"
 
-#: inc/editor.php:101
+#: inc/editor.php
 msgid "Short links such as maps.app.goo.gl can’t be read here: open the link, then copy the full address from the browser’s address bar."
 msgstr "這裡無法讀取 maps.app.goo.gl 之類的短網址：請先開啟連結，再從瀏覽器網址列複製完整網址。"
 
-#: inc/editor.php:102
+#: inc/editor.php
 msgid "Route stops"
 msgstr "停留點"
 
-#: inc/editor.php:102
+#: inc/editor.php
 msgid "One stop per line: Place name | location | short note. The location takes the same forms as above."
 msgstr "每行一個停留點：地點名稱 | 位置 | 簡短備註。位置的寫法與上方相同。"
 
-#: inc/editor.php:103
+#: inc/editor.php
 msgid "Starting point"
 msgstr "出發點"
 
-#: inc/editor.php:105
+#: inc/editor.php
 msgid "The map shows the stops in this order, joined by a straight line that is not a road or walking route. Publish only coordinates you are comfortable sharing. Empty coordinates mean no location."
 msgstr "地圖依此順序顯示停留點，並以直線連接；這條線不是道路或步行路線。請只公開願意分享的座標。座標留空表示沒有位置。"
 
-#: inc/editor.php:146
+#: inc/editor.php
 msgid "One place per line:"
 msgstr "每行一個地點："
 
-#: inc/editor.php:146
+#: inc/editor.php
 msgid "Day | Place | location | short note | optional post ID"
 msgstr "天數 | 地點 | 位置 | 簡短備註 | 選填文章 ID"
 
-#: inc/editor.php:146
+#: inc/editor.php
 msgid "The location can be coordinates or a map link, as in a story’s Location field."
 msgstr "位置可以是座標或地圖連結，寫法與遊記的「位置」欄位相同。"
 
-#: inc/editor.php:146
+#: inc/editor.php
 msgid "The map uses these coordinates, not the photos’ EXIF."
 msgstr "地圖使用這裡輸入的座標，不讀取照片的 EXIF。"
 
-#: inc/editor.php:148
+#: inc/editor.php
 msgid "Arrive and explore"
 msgstr "抵達並四處走走"
 
-#: inc/editor.php:150
+#: inc/editor.php
 msgid "Day numbers set the order of the itinerary. Locations are shown to everyone. Dashed lines show the order of stops, not a route to follow. A post ID links a stop to a published story."
-msgstr "天數決定行程順序。位置所有訪客都看得到。虛線只表示停留順序，不是可依循的路線。填入文章 ID 可將停留點連結到已發布的遊記。"
+msgstr "天數決定行程順序。位置所有訪客都看得到。虛線只表示停留順序，不是可依循的路線。填入文章 ID 可將停留點連結到已發佈的遊記。"
 
-#: inc/editor.php:179
+#: inc/editor.php
 msgid "This story belongs to:"
 msgstr "這篇遊記屬於："
 
-#: inc/editor.php:180
+#: inc/editor.php
 msgid "— No journey —"
 msgstr "— 不屬於任何旅程 —"
 
-#: inc/editor.php:184
+#: inc/editor.php
 msgid "Published stories appear on their journey’s page."
-msgstr "已發布的遊記會顯示在所屬旅程的頁面上。"
+msgstr "已發佈的遊記會顯示在所屬旅程的頁面上。"
 
-#: inc/editor.php:254
+#: inc/editor.php
 msgid "Hide map"
 msgstr "隱藏地圖"
 
-#: inc/editor.php:255 inc/front.php:19
+#: inc/editor.php
+#: inc/front.php
 msgid "Loading map…"
 msgstr "地圖載入中…"
 
-#: inc/editor.php:256 inc/front.php:21
+#: inc/editor.php
+#: inc/front.php
 msgid "Unable to load the map. Check your connection or content blockers."
 msgstr "無法載入地圖，請檢查網路連線或內容封鎖設定。"
 
-#: inc/editor.php:257
+#: inc/editor.php
 msgid "Story location"
 msgstr "遊記位置"
 
 #. translators: 1: most lines the box keeps, 2: most characters it keeps.
-#: inc/editor.php:266
+#: inc/editor.php
 #, php-format
 msgid "This box keeps at most %1$d lines and %2$d characters; the rest is not saved."
 msgstr "這個欄位最多保留 %1$d 行、%2$d 個字元，超出的部分不會儲存。"
 
-#: inc/editor.php:269
+#: inc/editor.php
 msgid "Saved. Some places couldn’t be read and are not on the map."
 msgstr "已儲存。部分地點無法讀取，不會顯示在地圖上。"
 
-#: inc/editor.php:270
+#: inc/editor.php
 msgid "Searching…"
 msgstr "搜尋中…"
 
-#: inc/editor.php:271
+#: inc/editor.php
 msgid "No places found."
 msgstr "找不到符合的地點。"
 
-#: inc/editor.php:272
+#: inc/editor.php
 msgid "The search failed. Check your connection and try again."
 msgstr "搜尋失敗，請檢查網路連線後再試一次。"
 
 #. translators: %s: day number in a journey.
-#: inc/editor.php:275 inc/places.php:170
+#: inc/editor.php
+#: inc/places.php
 #, php-format
 msgid "Day %s"
 msgstr "第 %s 天"
 
-#: inc/editor.php:276 inc/front.php:22
+#: inc/editor.php
+#: inc/front.php
 msgid "Place"
 msgstr "地點"
 
-#: inc/editor.php:278
+#: inc/editor.php
 msgid "Note"
 msgstr "備註"
 
-#: inc/editor.php:279
+#: inc/editor.php
 msgid "Story"
 msgstr "遊記"
 
-#: inc/editor.php:280
+#: inc/editor.php
 msgid "— No story —"
 msgstr "— 無遊記 —"
 
-#: inc/editor.php:281
+#: inc/editor.php
 msgid "Linked to this journey"
 msgstr "屬於這趟旅程"
 
-#: inc/editor.php:282
+#: inc/editor.php
 msgid "Other stories"
 msgstr "其他遊記"
 
-#: inc/editor.php:283
+#: inc/editor.php
 msgid "Order"
 msgstr "順序"
 
-#: inc/editor.php:284
+#: inc/editor.php
 msgid "Move up"
 msgstr "上移"
 
-#: inc/editor.php:285
+#: inc/editor.php
 msgid "Move down"
 msgstr "下移"
 
-#: inc/editor.php:286
+#: inc/editor.php
 msgid "Remove"
 msgstr "移除"
 
-#: inc/editor.php:287
+#: inc/editor.php
 msgid "Add row"
 msgstr "新增一列"
 
-#: inc/editor.php:288
+#: inc/editor.php
 msgid "Add stops from linked stories"
 msgstr "從所屬遊記加入停留點"
 
 #. translators: %d: number of rows added.
-#: inc/editor.php:290
+#: inc/editor.php
 #, php-format
 msgid "Rows added from linked stories: %d"
 msgstr "已從所屬遊記加入 %d 列"
 
-#: inc/editor.php:291
+#: inc/editor.php
 msgid "No linked story with a location is missing from the table."
 msgstr "有位置的所屬遊記都已在表格中。"
 
-#: inc/editor.php:292
+#: inc/editor.php
 msgid "Edit as text"
 msgstr "以文字編輯"
 
-#: inc/editor.php:293
+#: inc/editor.php
 msgid "Edit as rows"
 msgstr "以表格編輯"
 
-#: inc/front.php:20
+#: inc/front.php
 msgid "Retry loading the map"
 msgstr "重試載入地圖"
 
-#: inc/front.php:23 inc/front.php:71
+#: inc/front.php
 msgid "Read story ↗"
 msgstr "閱讀遊記 ↗"
 
-#: inc/front.php:60
+#: inc/front.php
 msgid "Load map"
 msgstr "載入地圖"
 
-#: inc/front.php:61
-msgid "Uses OpenStreetMap tiles and Leaflet from external services. Loading shares your IP address with them."
-msgstr "使用外部服務提供的 OpenStreetMap 圖資與 Leaflet。載入後，你的 IP 位址會傳送給這些服務。"
+#: inc/front.php
+msgid "Uses map tiles from OpenStreetMap. Loading shares your IP address with it."
+msgstr "使用 OpenStreetMap 提供的地圖圖磚。載入後，你的 IP 位址會傳送給該服務。"
 
-#: inc/front.php:83
+#: inc/front.php
 msgid "Places in this story"
 msgstr "這篇遊記的地點"
 
 #. translators: %d: number of places on the map.
-#: inc/front.php:85
+#: inc/front.php
 #, php-format
 msgid "Interactive map · %d place"
 msgid_plural "Interactive map · %d places"
 msgstr[0] "互動地圖 · %d 個地點"
 
-#: inc/front.php:106
+#: inc/front.php
 msgid "Journey map"
 msgstr "旅程地圖"
 
-#: inc/front.php:107
+#: inc/front.php
 msgid "Interactive journey map"
 msgstr "互動旅程地圖"
 
-#: inc/front.php:108
+#: inc/front.php
 msgid "Itinerary"
 msgstr "行程"
 
-#: inc/front.php:125
+#: inc/front.php
 msgid "Stories from this journey"
 msgstr "這趟旅程的旅行故事"
 
 #. translators: %s: the journey's name, linked to its page.
-#: inc/front.php:142
+#: inc/front.php
 #, php-format
 msgid "Part of the journey %s"
 msgstr "所屬旅程：%s"
 
-#: inc/places.php:121
+#: inc/places.php
 msgid "Journeys"
 msgstr "旅程"
 
-#: inc/places.php:122
+#: inc/places.php
 msgid "Journey"
 msgstr "旅程"
 
-#: inc/places.php:123
+#: inc/places.php
 msgid "Add Journey"
 msgstr "新增旅程"
 
-#: inc/places.php:124
+#: inc/places.php
 msgid "Edit Journey"
 msgstr "編輯旅程"

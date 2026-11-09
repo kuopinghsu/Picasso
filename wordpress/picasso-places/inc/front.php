@@ -29,16 +29,17 @@ function map_points( $id ) {
 	return 'vl_trip' === get_post_type( $id ) ? trip_points( $id ) : post_points( $id );
 }
 
+/** The styles on single posts and Journeys only, where the plugin adds its parts; the map script only when there is a map. */
 function front_assets() {
-	if ( is_admin() ) {
+	if ( is_admin() || ! is_singular( array( 'post', 'vl_trip' ) ) ) {
 		return;
 	}
 	wp_enqueue_style( 'picasso-places', asset_url( 'css/places.css' ), array(), VERSION );
-	if ( ! is_singular( array( 'post', 'vl_trip' ) ) || post_password_required() || ! map_points( get_queried_object_id() ) ) {
+	if ( post_password_required() || ! map_points( get_queried_object_id() ) ) {
 		return;
 	}
 	wp_enqueue_script( 'picasso-places-map', asset_url( 'js/map.js' ), array(), VERSION, true );
-	wp_localize_script( 'picasso-places-map', 'vlText', script_text() );
+	wp_localize_script( 'picasso-places-map', 'vlText', script_text() + array( 'leaflet' => asset_url( 'vendor/leaflet/' ) ) );
 }
 add_action( 'wp_enqueue_scripts', __NAMESPACE__ . '\\front_assets' );
 
@@ -59,7 +60,7 @@ function render_map( $points, $route, $label, $name ) {
 	return '<div class="picasso-places-frame vl-map" role="region" aria-label="' . esc_attr( $name ) . '" data-map="' . esc_attr( $json ) . '"><div class="picasso-places-placeholder">'
 		. '<p>' . esc_html( $label ) . '</p>'
 		. '<button type="button" class="picasso-places-load vl-map-load wp-element-button">' . esc_html__( 'Load map', 'picasso-places' ) . '</button>'
-		. '<small>' . esc_html__( 'Uses OpenStreetMap tiles and Leaflet from external services. Loading shares your IP address with them.', 'picasso-places' ) . '</small>'
+		. '<small>' . esc_html__( 'Uses map tiles from OpenStreetMap. Loading shares your IP address with it.', 'picasso-places' ) . '</small>'
 		. '</div></div>';
 }
 
@@ -209,6 +210,62 @@ function image_camera( $content, $block ) {
 	return false === $end ? $content : substr_replace( $content, '<figcaption class="wp-element-caption">' . $details . '</figcaption>', $end, 0 );
 }
 add_filter( 'render_block_core/image', __NAMESPACE__ . '\\image_camera', 10, 2 );
+
+/**
+ * Gives a Table block the column widths chosen in Picasso, which keeps them
+ * in percent in its own attribute, as a <colgroup>.
+ */
+function table_widths( $content, $block ) {
+	$widths = isset( $block['attrs']['picassoColumnWidths'] ) && is_array( $block['attrs']['picassoColumnWidths'] ) ? $block['attrs']['picassoColumnWidths'] : array();
+	if ( ! $widths || false !== strpos( $content, '<colgroup' ) ) {
+		return $content;
+	}
+	$columns = '';
+	foreach ( $widths as $width ) {
+		$columns .= '<col style="width:' . max( 0, min( 100, (int) $width ) ) . '%">';
+	}
+	return preg_replace( '~<table\b[^>]*>~', '$0<colgroup>' . $columns . '</colgroup>', $content, 1 );
+}
+add_filter( 'render_block_core/table', __NAMESPACE__ . '\\table_widths', 10, 2 );
+
+/** Keep Picasso's column widths when the block editor saves a table. */
+function table_width_attributes( $args, $block_type ) {
+	if ( 'core/table' === $block_type ) {
+		$args['attributes']['picassoColumnWidths'] = array( 'type' => 'array' );
+	}
+	return $args;
+}
+add_filter( 'register_block_type_args', __NAMESPACE__ . '\\table_width_attributes', 10, 2 );
+
+/**
+ * Starts an embedded YouTube video where its address says, such as t=90s
+ * or t=1m30s: the player YouTube gives for an address leaves that out.
+ */
+function youtube_start( $html, $url ) {
+	if ( ! is_string( $html ) || ! is_string( $url ) || ! preg_match( '~^https?://(?:[a-z]+\.)?(?:youtube\.com|youtu\.be)/~i', $url ) ) {
+		return $html;
+	}
+	if ( ! preg_match( '~[?&#](?:amp;)?(?:t|start)=(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s?)?(?:&|#|$)~', $url, $time ) ) {
+		return $html;
+	}
+	$start = 3600 * (int) ( $time[1] ?? 0 ) + 60 * (int) ( $time[2] ?? 0 ) + (int) ( $time[3] ?? 0 );
+	if ( $start <= 0 ) {
+		return $html;
+	}
+	return preg_replace_callback(
+		'~(<iframe\b[^>]*?\bsrc=")(https://www\.youtube(?:-nocookie)?\.com/embed/[^"?]+)(\?[^"]*)?"~',
+		function ( $found ) use ( $start ) {
+			$query = $found[3] ?? '';
+			if ( preg_match( '~[?&;]start=~', $query ) ) {
+				return $found[0];
+			}
+			return $found[1] . $found[2] . ( '' === $query ? '?' : $query . '&amp;' ) . 'start=' . $start . '"';
+		},
+		$html,
+		1
+	);
+}
+add_filter( 'embed_oembed_html', __NAMESPACE__ . '\\youtube_start', 10, 2 );
 
 /** The same camera line under the featured image of a single story or Journey. */
 function thumbnail_camera( $html, $post_id, $thumb_id ) {

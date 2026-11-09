@@ -61,6 +61,9 @@ foreach ( array( 'theme' => '', 'plugin' => 'PicassoPlaces\\' ) as $reader => $n
 	vl_test( "$reader line limit", "a\nb\nc", array( 'a', 'b' ), ( $ns . 'vl_geo_lines' )( "a\nb\nc", 2 ) );
 	vl_test( "$reader valid coord", '90.5', null, ( $ns . 'vl_valid_coord' )( '90.5', 'lat' ) );
 	vl_test( "$reader valid coord", '-180', -180.0, ( $ns . 'vl_valid_coord' )( '-180', 'lon' ) );
+	vl_test( "$reader format", '', '39.862806, -4.027306', ( $ns . 'vl_geo_format' )( 39.8628055555, -4.0273055555 ) );
+	vl_test( "$reader format", '', '0.00001, 0', ( $ns . 'vl_geo_format' )( 0.00001, -0.0000001 ) );
+	vl_test( "$reader format reads back", '', array( 0.00001, 30.0 ), ( $ns . 'vl_geo_read' )( ( $ns . 'vl_geo_format' )( 0.00001, 30 ) ) );
 }
 
 echo "$passed passed, $failed failed\n";

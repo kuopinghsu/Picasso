@@ -9,7 +9,12 @@ while ( have_posts() ) :
 	?>
 	<article <?php post_class( 'article' ); ?>>
 		<div class="article-intro">
-			<span class="eyebrow"><?php echo esc_html( get_the_date() ); ?> · <?php the_category( ', ' ); ?></span>
+			<?php
+			// The breadcrumbs name the story's category, so the line above the title then gives only the date.
+			$crumbs = vl_breadcrumbs();
+			echo $crumbs; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- escaped in vl_breadcrumbs().
+			?>
+			<span class="eyebrow"><?php echo esc_html( get_the_date() ); ?><?php if ( '' === $crumbs ) : ?> · <?php the_category( ', ' ); ?><?php endif; ?></span>
 			<h1><?php the_title(); ?></h1>
 			<?php if ( has_excerpt() ) : ?>
 				<p class="article-deck"><?php echo esc_html( get_the_excerpt() ); ?></p>
@@ -42,7 +47,7 @@ while ( have_posts() ) :
 		<?php
 		$linked_trip = absint( get_post_meta( get_the_ID(), '_vl_trip_id', true ) );
 		if ( $linked_trip && 'vl_trip' === get_post_type( $linked_trip ) && 'publish' === get_post_status( $linked_trip ) ) {
-			echo '<div class="trip-backlink"><span class="eyebrow">' . esc_html__( 'PART OF A JOURNEY', 'voyagelight' ) . '</span><p><a href="' . esc_url( get_permalink( $linked_trip ) ) . '">← ' . esc_html( get_the_title( $linked_trip ) ) . '</a></p></div>';
+			echo '<div class="trip-backlink"><span class="eyebrow">' . esc_html__( 'Part of a journey', 'voyagelight' ) . '</span><p><a href="' . esc_url( get_permalink( $linked_trip ) ) . '">← ' . esc_html( get_the_title( $linked_trip ) ) . '</a></p></div>';
 		}
 		echo vl_render_map( vl_post_points( get_the_ID() ), __( 'Places in this story', 'voyagelight' ), true ); // phpcs:ignore WordPress.Security.EscapeOutput -- escaped inside.
 		?>
@@ -66,10 +71,21 @@ while ( have_posts() ) :
 			echo '</div>';
 		}
 		?>
+		<?php
+		$related = get_theme_mod( 'vl_show_related', true ) && ! post_password_required() ? vl_related_posts( get_the_ID(), vl_home_count( 'related', 3 ) ) : array();
+		if ( $related ) {
+			echo '<section class="related-stories"><div class="section-heading"><div><span class="eyebrow">' . esc_html__( 'Keep exploring', 'voyagelight' ) . '</span><h2>' . esc_html__( 'Related stories', 'voyagelight' ) . '</h2></div></div><div class="listing-grid">';
+			foreach ( $related as $related_id ) {
+				vl_card( $related_id );
+			}
+			echo '</div></section>';
+		}
+		?>
 		<div class="post-nav">
 			<?php
-			previous_post_link( '%link', esc_html__( '← Previous story', 'voyagelight' ) );
-			next_post_link( '%link', esc_html__( 'Next story →', 'voyagelight' ) );
+			// The label, then the story's title, so a reader can tell where each link goes.
+			previous_post_link( '%link', '<span class="post-nav-label">' . esc_html__( '← Previous story', 'voyagelight' ) . '</span><span class="post-nav-title">%title</span>' );
+			next_post_link( '%link', '<span class="post-nav-label">' . esc_html__( 'Next story →', 'voyagelight' ) . '</span><span class="post-nav-title">%title</span>' );
 			?>
 		</div>
 		<?php

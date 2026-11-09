@@ -12,7 +12,6 @@
 | `picasso-places/` | Picasso Places 外掛的原始碼 |
 | `picasso-places/languages/` | `picasso-places.pot` 與 `picasso-places-zh_TW.po` |
 | `picasso-places/readme.txt` | 外掛自己的說明：描述、常見問題、隱私、版本紀錄 |
-| `setup-categories.sh` | 以 WP-CLI 建立佈景主題建議的分類、目的地與景點類型 |
 | `tests/` | 位置讀取程式的 PHP 與 JavaScript 測試，以及外掛防護測試 |
 
 ## 建置
@@ -21,7 +20,7 @@
 make theme
 ```
 
-這會確認 PHP 檔案中的每段文字在每個 `.po` 都有翻譯，然後寫出 `target/theme/voyagelight-<version>.zip` 與 `target/theme/picasso-places-<version>.zip`，並把每個 `.po` 編譯成 `.mo`。佈景主題的版本來自 `voyagelight/style.css`，外掛的版本來自 `picasso-places/picasso-places.php`，且必須與其 `const VERSION` 以及 `readme.txt` 的 Stable tag 一致。以相同的檔案建置，會得到位元組完全相同的 ZIP。`python3 scripts/build-theme.py --check` 只執行檢查；CI 會執行這項檢查，並對每個 PHP 檔案執行 `php -l`，以及下面的測試。
+這會確認 PHP 檔案中的每段文字在每個 `.po` 都有翻譯，且 `.pot` 與 `.po` 和 PHP 一致（見「語言」），然後在 `wordpress/` 寫出兩者的英文版與繁體中文版：`voyagelight-<version>-en.zip`、`voyagelight-<version>-zh-TW.zip`、`picasso-places-<version>-en.zip` 與 `picasso-places-<version>-zh-TW.zip`。每個版本不論網站語言為何，都以自己的語言顯示；中文版內含編譯成 `.mo` 的翻譯，兩個版本都不含 `.po` 與 `.pot` 檔。佈景主題的版本來自 `voyagelight/style.css`，外掛的版本來自 `picasso-places/picasso-places.php`，且必須與其 `const VERSION` 以及 `readme.txt` 的 Stable tag 一致。以相同的檔案建置，會得到位元組完全相同的 ZIP。`python3 scripts/build-theme.py --check` 只執行檢查；CI 會執行這項檢查，並對每個 PHP 檔案執行 `php -l`，以及下面的測試。
 
 位置讀取程式有 PHP 版（`voyagelight/inc/geo.php`）與編輯器用的 JavaScript 版（`voyagelight/assets/js/geo.js`）。佈景主題與外掛都以 `tests/geo-cases.json` 中的同一組案例測試這兩份程式：
 
@@ -35,59 +34,49 @@ php wordpress/tests/plugin-guard-test.php
 
 ## 安裝
 
-`make theme` 會寫出 `target/theme/voyagelight-<version>.zip` 與 `target/theme/picasso-places-<version>.zip`。佈景主題的版本是 `voyagelight/style.css` 裡的版本，外掛的版本是 `picasso-places/picasso-places.php` 裡的版本。兩者都需要 WordPress 6.2 或更新版本，以及 PHP 7.4 或更新版本，並已在 WordPress 7.1 搭配 PHP 8.5 上試過。安裝佈景主題，或把外掛與任何其他佈景主題一起安裝。外掛可以與佈景主題同時保持啟用：VoyageLight 或其子佈景主題為使用中的佈景主題時，外掛不會做任何事。
+在 `wordpress/` 選擇 ZIP 時就選好語言：`-en` 是英文，`-zh-TW` 是繁體中文。佈景主題的文字、自訂器設定與外掛就會是那個語言，不受 **設定 > 一般 > 網站語言** 影響；請把網站語言設成相同語言，WordPress 本身的文字（例如日期與留言表單）才會一致。日後要換語言，上傳另一個 ZIP 即可，設定、選單與小工具都會保留。佈景主題的版本是 `voyagelight/style.css` 裡的版本，外掛的版本是 `picasso-places/picasso-places.php` 裡的版本。兩者都需要 PHP 7.4 或更新版本；佈景主題需要 WordPress 6.2 或更新版本，外掛需要 WordPress 6.4 或更新版本，並已在 WordPress 7.1 搭配 PHP 8.5 上試過。安裝佈景主題，或把外掛與任何其他佈景主題一起安裝。外掛可以與佈景主題同時保持啟用：VoyageLight 或其子佈景主題為使用中的佈景主題時，外掛不會做任何事。
 
 ### 佈景主題
 
-1. 在 WordPress 前往 **外觀 > 佈景主題 > 新增 > 上傳佈景主題**，選擇 `voyagelight-<version>.zip` 並啟用。
+1. 在 WordPress 前往 **外觀 > 佈景主題 > 新增 > 上傳佈景主題**，選擇 `voyagelight-<version>-en.zip` 或 `voyagelight-<version>-zh-TW.zip` 並啟用。
 2. 到 **設定 > 永久連結** 儲存一次，讓 `/trips/` 與目的地的網址生效。
-3. 可在 WordPress 網站的根目錄執行 `bash path/to/wordpress/setup-categories.sh`。它需要 WP-CLI。它只會補上尚未存在的建議分類、目的地與景點類型，因此可以再執行一次。
-4. 在 **外觀 > 自訂 > VoyageLight 首頁** 設定首頁的主標題與副標題，並從媒體庫選擇封面照片。留空時，主標題與副標題會依網站語言顯示，並使用佈景主題自帶的照片。同一個區段可以關閉照片下方的相機資訊。
+3. 在 **文章 > 分類**、**文章 > 目的地** 與 **文章 > 景點類型** 建立分類，之後隨時可以改名、移到其他項目之下或刪除。側欄、頁首選單、頁尾與首頁的方塊都會跟著更新。
+4. 在 **外觀 > 自訂 > VoyageLight 首頁** 設定首頁的主標題與副標題，並從媒體庫選擇封面照片。留空時，主標題與副標題使用佈景主題自帶的文字（依所選版本的語言），照片也使用佈景主題自帶的照片。同一個區段可以關閉照片下方的相機資訊。同一區段的 **精選專題照片** 設定「Every place has a story」旁的照片；**網站識別** 設定標誌、網站名稱與標語。
+5. 在 **外觀 > 自訂 > VoyageLight 文字** 修改佈景主題的任何文字，不需外掛也不需修改檔案：每行一項，寫上網站顯示的文字、`=`，再接新的文字，例如 `最新旅行故事 = 最新文章`。含有 `%s` 或 `%d` 的文字要保留它們；少了或多了的修改會被略過。修改存在網站設定中，更新佈景主題也不會消失。等號後面不寫任何字就會隱藏那段文字，例如 `Powered by WordPress =`。
+6. 在 **外觀 > 自訂 > VoyageLight 首頁** 開關首頁的各個區段，在 **區塊順序** 用上移、下移調整它們的順序（大張主圖固定在最上方），並設定顯示的遊記與旅程數量。在 **外觀 > 自訂 > 色彩** 選擇主色：佈景主題會據此產生連結、按鈕、表格與深色模式的色調，並確保清楚可讀。同一處的 **淺色或深色** 設定訪客一開始看到的顏色：依訪客裝置的設定、淺色或深色；**讓訪客切換淺色與深色** 決定是否保留頁首的切換按鈕，訪客的選擇會保存在他們的瀏覽器。
+7. 在 **外觀 > 小工具** 把 WordPress 內建的小工具（關於、最新文章、搜尋…）加到 **側欄** 與 **頁尾**；**VoyageLight 面板** 小工具可放回佈景主題自帶的任一面板。區域裡沒有小工具時，會顯示佈景主題原本的內容。WordPress 安裝時自動放進第一個區域的小工具（搜尋、近期文章、近期留言、彙整、分類），會在啟用佈景主題時移到 **未使用的小工具**；若區域裡還有其他小工具則保持不動。要使用它們，拖回去即可。**首頁側欄** 放的是首頁最新遊記旁的內容。
+8. 在 **設定 > 永久連結** 的「選填」區，修改旅程（`trips`）、目的地（`destination`）與景點類型（`place-type`）的網址基底，例如 `journeys`。在 **外觀 > 自訂 > VoyageLight 文章頁** 把文章列表與首頁最新遊記旁的側欄放在右側、左側或不顯示；開關標題上方的導覽路徑，以及遊記結尾的相關遊記，並設定相關遊記篇數、頁尾旅程數與卡片摘要長度（以字數計；中文與日文由 WordPress 以字元計算）。
+
+每個頁面也帶有社群分享預覽（Open Graph：標題、摘要與照片）與給搜尋引擎的結構化資料（JSON-LD：遊記與其地點、旅程與其行程，以及導覽路徑）。受密碼保護的文章只分享標題。啟用 SEO 外掛時，佈景主題會把這兩項交給外掛。
 
 ### 外掛
 
-1. 在 **外掛 > 安裝外掛 > 上傳外掛** 選擇 `picasso-places-<version>.zip` 並啟用。
+1. 在 **外掛 > 安裝外掛 > 上傳外掛** 選擇 `picasso-places-<version>-en.zip` 或 `picasso-places-<version>-zh-TW.zip` 並啟用。
 2. 若找不到 `/trips/`，到 **設定 > 永久連結** 儲存一次。
 3. 文章內容下方會有 **地理標記與旅遊地圖**，側邊欄會有 **所屬旅程**。旅程有自己的選單。
 
 ## 語言
 
-佈景主題的介面文字是英文；**設定 > 一般 > 網站語言** 為繁體中文時則為繁體中文。文章依撰寫的原文顯示。首頁的目的地磚不論網站語言為何，都會以兩種語言寫出每個地方的名稱。
+佈景主題與外掛各有英文版與繁體中文版，是分開的 ZIP（見「安裝」），網站擇一使用。文章依撰寫的原文顯示。首頁的目的地磚不論網站語言為何，都會以兩種語言寫出每個地方的名稱。
 
-在 PHP 中新增或修改一段文字後，更新範本與翻譯：
+經營網站不需要下面的步驟，只要選對語言的 ZIP：佈景主題顯示的任何文字，都可以在 **外觀 > 自訂 > VoyageLight 文字** 修改或隱藏（見上方第 5 步）；分類、選單、小工具與文章也都在 WordPress 裡建立。
 
-```sh
-cd wordpress/voyagelight
-xgettext --language=PHP --from-code=UTF-8 --add-comments=translators: \
-  --keyword=__ --keyword=_e --keyword=esc_html__ --keyword=esc_html_e \
-  --keyword=esc_attr__ --keyword=esc_attr_e --keyword=_n:1,2 \
-  --package-name=VoyageLight --package-version=1.6.0 -o languages/voyagelight.pot *.php inc/*.php
-msgmerge --update --backup=none --no-fuzzy-matching languages/zh_TW.po languages/voyagelight.pot
-```
-
-接著翻譯 `zh_TW.po` 中的新條目，再執行 `make theme`。只要有一條尚未翻譯，建置就會失敗。
-
-外掛以自己的文字領域 `picasso-places` 依同樣方式處理。它的範本也包含外掛名稱與描述，因此以 WP-CLI 產生：
+只有修改佈景主題或外掛的 PHP 時才需要。在 PHP 中新增或修改一段文字後，執行：
 
 ```sh
-cd wordpress/picasso-places
-wp i18n make-pot . languages/picasso-places.pot --skip-js --skip-block-json --skip-theme-json \
-  --headers='{"Report-Msgid-Bugs-To":""}' \
-  --file-comment='This file is distributed under the same license as the Picasso Places plugin.'
-msgmerge --update --backup=none --no-fuzzy-matching \
-  -C ../voyagelight/languages/zh_TW.po languages/picasso-places-zh_TW.po languages/picasso-places.pot
+make translations
 ```
 
-`-C` 會用佈景主題的翻譯，填入外掛與佈景主題共用的文字，因此兩者用同樣的詞：Journey 作旅程、story 作遊記、stop 作停留點、location 作位置。
+`wordpress/voyagelight` 與 `wordpress/picasso-places` 裡的原始碼沒有 `inc/language.php`，因此會依網站語言顯示，方便試用翻譯。`make translations` 會依 PHP 重新產生 `languages/voyagelight.pot` 與 `languages/picasso-places.pot`，包含每段文字的複數形式與 `translators:` 註解，並同步每個 `.po`：新的文字加上空白的翻譯，PHP 已不再使用的文字則刪除。外掛新增的文字若佈景主題也有，會先填入佈景主題的翻譯，因此兩者用同樣的詞：Journey 作旅程、story 作遊記、stop 作停留點、location 作位置。它會列出尚待翻譯的文字；在 `.po` 填好後執行 `make theme`。只要還有文字沒翻譯，或 `.pot`、`.po` 與 PHP 不一致，建置就會失敗。不需要 gettext 工具或 WP-CLI。
 
 ## 顯示的內容
 
-- **首頁：** 一張大照片、六個區塊、最新遊記、旅程、目的地，以及由有位置的文章組成的旅遊地圖。
+- **首頁：** 一張大照片、各區塊或網站主要分類的照片方塊、最新遊記、旅程、目的地，以及由有位置的文章組成的旅遊地圖。
 - **文章：** 位置與停留點清單在文章編輯器中輸入；佈景主題不會從相片讀取這些資料。位置可以是座標、度與分，或 Google 地圖、Apple 地圖、OpenStreetMap、geo: 連結；maps.app.goo.gl 之類的短網址必須先開啟。佈景主題無法讀取的行會保留，並列在編輯器中。**在地圖上選取** 會載入 Leaflet 與 OpenStreetMap 圖磚，**搜尋** 會向 OpenStreetMap Nominatim 查詢，而且只在按下時才進行。支援寬幅與全寬圖片、圖庫與多欄，區塊編輯器會以網站的字型與欄寬顯示。標題下方那一行是文章摘要，只有寫了摘要才會顯示。
 - **Picasso 的文章：** 以 **保留相機資訊** 送出的相片，會在下方顯示相機、焦距、光圈、快門速度與 ISO，由 WordPress 從上傳的檔案讀取；圖庫中的相片不會。Picasso 的致謝段落（`picasso-credits`）以較小的字分開顯示。
 - **旅程：** 獨立的文章類型，含逐日停留點與所屬遊記，在 WordPress 中以列，或以 `Day | Place | location | note | post ID` 這樣的行輸入。**從所屬遊記加入停留點** 會依連結到這趟旅程的遊記填入各列。Picasso 不會代為填入。
-- **REST API：** 文章上的 `_vl_lat`、`_vl_lon`、`_vl_stops` 與 `_vl_trip_id`，以及旅程上的 `_vl_trip_days`，屬於已發布的文章，能閱讀該文章的人也能讀取這些欄位。寫入需要能編輯該文章的使用者。缺少的座標讀出來是 `0`。送回 `0, 0` 且沒有停留點行，表示沒有位置。帶有這些座標的停留點行，是位於 0, 0 的一個地點。
-- **地圖：** 讀者按下 **載入地圖** 之前，不會向其他地方取得任何資料；按下之後，Leaflet 來自 unpkg.com，圖磚來自 OpenStreetMap。字型內建於佈景主題。
+- **REST API：** 文章上的 `_vl_lat`、`_vl_lon`、`_vl_stops` 與 `_vl_trip_id`，以及旅程上的 `_vl_trip_days`，屬於已發佈的文章，能閱讀該文章的人也能讀取這些欄位。寫入需要能編輯該文章的使用者。缺少的座標讀出來是 `0`。送回 `0, 0` 且沒有停留點行，表示沒有位置。帶有這些座標的停留點行，是位於 0, 0 的一個地點。
+- **地圖：** 讀者按下 **載入地圖** 之前，不會向其他地方取得任何資料；按下之後，圖磚來自 OpenStreetMap。字型內建於佈景主題。
 
 旅程、目的地、景點類型與地圖短代碼（`[voyagelight_map]` 與 `[voyagelight_atlas]`）屬於佈景主題，因此使用其他佈景主題時會隱藏，換回時會再出現。外掛會在任何佈景主題下恢復旅程與文章欄位。目的地、景點類型與短代碼仍只屬於佈景主題。
 
@@ -96,7 +85,7 @@ msgmerge --update --backup=none --no-fuzzy-matching \
 Picasso Places 註冊與 VoyageLight 相同的文章欄位、相同的旅程文章類型（`vl_trip`，網址為 `/trips/`）與相同的編輯器方塊，儲存時的檢查也相同，因此文章與旅程可以在兩者之間原樣搬移。使用其他佈景主題時，它會加在單篇文章或旅程頁面的正文之後：
 
 - 有位置或停留點的文章：**這篇遊記的地點** 地圖與停留點清單；
-- 連結到已發布旅程的文章：**所屬旅程：…**；
+- 連結到已發佈旅程的文章：**所屬旅程：…**；
 - 旅程頁面：**旅程地圖**、逐日的 **行程**，以及 **這趟旅程的旅行故事**；
 - Picasso 以 **保留相機資訊** 送出的相片下方：相機、焦距、光圈、快門速度與 ISO，精選圖片也包含在內；圖庫中的相片沒有這一行。
 
@@ -115,6 +104,7 @@ VoyageLight 為使用中的佈景主題時，外掛完全不做任何事，因�
 | `voyagelight/assets/js/geo-admin.js` | `picasso-places/assets/js/geo-admin.js` |
 | `voyagelight/assets/js/map.js` | `picasso-places/assets/js/map.js` |
 | `voyagelight/assets/css/geo-admin.css` | `picasso-places/assets/css/geo-admin.css` |
+| `voyagelight/assets/vendor/leaflet/` | `picasso-places/assets/vendor/leaflet/` |
 
 改過佈景主題的其中一個檔案後，執行 `python3 scripts/build-theme.py --sync` 更新副本。副本有差異時，`--check`、`make theme` 與 CI 都會失敗。
 

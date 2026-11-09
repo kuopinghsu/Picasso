@@ -7,7 +7,7 @@ while ( have_posts() ) :
 	the_post();
 	?>
 	<article <?php post_class( 'article' ); ?>>
-		<div class="article-intro"><h1><?php the_title(); ?></h1></div>
+		<div class="article-intro"><?php echo vl_breadcrumbs(); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- escaped in vl_breadcrumbs(). ?><h1><?php the_title(); ?></h1></div>
 		<div class="article-content">
 			<?php
 			the_content();

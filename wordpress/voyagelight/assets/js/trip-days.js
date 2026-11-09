@@ -15,8 +15,8 @@
 			});
 		}
 		loader = Promise.all([
-			add('link', { rel: 'stylesheet', href: 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css', integrity: 'sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=', crossOrigin: 'anonymous' }),
-			add('script', { src: 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js', integrity: 'sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=', crossOrigin: 'anonymous' })
+			add('link', { rel: 'stylesheet', href: text.leaflet + 'leaflet.css' }),
+			add('script', { src: text.leaflet + 'leaflet.js' })
 		]).catch((error) => {
 			loader = null;
 			throw error;
@@ -106,6 +106,9 @@
 		const load = el.querySelector('.vl-trip-load');
 		if (load) {
 			load.addEventListener('click', () => {
+				// The button goes with the placeholder; a keyboard user who pressed it lands on the map, which Leaflet
+				// makes focusable. Asked now: disabling the button below takes the focus off it.
+				const hadFocus = document.activeElement === load;
 				load.disabled = true;
 				load.textContent = text.loadingMap;
 				leaflet().then(() => {
@@ -116,6 +119,7 @@
 					map = L.map(canvas, { scrollWheelZoom: false });
 					L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 18, attribution: '© OpenStreetMap contributors' }).addTo(map);
 					updateMap();
+					if (hadFocus) map.getContainer().focus({ preventScroll: true });
 				}).catch(() => {
 					load.disabled = false;
 					load.textContent = text.retryMap;

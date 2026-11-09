@@ -53,6 +53,8 @@ for (const folder of ['voyagelight', 'picasso-places']) {
 	check('join day trims', '', '2 | A/B | 1, 2', geo.joinDay({ day: 2, name: 'A|B', location: '1, 2', note: '', post: '' }));
 	check('join stop', '', 'A | 1, 2', geo.joinStop({ name: 'A', location: '1, 2', note: '' }));
 	check('format', '', '39.862806, -4.027306', geo.format(39.8628055555, -4.0273055555));
+	check('format small', '', '0.00001, 30', geo.format(0.00001, 30));
+	check('split day note with |', '', { day: '1', name: 'A', location: '1, 2', note: 'n | m', post: '5' }, geo.splitDay('1 | A | 1, 2 | n | m | 5'));
 }
 
 console.log(passed + ' passed, ' + failed + ' failed');

@@ -46,7 +46,7 @@ function geo_picker( $kind ) {
 	$panel = 'vl-geo-panel-' . $kind;
 	echo '<div class="vl-geo-picker hide-if-no-js" data-kind="' . esc_attr( $kind ) . '">';
 	echo '<p><button type="button" class="button vl-geo-open" aria-expanded="false" aria-controls="' . esc_attr( $panel ) . '">' . esc_html__( 'Pick on map', 'picasso-places' ) . '</button> ';
-	echo '<span class="description">' . esc_html__( 'The map loads Leaflet from unpkg.com and map tiles from OpenStreetMap, which see your IP address.', 'picasso-places' ) . '</span></p>';
+	echo '<span class="description">' . esc_html__( 'The map loads its tiles from OpenStreetMap, which sees your IP address.', 'picasso-places' ) . '</span></p>';
 	echo '<div class="vl-geo-panel" id="' . esc_attr( $panel ) . '" hidden><div class="vl-geo-search">';
 	echo '<label for="vl-geo-query-' . esc_attr( $kind ) . '">' . esc_html__( 'Find a place', 'picasso-places' ) . '</label> ';
 	echo '<input type="search" id="vl-geo-query-' . esc_attr( $kind ) . '" class="vl-geo-query regular-text" autocomplete="off"> ';
@@ -83,7 +83,7 @@ function geo_fields( $post ) {
 	$stops   = get_post_meta( $post->ID, '_vl_stops', true );
 	$unread  = get_transient( 'picasso_places_location_' . $post->ID . '_' . get_current_user_id() );
 	$reasons = geo_reasons();
-	$value   = null !== $lat && null !== $lon ? $lat . ', ' . $lon : '';
+	$value   = null !== $lat && null !== $lon ? vl_geo_format( $lat, $lon ) : '';
 	echo '<p><label for="vl_location"><strong>' . esc_html__( 'Location', 'picasso-places' ) . '</strong></label> · ' . esc_html__( 'Paste coordinates or a map link, such as 39.8628, -4.0273 or 39°51′46″N 4°01′38″W. Links from Google Maps, Apple Maps and OpenStreetMap and geo: addresses work too. Leave it empty for no location.', 'picasso-places' ) . '</p>';
 	if ( is_array( $unread ) && isset( $unread['text'], $reasons[ $unread['why'] ] ) ) {
 		$value = $unread['text'];
@@ -272,22 +272,17 @@ function trip_editor_data( $trip_id ) {
 			'id'       => $story->ID,
 			'day'      => min( VL_GEO_DAY_MAX, $first->diff( $date )->days + 1 ),
 			'place'    => $place,
-			'location' => $lat . ', ' . $lon,
+			'location' => vl_geo_format( $lat, $lon ),
 		);
 	}
-	$others = collect_posts(
-		array(
-			'post_type'   => 'post',
-			'post_status' => 'publish',
-			'orderby'     => array(
-				'date' => 'DESC',
-				'ID'   => 'DESC',
-			),
-		)
-	);
+	// Only each story's id and title: whole posts, with their content, fields and terms, would load every story on the site.
+	global $wpdb;
+	$others = $wpdb->get_results( $wpdb->prepare( "SELECT ID, post_title FROM {$wpdb->posts} WHERE post_type = %s AND post_status = %s ORDER BY post_date DESC, ID DESC", 'post', 'publish' ) ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery -- a read of two columns, fresh each time the editor opens.
+	$skip   = array_flip( array_map( 'intval', $ids ) );
 	foreach ( $others as $story ) {
-		if ( ! in_array( $story->ID, $ids, true ) ) {
-			$stories[] = array( 'id' => $story->ID, 'title' => plain_title( $story ), 'linked' => false );
+		$id = (int) $story->ID;
+		if ( ! isset( $skip[ $id ] ) ) {
+			$stories[] = array( 'id' => $id, 'title' => html_entity_decode( wp_strip_all_tags( $story->post_title ), ENT_QUOTES, 'UTF-8' ), 'linked' => false );
 		}
 	}
 	return array( 'stories' => $stories, 'linked' => $rows );
@@ -350,6 +345,7 @@ function admin_assets( $hook ) {
 	$data = array(
 		'language' => get_bloginfo( 'language' ),
 		'dayMax'   => VL_GEO_DAY_MAX,
+		'leaflet'  => asset_url( 'vendor/leaflet/' ),
 		'text'     => geo_admin_text(),
 	);
 	if ( 'vl_trip' === $screen->post_type ) {

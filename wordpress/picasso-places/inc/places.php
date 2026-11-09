@@ -126,6 +126,24 @@ function rest_zero_location( $prepared, $request ) {
 }
 add_filter( 'rest_pre_insert_post', __NAMESPACE__ . '\\rest_zero_location', 10, 2 );
 
+/**
+ * The REST API leaves out the places of a password-protected story or Journey,
+ * as the page does, unless the reader may edit it or sends its password.
+ */
+function rest_hide_protected_places( $response, $post, $request ) {
+	if ( '' === $post->post_password || current_user_can( 'edit_post', $post->ID ) || hash_equals( $post->post_password, (string) $request['password'] ) ) {
+		return $response;
+	}
+	$data = $response->get_data();
+	if ( isset( $data['meta'] ) && is_array( $data['meta'] ) ) {
+		$data['meta'] = array_diff_key( $data['meta'], array_flip( array( '_vl_lat', '_vl_lon', '_vl_stops', '_vl_trip_days' ) ) );
+		$response->set_data( $data );
+	}
+	return $response;
+}
+add_filter( 'rest_prepare_post', __NAMESPACE__ . '\\rest_hide_protected_places', 10, 3 );
+add_filter( 'rest_prepare_vl_trip', __NAMESPACE__ . '\\rest_hide_protected_places', 10, 3 );
+
 /** Journeys: a trip with day-by-day stops, travel stories and a map. */
 function register_trips() {
 	register_post_type(

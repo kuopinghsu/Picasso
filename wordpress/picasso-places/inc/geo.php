@@ -147,6 +147,18 @@ function vl_geo_read( $text ) {
 	return array( round( $lat, 6 ), round( $lon, 6 ) );
 }
 
+/**
+ * A latitude and longitude as `lat, lon` text that vl_geo_read() reads back:
+ * six decimals at most, never in exponent form such as 1.0E-5. assets/js/geo.js format() matches.
+ */
+function vl_geo_format( $lat, $lon ) {
+	$number = function ( $value ) {
+		$text = rtrim( rtrim( sprintf( '%.6F', (float) $value ), '0' ), '.' );
+		return '-0' === $text ? '0' : $text;
+	};
+	return $number( $lat ) . ', ' . $number( $lon );
+}
+
 /** array( latitude, longitude ) from any form vl_geo_read() accepts, or null. */
 function vl_parse_location( $text ) {
 	$point = vl_geo_read( $text );
@@ -210,13 +222,17 @@ function vl_geo_day_line( $line ) {
 	if ( ! is_array( $point ) ) {
 		return $point;
 	}
-	$post = $rest[1] ?? '';
+	// A note can hold a "|", so the post ID is the last column after it, when that is a number or empty.
+	$post = '';
+	if ( count( $rest ) >= 2 && preg_match( '/^\d*$/', end( $rest ) ) ) {
+		$post = array_pop( $rest );
+	}
 	return array(
 		'day'     => (int) $cols[0],
 		'name'    => $cols[1],
 		'lat'     => $point[0],
 		'lon'     => $point[1],
-		'note'    => $rest[0] ?? '',
+		'note'    => implode( ' | ', $rest ),
 		'post_id' => preg_match( '/^\d+$/', $post ) ? (int) $post : 0,
 	);
 }

@@ -1,7 +1,7 @@
 === Picasso Places ===
 Contributors: picasso
 Tags: travel, map, geotag, itinerary, journey
-Requires at least: 6.2
+Requires at least: 6.4
 Tested up to: 7.1
 Requires PHP: 7.4
 Stable tag: 1.0.0
@@ -16,10 +16,10 @@ Picasso Places brings the travel features of the VoyageLight theme to any theme,
 
 * **Location and route stops.** A post's editor has a Location field and a list of stops. A location can be typed as coordinates, in degrees and minutes, or pasted as a Google Maps, Apple Maps, OpenStreetMap or geo: link. The editor shows how it reads each location, and lists any line it can't read instead of dropping it. Places can be picked on a map or found by name.
 * **Journeys.** A post type of its own, with day-by-day stops entered as rows or as `Day | Place | location | note | post ID` lines, and the stories that belong to it. A story chooses its Journey in the editor's Related journey box.
-* **On the site.** After a post's content: a map of its location or stops, and a link to its Journey. On a Journey: its map, its stops day by day and its stories. Maps load only when the reader presses Load map. The styles take the theme's fonts and colours, in light and dark themes.
+* **On the site.** After a post's content: a map of its location or stops, and a link to its Journey. On a Journey: its map, its stops day by day and its stories. Maps load only when the reader presses Load map. The styles take the theme's fonts and colours, in light and dark themes. Tables published from Picasso keep the column widths chosen there, and YouTube videos start where their address says, such as t=90s.
 * **REST API.** `_vl_lat`, `_vl_lon`, `_vl_stops` and `_vl_trip_id` on posts and `_vl_trip_days` on Journeys (`/wp/v2/vl_trip`) are part of a published post, so anyone who can read the post can read them. Writing them needs a user who can edit the post. A missing coordinate reads as 0. Sending 0, 0 back with no stop line means no location. A stop line with those coordinates is a place at 0, 0.
 
-The plugin is in English and Traditional Chinese, following Settings > General > Site Language.
+The plugin comes in two builds, English (picasso-places-<version>-en.zip) and Traditional Chinese (picasso-places-<version>-zh-TW.zip), each in its language whatever the site's.
 
 == Installation ==
 
@@ -39,11 +39,11 @@ They stay in the database. Under a theme without these features, Journeys and ma
 
 = What do readers' browsers fetch from elsewhere? =
 
-Nothing, until a reader presses Load map. Then the browser loads Leaflet from unpkg.com and map tiles from tile.openstreetmap.org, which see the reader's IP address and the page that asked. The plugin sets no cookies and keeps no data about readers.
+Nothing, until a reader presses Load map. Then the browser loads map tiles from tile.openstreetmap.org, which see the reader's IP address and the page that asked. The plugin sets no cookies and keeps no data about readers.
 
 = What does the editor fetch from elsewhere? =
 
-Nothing, until an author asks. Pick on map loads Leaflet from unpkg.com and map tiles from tile.openstreetmap.org. Search sends the typed text, and the site's language, to OpenStreetMap Nominatim (nominatim.openstreetmap.org), one request per press. These services see the author's IP address.
+Nothing, until an author asks. Pick on map loads map tiles from tile.openstreetmap.org. Search sends the typed text, and the site's language, to OpenStreetMap Nominatim (nominatim.openstreetmap.org), one request per press. These services see the author's IP address.
 
 = Are photo locations read from the pictures? =
 
@@ -55,15 +55,16 @@ Links such as maps.app.goo.gl hold no coordinates until they are opened. Open th
 
 == Privacy ==
 
-The plugin stores the locations, stops and Journeys that authors enter, as post meta. It sends nothing anywhere by itself. A map (Load map, Pick on map) loads Leaflet 1.9.4 from unpkg.com, checked against a known hash, and OpenStreetMap tiles; Search in the editor queries OpenStreetMap Nominatim. Each happens only when someone presses the button, and those services receive that person's IP address. See the privacy policies of unpkg.com and the OpenStreetMap Foundation.
+The plugin stores the locations, stops and Journeys that authors enter, as post meta. It sends nothing anywhere by itself. A map (Load map, Pick on map) loads OpenStreetMap tiles, with the Leaflet library that comes with the plugin; Search in the editor queries OpenStreetMap Nominatim. Each happens only when someone presses the button, and those services receive that person's IP address. See the OpenStreetMap Foundation's privacy policy.
 
 == Changelog ==
 
 = 1.0.0 =
-* First release: the location, stops and Journey fields and editor boxes of the VoyageLight theme 1.6.0, its REST API, and maps, itineraries and Journey links for any theme.
+* First release: the location, stops and Journey fields and editor boxes of the VoyageLight theme 1.6.0, its REST API, and maps, itineraries, Journey links and the column widths of Picasso's tables and the start times of YouTube videos for any theme.
+* Leaflet comes with the plugin, so a map fetches only OpenStreetMap's tiles. The styles load only on single posts and Journeys, a map is short until it is loaded, a loaded map takes the keyboard focus, and the Load map button is styled under themes that don't style WordPress's buttons.
 
 == Resources ==
 
-* Leaflet 1.9.4, BSD 2-Clause License, loaded from unpkg.com only when a reader or author asks for a map; not included.
+* Leaflet 1.9.4, Copyright 2010-2023 Volodymyr Agafonkin, BSD 2-Clause License, assets/vendor/leaflet/LICENSE; loaded only when a reader or author asks for a map.
 * Place search by OpenStreetMap Nominatim, used only when an author presses Search in the editor.
 * Map data © OpenStreetMap contributors, Open Database License.

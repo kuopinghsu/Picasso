@@ -1,18 +1,34 @@
-/* The block editor, made to look like a post on the site: fonts, colours and the 760px column. */
+/* The block editor, made to look like a post on the site: fonts, colours and the 720px column. */
 @font-face{font-family:'DM Sans';font-style:normal;font-weight:400 700;font-display:swap;src:url('../fonts/dm-sans-latin-ext.woff2') format('woff2');unicode-range:U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F, U+A720-A7FF}
 @font-face{font-family:'DM Sans';font-style:normal;font-weight:400 700;font-display:swap;src:url('../fonts/dm-sans-latin.woff2') format('woff2');unicode-range:U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD}
 @font-face{font-family:'Playfair Display';font-style:normal;font-weight:500 700;font-display:swap;src:url('../fonts/playfair-display-latin-ext.woff2') format('woff2');unicode-range:U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F, U+A720-A7FF}
 @font-face{font-family:'Playfair Display';font-style:normal;font-weight:500 700;font-display:swap;src:url('../fonts/playfair-display-latin.woff2') format('woff2');unicode-range:U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD}
-:root{--ink:#172b36;--muted:#667881;--stroke:#e2e8e9;--accent:#286e88}
-body{background:#fbfaf8;color:var(--ink);font:18px/1.85 Georgia,serif}
-.wp-block{max-width:760px}
-.wp-block[data-align="wide"]{max-width:1050px}
+:root{--ink:#10242e;--muted:#5d707a;--stroke:#e3e8e9;--accent:#1f6f8b;--sans:'DM Sans',system-ui,-apple-system,'Segoe UI','PingFang TC','Noto Sans TC','Microsoft JhengHei',sans-serif;--serif:'Playfair Display',Georgia,'Noto Serif TC','Songti TC',serif}
+body{background:#f6f5f2;color:var(--ink);font:18px/1.8 var(--sans);-webkit-font-smoothing:antialiased}
+.wp-block{max-width:720px}
+.wp-block[data-align="wide"]{max-width:1100px}
 .wp-block[data-align="full"]{max-width:none}
-.editor-post-title__input,.editor-post-title{font:600 clamp(40px,6vw,70px)/1.18 'Playfair Display',Georgia,serif;letter-spacing:-.035em;text-align:center}
-h1,h2,h3,h4{font-family:'Playfair Display',Georgia,serif;letter-spacing:-.035em;line-height:1.18}
-h2{font-size:clamp(28px,3vw,40px)}
-a{color:var(--accent)}
-img{max-width:100%;height:auto;border-radius:8px}
-figcaption,.wp-element-caption{font:13px 'DM Sans',sans-serif;text-align:center;color:var(--muted)}
-blockquote{border-left:3px solid var(--accent);padding-left:25px;font-style:italic}
-.picasso-credits{font:13px/1.6 'DM Sans',system-ui,sans-serif;color:var(--muted);border-top:1px solid var(--stroke);padding-top:14px;margin-top:40px}
+.editor-post-title__input,.editor-post-title{font:600 clamp(38px,6vw,72px)/1.05 var(--serif);letter-spacing:-.035em;text-align:center}
+h1,h2,h3,h4{font-family:var(--serif);font-weight:600;letter-spacing:-.025em;line-height:1.15}
+h2{font-size:clamp(26px,3vw,34px)}
+h3{font-size:24px}
+a{color:var(--accent);text-underline-offset:3px}
+img{max-width:100%;height:auto;border-radius:16px}
+figcaption,.wp-element-caption{font:13px/1.5 var(--sans);text-align:center;color:var(--muted)}
+blockquote{border-left:3px solid var(--accent);padding-left:24px;font:italic 500 22px/1.5 var(--serif)}
+/* Tables as on the site: fjord teal header row, sand and brass totals row, sea-glass stripes. */
+.wp-block-table{border:1px solid var(--stroke);border-radius:16px;overflow-x:auto;background:#fff}
+.wp-block-table table{border-collapse:separate;border-spacing:0;font:15px/1.5 var(--sans);font-variant-numeric:tabular-nums}
+.wp-block-table th,.wp-block-table td{padding:12px 16px;border:0;border-bottom:1px solid var(--stroke);text-align:left;vertical-align:top}
+.wp-block-table thead,.wp-block-table tfoot{border:0}
+.wp-block-table thead th{background:linear-gradient(180deg,var(--table-head-2,#17627a),var(--table-head,#0f4c5c));color:#fff;font-size:13px;font-weight:700;letter-spacing:.02em;border-bottom:3px solid #c4955a}
+.wp-block-table tbody td:first-child{font-weight:500}
+.wp-block-table .has-text-align-right,.wp-block-table [data-align="right"]{text-align:right}
+.wp-block-table .has-text-align-center,.wp-block-table [data-align="center"]{text-align:center}
+.wp-block-table.is-style-stripes tbody td{border-bottom-color:transparent}
+.wp-block-table.is-style-stripes{border-bottom:1px solid var(--stroke)}
+.wp-block-table.is-style-stripes tbody tr:nth-child(odd){background:var(--table-zebra,rgba(31,111,139,.06))}
+.wp-block-table tfoot td,.wp-block-table tfoot th{background:rgba(196,149,90,.17);border-top:2px solid #c4955a;border-bottom:0;font-weight:700;color:#7a5520}
+.wp-block-table tfoot tr>:first-child{color:var(--ink)}
+.wp-block-table figcaption{margin:0;padding:10px 16px;border-top:1px solid var(--stroke);text-align:left;font-size:13px}
+.picasso-credits{font:13px/1.6 var(--sans);color:var(--muted);border-top:1px solid var(--stroke);padding-top:14px;margin-top:40px}

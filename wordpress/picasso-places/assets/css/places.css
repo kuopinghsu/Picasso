@@ -2,15 +2,24 @@
    .picasso-places and .picasso-places-map are left alone: Picasso puts them on the map picture it adds to posts for sites without this plugin. */
 .picasso-places-section { margin-block: 2.5em; overflow-wrap: anywhere; }
 .picasso-places-section > h2 { margin-block: 1.5em .6em; }
-.picasso-places-frame { position: relative; z-index: 0; display: flex; flex-direction: column; justify-content: center; box-sizing: border-box; width: 100%; max-width: 100%; height: min(26rem, 70vh); min-height: 16rem; overflow: hidden; border: 1px solid rgba(128, 128, 128, .35); border-radius: 6px; background: rgba(128, 128, 128, .08); }
+/* Short until the reader loads the map, then tall enough to explore. */
+.picasso-places-frame { position: relative; z-index: 0; display: flex; flex-direction: column; justify-content: center; box-sizing: border-box; width: 100%; max-width: 100%; height: 11rem; overflow: hidden; border: 1px solid rgba(128, 128, 128, .35); border-radius: 6px; background: rgba(128, 128, 128, .08); }
+.picasso-places-frame:has(.vl-map-canvas) { height: min(26rem, 70vh); min-height: 16rem; }
 .picasso-places-frame .vl-map-canvas { flex: 1; width: 100%; }
 .picasso-places-placeholder { display: flex; flex-direction: column; align-items: center; gap: .8em; padding: 1em; text-align: center; }
 .picasso-places-placeholder p { margin: 0; font-weight: 600; }
 .picasso-places-placeholder small { max-width: 32em; opacity: .8; }
-.picasso-places-load { cursor: pointer; font: inherit; }
+/* A button that looks like one under any theme: block themes style .wp-element-button, older themes may not.
+   :where() keeps it weaker than the theme's own button styles, which win wherever they exist. */
+:where(.picasso-places-load) { display: inline-block; padding: .55em 1.2em; border: 1px solid currentColor; border-radius: 999px; background: transparent; color: inherit; font: inherit; font-weight: 600; line-height: 1.3; }
+:where(.picasso-places-load):hover { background: rgba(128, 128, 128, .15); }
+.picasso-places-load { cursor: pointer; }
 .picasso-places-load:disabled { cursor: progress; opacity: .7; }
 .picasso-places-frame .vl-map-error { margin: 0 1em 1em; text-align: center; }
 .picasso-places-frame .leaflet-container img { margin: 0; border-radius: 0; box-shadow: none; }
+/* Popups are white whatever the theme, so their text and links have fixed dark colours that read on white,
+   rather than the theme's, which may be light on a dark theme. */
+.picasso-places-frame .leaflet-popup-content-wrapper, .picasso-places-frame .leaflet-popup-tip { background: #fff; }
 .picasso-places-frame .leaflet-popup-content { color: #1d2327; font-family: inherit; }
 .picasso-places-frame .leaflet-popup-content a { color: #135e96; }
 .picasso-places-stops { margin-block: .8em 0; padding-inline-start: 1.6em; }

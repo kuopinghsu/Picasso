@@ -18,795 +18,857 @@ msgstr ""
 "Content-Transfer-Encoding: 8bit\n"
 "Plural-Forms: nplurals=INTEGER; plural=EXPRESSION;\n"
 
-#: 404.php:5
-msgid "404 · OFF THE MAP"
+#: 404.php
+msgid "404 · off the map"
 msgstr ""
 
-#: 404.php:6
+#: 404.php
 msgid "This trail ends here."
 msgstr ""
 
-#: 404.php:7
+#: 404.php
 msgid "The page you’re looking for may have moved."
 msgstr ""
 
-#: 404.php:8
+#: 404.php
 msgid "Return to homepage"
 msgstr ""
 
-#: archive-vl_trip.php:5
-msgid "JOURNEY COLLECTIONS"
+#: archive-vl_trip.php
+msgid "Journey collections"
 msgstr ""
 
-#: archive-vl_trip.php:5 front-page.php:8 functions.php:495 header.php:31
-#: sidebar.php:17
+#: archive-vl_trip.php
+#: footer.php
+#: front-page.php
+#: header.php
+#: inc/content.php
+#: inc/customizer.php
+#: inc/discovery.php
+#: inc/journeys.php
 msgid "Journeys"
 msgstr ""
 
-#: archive-vl_trip.php:5
-msgid ""
-"Explore full travel routes, day-by-day itineraries, maps and related stories."
+#: archive-vl_trip.php
+msgid "Explore full travel routes, day-by-day itineraries, maps and related stories."
 msgstr ""
 
-#: archive-vl_trip.php:14
+#: archive-vl_trip.php
 msgid "No journeys published yet."
 msgstr ""
 
-#: archive.php:6
-msgid "EXPLORE THE ARCHIVE"
+#: archive.php
+msgid "Explore the archive"
 msgstr ""
 
-#: archive.php:15
+#: archive.php
 msgid "No stories in this collection yet."
 msgstr ""
 
-#: comments.php:7
+#: comments.php
 msgid "Discussion"
 msgstr ""
 
-#: footer.php:3
+#: footer.php
 msgid "Travel stories, places, and the art of seeing."
 msgstr ""
 
-#: footer.php:4 functions.php:35
-msgid "Footer navigation"
+#: footer.php
+#: inc/content.php
+#: search.php
+msgid "Travel categories"
 msgstr ""
 
-#: footer.php:11
+#: footer.php
 msgid "Powered by WordPress"
 msgstr ""
 
-#: front-page.php:6
+#: footer.php
+#: functions.php
+msgid "Footer navigation"
+msgstr ""
+
+#: front-page.php
 msgid "Travel Stories"
 msgstr ""
 
-#: front-page.php:6
+#: front-page.php
 msgid "People, places & memories"
 msgstr ""
 
-#: front-page.php:7 functions.php:103 sidebar.php:3
+#: front-page.php
+#: functions.php
+#: inc/content.php
 msgid "Destinations"
 msgstr ""
 
-#: front-page.php:7
+#: front-page.php
 msgid "Browse by destination"
 msgstr ""
 
-#: front-page.php:8
+#: front-page.php
 msgid "Day-by-day trip journals"
 msgstr ""
 
-#: front-page.php:9
+#: front-page.php
 msgid "Travel Map"
 msgstr ""
 
-#: front-page.php:9
+#: front-page.php
 msgid "Explore places on a map"
 msgstr ""
 
-#: front-page.php:10
-msgid "Food & Culture"
+#: front-page.php
+msgid "Travel · explore · share"
 msgstr ""
 
-#: front-page.php:10
-msgid "Local flavours & culture"
-msgstr ""
-
-#: front-page.php:11
-msgid "Travel Guides"
-msgstr ""
-
-#: front-page.php:11
-msgid "Plan with useful notes"
-msgstr ""
-
-#: front-page.php:19
-msgid "TRAVEL · EXPLORE · SHARE"
-msgstr ""
-
-#: front-page.php:20
+#: front-page.php
 msgid "The world, through our journeys"
 msgstr ""
 
-#: front-page.php:21
+#: front-page.php
 msgid "Stories, places and moments worth sharing."
 msgstr ""
 
-#: front-page.php:23 front-page.php:82
+#: front-page.php
+#: template-parts/home-journeys.php
 msgid "Explore journeys"
 msgstr ""
 
-#: front-page.php:24
+#: front-page.php
 msgid "Read travel stories"
 msgstr ""
 
-#: front-page.php:28
+#: front-page.php
 msgid "Norwegian fjords · Demo photography"
 msgstr ""
 
-#: front-page.php:33
-msgid "Explore travel sections"
-msgstr ""
-
-#: front-page.php:45 single-vl_trip.php:106
-msgid "TRAVEL JOURNAL"
-msgstr ""
-
-#: front-page.php:46
-msgid "Latest travel stories"
-msgstr ""
-
-#: front-page.php:47
-msgid "Places, people, and the moments worth remembering."
-msgstr ""
-
-#: front-page.php:49
-msgid "All stories ↗"
-msgstr ""
-
-#: front-page.php:62
-msgid "Eqi Glacier: A Close Encounter with the Icefjord"
-msgstr ""
-
-#: front-page.php:62
-msgid "Greenland"
-msgstr ""
-
-#: front-page.php:62
-msgid "Travel stories"
-msgstr ""
-
-#: front-page.php:63
-msgid "Under the Northern Lights"
-msgstr ""
-
-#: front-page.php:63
-msgid "Nordic"
-msgstr ""
-
-#: front-page.php:63
-msgid "Nature & Scenery"
-msgstr ""
-
-#: front-page.php:64
-msgid "Toledo: A City of History and Light"
-msgstr ""
-
-#: front-page.php:64
-msgid "Spain"
-msgstr ""
-
-#: front-page.php:64
-msgid "Culture"
-msgstr ""
-
-#: front-page.php:65
-msgid "Tokyo: A Walk Through Spring"
-msgstr ""
-
-#: front-page.php:65
-msgid "Japan"
-msgstr ""
-
-#: front-page.php:65
-msgid "City Walks"
-msgstr ""
-
-#: front-page.php:66
-msgid "A Morning in the Baltic Old Town"
-msgstr ""
-
-#: front-page.php:66
-msgid "Baltic"
-msgstr ""
-
-#: front-page.php:66
-msgid "History & Culture"
-msgstr ""
-
-#: front-page.php:70
-msgid "SAMPLE"
-msgstr ""
-
-#: front-page.php:71
-msgid "Demo illustration. Publish your own story to replace this sample."
-msgstr ""
-
-#: front-page.php:81
-msgid "ONE JOURNEY · MANY STORIES"
-msgstr ""
-
-#: front-page.php:83
-msgid ""
-"Follow each trip day by day, with stops and stories together on one map."
-msgstr ""
-
-#: front-page.php:85
-msgid "All journeys ↗"
-msgstr ""
-
-#: front-page.php:95
-msgid ""
-"Publish your first Journey from the WordPress dashboard to show it here."
-msgstr ""
-
-#: front-page.php:104
-msgid "DESTINATIONS & DISCOVERY"
-msgstr ""
-
-#: front-page.php:105
-msgid "Featured destinations"
-msgstr ""
-
-#: front-page.php:106
-msgid ""
-"Explore stories by country and region, then see where each place is on a map."
-msgstr ""
-
-#: front-page.php:133
-msgid "PLACE & CONTEXT"
-msgstr ""
-
-#: front-page.php:134
-msgid "Explore the travel map"
-msgstr ""
-
-#: front-page.php:135
-msgid "See where places are, and how they relate to nearby destinations."
-msgstr ""
-
-#: front-page.php:141 functions.php:478 functions.php:485
-msgid "Travel atlas"
-msgstr ""
-
-#: front-page.php:143
-msgid "Your travel atlas starts here."
-msgstr ""
-
-#: front-page.php:144
-msgid ""
-"Give published travel posts a latitude and longitude to populate this map "
-"automatically."
-msgstr ""
-
-#: front-page.php:151
-msgid "COLLECTIONS"
-msgstr ""
-
-#: front-page.php:152
-msgid "Every place has a story."
-msgstr ""
-
-#: front-page.php:153
-msgid ""
-"Follow the route, the local culture, and the little details along the way. "
-"Build a travel journal with your own voice."
-msgstr ""
-
-#: front-page.php:154
-msgid "Explore the journal ↗"
-msgstr ""
-
-#: front-page.php:156
-msgid "Illustrated cherry blossom scene"
-msgstr ""
-
-#: functions.php:34 header.php:22
+#: functions.php
+#: header.php
 msgid "Primary navigation"
 msgstr ""
 
-#: functions.php:46 header.php:37
-msgid "Dark"
-msgstr ""
-
-#: functions.php:47
-msgid "Light"
-msgstr ""
-
-#: functions.php:48 functions.php:604
+#: functions.php
+#: inc/journeys.php
 msgid "Loading map…"
 msgstr ""
 
-#: functions.php:49
+#: functions.php
 msgid "Retry loading the map"
 msgstr ""
 
-#: functions.php:50 functions.php:605
+#: functions.php
+#: inc/journeys.php
 msgid "Unable to load the map. Check your connection or content blockers."
 msgstr ""
 
-#: functions.php:51 functions.php:625
+#: functions.php
+#: inc/journeys.php
 msgid "Place"
 msgstr ""
 
-#: functions.php:52 functions.php:458 single-vl_trip.php:90
+#: functions.php
+#: inc/locations.php
+#: single-vl_trip.php
 msgid "Read story ↗"
 msgstr ""
 
-#: functions.php:53
+#: functions.php
 msgid "All stops"
 msgstr ""
 
 #. translators: %s: day number in a journey.
-#: functions.php:55 functions.php:624 functions.php:732
+#: functions.php
+#: inc/journeys.php
 #, php-format
 msgid "Day %s"
 msgstr ""
 
-#: functions.php:103 single.php:51
+#: functions.php
+#: single.php
 msgid "Destination"
 msgstr ""
 
-#: functions.php:115 sidebar.php:4
+#: functions.php
+#: inc/content.php
 msgid "Place types"
 msgstr ""
 
-#: functions.php:115 single.php:52
+#: functions.php
+#: single.php
 msgid "Place type"
 msgstr ""
 
-#: functions.php:131
-msgid "VoyageLight homepage"
+#: header.php
+msgid "Skip to content"
 msgstr ""
 
-#: functions.php:133
-msgid "Hero headline"
+#: header.php
+msgid "Toggle navigation"
 msgstr ""
 
-#: functions.php:134
-msgid "Hero subtitle"
+#: header.php
+#: inc/discovery.php
+msgid "Home"
 msgstr ""
 
-#: functions.php:141
-msgid "Hero image"
+#: header.php
+msgid "Stories"
 msgstr ""
 
-#: functions.php:143
-msgid "Show camera details under photos"
+#: header.php
+#: inc/customizer.php
+msgid "Dark"
 msgstr ""
 
-#: functions.php:181
+#. translators: %d: number of stories in a category.
+#. translators: %d: number of stories linked to a journey.
+#: inc/content.php
+#: single-vl_trip.php
+#, php-format
+msgid "%d story"
+msgid_plural "%d stories"
+msgstr[0] ""
+msgstr[1] ""
+
+#: inc/content.php
+#: single-vl_trip.php
+#: template-parts/home-stories.php
 msgid "Travel journal"
 msgstr ""
 
-#: functions.php:183 functions.php:628
+#: inc/content.php
+#: inc/journeys.php
 msgid "Story"
 msgstr ""
 
-#: functions.php:239
-msgid "There is no location."
-msgstr ""
-
-#: functions.php:240
-msgid ""
-"Short links can’t be read without opening them. Open the link, then copy the "
-"full address from the browser’s address bar."
-msgstr ""
-
-#: functions.php:241
-msgid ""
-"This link has no coordinates in it. Open the place on the map, then copy the "
-"address again."
-msgstr ""
-
-#: functions.php:242
-msgid ""
-"Out of range: latitude goes from -90 to 90 and longitude from -180 to 180."
-msgstr ""
-
-#: functions.php:243
-msgid "This is not a location the theme can read."
-msgstr ""
-
-#: functions.php:244
-msgid "The place name is missing."
-msgstr ""
-
-#: functions.php:245
-#. translators: %d: highest day number.
-msgid "The day must be a number from 1 to %d."
-msgstr ""
-
-#: functions.php:256 functions.php:611
-msgid "These lines couldn’t be read and are not on the map:"
-msgstr ""
-
-#. translators: 1: line number, 2: the text of the line, 3: why it couldn't be read.
-#: functions.php:259 functions.php:613
+#. translators: %s: name of a menu item, such as Europe.
+#: inc/content.php
 #, php-format
-msgid "Line %1$d: “%2$s” — %3$s"
+msgid "Show the %s menu"
 msgstr ""
 
-#: functions.php:268 functions.php:602
+#: inc/content.php
+msgid "VoyageLight panel"
+msgstr ""
+
+#: inc/content.php
+msgid "One of the theme’s own panels: travel categories, destinations, place types or journeys."
+msgstr ""
+
+#: inc/content.php
+msgid "Panel"
+msgstr ""
+
+#: inc/content.php
+#: inc/customizer.php
+msgid "Sidebar"
+msgstr ""
+
+#: inc/content.php
+msgid "Beside stories and archives. Left empty, the theme’s own panels are shown."
+msgstr ""
+
+#: inc/content.php
+msgid "Footer"
+msgstr ""
+
+#: inc/content.php
+msgid "Columns beside the site’s name in the footer. Left empty, the top categories and the latest Journeys are shown."
+msgstr ""
+
+#: inc/content.php
+msgid "Start page sidebar"
+msgstr ""
+
+#: inc/content.php
+msgid "Beside the latest stories on the start page. Left empty, the travel categories are shown."
+msgstr ""
+
+#. translators: %s: name of a start page section, such as Travel map.
+#: inc/customize-order.php
+#, php-format
+msgid "Move %s up"
+msgstr ""
+
+#. translators: %s: name of a start page section, such as Travel map.
+#: inc/customize-order.php
+#, php-format
+msgid "Move %s down"
+msgstr ""
+
+#: inc/customizer.php
+msgid "VoyageLight homepage"
+msgstr ""
+
+#: inc/customizer.php
+msgid "Hero headline"
+msgstr ""
+
+#: inc/customizer.php
+msgid "Hero subtitle"
+msgstr ""
+
+#: inc/customizer.php
+msgid "Hero image"
+msgstr ""
+
+#: inc/customizer.php
+msgid "Collections photo"
+msgstr ""
+
+#: inc/customizer.php
+msgid "Show camera details under photos"
+msgstr ""
+
+#: inc/customizer.php
+msgid "Order of sections"
+msgstr ""
+
+#: inc/customizer.php
+msgid "The large photo always comes first."
+msgstr ""
+
+#: inc/customizer.php
+msgid "Stories on the start page"
+msgstr ""
+
+#: inc/customizer.php
+msgid "Journeys on the start page"
+msgstr ""
+
+#: inc/customizer.php
+msgid "Related stories after each story"
+msgstr ""
+
+#: inc/customizer.php
+msgid "Journeys in the footer"
+msgstr ""
+
+#: inc/customizer.php
+msgid "Length of card summaries"
+msgstr ""
+
+#: inc/customizer.php
+msgid "In words, from 5 to 80. In Chinese and Japanese, WordPress counts characters instead."
+msgstr ""
+
+#: inc/customizer.php
+msgid "Accent colour"
+msgstr ""
+
+#: inc/customizer.php
+msgid "For links, buttons and highlights. The theme makes its lighter and darker shades, and one for dark mode, dark or light enough to read. Leave it empty for the theme’s teal."
+msgstr ""
+
+#: inc/customizer.php
+msgid "Light or dark"
+msgstr ""
+
+#: inc/customizer.php
+msgid "As the visitor’s device is set"
+msgstr ""
+
+#: inc/customizer.php
+msgid "Light"
+msgstr ""
+
+#: inc/customizer.php
+msgid "Let visitors switch between light and dark"
+msgstr ""
+
+#: inc/customizer.php
+msgid "A button in the header. A visitor’s choice is kept in their browser and wins over the setting above."
+msgstr ""
+
+#: inc/customizer.php
+msgid "VoyageLight stories"
+msgstr ""
+
+#: inc/customizer.php
+msgid "Beside story lists and the start page’s latest stories."
+msgstr ""
+
+#: inc/customizer.php
+msgid "On the right"
+msgstr ""
+
+#: inc/customizer.php
+msgid "On the left"
+msgstr ""
+
+#: inc/customizer.php
+msgid "None"
+msgstr ""
+
+#: inc/customizer.php
+msgid "Show breadcrumbs"
+msgstr ""
+
+#: inc/customizer.php
+msgid "Show related stories"
+msgstr ""
+
+#: inc/customizer.php
+msgid "VoyageLight text"
+msgstr ""
+
+#: inc/customizer.php
+msgid "Text changes"
+msgstr ""
+
+#: inc/customizer.php
+#, php-format
+msgid "One change per line: the text as the site shows it, an equals sign, then the new text, such as “Latest travel stories = Recent posts”. Nothing after the equals sign hides the text. A text with %s or %d keeps them in the new text. Leave this empty for the theme’s own words."
+msgstr ""
+
+#: inc/customizer.php
+msgid "Show the photo tiles"
+msgstr ""
+
+#: inc/customizer.php
+msgid "Show the latest stories"
+msgstr ""
+
+#: inc/customizer.php
+msgid "Show the journeys"
+msgstr ""
+
+#: inc/customizer.php
+msgid "Show the featured destinations"
+msgstr ""
+
+#: inc/customizer.php
+msgid "Show the travel map"
+msgstr ""
+
+#: inc/customizer.php
+msgid "Show the collections band"
+msgstr ""
+
+#: inc/customizer.php
+msgid "Photo tiles"
+msgstr ""
+
+#: inc/customizer.php
+msgid "Latest stories"
+msgstr ""
+
+#: inc/customizer.php
+#: template-parts/home-destinations.php
+msgid "Featured destinations"
+msgstr ""
+
+#: inc/customizer.php
+msgid "Travel map"
+msgstr ""
+
+#: inc/customizer.php
+msgid "Collections band"
+msgstr ""
+
+#: inc/discovery.php
+msgid "Journey base"
+msgstr ""
+
+#: inc/discovery.php
+msgid "Destination base"
+msgstr ""
+
+#: inc/discovery.php
+msgid "Place type base"
+msgstr ""
+
+#: inc/discovery.php
+msgid "Latin letters, digits and hyphens, such as journeys. Leave it empty for the theme’s own."
+msgstr ""
+
+#: inc/discovery.php
+msgid "Breadcrumb"
+msgstr ""
+
+#: inc/journeys.php
+#: single-vl_trip.php
+msgid "Journey"
+msgstr ""
+
+#: inc/journeys.php
+msgid "Add Journey"
+msgstr ""
+
+#: inc/journeys.php
+msgid "Edit Journey"
+msgstr ""
+
+#: inc/journeys.php
+msgid "Journey itinerary & GeoTags"
+msgstr ""
+
+#: inc/journeys.php
+msgid "Related journey"
+msgstr ""
+
+#: inc/journeys.php
+msgid "One place per line:"
+msgstr ""
+
+#: inc/journeys.php
+msgid "Day | Place | location | short note | optional post ID"
+msgstr ""
+
+#: inc/journeys.php
+msgid "The location can be coordinates or a map link, as in a story’s Location field."
+msgstr ""
+
+#: inc/journeys.php
+msgid "The map uses these coordinates, not the photos’ EXIF."
+msgstr ""
+
+#: inc/journeys.php
+msgid "Arrive and explore"
+msgstr ""
+
+#: inc/journeys.php
+msgid "Day numbers set the order of the itinerary. Locations are shown to everyone. Dashed lines show the order of stops, not a route to follow. A post ID links a stop to a published story."
+msgstr ""
+
+#: inc/journeys.php
+#: inc/locations.php
 msgid "Pick on map"
 msgstr ""
 
-#: functions.php:269
-msgid ""
-"The map loads Leaflet from unpkg.com and map tiles from OpenStreetMap, which "
-"see your IP address."
+#: inc/journeys.php
+msgid "Hide map"
 msgstr ""
 
-#: functions.php:271
-msgid "Find a place"
+#: inc/journeys.php
+msgid "Story location"
 msgstr ""
 
-#: functions.php:273 searchform.php:6
-msgid "Search"
-msgstr ""
-
-#: functions.php:274
-msgid "Search by OpenStreetMap Nominatim"
-msgstr ""
-
-#: functions.php:274
-msgid "Pressing Search sends what you typed to it."
-msgstr ""
-
-#: functions.php:277
-msgid "A click on the map"
-msgstr ""
-
-#: functions.php:278
-msgid "sets the story’s location"
-msgstr ""
-
-#: functions.php:279
-msgid "adds a route stop"
-msgstr ""
-
-#: functions.php:282
-msgid "Place name"
-msgstr ""
-
-#: functions.php:284 functions.php:622
-msgid "Day"
-msgstr ""
-
-#: functions.php:286
-msgid "Add stop"
-msgstr ""
-
-#: functions.php:287
-msgid "Cancel"
-msgstr ""
-
-#: functions.php:288
-msgid "Click the map to set the location or add a stop. Drag a pin to move it."
-msgstr ""
-
-#: functions.php:288
-msgid "Click the map to add a stop. Drag a pin to move it."
-msgstr ""
-
-#: functions.php:293
-msgid "VoyageLight · Geotag & Travel Map"
-msgstr ""
-
-#: functions.php:306 functions.php:626
-msgid "Location"
-msgstr ""
-
-#: functions.php:306
-msgid ""
-"Paste coordinates or a map link, such as 39.8628, -4.0273 or 39°51′46″N "
-"4°01′38″W. Links from Google Maps, Apple Maps and OpenStreetMap and geo: "
-"addresses work too. Leave it empty for no location."
-msgstr ""
-
-#. translators: 1: the location as typed, 2: why it couldn't be read.
-#: functions.php:311 functions.php:617
-#, php-format
-msgid "The location “%1$s” couldn’t be read: %2$s The saved location was kept."
+#: inc/journeys.php
+#: inc/locations.php
+msgid "No location set."
 msgstr ""
 
 #. translators: %s: latitude and longitude, such as 39.86280, -4.02730.
-#: functions.php:316 functions.php:609
+#: inc/journeys.php
+#: inc/locations.php
 #, php-format
 msgid "Reads as %s"
 msgstr ""
 
-#: functions.php:318 functions.php:607
-msgid "No location set."
+#: inc/journeys.php
+#: inc/locations.php
+msgid "These lines couldn’t be read and are not on the map:"
 msgstr ""
 
-#: functions.php:322
-msgid ""
-"Short links such as maps.app.goo.gl can’t be read here: open the link, then "
-"copy the full address from the browser’s address bar."
-msgstr ""
-
-#: functions.php:323
-msgid "Route stops"
-msgstr ""
-
-#: functions.php:323
-msgid ""
-"One stop per line: Place name | location | short note. The location takes "
-"the same forms as above."
-msgstr ""
-
-#: functions.php:324
-msgid "Starting point"
-msgstr ""
-
-#: functions.php:326
-msgid ""
-"The map shows the stops in this order, joined by a straight line that is not "
-"a road or walking route. Publish only coordinates you are comfortable "
-"sharing. Empty coordinates mean no location."
-msgstr ""
-
-#: functions.php:462
-msgid "GEOGRAPHIC CONTEXT"
-msgstr ""
-
-#: functions.php:464
-msgid ""
-"See where the places are in relation to each other, and select a pin to read "
-"its note. Lines show the order of stops, not the actual route."
-msgstr ""
-
-#. translators: %d: number of places on the map.
-#: functions.php:467
+#. translators: 1: line number, 2: the text of the line, 3: why it couldn't be read.
+#: inc/journeys.php
+#: inc/locations.php
 #, php-format
-msgid "Interactive map · %d place"
-msgid_plural "Interactive map · %d places"
-msgstr[0] ""
-msgstr[1] ""
-
-#: functions.php:468 single-vl_trip.php:57
-msgid "Load map"
-msgstr ""
-
-#: functions.php:469
-msgid ""
-"Uses OpenStreetMap tiles and Leaflet from external services. Loading shares "
-"your IP address with them."
-msgstr ""
-
-#: functions.php:478 single.php:47
-msgid "Places in this story"
-msgstr ""
-
-#: functions.php:496 functions.php:761
-msgid "Journey"
-msgstr ""
-
-#: functions.php:497
-msgid "Add Journey"
-msgstr ""
-
-#: functions.php:498
-msgid "Edit Journey"
-msgstr ""
-
-#: functions.php:528
-msgid "Journey itinerary & GeoTags"
-msgstr ""
-
-#: functions.php:529
-msgid "Related journey"
-msgstr ""
-
-#: functions.php:536
-msgid "One place per line:"
-msgstr ""
-
-#: functions.php:536
-msgid "Day | Place | location | short note | optional post ID"
-msgstr ""
-
-#: functions.php:536
-msgid ""
-"The location can be coordinates or a map link, as in a story’s Location "
-"field."
-msgstr ""
-
-#: functions.php:536
-msgid "The map uses these coordinates, not the photos’ EXIF."
-msgstr ""
-
-#: functions.php:538
-msgid "Arrive and explore"
-msgstr ""
-
-#: functions.php:540
-msgid ""
-"Day numbers set the order of the itinerary. Locations are shown to everyone. "
-"Dashed lines show the order of stops, not a route to follow. A post ID links "
-"a stop to a published story."
-msgstr ""
-
-#: functions.php:603
-msgid "Hide map"
-msgstr ""
-
-#: functions.php:606
-msgid "Story location"
+msgid "Line %1$d: “%2$s” — %3$s"
 msgstr ""
 
 #. translators: 1: most lines the box keeps, 2: most characters it keeps.
-#: functions.php:615
+#: inc/journeys.php
 #, php-format
-msgid ""
-"This box keeps at most %1$d lines and %2$d characters; the rest is not saved."
+msgid "This box keeps at most %1$d lines and %2$d characters; the rest is not saved."
 msgstr ""
 
-#: functions.php:618
+#. translators: 1: the location as typed, 2: why it couldn't be read.
+#: inc/journeys.php
+#: inc/locations.php
+#, php-format
+msgid "The location “%1$s” couldn’t be read: %2$s The saved location was kept."
+msgstr ""
+
+#: inc/journeys.php
 msgid "Saved. Some places couldn’t be read and are not on the map."
 msgstr ""
 
-#: functions.php:619
+#: inc/journeys.php
 msgid "Searching…"
 msgstr ""
 
-#: functions.php:620
+#: inc/journeys.php
 msgid "No places found."
 msgstr ""
 
-#: functions.php:621
+#: inc/journeys.php
 msgid "The search failed. Check your connection and try again."
 msgstr ""
 
-#: functions.php:627
+#: inc/journeys.php
+#: inc/locations.php
+msgid "Day"
+msgstr ""
+
+#: inc/journeys.php
+#: inc/locations.php
+msgid "Location"
+msgstr ""
+
+#: inc/journeys.php
 msgid "Note"
 msgstr ""
 
-#: functions.php:629
+#: inc/journeys.php
 msgid "— No story —"
 msgstr ""
 
-#: functions.php:630
+#: inc/journeys.php
 msgid "Linked to this journey"
 msgstr ""
 
-#: functions.php:631
+#: inc/journeys.php
 msgid "Other stories"
 msgstr ""
 
-#: functions.php:632
+#: inc/journeys.php
 msgid "Order"
 msgstr ""
 
-#: functions.php:633
+#: inc/journeys.php
 msgid "Move up"
 msgstr ""
 
-#: functions.php:634
+#: inc/journeys.php
 msgid "Move down"
 msgstr ""
 
-#: functions.php:635
+#: inc/journeys.php
 msgid "Remove"
 msgstr ""
 
-#: functions.php:636
+#: inc/journeys.php
 msgid "Add row"
 msgstr ""
 
-#: functions.php:637
+#: inc/journeys.php
 msgid "Add stops from linked stories"
 msgstr ""
 
 #. translators: %d: number of rows added.
-#: functions.php:639
+#: inc/journeys.php
 #, php-format
 msgid "Rows added from linked stories: %d"
 msgstr ""
 
-#: functions.php:640
+#: inc/journeys.php
 msgid "No linked story with a location is missing from the table."
 msgstr ""
 
-#: functions.php:641
+#: inc/journeys.php
 msgid "Edit as text"
 msgstr ""
 
-#: functions.php:642
+#: inc/journeys.php
 msgid "Edit as rows"
 msgstr ""
 
-#: functions.php:680
+#: inc/journeys.php
 msgid "This story belongs to:"
 msgstr ""
 
-#: functions.php:681
+#: inc/journeys.php
 msgid "— No journey —"
 msgstr ""
 
-#: functions.php:685
+#: inc/journeys.php
 msgid "Published stories appear on their journey’s page."
 msgstr ""
 
 #. translators: %d: number of stops in a journey.
-#: functions.php:763
+#: inc/journeys.php
 #, php-format
 msgid "%d stop"
 msgid_plural "%d stops"
 msgstr[0] ""
 msgstr[1] ""
 
-#: header.php:14
-msgid "Skip to content"
+#: inc/locations.php
+msgid "There is no location."
 msgstr ""
 
-#: header.php:21
-msgid "Toggle navigation"
+#: inc/locations.php
+msgid "Short links can’t be read without opening them. Open the link, then copy the full address from the browser’s address bar."
 msgstr ""
 
-#: header.php:29
-msgid "Home"
+#: inc/locations.php
+msgid "This link has no coordinates in it. Open the place on the map, then copy the address again."
 msgstr ""
 
-#: header.php:30
-msgid "Stories"
+#: inc/locations.php
+msgid "Out of range: latitude goes from -90 to 90 and longitude from -180 to 180."
 msgstr ""
 
-#: header.php:37
-msgid "Toggle light or dark theme"
+#: inc/locations.php
+msgid "This is not a location the theme can read."
 msgstr ""
 
-#: index.php:3
+#: inc/locations.php
+msgid "The place name is missing."
+msgstr ""
+
+#. translators: %d: highest day number.
+#: inc/locations.php
+#, php-format
+msgid "The day must be a number from 1 to %d."
+msgstr ""
+
+#: inc/locations.php
+msgid "The map loads its tiles from OpenStreetMap, which sees your IP address."
+msgstr ""
+
+#: inc/locations.php
+msgid "Find a place"
+msgstr ""
+
+#: inc/locations.php
+#: searchform.php
+msgid "Search"
+msgstr ""
+
+#: inc/locations.php
+msgid "Search by OpenStreetMap Nominatim"
+msgstr ""
+
+#: inc/locations.php
+msgid "Pressing Search sends what you typed to it."
+msgstr ""
+
+#: inc/locations.php
+msgid "A click on the map"
+msgstr ""
+
+#: inc/locations.php
+msgid "sets the story’s location"
+msgstr ""
+
+#: inc/locations.php
+msgid "adds a route stop"
+msgstr ""
+
+#: inc/locations.php
+msgid "Place name"
+msgstr ""
+
+#: inc/locations.php
+msgid "Add stop"
+msgstr ""
+
+#: inc/locations.php
+msgid "Cancel"
+msgstr ""
+
+#: inc/locations.php
+msgid "Click the map to set the location or add a stop. Drag a pin to move it."
+msgstr ""
+
+#: inc/locations.php
+msgid "Click the map to add a stop. Drag a pin to move it."
+msgstr ""
+
+#: inc/locations.php
+msgid "VoyageLight · Geotag & Travel Map"
+msgstr ""
+
+#: inc/locations.php
+msgid "Paste coordinates or a map link, such as 39.8628, -4.0273 or 39°51′46″N 4°01′38″W. Links from Google Maps, Apple Maps and OpenStreetMap and geo: addresses work too. Leave it empty for no location."
+msgstr ""
+
+#: inc/locations.php
+msgid "Short links such as maps.app.goo.gl can’t be read here: open the link, then copy the full address from the browser’s address bar."
+msgstr ""
+
+#: inc/locations.php
+msgid "Route stops"
+msgstr ""
+
+#: inc/locations.php
+msgid "One stop per line: Place name | location | short note. The location takes the same forms as above."
+msgstr ""
+
+#: inc/locations.php
+msgid "Starting point"
+msgstr ""
+
+#: inc/locations.php
+msgid "The map shows the stops in this order, joined by a straight line that is not a road or walking route. Publish only coordinates you are comfortable sharing. Empty coordinates mean no location."
+msgstr ""
+
+#: inc/locations.php
+msgid "Geographic context"
+msgstr ""
+
+#: inc/locations.php
+msgid "See where the places are in relation to each other, and select a pin to read its note. Lines show the order of stops, not the actual route."
+msgstr ""
+
+#. translators: %d: number of places on the map.
+#: inc/locations.php
+#, php-format
+msgid "Interactive map · %d place"
+msgid_plural "Interactive map · %d places"
+msgstr[0] ""
+msgstr[1] ""
+
+#: inc/locations.php
+#: single-vl_trip.php
+msgid "Load map"
+msgstr ""
+
+#: inc/locations.php
+#: single-vl_trip.php
+msgid "Uses map tiles from OpenStreetMap. Loading shares your IP address with it."
+msgstr ""
+
+#: inc/locations.php
+#: template-parts/home-map.php
+msgid "Travel atlas"
+msgstr ""
+
+#: inc/locations.php
+#: single.php
+msgid "Places in this story"
+msgstr ""
+
+#: index.php
 msgid "All stories"
 msgstr ""
 
-#: index.php:7
-msgid "JOURNAL"
+#: index.php
+msgid "Journal"
 msgstr ""
 
-#: index.php:16
+#: index.php
 msgid "No stories published yet."
 msgstr ""
 
 #. translators: %s: the words searched for.
-#: search.php:6
+#: search.php
 #, php-format
 msgid "Search results for: %s"
 msgstr ""
 
-#: search.php:15
+#: search.php
 msgid "No results found."
 msgstr ""
 
-#: searchform.php:3
+#: search.php
+msgid "Try other words, or browse the travel categories."
+msgstr ""
+
+#: searchform.php
 msgid "Search the journal"
 msgstr ""
 
-#: searchform.php:5
+#: searchform.php
 msgid "Search stories, places…"
 msgstr ""
 
-#: sidebar.php:2
-msgid "Travel categories"
-msgstr ""
-
-#: single-vl_trip.php:19
-msgid "JOURNEY"
-msgstr ""
-
 #. translators: %d: number of days in a journey.
-#: single-vl_trip.php:26
+#: single-vl_trip.php
 #, php-format
 msgid "%d day"
 msgid_plural "%d days"
@@ -814,100 +876,233 @@ msgstr[0] ""
 msgstr[1] ""
 
 #. translators: %d: number of places in a journey.
-#: single-vl_trip.php:28
+#: single-vl_trip.php
 #, php-format
 msgid "%d place"
 msgid_plural "%d places"
 msgstr[0] ""
 msgstr[1] ""
 
-#. translators: %d: number of stories linked to a journey.
-#: single-vl_trip.php:30
-#, php-format
-msgid "%d story"
-msgid_plural "%d stories"
-msgstr[0] ""
-msgstr[1] ""
-
-#: single-vl_trip.php:42
-msgid "JOURNEY MAP"
-msgstr ""
-
-#: single-vl_trip.php:43
-msgid "Daily Stops & Map"
-msgstr ""
-
-#: single-vl_trip.php:44
-msgid ""
-"See where each day’s stops are in relation to each other. Dashed lines show "
-"the order of visits, not a route to follow."
-msgstr ""
-
-#: single-vl_trip.php:47
-msgid "Select journey day"
-msgstr ""
-
-#: single-vl_trip.php:51
-msgid "All Days"
-msgstr ""
-
-#: single-vl_trip.php:54
+#: single-vl_trip.php
 msgid "Journey map"
 msgstr ""
 
-#: single-vl_trip.php:56
+#: single-vl_trip.php
+msgid "Daily stops & map"
+msgstr ""
+
+#: single-vl_trip.php
+msgid "See where each day’s stops are in relation to each other. Dashed lines show the order of visits, not a route to follow."
+msgstr ""
+
+#: single-vl_trip.php
+msgid "Select journey day"
+msgstr ""
+
+#: single-vl_trip.php
+msgid "All days"
+msgstr ""
+
+#: single-vl_trip.php
 msgid "Interactive journey map"
 msgstr ""
 
-#: single-vl_trip.php:58
-msgid "Loading connects to the Leaflet CDN and OpenStreetMap tile services."
+#: single-vl_trip.php
+msgid "Day by day"
 msgstr ""
 
-#: single-vl_trip.php:69
-msgid "DAY BY DAY"
-msgstr ""
-
-#: single-vl_trip.php:70
+#: single-vl_trip.php
 msgid "Itinerary"
 msgstr ""
 
-#: single-vl_trip.php:71
+#: single-vl_trip.php
 msgid "Stops and notes in order. Select a linked story to read more."
 msgstr ""
 
-#: single-vl_trip.php:98
-msgid ""
-"No itinerary stops yet. Add Day | Place | location in the Journey editor."
+#: single-vl_trip.php
+msgid "No itinerary stops yet. Add Day | Place | location in the Journey editor."
 msgstr ""
 
-#: single-vl_trip.php:107
+#: single-vl_trip.php
 msgid "Stories from this journey"
 msgstr ""
 
-#: single-vl_trip.php:118
+#: single-vl_trip.php
 msgid "No linked travel stories yet. Choose this journey in a story’s editor."
 msgstr ""
 
 #. translators: 1: author name, 2: minutes to read.
-#: single.php:18
+#: single.php
 #, php-format
 msgid "By %1$s · %2$d min read"
 msgid_plural "By %1$s · %2$d min read"
 msgstr[0] ""
 msgstr[1] ""
 
-#: single.php:45
-msgid "PART OF A JOURNEY"
+#: single.php
+msgid "Part of a journey"
 msgstr ""
 
-#: single.php:53
+#: single.php
 msgid "Tags"
 msgstr ""
 
-#: single.php:71
+#: single.php
+msgid "Keep exploring"
+msgstr ""
+
+#: single.php
+msgid "Related stories"
+msgstr ""
+
+#: single.php
 msgid "← Previous story"
 msgstr ""
 
-#: single.php:72
+#: single.php
 msgid "Next story →"
+msgstr ""
+
+#: template-parts/home-collections.php
+msgid "Collections"
+msgstr ""
+
+#: template-parts/home-collections.php
+msgid "Every place has a story."
+msgstr ""
+
+#: template-parts/home-collections.php
+msgid "Follow the route, the local culture, and the little details along the way. Build a travel journal with your own voice."
+msgstr ""
+
+#: template-parts/home-collections.php
+msgid "Explore the journal ↗"
+msgstr ""
+
+#: template-parts/home-destinations.php
+msgid "Destinations & discovery"
+msgstr ""
+
+#: template-parts/home-destinations.php
+msgid "Explore stories by country and region, then see where each place is on a map."
+msgstr ""
+
+#: template-parts/home-journeys.php
+msgid "One journey · many stories"
+msgstr ""
+
+#: template-parts/home-journeys.php
+msgid "Follow each trip day by day, with stops and stories together on one map."
+msgstr ""
+
+#: template-parts/home-journeys.php
+msgid "All journeys ↗"
+msgstr ""
+
+#: template-parts/home-journeys.php
+msgid "Publish your first Journey from the WordPress dashboard to show it here."
+msgstr ""
+
+#: template-parts/home-map.php
+msgid "Place & context"
+msgstr ""
+
+#: template-parts/home-map.php
+msgid "Explore the travel map"
+msgstr ""
+
+#: template-parts/home-map.php
+msgid "See where places are, and how they relate to nearby destinations."
+msgstr ""
+
+#: template-parts/home-map.php
+msgid "Your travel atlas starts here."
+msgstr ""
+
+#: template-parts/home-map.php
+msgid "Give published travel posts a latitude and longitude to populate this map automatically."
+msgstr ""
+
+#: template-parts/home-stories.php
+msgid "Latest travel stories"
+msgstr ""
+
+#: template-parts/home-stories.php
+msgid "Places, people, and the moments worth remembering."
+msgstr ""
+
+#: template-parts/home-stories.php
+msgid "All stories ↗"
+msgstr ""
+
+#: template-parts/home-stories.php
+msgid "Eqi Glacier: A Close Encounter with the Icefjord"
+msgstr ""
+
+#: template-parts/home-stories.php
+msgid "Greenland"
+msgstr ""
+
+#: template-parts/home-stories.php
+msgid "Travel stories"
+msgstr ""
+
+#: template-parts/home-stories.php
+msgid "Under the Northern Lights"
+msgstr ""
+
+#: template-parts/home-stories.php
+msgid "Nordic"
+msgstr ""
+
+#: template-parts/home-stories.php
+msgid "Nature & Scenery"
+msgstr ""
+
+#: template-parts/home-stories.php
+msgid "Toledo: A City of History and Light"
+msgstr ""
+
+#: template-parts/home-stories.php
+msgid "Spain"
+msgstr ""
+
+#: template-parts/home-stories.php
+msgid "Culture"
+msgstr ""
+
+#: template-parts/home-stories.php
+msgid "Tokyo: A Walk Through Spring"
+msgstr ""
+
+#: template-parts/home-stories.php
+msgid "Japan"
+msgstr ""
+
+#: template-parts/home-stories.php
+msgid "City Walks"
+msgstr ""
+
+#: template-parts/home-stories.php
+msgid "A Morning in the Baltic Old Town"
+msgstr ""
+
+#: template-parts/home-stories.php
+msgid "Baltic"
+msgstr ""
+
+#: template-parts/home-stories.php
+msgid "History & Culture"
+msgstr ""
+
+#: template-parts/home-stories.php
+msgid "Sample"
+msgstr ""
+
+#: template-parts/home-stories.php
+msgid "Demo illustration. Publish your own story to replace this sample."
+msgstr ""
+
+#: template-parts/home-tiles.php
+msgid "Explore travel sections"
 msgstr ""

@@ -16,7 +16,8 @@ while ( have_posts() ) :
 	?>
 	<article class="article">
 		<div class="article-intro">
-			<span class="eyebrow"><?php esc_html_e( 'JOURNEY', 'voyagelight' ); ?></span>
+			<?php echo vl_breadcrumbs(); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- escaped in vl_breadcrumbs(). ?>
+			<span class="eyebrow"><?php esc_html_e( 'Journey', 'voyagelight' ); ?></span>
 			<h1><?php the_title(); ?></h1>
 			<?php if ( has_excerpt() ) : ?>
 				<p class="article-deck"><?php echo esc_html( get_the_excerpt() ); ?></p>
@@ -35,27 +36,33 @@ while ( have_posts() ) :
 		<?php endif; ?>
 		<div class="article-content"><?php the_content(); ?></div>
 
+		<?php
+		// A password-protected Journey keeps its places and stories hidden until the password is entered.
+		if ( ! post_password_required() ) :
+			?>
 		<?php if ( $days ) : ?>
 		<section class="vl-trip-explorer" data-itinerary="<?php echo esc_attr( wp_json_encode( vl_trip_explorer_stops( $days ), JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_AMP | JSON_HEX_QUOT | JSON_UNESCAPED_UNICODE ) ); ?>">
 			<div class="section-heading">
 				<div>
-					<span class="eyebrow"><?php esc_html_e( 'JOURNEY MAP', 'voyagelight' ); ?></span>
-					<h2><?php esc_html_e( 'Daily Stops & Map', 'voyagelight' ); ?></h2>
+					<span class="eyebrow"><?php esc_html_e( 'Journey map', 'voyagelight' ); ?></span>
+					<h2><?php esc_html_e( 'Daily stops & map', 'voyagelight' ); ?></h2>
 					<p><?php esc_html_e( 'See where each day’s stops are in relation to each other. Dashed lines show the order of visits, not a route to follow.', 'voyagelight' ); ?></p>
 				</div>
 			</div>
 			<div class="vl-day-tabs" role="group" aria-label="<?php esc_attr_e( 'Select journey day', 'voyagelight' ); ?>">
+				<?php // All days first: it is the one shown when the page opens. ?>
+				<button type="button" class="vl-day-tab" data-day="all" aria-pressed="true"><?php esc_html_e( 'All days', 'voyagelight' ); ?></button>
 				<?php foreach ( $daynumbers as $day ) : ?>
 					<button type="button" class="vl-day-tab" data-day="<?php echo esc_attr( $day ); ?>" aria-pressed="false"><?php echo esc_html( vl_day_label( $day ) ); ?></button>
 				<?php endforeach; ?>
-				<button type="button" class="vl-day-tab" data-day="all" aria-pressed="true"><?php esc_html_e( 'All Days', 'voyagelight' ); ?></button>
 			</div>
 			<div class="vl-trip-explorer-grid">
 				<div class="vl-trip-map" role="region" aria-label="<?php esc_attr_e( 'Journey map', 'voyagelight' ); ?>">
 					<div class="vl-trip-map-placeholder">
+						<?php echo vl_pin_icon(); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- fixed markup. ?>
 						<p><?php esc_html_e( 'Interactive journey map', 'voyagelight' ); ?></p>
 						<button class="vl-trip-load" type="button"><?php esc_html_e( 'Load map', 'voyagelight' ); ?></button>
-						<small><?php esc_html_e( 'Loading connects to the Leaflet CDN and OpenStreetMap tile services.', 'voyagelight' ); ?></small>
+						<small><?php esc_html_e( 'Uses map tiles from OpenStreetMap. Loading shares your IP address with it.', 'voyagelight' ); ?></small>
 					</div>
 				</div>
 				<div class="vl-trip-stop-panel"><h3 class="vl-day-heading"></h3><ol class="vl-day-stop-list"></ol></div>
@@ -66,7 +73,7 @@ while ( have_posts() ) :
 		<section class="journey-timeline">
 			<div class="section-heading">
 				<div>
-					<span class="eyebrow"><?php esc_html_e( 'DAY BY DAY', 'voyagelight' ); ?></span>
+					<span class="eyebrow"><?php esc_html_e( 'Day by day', 'voyagelight' ); ?></span>
 					<h2><?php esc_html_e( 'Itinerary', 'voyagelight' ); ?></h2>
 					<p><?php esc_html_e( 'Stops and notes in order. Select a linked story to read more.', 'voyagelight' ); ?></p>
 				</div>
@@ -103,7 +110,7 @@ while ( have_posts() ) :
 		<section class="journey-related">
 			<div class="section-heading">
 				<div>
-					<span class="eyebrow"><?php esc_html_e( 'TRAVEL JOURNAL', 'voyagelight' ); ?></span>
+					<span class="eyebrow"><?php esc_html_e( 'Travel journal', 'voyagelight' ); ?></span>
 					<h2><?php esc_html_e( 'Stories from this journey', 'voyagelight' ); ?></h2>
 				</div>
 			</div>
@@ -119,6 +126,7 @@ while ( have_posts() ) :
 			}
 			?>
 		</section>
+		<?php endif; ?>
 	</article>
 <?php endwhile; ?>
 </main>

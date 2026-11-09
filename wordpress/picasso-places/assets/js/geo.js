@@ -131,7 +131,9 @@
 			where = cols[2] + ', ' + cols[3];
 			rest = cols.slice(4);
 		}
-		return { day: cols[0], name: cols[1], location: where, note: rest[0] || '', post: rest[1] || '' };
+		// A note can hold a "|", so the post ID is the last column after it, when that is a number or empty.
+		const post = rest.length >= 2 && /^\d*$/.test(rest[rest.length - 1]) ? rest.pop() : '';
+		return { day: cols[0], name: cols[1], location: where, note: rest.join(' | '), post };
 	}
 
 	function stopLine(line) {

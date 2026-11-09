@@ -15,8 +15,8 @@
 		if (window.L) return Promise.resolve();
 		if (loading) return loading;
 		loading = Promise.all([
-			asset('link', { rel: 'stylesheet', href: 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css', integrity: 'sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=', crossOrigin: 'anonymous' }),
-			asset('script', { src: 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js', integrity: 'sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=', crossOrigin: 'anonymous' })
+			asset('link', { rel: 'stylesheet', href: text.leaflet + 'leaflet.css' }),
+			asset('script', { src: text.leaflet + 'leaflet.js' })
 		]).catch(function (error) {
 			loading = null;
 			throw error;
@@ -31,6 +31,9 @@
 		if (!raw) return;
 		var data;
 		try { data = JSON.parse(raw); } catch (ex) { return; }
+		// The button goes with the placeholder; a keyboard user who pressed it lands on the map, which Leaflet
+		// makes focusable. Asked now: disabling the button below takes the focus off it.
+		var hadFocus = document.activeElement === button;
 		button.disabled = true;
 		button.textContent = text.loadingMap;
 		leaflet().then(function () {
@@ -67,6 +70,7 @@
 			else if (bounds.length) view.fitBounds(bounds, { padding: [35, 35], maxZoom: 12 });
 			else view.setView([20, 0], 2);
 			setTimeout(function () { view.invalidateSize(); }, 100);
+			if (hadFocus) view.getContainer().focus({ preventScroll: true });
 		}).catch(function () {
 			button.disabled = false;
 			button.textContent = text.retryMap;

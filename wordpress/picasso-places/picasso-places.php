@@ -3,7 +3,7 @@
  * Plugin Name:       Picasso Places
  * Description:       Locations, route stops, maps and Journeys for travel stories, with any theme, including the fields Picasso publishes. It does nothing while the VoyageLight theme is active, which has them built in.
  * Version:           1.0.0
- * Requires at least: 6.2
+ * Requires at least: 6.4
  * Requires PHP:      7.4
  * Author:            Picasso
  * License:           GPLv2 or later
@@ -42,7 +42,14 @@ function start() {
 	if ( theme_provides_places() ) {
 		return;
 	}
-	load_plugin_textdomain( 'picasso-places', false, dirname( plugin_basename( __FILE__ ) ) . '/languages' );
+	// `make theme` makes an English and a Traditional Chinese build, each with inc/language.php naming
+	// its language, shown whatever the site's language; without it, as in the source, the site's language.
+	$language = is_readable( __DIR__ . '/inc/language.php' ) ? (string) include __DIR__ . '/inc/language.php' : '';
+	if ( '' === $language ) {
+		load_plugin_textdomain( 'picasso-places', false, dirname( plugin_basename( __FILE__ ) ) . '/languages' );
+	} elseif ( is_readable( __DIR__ . '/languages/picasso-places-' . $language . '.mo' ) ) {
+		load_textdomain( 'picasso-places', __DIR__ . '/languages/picasso-places-' . $language . '.mo' );
+	}
 	require_once __DIR__ . '/inc/geo.php';
 	require_once __DIR__ . '/inc/places.php';
 	require_once __DIR__ . '/inc/editor.php';

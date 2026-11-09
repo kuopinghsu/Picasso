@@ -435,6 +435,9 @@ pub enum DayFilter {
     Any,
     Unassigned,
     Day(i64),
+    /// Members dated from one day to the other: by their Day's date, or
+    /// else by when they were taken, in the Trip's zone.
+    Dates(NaiveDate, NaiveDate),
     /// Members Suggest days couldn't place and the user hasn't placed since.
     Review,
 }
@@ -658,6 +661,9 @@ pub struct Story {
     pub subtitle: String,
     pub author: String,
     pub show_date: bool,
+    /// The dates it is about, the first and the last, in order; `None` for
+    /// the whole Trip.
+    pub dates: Option<(NaiveDate, NaiveDate)>,
     /// Text that opens the Story, before its blocks; empty for none.
     pub introduction: String,
     /// Text that closes the Story, after its blocks; empty for none.
@@ -851,11 +857,29 @@ pub enum Block {
     Info { title: String, items: Vec<(String, String)> },
     /// A web page to read more, with its title and a note.
     Link { url: String, title: String, note: String },
+    /// A YouTube video by its web address (see [`youtube`]), with a
+    /// caption below.
+    YouTube { url: String, caption: String },
+    /// One of the library's videos, played from `start` to `end` in
+    /// milliseconds; an `end` of 0 plays it to its end (see [`clip_range`]).
+    Video { media: MediaUse, start: u32, end: u32 },
+    /// Text in rows and columns, every row as long as the others, the
+    /// first the header row when `header`, with a caption below. `widths`
+    /// are the columns' shares of the width in percent, or none when the
+    /// columns fit their text (see [`table_widths_fit`]).
+    Table { header: bool, rows: Vec<Vec<String>>, widths: Vec<u8>, caption: String },
     /// A kind or version this build doesn't know, kept as it was read.
     Unknown { kind: String, version: i64, payload: String, media: Vec<MediaUse> },
 }
 
 impl Block {
+    /// An empty table of `columns` × `rows` with a header row, each within
+    /// what a table allows.
+    pub fn table(columns: usize, rows: usize) -> Block {
+        let row = vec![String::new(); columns.clamp(1, TABLE_COLUMNS_MAX)];
+        Block::Table { header: true, rows: vec![row; rows.clamp(1, TABLE_ROWS_MAX)], widths: Vec::new(), caption: String::new() }
+    }
+
     /// Name stored with the block.
     pub fn kind(&self) -> &str {
         match self {
@@ -866,6 +890,9 @@ impl Block {
             Block::Route { .. } => "route",
             Block::Info { .. } => "info",
             Block::Link { .. } => "link",
+            Block::YouTube { .. } => "youtube",
+            Block::Video { .. } => "video",
+            Block::Table { .. } => "table",
             Block::Paragraph(_) => "paragraph",
             Block::Photo(_) => "photo",
             Block::Gallery(_) => "gallery",
@@ -894,6 +921,9 @@ impl Block {
             Block::Route { caption, source, route } => json!({ "caption": caption, "source": source, "route": route }).to_string(),
             Block::Info { title, items } => json!({ "title": title, "items": items }).to_string(),
             Block::Link { url, title, note } => json!({ "url": url, "title": title, "note": note }).to_string(),
+            Block::YouTube { url, caption } => json!({ "url": url, "caption": caption }).to_string(),
+            Block::Video { start, end, .. } => json!({ "start": start, "end": end }).to_string(),
+            Block::Table { header, rows, widths, caption } => json!({ "header": header, "rows": rows, "widths": widths, "caption": caption }).to_string(),
             Block::Photo(_) | Block::Gallery(_) | Block::Separator => "{}".into(),
             Block::Unknown { payload, .. } => payload.clone(),
         }
@@ -901,7 +931,7 @@ impl Block {
 
     pub fn media(&self) -> &[MediaUse] {
         match self {
-            Block::Photo(one) => std::slice::from_ref(one),
+            Block::Photo(one) | Block::Video { media: one, .. } => std::slice::from_ref(one),
             Block::Gallery(media) | Block::Grid { media, .. } | Block::Unknown { media, .. } => media,
             _ => &[],
         }
@@ -945,6 +975,31 @@ impl Block {
                 _ => unknown(media),
             };
         }
+        if kind == "youtube" {
+            return match (value["url"].as_str(), value["caption"].as_str()) {
+                (Some(url), Some(caption)) if media.is_empty() => Block::YouTube { url: url.into(), caption: caption.into() },
+                _ => unknown(media),
+            };
+        }
+        if kind == "video" {
+            let time = |key: &str| value[key].as_u64().and_then(|ms| u32::try_from(ms).ok());
+            return match (time("start"), time("end")) {
+                (Some(start), Some(end)) if media.len() == 1 && (end == 0 || end > start) => Block::Video { media: media.remove(0), start, end },
+                _ => unknown(media),
+            };
+        }
+        if kind == "table" {
+            let rows = serde_json::from_value::<Vec<Vec<String>>>(value["rows"].clone()).ok().filter(|rows| table_fits(rows));
+            // Widths that don't fit the columns leave them fitting their text.
+            let widths = |rows: &[Vec<String>]| {
+                let widths = serde_json::from_value::<Vec<u8>>(value["widths"].clone()).unwrap_or_default();
+                if table_widths_fit(&widths, rows[0].len()) { widths } else { Vec::new() }
+            };
+            return match (value["header"].as_bool(), rows, value["caption"].as_str()) {
+                (Some(header), Some(rows), Some(caption)) if media.is_empty() => Block::Table { header, widths: widths(&rows), rows, caption: caption.into() },
+                _ => unknown(media),
+            };
+        }
         match (kind, text, media.len()) {
             ("heading", Some(text), 0) => Block::Heading(text),
             ("subheading", Some(text), 0) => Block::Subheading(text),
@@ -969,6 +1024,19 @@ impl Block {
     }
 }
 
+/// Shortest part of a video a Video block plays, in milliseconds.
+pub const CLIP_MIN_MS: u32 = 500;
+
+/// The part of a video `duration` seconds long (0 while unknown) that a
+/// Video block from `start` to `end` milliseconds plays, in seconds. An
+/// `end` of 0, or past the video's end, is its end.
+pub fn clip_range(start: u32, end: u32, duration: f64) -> (f64, f64) {
+    let start = f64::from(start) / 1000.0;
+    let end = if end == 0 { duration } else { f64::from(end) / 1000.0 };
+    let end = if duration > 0.0 { end.min(duration) } else { end };
+    (start.min(end).max(0.0), end.max(0.0))
+}
+
 /// A Link block's address when it can be followed: http or https only, so
 /// a page never links to a file or a script.
 pub fn web_address(url: &str) -> Option<&str> {
@@ -979,8 +1047,137 @@ pub fn web_address(url: &str) -> Option<&str> {
     (web && host && !url.contains(char::is_whitespace)).then_some(url)
 }
 
+/// A YouTube video, found in a web address by [`youtube`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct YouTubeVideo {
+    /// The video's id, 11 letters, digits, `-`, or `_`.
+    pub id: String,
+    /// Where it starts playing, in seconds.
+    pub start: u32,
+}
+
+impl YouTubeVideo {
+    /// The video's page on YouTube.
+    pub fn watch(&self) -> String {
+        match self.start {
+            0 => format!("https://www.youtube.com/watch?v={}", self.id),
+            start => format!("https://www.youtube.com/watch?v={}&t={start}s", self.id),
+        }
+    }
+
+    /// Where it starts, as 1:30 or 1:15:00; empty from the beginning.
+    pub fn start_label(&self) -> String {
+        let (hours, minutes, seconds) = (self.start / 3600, self.start / 60 % 60, self.start % 60);
+        match (self.start, hours) {
+            (0, _) => String::new(),
+            (_, 0) => format!("{minutes}:{seconds:02}"),
+            _ => format!("{hours}:{minutes:02}:{seconds:02}"),
+        }
+    }
+}
+
+/// The YouTube video a web address plays: one from youtube.com's watch,
+/// shorts, live, or embed pages, or from youtu.be, starting where its
+/// `t` or `start` says. A playlist's address plays no one video.
+pub fn youtube(url: &str) -> Option<YouTubeVideo> {
+    let rest = web_address(url)?.split_once("://")?.1;
+    let (address, fragment) = rest.split_once('#').unwrap_or((rest, ""));
+    let (place, query) = address.split_once('?').unwrap_or((address, ""));
+    let (host, path) = place.split_once('/').unwrap_or((place, ""));
+    let host = host.rsplit_once('@').map_or(host, |(_, host)| host);
+    let host = host.split_once(':').map_or(host, |(host, _)| host).to_ascii_lowercase();
+    let host = ["www.", "m.", "music."].iter().find_map(|sub| host.strip_prefix(sub)).unwrap_or(&host);
+    let param = |name: &str| query.split('&').chain(fragment.split('&')).find_map(|pair| pair.strip_prefix(name)?.strip_prefix('='));
+    let mut parts = path.split('/');
+    let id = match (host, parts.next()) {
+        ("youtu.be", Some(id)) => id,
+        ("youtube.com" | "youtube-nocookie.com", Some("watch")) => param("v")?,
+        ("youtube.com" | "youtube-nocookie.com", Some("shorts" | "live" | "embed" | "v")) => parts.next()?,
+        _ => return None,
+    };
+    if id.len() != 11 || id == "videoseries" || !id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_') {
+        return None;
+    }
+    let start = param("t").or_else(|| param("start")).and_then(seconds).unwrap_or(0);
+    Some(YouTubeVideo { id: id.into(), start })
+}
+
+/// A time such as `90`, `90s`, or `1h2m3s`, in seconds.
+fn seconds(text: &str) -> Option<u32> {
+    if text.is_empty() {
+        return None;
+    }
+    let (mut total, mut number, mut digits) = (0u32, 0u32, false);
+    for c in text.chars() {
+        if let Some(digit) = c.to_digit(10) {
+            number = number.checked_mul(10)?.checked_add(digit)?;
+            digits = true;
+            continue;
+        }
+        let unit = match c {
+            'h' => 3600,
+            'm' => 60,
+            's' => 1,
+            _ => return None,
+        };
+        if !digits {
+            return None;
+        }
+        total = total.checked_add(number.checked_mul(unit)?)?;
+        (number, digits) = (0, false);
+    }
+    total.checked_add(number)
+}
+
 /// Most places across or down a grid.
 pub const GRID_MAX: u8 = 4;
+
+/// Most columns of a table.
+pub const TABLE_COLUMNS_MAX: usize = 8;
+
+/// Most rows of a table, its header row among them.
+pub const TABLE_ROWS_MAX: usize = 30;
+
+/// Whether `rows` make a table this build can show: each row as long as
+/// the others, with no more columns and rows than allowed.
+pub fn table_fits(rows: &[Vec<String>]) -> bool {
+    let columns = rows.first().map_or(0, Vec::len);
+    (1..=TABLE_ROWS_MAX).contains(&rows.len()) && (1..=TABLE_COLUMNS_MAX).contains(&columns) && rows.iter().all(|row| row.len() == columns)
+}
+
+/// Least share of a table's width a column can have, in percent.
+pub const TABLE_WIDTH_MIN: u8 = 5;
+
+/// Whether `widths` can be the widths of a table `columns` wide: none, or
+/// one share for each column, each at least [`TABLE_WIDTH_MIN`], making
+/// 100 together.
+pub fn table_widths_fit(widths: &[u8], columns: usize) -> bool {
+    widths.is_empty() || (widths.len() == columns && widths.iter().all(|&width| width >= TABLE_WIDTH_MIN) && widths.iter().map(|&width| u32::from(width)).sum::<u32>() == 100)
+}
+
+/// Shares in percent as `weights` are to each other, each at least
+/// [`TABLE_WIDTH_MIN`] and 100 together, for at most a table's columns.
+pub fn spread_widths(weights: &[f32]) -> Vec<u8> {
+    let total: f32 = weights.iter().map(|weight| weight.max(0.0)).sum();
+    let even = 100.0 / weights.len().max(1) as f32;
+    let mut widths: Vec<u8> = weights
+        .iter()
+        .map(|weight| if total > 0.0 { weight.max(0.0) / total * 100.0 } else { even })
+        .map(|share| (share.round() as u8).max(TABLE_WIDTH_MIN))
+        .collect();
+    // Rounding, and the least share, leave them off 100 by a few; the
+    // widest column makes it up.
+    loop {
+        let sum: u32 = widths.iter().map(|&width| u32::from(width)).sum();
+        let Some(widest) = (0..widths.len()).max_by_key(|&n| (widths[n], std::cmp::Reverse(n))) else { break };
+        match sum.cmp(&100) {
+            std::cmp::Ordering::Less => widths[widest] += 1,
+            std::cmp::Ordering::Greater if widths[widest] > TABLE_WIDTH_MIN => widths[widest] -= 1,
+            _ => break,
+        }
+    }
+    widths
+}
 
 /// The grid layouts offered, as (columns, rows).
 pub const GRID_LAYOUTS: [(u8, u8); 7] = [(2, 1), (1, 2), (3, 1), (2, 2), (3, 2), (2, 3), (3, 3)];
@@ -1242,6 +1439,41 @@ mod tests {
     }
 
     #[test]
+    fn a_youtube_address_gives_its_video_and_where_it_starts() {
+        let video = |id: &str, start| Some(YouTubeVideo { id: id.into(), start });
+        assert_eq!(youtube("https://www.youtube.com/watch?v=dQw4w9WgXcQ"), video("dQw4w9WgXcQ", 0));
+        assert_eq!(youtube(" https://youtu.be/dQw4w9WgXcQ?t=90 "), video("dQw4w9WgXcQ", 90));
+        assert_eq!(youtube("https://m.youtube.com/watch?feature=share&v=dQw4w9WgXcQ&t=1m30s"), video("dQw4w9WgXcQ", 90));
+        assert_eq!(youtube("https://YouTube.com/shorts/abc-DEF_123?si=x"), video("abc-DEF_123", 0));
+        assert_eq!(youtube("https://www.youtube.com/live/abc-DEF_123"), video("abc-DEF_123", 0));
+        assert_eq!(youtube("https://www.youtube-nocookie.com/embed/abc-DEF_123?start=75"), video("abc-DEF_123", 75));
+        assert_eq!(youtube("http://youtube.com/watch?v=abc-DEF_123#t=1h2m3s"), video("abc-DEF_123", 3723));
+        assert_eq!(youtube("https://youtu.be/abc-DEF_123?t=soon"), video("abc-DEF_123", 0), "a start it can't read starts at the beginning");
+        for bad in [
+            "https://www.youtube.com/watch?v=short",
+            "https://www.youtube.com/watch?v=abc-DEF_123x",
+            "https://www.youtube.com/watch?vv=abc-DEF_123",
+            "https://www.youtube.com/@channel",
+            "https://youtube.com.example.com/watch?v=abc-DEF_123",
+            "https://youtube.com@example.com/watch?v=abc-DEF_123",
+            "https://vimeo.com/123456789",
+            "https://www.youtube.com/embed/videoseries?list=PL0123456789",
+            "javascript:alert('youtu.be/abc-DEF_123')",
+            "youtu.be/abc-DEF_123",
+            "",
+        ] {
+            assert_eq!(youtube(bad), None, "{bad}");
+        }
+        let started = YouTubeVideo { id: "abc-DEF_123".into(), start: 90 };
+        assert_eq!(started.watch(), "https://www.youtube.com/watch?v=abc-DEF_123&t=90s");
+        assert_eq!(started.start_label(), "1:30");
+        let long = YouTubeVideo { start: 4500, ..started.clone() };
+        assert_eq!(long.start_label(), "1:15:00");
+        let whole = YouTubeVideo { start: 0, ..started };
+        assert_eq!((whole.watch().as_str(), whole.start_label().as_str()), ("https://www.youtube.com/watch?v=abc-DEF_123", ""));
+    }
+
+    #[test]
     fn blocks_read_back_what_they_store() {
         let photo = MediaUse { media_id: 3, caption: "Gion at dusk".into(), alt: "Lanterns on a street".into() };
         let blocks = [
@@ -1255,10 +1487,35 @@ mod tests {
             Block::Credits("Photos: me".into()),
             Block::Info { title: "Getting there".into(), items: vec![("Train".into(), "2 h from Lisbon".into()), (String::new(), "No \"booking\" needed".into())] },
             Block::Link { url: "https://example.com/ferry?a=1&b=2".into(), title: "Ferry times".into(), note: "Summer only".into() },
+            Block::YouTube { url: "https://youtu.be/abc-DEF_123?t=90".into(), caption: "The \"ferry\" leaving".into() },
+            Block::Video { media: photo.clone(), start: 1500, end: 0 },
+            Block::Video { media: MediaUse::new(6), start: 0, end: 12_250 },
+            Block::Table {
+                header: true,
+                rows: vec![vec!["Ferry".into(), "Leaves".into()], vec!["Lisbon \"A\"".into(), "9:00\n9:30".into()]],
+                widths: vec![70, 30],
+                caption: "In summer".into(),
+            },
+            Block::table(3, 2),
         ];
         for block in blocks {
             let read = Block::read(block.kind(), block.version(), &block.payload(), block.media().to_vec());
             assert_eq!(read, block);
+        }
+    }
+
+    #[test]
+    fn a_video_plays_the_part_chosen_within_the_video() {
+        assert_eq!(clip_range(0, 0, 30.0), (0.0, 30.0), "the whole video");
+        assert_eq!(clip_range(1500, 12_250, 30.0), (1.5, 12.25));
+        assert_eq!(clip_range(1500, 0, 30.0), (1.5, 30.0), "to its end");
+        assert_eq!(clip_range(1500, 45_000, 30.0), (1.5, 30.0), "a video cut shorter since ends at its end");
+        assert_eq!(clip_range(40_000, 45_000, 30.0), (30.0, 30.0));
+        assert_eq!(clip_range(1500, 12_250, 0.0), (1.5, 12.25), "while its length is unknown");
+        let read = |payload: &str, media: usize| Block::read("video", 1, payload, vec![MediaUse::new(1); media]);
+        assert_eq!(read(r#"{"start":0,"end":0}"#, 1), Block::Video { media: MediaUse::new(1), start: 0, end: 0 });
+        for kept in [(r#"{"start":5000,"end":5000}"#, 1), (r#"{"start":5000,"end":4000}"#, 1), (r#"{"start":-1,"end":0}"#, 1), (r#"{"start":0}"#, 1), (r#"{"start":0,"end":0}"#, 2), (r#"{"start":0,"end":0}"#, 0)] {
+            assert!(matches!(read(kept.0, kept.1), Block::Unknown { .. }), "{kept:?} is kept as it is");
         }
     }
 
@@ -1270,6 +1527,34 @@ mod tests {
         }
         let wide = Block::read("grid", 1, r#"{"columns":9,"rows":1,"caption":""}"#, Vec::new());
         assert!(matches!(wide, Block::Unknown { .. }), "a layout this build can't show is kept as it is");
+    }
+
+    #[test]
+    fn a_table_is_rectangular_and_within_its_size() {
+        assert_eq!(Block::table(3, 2), Block::Table { header: true, rows: vec![vec![String::new(); 3]; 2], widths: Vec::new(), caption: String::new() });
+        assert_eq!(Block::table(0, 99), Block::table(1, TABLE_ROWS_MAX), "sizes are kept within a table's");
+        let read = |rows: &str| Block::read("table", 1, &format!(r#"{{"header":false,"rows":{rows},"caption":""}}"#), Vec::new());
+        assert!(matches!(read(r#"[["a","b"],["c","d"]]"#), Block::Table { header: false, .. }));
+        for kept in [r#"[["a","b"],["c"]]"#, "[]", "[[]]", r#"[["1","2","3","4","5","6","7","8","9"]]"#] {
+            assert!(matches!(read(kept), Block::Unknown { .. }), "{kept} is kept as it is");
+        }
+    }
+
+    #[test]
+    fn a_tables_column_widths_make_100_and_wrong_ones_are_none() {
+        let widths = |stored: &str| match Block::read("table", 1, &format!(r#"{{"header":true,"rows":[["a","b"]],{stored}"caption":""}}"#), Vec::new()) {
+            Block::Table { widths, .. } => widths,
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(widths(r#""widths":[25,75],"#), [25, 75]);
+        for wrong in ["", r#""widths":[50],"#, r#""widths":[60,60],"#, r#""widths":[2,98],"#, r#""widths":"wide","#] {
+            assert!(widths(wrong).is_empty(), "{wrong} leaves the columns fitting their text");
+        }
+        assert_eq!(spread_widths(&[1.0, 1.0, 1.0]), [34, 33, 33]);
+        assert_eq!(spread_widths(&[1.0; 8]).iter().map(|&width| u32::from(width)).sum::<u32>(), 100);
+        assert_eq!(spread_widths(&[97.0, 1.0, 2.0]), [90, TABLE_WIDTH_MIN, TABLE_WIDTH_MIN], "no column is narrower than the least");
+        assert_eq!(spread_widths(&[0.0, 0.0]), [50, 50]);
+        assert_eq!(spread_widths(&[]), Vec::<u8>::new());
     }
 
     #[test]
@@ -1331,6 +1616,7 @@ mod cover_tests {
             subtitle: String::new(),
             author: String::new(),
             show_date: false,
+            dates: None,
             introduction: String::new(),
             conclusion: String::new(),
             cover: Some(7),

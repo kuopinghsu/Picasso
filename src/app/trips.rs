@@ -173,6 +173,15 @@ pub(super) struct DayDialog {
     error: String,
 }
 
+/// Starting a Story about some dates of the Trip, blank or with their photos.
+pub(super) struct StoryDialog {
+    trip_id: i64,
+    /// The first and last date; `None` for the whole Trip.
+    dates: Option<(NaiveDate, NaiveDate)>,
+    photos: bool,
+    error: String,
+}
+
 /// Naming a Place, with its name in the local language and notes.
 pub(super) struct PlaceDialog {
     place_id: i64,
@@ -821,7 +830,7 @@ impl PicassoApp {
     fn new_story_menu(&mut self, button: &egui::Response, trip_id: i64, days: &[TripDay]) {
         // The Stories tab hides the grid, so a selection there is out of sight.
         let selected = !self.selection.is_empty() && !self.trip_stories.contains(&trip_id);
-        let (mut blank, mut from_days, mut from_selection) = (false, None::<Vec<i64>>, false);
+        let (mut blank, mut from_days, mut some_dates, mut from_selection) = (false, false, false, false);
         let popup = egui::Popup::menu(button).show(|ui| {
             if ui.button(tr("Blank story")).clicked() {
                 blank = true;
@@ -833,17 +842,12 @@ impl PicassoApp {
                 .on_disabled_hover_text(tr("Put photos in days first"))
                 .clicked()
             {
-                from_days = Some(days.iter().filter(|day| day.members > 0).map(|day| day.id).collect());
+                from_days = true;
             }
-            ui.add_enabled_ui(filled, |ui| {
-                ui.menu_button(tr("From one day"), |ui| {
-                    for day in days.iter().filter(|day| day.members > 0) {
-                        if ui.button(day_name(day)).clicked() {
-                            from_days = Some(vec![day.id]);
-                        }
-                    }
-                });
-            });
+            let some = ui.button(tr("For some dates…"));
+            if some.on_hover_text(tr("Choose the dates the story is about, to start it blank or with their photos")).clicked() {
+                some_dates = true;
+            }
             let picked = ui.add_enabled(selected, egui::Button::new(tr("From the selected photos")));
             if picked.on_disabled_hover_text(tr("Select photos first")).clicked() {
                 from_selection = true;
@@ -868,20 +872,101 @@ impl PicassoApp {
                 Err(err) => self.activity = err,
             }
         }
-        if let Some(ids) = from_days {
-            let title = self.trip_title(trip_id);
-            match self.db.create_story_from_days(trip_id, &title, &ids, day_label) {
-                Ok((id, videos)) => {
-                    if videos > 0 {
-                        self.activity = trf("{} videos were left out of the story", &[&videos]);
-                    }
-                    open = Some(id);
-                }
+        if from_days {
+            match self.story_from_days(trip_id, None) {
+                Ok(id) => open = Some(id),
                 Err(err) => self.activity = err,
             }
         }
+        if some_dates {
+            self.ask_new_story(trip_id);
+        }
         if let Some(id) = open {
             self.open_story(id);
+        }
+    }
+
+    /// Asks which dates a new Story is about, the Trip's to begin with.
+    pub(super) fn ask_new_story(&mut self, trip_id: i64) {
+        let days = self.days_of(trip_id);
+        let trip = self.trips.iter().find(|trip| trip.id == trip_id);
+        let photos = trip.is_some_and(|trip| trip.members > 0);
+        let dates = trip_span(trip, &days);
+        self.modal = Modal::NewStory(StoryDialog { trip_id, dates, photos, error: String::new() });
+    }
+
+    /// A Story about the dates `dates`, or the whole Trip, begun with a
+    /// heading for each Day or date and its photos.
+    fn story_from_days(&mut self, trip_id: i64, dates: Option<(NaiveDate, NaiveDate)>) -> Result<i64, String> {
+        let title = self.trip_title(trip_id);
+        let (id, videos) = self.db.create_story_from_days(trip_id, &title, dates, day_label)?;
+        if videos > 0 {
+            self.activity = trf("{} videos were left out of the story", &[&videos]);
+        }
+        Ok(id)
+    }
+
+    pub(super) fn new_story_modal(&mut self, ctx: &egui::Context) {
+        let Modal::NewStory(dialog) = &self.modal else { return };
+        let trip_id = dialog.trip_id;
+        let days = self.days_of(trip_id);
+        let span = trip_span(self.trips.iter().find(|trip| trip.id == trip_id), &days);
+        let Modal::NewStory(dialog) = &mut self.modal else { return };
+        let mut close = false;
+        let mut create = false;
+        let response = egui::Modal::new(egui::Id::unique("new-story")).frame(about::dialog_frame()).show(ctx, |ui| {
+            ui.set_width(440.0);
+            about::title_bar(ui, &self.logo, tr("New story"), &mut close);
+            egui::Frame::new().inner_margin(Margin::symmetric(20, 14)).show(ui, |ui| {
+                ui.spacing_mut().item_spacing.y = 6.0;
+                ui.label(tr("Dates"));
+                let readable = date_range(ui, "new-story-dates", &mut dialog.dates, span.map(|span| span.0)).is_some();
+                ui.add_space(4.0);
+                ui.checkbox(&mut dialog.photos, tr("Start with their photos"));
+                let hint = if dialog.photos {
+                    tr("A heading for each day and its photos in order, to write around. Videos are left out.")
+                } else {
+                    tr("A blank story. Add photos… shows the photos of these dates first.")
+                };
+                ui.label(RichText::new(hint).size(12.0).color(theme::muted()));
+                if !dialog.error.is_empty() {
+                    ui.label(RichText::new(&dialog.error).color(theme::DANGER));
+                }
+                ui.add_space(6.0);
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if ui.add_enabled(readable, theme::primary_button(tr("Create"))).clicked() {
+                        create = true;
+                    }
+                    if ui.button(tr("Cancel")).clicked() {
+                        close = true;
+                    }
+                });
+            });
+        });
+        if create {
+            let (trip_id, mut range, photos) = (dialog.trip_id, dialog.dates, dialog.photos);
+            // A blank Story on the Trip's own dates is about the whole Trip,
+            // so it follows them when they change. One begun with photos
+            // keeps them, as the whole Trip's photos are only those in Days.
+            if range == span && !photos {
+                range = None;
+            }
+            let made = if photos { self.story_from_days(trip_id, range) } else { self.db.create_story_about(trip_id, "", range) };
+            match made {
+                Ok(id) => {
+                    self.modal = Modal::None;
+                    self.open_story(id);
+                }
+                Err(err) => {
+                    if let Modal::NewStory(dialog) = &mut self.modal {
+                        dialog.error = err;
+                    }
+                }
+            }
+            return;
+        }
+        if close || response.should_close() {
+            self.modal = Modal::None;
         }
     }
 
@@ -2292,7 +2377,81 @@ pub(super) fn day_name(day: &TripDay) -> String {
     }
 }
 
-/// A calendar day written the way the interface language writes dates.
+/// The Trip's dates: its first and last day, or else those of its dated Days.
+pub(super) fn trip_span(trip: Option<&Trip>, days: &[TripDay]) -> Option<(NaiveDate, NaiveDate)> {
+    let dated = || days.iter().filter_map(|day| day.day);
+    let first = trip.and_then(|trip| trip.first_day).or_else(|| dated().min());
+    let last = trip.and_then(|trip| trip.last_day).or_else(|| dated().max());
+    match (first, last) {
+        (Some(first), Some(last)) => Some((first.min(last), first.max(last))),
+        (Some(day), None) | (None, Some(day)) => Some((day, day)),
+        (None, None) => None,
+    }
+}
+
+/// The dates typed as the first and last of a range, earlier first: one
+/// date when only one is typed, `Some(None)` when neither is, and `None`
+/// when either can't be read.
+fn typed_range(first: &str, last: &str) -> Option<Option<(NaiveDate, NaiveDate)>> {
+    Some(match (parse_day(first)?, parse_day(last)?) {
+        (None, None) => None,
+        (Some(day), None) | (None, Some(day)) => Some((day, day)),
+        (Some(first), Some(last)) => Some((first.min(last), first.max(last))),
+    })
+}
+
+/// Chooses the dates a Story is about with a field and calendar for each
+/// end, both empty for the whole Trip; the calendars open at `start` while
+/// nothing is typed. What is typed counts once the field is left, so a date
+/// half typed is never taken for another; a date picked counts at once.
+/// Choosing a first date after the last moves the last with it, and the
+/// other way round. Returns `None` while what is typed can't be read, else
+/// whether the dates changed.
+pub(super) fn date_range(ui: &mut egui::Ui, salt: &str, dates: &mut Option<(NaiveDate, NaiveDate)>, start: Option<NaiveDate>) -> Option<bool> {
+    type Typed = (Option<(NaiveDate, NaiveDate)>, String, String);
+    let id = ui.make_persistent_id(("date-range", salt));
+    let text = |day: Option<NaiveDate>| day.map(|day| day.to_string()).unwrap_or_default();
+    // What is typed is kept while it is typed or can't be read, until the
+    // dates change elsewhere, as by Undo.
+    let (_, mut first, mut last) = ui
+        .data(|data| data.get_temp::<Typed>(id))
+        .filter(|(seen, ..)| seen == dates)
+        .unwrap_or_else(|| (*dates, text(dates.map(|dates| dates.0)), text(dates.map(|dates| dates.1))));
+    // The hints name the fields, for screen readers too.
+    let typing = ui
+        .horizontal(|ui| {
+            let typing = date_field_from(ui, &format!("{salt}-first"), &mut first, tr("First day"), start);
+            ui.label(tr("to"));
+            typing | date_field_from(ui, &format!("{salt}-last"), &mut last, tr("Last day"), parse_day(&first).flatten().or(start))
+        })
+        .inner;
+    let typed = typed_range(&first, &last);
+    let mut changed = false;
+    if !typing {
+        if let (Some(Some(from)), Some(Some(to))) = (parse_day(&first), parse_day(&last)) {
+            if from > to && Some(from) != dates.map(|dates| dates.0) {
+                last = first.clone();
+            } else if from > to {
+                first = last.clone();
+            }
+        }
+        match typed_range(&first, &last) {
+            Some(typed) => {
+                changed = typed != *dates;
+                *dates = typed;
+                // Written the one way, as 2026/3/1 becomes 2026-03-01.
+                first = text(parse_day(&first).flatten());
+                last = text(parse_day(&last).flatten());
+            }
+            None => {
+                ui.label(RichText::new(tr("Type dates such as 2026-03-01")).size(12.0).color(theme::DANGER));
+            }
+        }
+    }
+    ui.data_mut(|data| data.insert_temp::<Typed>(id, (*dates, first, last)));
+    typed.map(|_| changed)
+}
+
 /// How many members are to review for `reason`.
 fn review_text(reason: Review, count: usize) -> String {
     let text = match reason {
@@ -2340,7 +2499,19 @@ fn arrange(order: &[i64], selected: &[bool], step: Arrange) -> Vec<i64> {
 
 /// The Trip's dates as shown, if it has any.
 pub(super) fn trip_dates(trip: &Trip) -> Option<String> {
-    match (trip.first_day, trip.last_day) {
+    date_span(trip.first_day, trip.last_day)
+}
+
+/// The dates of a Story about `dates` as shown, or of the whole `trip`.
+pub(super) fn story_dates(trip: Option<&Trip>, dates: Option<(NaiveDate, NaiveDate)>) -> Option<String> {
+    match dates {
+        Some((first, last)) => date_span(Some(first), Some(last)),
+        None => trip.and_then(trip_dates),
+    }
+}
+
+fn date_span(first: Option<NaiveDate>, last: Option<NaiveDate>) -> Option<String> {
+    match (first, last) {
         (Some(first), Some(last)) if first != last => Some(format!("{} – {}", day_label(first), day_label(last))),
         (Some(day), _) | (None, Some(day)) => Some(day_label(day)),
         (None, None) => None,
@@ -2352,87 +2523,193 @@ fn date_field(ui: &mut egui::Ui, id: &str, text: &mut String, hint: &str) {
     date_field_from(ui, id, text, hint, None);
 }
 
-/// [`date_field`], opening at `start` while no date is typed.
-fn date_field_from(ui: &mut egui::Ui, id: &str, text: &mut String, hint: &str, start: Option<NaiveDate>) {
+/// [`date_field`], opening at `start` while no date is typed. Returns
+/// whether the text is being typed in.
+fn date_field_from(ui: &mut egui::Ui, id: &str, text: &mut String, hint: &str, start: Option<NaiveDate>) -> bool {
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 4.0;
-        ui.add(egui::TextEdit::singleline(text).hint_text(hint).desired_width(96.0));
+        let typing = ui.add(egui::TextEdit::singleline(text).hint_text(hint).desired_width(96.0)).has_focus();
         let button = theme::named(ui.add(egui::Button::new("    ")), tr("Choose a date"));
         paint_calendar_icon(ui, button.rect);
+        // Made outside the popup, whose own ids are not the field's.
+        let view_id = ui.make_persistent_id(("calendar-view", id));
         let popup = egui::Popup::menu(&button).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
             let typed = parse_day(text).flatten();
-            let shown_id = ui.make_persistent_id(("calendar-month", id));
             let today = Local::now().date_naive();
-            let shown = ui.data(|data| data.get_temp::<NaiveDate>(shown_id)).or(typed).or(start).unwrap_or(today);
-            if let Some(picked) = calendar(ui, shown_id, shown, typed, today) {
+            let view = ui.data(|data| data.get_temp::<CalendarView>(view_id)).unwrap_or(CalendarView { shown: typed.or(start).unwrap_or(today), zoom: Zoom::Days });
+            if let Some(picked) = calendar(ui, view_id, view, typed, today) {
                 *text = picked.map(|day| day.to_string()).unwrap_or_default();
-                ui.data_mut(|data| data.remove::<NaiveDate>(shown_id));
+                ui.data_mut(|data| data.remove::<CalendarView>(view_id));
                 ui.close();
             }
         });
         if popup.is_none() {
-            // Opening again starts from the date in the field.
-            ui.data_mut(|data| data.remove::<NaiveDate>(ui.make_persistent_id(("calendar-month", id))));
+            // Opening again starts from the date in the field, at its month.
+            ui.data_mut(|data| data.remove::<CalendarView>(view_id));
         }
-    });
+        typing
+    })
+    .inner
 }
 
-/// A month of days to click, from Monday. Returns `Some(day)` for a
-/// picked day, `Some(None)` for Clear. `shown` is any day of the month on view.
-fn calendar(ui: &mut egui::Ui, shown_id: egui::Id, shown: NaiveDate, selected: Option<NaiveDate>, today: NaiveDate) -> Option<Option<NaiveDate>> {
-    use chrono::{Datelike, Duration, Months};
-    let first = shown.with_day(1).unwrap_or(shown);
+/// How far out the calendar is: a month of days, a year of months, or a
+/// decade of years. Its title steps out; picking a year or month steps in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Zoom {
+    Days,
+    Months,
+    Years,
+}
+
+/// What the calendar shows: any day of the month, year, or decade on view.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct CalendarView {
+    shown: NaiveDate,
+    zoom: Zoom,
+}
+
+impl CalendarView {
+    /// The first year of the decade on view.
+    fn decade(self) -> i32 {
+        use chrono::Datelike;
+        self.shown.year() - self.shown.year().rem_euclid(10)
+    }
+
+    /// The page before (`-1`) or after (`1`) this one, at the same zoom.
+    fn turned(self, by: i32) -> CalendarView {
+        use chrono::Months;
+        let months = match self.zoom {
+            Zoom::Days => 1,
+            Zoom::Months => 12,
+            Zoom::Years => 120,
+        };
+        let shown = if by < 0 { self.shown.checked_sub_months(Months::new(months)) } else { self.shown.checked_add_months(Months::new(months)) };
+        CalendarView { shown: shown.unwrap_or(self.shown), ..self }
+    }
+
+    /// The month or year picked at this zoom, one step in.
+    fn zoomed_in(self, year: i32, month: u32) -> Option<CalendarView> {
+        let zoom = if self.zoom == Zoom::Years { Zoom::Months } else { Zoom::Days };
+        Some(CalendarView { shown: NaiveDate::from_ymd_opt(year, month, 1)?, zoom })
+    }
+}
+
+/// A calendar to click a day in, from Monday, that zooms out: the title of a
+/// month shows the year's months, and that of a year its decade; picking one
+/// zooms back in. Returns `Some(day)` for a picked day,
+/// `Some(None)` for Clear.
+fn calendar(ui: &mut egui::Ui, view_id: egui::Id, view: CalendarView, selected: Option<NaiveDate>, today: NaiveDate) -> Option<Option<NaiveDate>> {
+    use chrono::{Datelike, Duration};
+    let (shown, year) = (view.shown, view.shown.year());
     let mut picked = None;
-    let mut month = first;
+    let mut next = view;
     // Seven day cells and the gaps between them; nothing in the popup may be
     // wider, or the menu stretches past the grid.
     const CELL: f32 = 28.0;
     const GAP: f32 = 2.0;
     let width = 7.0 * CELL + 6.0 * GAP;
     ui.set_width(width);
+    let (title, back, forward, out) = match view.zoom {
+        Zoom::Days => (crate::types::format_month(year, shown.month()), tr("Previous month"), tr("Next month"), Some((Zoom::Months, tr("Choose a month")))),
+        Zoom::Months => (year.to_string(), tr("Previous year"), tr("Next year"), Some((Zoom::Years, tr("Choose a year")))),
+        Zoom::Years => (format!("{} – {}", view.decade(), view.decade() + 9), tr("Earlier years"), tr("Later years"), None),
+    };
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 0.0;
         let arrow = Vec2::new(CELL, 22.0);
-        if theme::named(ui.add_sized(arrow, egui::Button::new("‹")), tr("Previous month")).clicked() {
-            month = first.checked_sub_months(Months::new(1)).unwrap_or(first);
+        if theme::named(ui.add_sized(arrow, egui::Button::new("‹")), back).clicked() {
+            next = view.turned(-1);
         }
-        let title = RichText::new(crate::types::format_month(first.year(), first.month())).strong();
-        ui.add_sized(Vec2::new(width - 2.0 * CELL, 22.0), egui::Label::new(title));
-        if theme::named(ui.add_sized(arrow, egui::Button::new("›")), tr("Next month")).clicked() {
-            month = first.checked_add_months(Months::new(1)).unwrap_or(first);
-        }
-    });
-    // Without these a column is as wide as a button, wider than a day.
-    egui::Grid::new(("calendar", shown_id)).spacing([GAP, GAP]).min_col_width(CELL).max_col_width(CELL).show(ui, |ui| {
-        for weekday in 0..7 {
-            let name = RichText::new(crate::types::short_weekday(weekday)).size(11.0).color(theme::muted());
-            ui.add_sized([CELL, 16.0], egui::Label::new(name));
-        }
-        ui.end_row();
-        let lead = first.weekday().num_days_from_monday() as i64;
-        let mut day = first - Duration::days(lead);
-        for _ in 0..6 {
-            for _ in 0..7 {
-                let in_month = day.month() == first.month();
-                let mut label = RichText::new(day.day().to_string()).size(12.5);
-                if !in_month {
-                    label = label.color(theme::muted().gamma_multiply(0.6));
+        let size = Vec2::new(width - 2.0 * CELL, 22.0);
+        match out {
+            Some((zoom, hint)) => {
+                let label = RichText::new(format!("{title}  ▾")).strong().color(theme::accent());
+                if ui.add_sized(size, egui::Button::new(label).frame(false)).on_hover_text(hint).clicked() {
+                    next = CalendarView { zoom, ..view };
                 }
-                if day == today {
-                    label = label.strong().underline();
-                }
-                let cell = ui.add_sized([CELL, 24.0], egui::Button::selectable(selected == Some(day), label));
-                if cell.clicked() {
-                    picked = Some(Some(day));
-                }
-                day += Duration::days(1);
             }
-            ui.end_row();
-            if day.month() != first.month() {
-                break;
+            None => {
+                ui.add_sized(size, egui::Label::new(RichText::new(title).strong()));
             }
         }
+        if theme::named(ui.add_sized(arrow, egui::Button::new("›")), forward).clicked() {
+            next = view.turned(1);
+        }
     });
+    // How tall the month of days last was, so zooming out keeps the page's size.
+    let days_height = view_id.with("days-height");
+    match view.zoom {
+        Zoom::Days => {
+            let first = shown.with_day(1).unwrap_or(shown);
+            // Without these a column is as wide as a button, wider than a day.
+            let grid = egui::Grid::new(("calendar", view_id)).spacing([GAP, GAP]).min_col_width(CELL).max_col_width(CELL).show(ui, |ui| {
+                for weekday in 0..7 {
+                    let name = RichText::new(crate::types::short_weekday(weekday)).size(11.0).color(theme::muted());
+                    ui.add_sized([CELL, 16.0], egui::Label::new(name));
+                }
+                ui.end_row();
+                let lead = first.weekday().num_days_from_monday() as i64;
+                let mut day = first - Duration::days(lead);
+                for _ in 0..6 {
+                    for _ in 0..7 {
+                        let in_month = day.month() == first.month();
+                        let mut label = RichText::new(day.day().to_string()).size(12.5);
+                        if !in_month {
+                            label = label.color(theme::muted().gamma_multiply(0.6));
+                        }
+                        if day == today {
+                            label = label.strong().underline();
+                        }
+                        let cell = ui.add_sized([CELL, 24.0], egui::Button::selectable(selected == Some(day), label));
+                        if cell.clicked() {
+                            picked = Some(Some(day));
+                        }
+                        day += Duration::days(1);
+                    }
+                    ui.end_row();
+                    if day.month() != first.month() {
+                        break;
+                    }
+                }
+            });
+            let height = grid.response.rect.height();
+            ui.data_mut(|d| d.insert_temp(days_height, height));
+        }
+        // Twelve months or years in four rows of three, as tall as the month of days.
+        Zoom::Months | Zoom::Years => {
+            let height = ui.data(|d| d.get_temp::<f32>(days_height)).unwrap_or(0.0);
+            let cell = Vec2::new((width - 2.0 * GAP) / 3.0, ((height - 3.0 * GAP) / 4.0).max(40.0));
+            // The one picked, or else the one zoomed out of, so it is plain where you were.
+            let marked = selected.unwrap_or(shown);
+            egui::Grid::new(("calendar-zoom", view_id, view.zoom == Zoom::Years)).spacing([GAP, GAP]).min_col_width(cell.x).max_col_width(cell.x).show(ui, |ui| {
+                for n in 0..12 {
+                    let (text, chosen, now, inside, zoomed) = if view.zoom == Zoom::Months {
+                        let month = n + 1;
+                        let at = |day: NaiveDate| day.year() == year && day.month() == month;
+                        (crate::types::short_month(month), at(marked), at(today), true, view.zoomed_in(year, month))
+                    } else {
+                        let year = view.decade() - 1 + n as i32;
+                        let inside = (0..10).contains(&(n as i32 - 1));
+                        (year.to_string(), marked.year() == year, today.year() == year, inside, view.zoomed_in(year, shown.month()))
+                    };
+                    let mut label = RichText::new(text).size(13.0);
+                    if !inside {
+                        label = label.color(theme::muted().gamma_multiply(0.6));
+                    }
+                    if now {
+                        label = label.strong().underline();
+                    }
+                    let button = ui.add_enabled(zoomed.is_some(), egui::Button::selectable(chosen, label).min_size(cell));
+                    if button.clicked() {
+                        next = zoomed.unwrap_or(view);
+                    }
+                    if n % 3 == 2 {
+                        ui.end_row();
+                    }
+                }
+            });
+        }
+    }
     ui.horizontal(|ui| {
         ui.set_width(width);
         if ui.link(tr("Today")).clicked() {
@@ -2444,8 +2721,8 @@ fn calendar(ui: &mut egui::Ui, shown_id: egui::Id, shown: NaiveDate, selected: O
             }
         });
     });
-    if month != first {
-        ui.data_mut(|data| data.insert_temp(shown_id, month));
+    if next != view {
+        ui.data_mut(|data| data.insert_temp(view_id, next));
     }
     picked
 }
@@ -2484,6 +2761,38 @@ fn read_captures(db: &crate::db::Database, trip_id: i64, progress: &crate::story
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_calendar_turns_a_page_at_each_zoom_and_steps_in_from_years_to_days() {
+        let date = |text| NaiveDate::parse_from_str(text, "%Y-%m-%d").unwrap();
+        let view = |shown, zoom| CalendarView { shown: date(shown), zoom };
+        assert_eq!(view("2026-03-31", Zoom::Days).turned(-1), view("2026-02-28", Zoom::Days), "a short month takes its last day");
+        assert_eq!(view("2026-03-15", Zoom::Months).turned(1), view("2027-03-15", Zoom::Months));
+        assert_eq!(view("2026-03-15", Zoom::Years).turned(-1), view("2016-03-15", Zoom::Years));
+        assert_eq!(view("2026-03-15", Zoom::Years).decade(), 2020);
+        assert_eq!(view("2026-03-15", Zoom::Years).zoomed_in(2019, 3), Some(view("2019-03-01", Zoom::Months)), "a year shows its months");
+        assert_eq!(view("2019-03-01", Zoom::Months).zoomed_in(2019, 7), Some(view("2019-07-01", Zoom::Days)), "a month shows its days");
+    }
+
+    #[test]
+    fn a_storys_dates_are_typed_in_either_order_or_are_the_trips() {
+        let date = |text| NaiveDate::parse_from_str(text, "%Y-%m-%d").unwrap();
+        let (may1, may3) = (date("2026-05-01"), date("2026-05-03"));
+        assert_eq!(typed_range("2026-05-03", "2026/5/1"), Some(Some((may1, may3))), "earlier first");
+        assert_eq!(typed_range("", "2026-05-03"), Some(Some((may3, may3))), "one date is a day");
+        assert_eq!(typed_range("", " "), Some(None), "none is the whole trip");
+        assert_eq!(typed_range("2026-05-01", "May 3"), None);
+
+        let day = |id, at: Option<&'static str>| TripDay { id, trip_id: 1, position: id - 1, day: at.map(date), title: String::new(), notes: String::new(), members: 0 };
+        let days = [day(1, Some("2026-05-03")), day(2, None), day(3, Some("2026-05-01"))];
+        assert_eq!(trip_span(None, &days), Some((may1, may3)), "without the trip's own dates, its Days'");
+        assert_eq!(trip_span(None, &days[1..2]), None);
+
+        let label = |text| day_label(date(text));
+        assert_eq!(story_dates(None, Some((may1, may3))), Some(format!("{} – {}", label("2026-05-01"), label("2026-05-03"))));
+        assert_eq!(story_dates(None, Some((may3, may3))), Some(label("2026-05-03")));
+        assert_eq!(story_dates(None, None), None, "a Story about the whole Trip has the Trip's dates");
+    }
 
     #[test]
     fn typed_days_are_read_with_dashes_slashes_or_dots() {

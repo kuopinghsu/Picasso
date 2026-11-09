@@ -138,12 +138,15 @@ enum Modal {
     DayDetails(trips::DayDialog),
     PlaceDetails(trips::PlaceDialog),
     Resource(trips::ResourceDialog),
+    NewStory(trips::StoryDialog),
     /// Delete Story (id, name)?
     DeleteStory(i64, String),
     /// Quitting while the open Story couldn't be saved.
     UnsavedStory,
     ExportStory(story::ExportDialog),
     PublishStory(publish_story::PublishDialog),
+    /// Delete the uploads in `publish_leftovers` from their site?
+    DeleteUploads,
     Help,
     About,
     Settings,
@@ -268,6 +271,8 @@ pub struct PicassoApp {
     /// a job still running from one cut short. The job's thread holds what
     /// each points to, so one that ends without a word stops counting.
     publishing: HashMap<(i64, i64), std::sync::Weak<()>>,
+    /// Sites uploads are being deleted from, held the same way.
+    deleting_uploads: HashMap<i64, std::sync::Weak<()>>,
     /// Each Story's last export in this session, by Story.
     story_exports: HashMap<i64, story::LastExport>,
     /// The Story being edited, shown in place of its Trip's photos.
@@ -408,6 +413,9 @@ pub struct PicassoApp {
     /// A post with a Story's title found on a site that has no record of it
     /// here: (Story, site, post). The publish dialog asks what to do with it.
     publish_found: Option<(i64, i64, i64)>,
+    /// Uploads saved posts stopped using, offered to delete from their site,
+    /// one site at a time in the order they came.
+    publish_leftovers: Vec<publish_story::Leftovers>,
     /// When the latest Move to trash ran, and the path and folder of each
     /// file in it, for Undo.
     last_trashed: Option<(Instant, Vec<(String, i64)>)>,
@@ -619,6 +627,7 @@ impl PicassoApp {
             trip_reads: trips::TripReads::default(),
             publish_renders: crate::publish::Renders::default(),
             publishing: HashMap::new(),
+            deleting_uploads: HashMap::new(),
             story_exports: HashMap::new(),
             story: None,
             show_archived_trips: false,
@@ -713,6 +722,7 @@ impl PicassoApp {
             track_keeper,
             activity: String::new(),
             publish_found: None,
+            publish_leftovers: Vec::new(),
             last_trashed: None,
             unreadable: HashMap::new(),
             export_run: None,
@@ -1182,6 +1192,7 @@ impl PicassoApp {
             UiEvent::RouteProfile(story_id, source, profile) => self.on_route_profile(story_id, source, profile),
             UiEvent::PublishProgress(site_id, log, event) => self.on_publish_progress(site_id, log, event),
             UiEvent::StoryPublished(done) => self.on_story_published(*done),
+            UiEvent::UploadsDeleted(site_id, site, deleted) => self.on_uploads_deleted(site_id, &site, deleted),
             UiEvent::TripPackaged(outcome) => self.on_trip_packaged(outcome),
             UiEvent::TripUnpacked(outcome) => self.on_trip_unpacked(*outcome),
         }
@@ -1348,6 +1359,10 @@ impl PicassoApp {
                 return;
             }
             if !matches!(self.modal, Modal::None) {
+                if matches!(self.modal, Modal::DeleteUploads) && !self.publish_leftovers.is_empty() {
+                    // Kept, or it would be asked about again at once.
+                    self.publish_leftovers.remove(0);
+                }
                 if !self.renaming() {
                     self.modal = Modal::None;
                 }
@@ -2077,6 +2092,10 @@ impl PicassoApp {
     }
 
     fn modals(&mut self, ctx: &egui::Context) {
+        // Waits for any dialog open when the save finished.
+        if self.leftovers_due() && matches!(self.modal, Modal::None) {
+            self.modal = Modal::DeleteUploads;
+        }
         match self.modal {
             Modal::None => {}
             Modal::Help => {
@@ -2107,10 +2126,12 @@ impl PicassoApp {
             Modal::DayDetails(_) => self.day_modal(ctx),
             Modal::PlaceDetails(_) => self.place_modal(ctx),
             Modal::Resource(_) => self.resource_modal(ctx),
+            Modal::NewStory(_) => self.new_story_modal(ctx),
             Modal::DeleteStory(..) => self.delete_story_modal(ctx),
             Modal::UnsavedStory => self.unsaved_story_modal(ctx),
             Modal::ExportStory(_) => self.export_story_modal(ctx),
             Modal::PublishStory(_) => self.publish_story_modal(ctx),
+            Modal::DeleteUploads => self.delete_uploads_modal(ctx),
             Modal::Settings => self.settings_modal(ctx),
             Modal::About => {
                 if about::show(ctx, &self.logo) {
@@ -2922,6 +2943,7 @@ impl eframe::App for PicassoApp {
             stats.record(frame.info().cpu_usage);
         }
         self.autosave_story(ctx);
+        self.stop_unseen_clip(ctx);
         let dark = self.theme_mode.is_dark(system_dark(ctx));
         if dark != theme::is_dark() {
             theme::set_dark(ctx, dark);

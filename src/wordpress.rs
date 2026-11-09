@@ -10,7 +10,7 @@
 //! Publishing to a site uses it; until then only its tests do.
 #![cfg_attr(not(test), allow(dead_code))]
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 use base64::engine::general_purpose::STANDARD;
@@ -228,6 +228,8 @@ pub enum Failure {
     CredentialsIgnored,
     /// The account may not do this.
     Forbidden,
+    /// The account cannot inspect all content before deleting media.
+    CleanupAccess,
     /// The server refused the size of what was sent.
     TooLarge,
     /// Too many requests; the site asks to wait this many seconds, when it says.
@@ -262,6 +264,14 @@ pub struct Request<'b> {
 /// redirects followed and any status returned as a [`Reply`].
 pub trait Http {
     fn send(&self, request: &Request) -> Result<Reply, Failure>;
+
+    /// Sends `request` with the file at `file` as its body, read as it is
+    /// sent rather than held whole, for as long as sending it takes, or
+    /// until `cancel` is set.
+    fn send_file(&self, request: &Request, file: &std::path::Path, _cancel: Option<&std::sync::atomic::AtomicBool>) -> Result<Reply, Failure> {
+        let body = std::fs::read(file).map_err(|_| Failure::Unreachable)?;
+        self.send(&Request { body: Some(&body), ..request.clone() })
+    }
 }
 
 /// The site's REST API, found from its address.
@@ -271,6 +281,13 @@ pub struct Api {
     pub site: SiteUrl,
     /// The API's root: ".../wp-json/" or ".../?rest_route=/".
     pub root: SiteUrl,
+    /// Where WordPress says it is, its `url` in the API's index: wp-admin
+    /// is under it, and a browser is signed in there, which the address
+    /// typed may not be, as 127.0.0.1 for localhost.
+    pub wordpress: Option<SiteUrl>,
+    /// Where WordPress says its pages are, its `home` in the API's index,
+    /// which differs from `wordpress` when WordPress is in a folder of its own.
+    pub home: Option<SiteUrl>,
     /// The site's title.
     pub name: String,
     /// What the site offers, such as "wp/v2".
@@ -500,6 +517,27 @@ impl Client<'_> {
         media_of(&reply.json().ok_or(Failure::BadReply)?)
     }
 
+    /// Uploads the file at `file`, of type `mime`, to the site's media
+    /// library as `name`, sent as it is read. It is never sent twice, nor
+    /// on through a redirect.
+    pub fn upload_file(&self, api: &Api, credentials: &Credentials, file: &std::path::Path, mime: &str, name: &str) -> Result<Media, Failure> {
+        let url = api.route("/wp/v2/media", "");
+        self.policy.check(&url)?;
+        let length = std::fs::metadata(file).map_err(|_| Failure::Unreachable)?.len();
+        let headers = vec![
+            ("Content-Type", mime.to_string()),
+            ("Content-Disposition", format!("attachment; filename=\"{name}\"")),
+            ("Content-Length", length.to_string()),
+        ];
+        let request = Request { method: "POST", url, auth: Some(credentials.header()), headers, body: None };
+        let reply = self.http.send_file(&request, file, self.cancel)?;
+        if (300..400).contains(&reply.status) {
+            return Err(Failure::Status(reply.status));
+        }
+        checked(&reply)?;
+        media_of(&reply.json().ok_or(Failure::BadReply)?)
+    }
+
     /// Sets the upload `id`'s description in the site's media library, which
     /// WordPress offers again when the photo is put in another post.
     pub fn set_media_alt(&self, api: &Api, credentials: &Credentials, id: i64, alt: &str) -> Result<(), Failure> {
@@ -552,6 +590,87 @@ impl Client<'_> {
         }
         checked(&reply)?;
         Ok(Some(reply.json().and_then(|json| media_of(&json).ok())))
+    }
+
+    /// Deletes upload `id` from the site's media library for good, as
+    /// WordPress keeps no trash for uploads. Sent as a POST, as WordPress
+    /// takes changes, with `_method` making it a deletion. False when the
+    /// site no longer had it.
+    pub fn delete_media(&self, api: &Api, credentials: &Credentials, id: i64) -> Result<bool, Failure> {
+        let url = api.route(&format!("/wp/v2/media/{id}"), "force=true&_method=DELETE");
+        let reply = self.post(&url, credentials, Vec::new(), &[])?;
+        if reply.status == 410 || (reply.status == 404 && reply.error_code().as_deref() == Some("rest_post_invalid_id")) {
+            return Ok(false);
+        }
+        checked(&reply)?;
+        Ok(true)
+    }
+
+    /// Attachments referenced by ID in post or page content or featured media.
+    pub fn referenced_media(&self, api: &Api, credentials: &Credentials) -> Result<HashSet<i64>, Failure> {
+        const PER_PAGE: usize = 20;
+        let mut referenced = HashSet::new();
+        for route in ["/wp/v2/posts", "/wp/v2/pages"] {
+            let mut page = 1;
+            let mut expected_total = None;
+            loop {
+                let query = format!("context=edit&status=publish,future,draft,pending,private&per_page={PER_PAGE}&page={page}&orderby=id&order=asc&_fields=featured_media,content.raw");
+                let (_, reply) = self.get(&api.route(route, &query), Some(credentials))?;
+                if reply.status == 403
+                    || (reply.status == 400 && reply.json().is_some_and(|body| body["code"] == "rest_forbidden_status" || body["data"]["details"]["status"]["code"] == "rest_forbidden_status"))
+                {
+                    return Err(Failure::CleanupAccess);
+                }
+                checked(&reply)?;
+                let total = reply.header("x-wp-total").next().and_then(|value| value.trim().parse::<usize>().ok()).ok_or(Failure::BadReply)?;
+                let items = reply.json().and_then(|json| json.as_array().cloned()).ok_or(Failure::BadReply)?;
+                // WordPress may count posts the account cannot read without
+                // returning their fields. An incomplete scan cannot clear an upload.
+                let remaining = total.saturating_sub((page - 1) * PER_PAGE);
+                if total != *expected_total.get_or_insert(total) || items.len() > remaining.min(PER_PAGE) {
+                    return Err(Failure::BadReply);
+                }
+                if items.len() < remaining.min(PER_PAGE) {
+                    return Err(Failure::CleanupAccess);
+                }
+                for item in items {
+                    let id = item.get("featured_media").and_then(Value::as_i64).ok_or(Failure::BadReply)?;
+                    if id > 0 {
+                        referenced.insert(id);
+                    }
+                    let raw = item["content"]["raw"].as_str().ok_or(Failure::BadReply)?;
+                    shortcode_media(raw, &mut referenced);
+                }
+                if remaining <= PER_PAGE {
+                    break;
+                }
+                page += 1;
+            }
+        }
+        Ok(referenced)
+    }
+
+    /// Whether a post or page on the site, in any state but the trash, has
+    /// `name` in its title, excerpt or text, as an upload's file name is
+    /// wherever it is shown. Pages the account may not edit are looked
+    /// through as published only. WordPress leaves the posts the account may
+    /// not read, such as another author's drafts, out of the list but not out
+    /// of its count, so the count decides.
+    pub fn media_in_use(&self, api: &Api, credentials: &Credentials, name: &str) -> Result<bool, Failure> {
+        let search = format!("search={}&per_page=1&_fields=id", query_value(name));
+        for route in ["/wp/v2/posts", "/wp/v2/pages"] {
+            let (_, mut reply) = self.get(&api.route(route, &format!("{search}&status=publish,future,draft,pending,private")), Some(credentials))?;
+            if matches!(reply.status, 400 | 401 | 403) {
+                reply = self.get(&api.route(route, &search), Some(credentials))?.1;
+            }
+            checked(&reply)?;
+            let list = reply.json().and_then(|json| json.as_array().cloned()).ok_or(Failure::BadReply)?;
+            let total = reply.header("x-wp-total").next().and_then(|n| n.trim().parse::<u64>().ok());
+            if !list.is_empty() || total.is_some_and(|total| total > 0) {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     /// The uploads among `ids` still in the site's media library, as the site
@@ -702,6 +821,13 @@ impl Client<'_> {
         let reply = self.post(&api.route(route, ""), credentials, vec![("Content-Type", "application/json".to_string())], &bytes)?;
         checked(&reply)?;
         reply.json().ok_or(Failure::BadReply)
+    }
+
+    /// The API as its index describes it now, with where WordPress and
+    /// its pages say they are.
+    pub fn reread(&self, api: &Api) -> Option<Api> {
+        let (_, reply) = self.get(&api.root, None).ok()?;
+        api_index(&api.site, &api.root, &reply)
     }
 
     /// The time now on the site's clock, in its time zone, read from the
@@ -878,6 +1004,33 @@ fn raw_title(item: &Value) -> &str {
 }
 
 /// `text` as one value of a query string.
+/// Gallery and playlist shortcodes can store a list of attachments without
+/// storing their URLs. Accept the quoted and unquoted attribute forms.
+fn shortcode_media(content: &str, referenced: &mut HashSet<i64>) {
+    let tags = ["[gallery", "[playlist"];
+    let shortcodes = tags.into_iter().flat_map(|tag| content.match_indices(tag).map(move |(at, _)| &content[at + tag.len()..]));
+    for rest in shortcodes {
+        let Some((mut attributes, _)) = rest.split_once(']') else { continue };
+        if !attributes.starts_with(|ch: char| ch.is_ascii_whitespace()) {
+            continue;
+        }
+        while let Some((name, rest)) = attributes.split_once('=') {
+            let rest = rest.trim_start();
+            let (value, remaining) = match rest.as_bytes().first() {
+                Some(&quote @ (b'\'' | b'"')) => {
+                    let Some(pair) = rest[1..].split_once(char::from(quote)) else { break };
+                    pair
+                }
+                _ => rest.split_once(|ch: char| ch.is_ascii_whitespace() || ch == '/').unwrap_or((rest, "")),
+            };
+            if matches!(name.split_ascii_whitespace().last().map(str::to_ascii_lowercase).as_deref(), Some("ids" | "include")) {
+                referenced.extend(value.split(|ch: char| ch == ',' || ch.is_ascii_whitespace()).filter_map(|id| id.parse::<i64>().ok()).filter(|id| *id > 0));
+            }
+            attributes = remaining;
+        }
+    }
+}
+
 fn query_value(text: &str) -> String {
     let mut out = String::new();
     for byte in text.bytes() {
@@ -890,10 +1043,21 @@ fn query_value(text: &str) -> String {
     out
 }
 
+/// Where post `id` is read on the site, by its id.
+pub fn post_link(api: &Api, id: i64) -> String {
+    format!("{}/?p={id}", api.home.as_ref().unwrap_or(&api.site).to_url().trim_end_matches('/'))
+}
+
 pub fn edit_link(api: &Api, id: i64) -> String {
-    let base = api.site.path.split('?').next().unwrap_or("/");
+    let site = api.wordpress.as_ref().unwrap_or(&api.site);
+    let base = site.path.split('?').next().unwrap_or("/");
     let dir = if base.ends_with('/') { base.to_string() } else { format!("{base}/") };
-    format!("{}{dir}wp-admin/post.php?post={id}&action=edit", api.site.origin())
+    format!("{}{dir}wp-admin/post.php?post={id}&action=edit", site.origin())
+}
+
+/// The web address the API's index gives as `key`.
+fn address(index: &Value, key: &str) -> Option<SiteUrl> {
+    index.get(key).and_then(Value::as_str).and_then(|url| SiteUrl::parse(url).ok())
 }
 
 /// The API root a reply describes, when it is one.
@@ -906,6 +1070,8 @@ fn api_index(site: &SiteUrl, root: &SiteUrl, reply: &Reply) -> Option<Api> {
     Some(Api {
         site: site.clone(),
         root: root.clone(),
+        wordpress: address(&index, "url"),
+        home: address(&index, "home"),
         name: decode_entities(index.get("name").and_then(Value::as_str).unwrap_or_default()),
         namespaces,
     })
@@ -989,7 +1155,8 @@ fn too_large(reply: &Reply) -> bool {
     let Some(json) = reply.json() else { return false };
     let code = json.get("code").and_then(Value::as_str).unwrap_or_default();
     let message = json.get("message").and_then(Value::as_str).unwrap_or_default().to_ascii_lowercase();
-    matches!(code, "rest_upload_file_too_big" | "rest_upload_limited_space") || message.contains("upload_max_filesize") || message.contains("post_max_size")
+    // PHP drops a body over its post_max_size, and WordPress then finds no data.
+    matches!(code, "rest_upload_file_too_big" | "rest_upload_limited_space" | "rest_upload_no_data") || message.contains("upload_max_filesize") || message.contains("post_max_size")
 }
 
 /// [`Http`] over the network.
@@ -1012,7 +1179,7 @@ impl Network {
 impl Http for Network {
     fn send(&self, request: &Request) -> Result<Reply, Failure> {
         let url = request.url.to_url();
-        let mut response = match (request.method, request.body) {
+        let response = match (request.method, request.body) {
             ("POST", body) => {
                 let mut call = self.agent.post(&url).header("Accept", "application/json");
                 if let Some(auth) = &request.auth {
@@ -1036,15 +1203,62 @@ impl Http for Network {
             }
         }
         .map_err(|err| network_failure(&err))?;
-        let headers = response
-            .headers()
-            .iter()
-            .filter_map(|(name, value)| Some((name.as_str().to_ascii_lowercase(), value.to_str().ok()?.to_string())))
-            .collect();
-        let status = response.status().as_u16();
-        let body = response.body_mut().with_config().limit(MAX_REPLY).read_to_vec().map_err(|err| network_failure(&err))?;
-        Ok(Reply { status, headers, body })
+        reply_of(response)
     }
+
+    fn send_file(&self, request: &Request, file: &std::path::Path, cancel: Option<&std::sync::atomic::AtomicBool>) -> Result<Reply, Failure> {
+        let opened = std::fs::File::open(file).map_err(|_| Failure::Unreachable)?;
+        let cancel = cancel.unwrap_or(&NEVER);
+        // A large file takes as long as the connection needs; only the
+        // site's answer after it has a limit.
+        let mut call = self
+            .agent
+            .post(request.url.to_url())
+            .config()
+            .timeout_global(None)
+            .timeout_connect(Some(Duration::from_secs(30)))
+            .timeout_recv_response(Some(Duration::from_secs(300)))
+            .build()
+            .header("Accept", "application/json");
+        if let Some(auth) = &request.auth {
+            call = call.header("Authorization", auth);
+        }
+        for (name, value) in &request.headers {
+            call = call.header(*name, value);
+        }
+        let mut body = Cancellable { inner: std::io::BufReader::new(opened), cancel };
+        let response = call.send(ureq::SendBody::from_reader(&mut body)).map_err(|err| network_failure(&err))?;
+        reply_of(response)
+    }
+}
+
+static NEVER: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// A body that stops being read once `cancel` is set, which ends the request.
+struct Cancellable<'a, R> {
+    inner: R,
+    cancel: &'a std::sync::atomic::AtomicBool,
+}
+
+impl<R: std::io::Read> std::io::Read for Cancellable<'_, R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if self.cancel.load(std::sync::atomic::Ordering::Relaxed) {
+            return Err(std::io::Error::other("cancelled"));
+        }
+        self.inner.read(buf)
+    }
+}
+
+/// The site's answer, as [`Reply`].
+fn reply_of(mut response: ureq::http::Response<ureq::Body>) -> Result<Reply, Failure> {
+    let headers = response
+        .headers()
+        .iter()
+        .filter_map(|(name, value)| Some((name.as_str().to_ascii_lowercase(), value.to_str().ok()?.to_string())))
+        .collect();
+    let status = response.status().as_u16();
+    let body = response.body_mut().with_config().limit(MAX_REPLY).read_to_vec().map_err(|err| network_failure(&err))?;
+    Ok(Reply { status, headers, body })
 }
 
 fn network_failure(err: &ureq::Error) -> Failure {
@@ -1157,6 +1371,33 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn posts_open_and_are_read_where_wordpress_says_it_is_where_the_browser_is_signed_in() {
+        let index = |url: &str, home: &str| format!(r#"{{"name":"Travels","url":"{url}","home":"{home}","namespaces":["wp/v2"]}}"#);
+        let local = Fake::default()
+            .answer("http://127.0.0.1:10005/", 200, &[], "<html>")
+            .answer("http://127.0.0.1:10005/wp-json/", 200, &[], &index("http://localhost:10005", "http://localhost:10005"));
+        let api = Client::new(&local, Policy { development: true }).discover("http://127.0.0.1:10005").unwrap();
+        assert_eq!(api.site.to_url(), "http://127.0.0.1:10005/", "requests still go where the person said");
+        assert_eq!(edit_link(&api, 7), "http://localhost:10005/wp-admin/post.php?post=7&action=edit");
+        assert_eq!(post_link(&api, 7), "http://localhost:10005/?p=7");
+        let saved_before = Api { wordpress: None, home: None, ..api.clone() };
+        assert_eq!((edit_link(&saved_before, 7), post_link(&saved_before, 7)), ("http://127.0.0.1:10005/wp-admin/post.php?post=7&action=edit".into(), "http://127.0.0.1:10005/?p=7".into()));
+        assert_eq!(Client::new(&local, Policy { development: true }).reread(&saved_before), Some(api), "a site connected earlier reads them when publishing");
+
+        let own_folder = Fake::default()
+            .answer("https://example.com/", 200, &[], "<html>")
+            .answer("https://example.com/wp-json/", 200, &[], &index(r"https:\/\/example.com\/wp", r"https:\/\/example.com"));
+        let api = Client::new(&own_folder, Policy::default()).discover("example.com").unwrap();
+        assert_eq!(edit_link(&api, 7), "https://example.com/wp/wp-admin/post.php?post=7&action=edit");
+        assert_eq!(post_link(&api, 7), "https://example.com/?p=7");
+
+        let unsaid = Fake::default().answer("https://example.com/blog", 200, &[], "<html>").answer("https://example.com/blog/wp-json/", 200, &[], INDEX);
+        let api = Client::new(&unsaid, Policy::default()).discover("example.com/blog").unwrap();
+        assert_eq!(edit_link(&api, 7), "https://example.com/blog/wp-admin/post.php?post=7&action=edit");
+        assert_eq!(post_link(&api, 7), "https://example.com/blog/?p=7");
+    }
+
+    #[test]
     fn a_blocked_api_and_a_site_without_wordpress_are_told_apart() {
         let blocked = Fake::default()
             .answer("https://example.com/", 200, &[], "<html>")
@@ -1174,6 +1415,8 @@ pub(crate) mod tests {
         let api = Api {
             site: SiteUrl::parse("https://example.com").unwrap(),
             root: SiteUrl::parse("https://example.com/wp-json/").unwrap(),
+            wordpress: None,
+            home: None,
             name: String::new(),
             namespaces: vec!["wp/v2".into()],
         };
@@ -1190,6 +1433,8 @@ pub(crate) mod tests {
         let api = Api {
             site: SiteUrl::parse("https://example.com").unwrap(),
             root: SiteUrl::parse("https://example.com/wp-json/").unwrap(),
+            wordpress: None,
+            home: None,
             name: String::new(),
             namespaces: vec!["wp/v2".into()],
         };
@@ -1221,6 +1466,7 @@ pub(crate) mod tests {
         for (status, body) in [
             (500, r#"{"code":"rest_upload_unknown_error","message":"The uploaded file exceeds the upload_max_filesize directive in php.ini."}"#),
             (400, r#"{"code":"rest_upload_file_too_big","message":"This file is too big."}"#),
+            (400, r#"{"code":"rest_upload_no_data","message":"No data supplied."}"#),
             (413, ""),
         ] {
             let fake = Fake::default().answer_to("POST", media, status, &[], body);
@@ -1228,6 +1474,22 @@ pub(crate) mod tests {
             assert_eq!(fake.bodies.borrow().len(), 1);
         }
         assert!(!Failure::TooLarge.outcome_unknown(), "refused, so known not to be done");
+    }
+
+    #[test]
+    fn a_file_is_uploaded_as_it_is_and_named() {
+        let api = local_api();
+        let credentials = Credentials { user: "ana".into(), password: "abcd efgh".into() };
+        let media = "https://example.com/blog/wp-json/wp/v2/media";
+        let file = std::env::temp_dir().join(format!("picasso-upload-file-{}.mp4", std::process::id()));
+        std::fs::write(&file, b"\0\0\0\x18ftypmp42").unwrap();
+        let fake = Fake::default().answer_to("POST", media, 201, &[], r#"{"id":5,"source_url":"https://example.com/blog/v.mp4","mime_type":"video/mp4"}"#);
+        let sent = Client::new(&fake, Policy::default()).upload_file(&api, &credentials, &file, "video/mp4", "v.mp4").unwrap();
+        assert_eq!((sent.id, sent.url.as_str()), (5, "https://example.com/blog/v.mp4"));
+        assert_eq!(fake.bodies.borrow()[0], (format!("POST {media}"), b"\0\0\0\x18ftypmp42".to_vec()));
+        let refused = Fake::default().answer_to("POST", media, 413, &[], "");
+        assert_eq!(Client::new(&refused, Policy::default()).upload_file(&api, &credentials, &file, "video/mp4", "v.mp4"), Err(Failure::TooLarge));
+        let _ = std::fs::remove_file(file);
     }
 
     #[test]
@@ -1244,6 +1506,8 @@ pub(crate) mod tests {
         let api = Api {
             site: SiteUrl::parse("http://localhost:10003").unwrap(),
             root: SiteUrl::parse("http://localhost:10003/wp-json/").unwrap(),
+            wordpress: None,
+            home: None,
             name: String::new(),
             namespaces: vec!["wp/v2".into()],
         };
@@ -1333,6 +1597,8 @@ pub(crate) mod tests {
         Api {
             site: SiteUrl::parse("https://example.com/blog").unwrap(),
             root: SiteUrl::parse("https://example.com/blog/wp-json/").unwrap(),
+            wordpress: None,
+            home: None,
             name: String::new(),
             namespaces: vec!["wp/v2".into()],
         }

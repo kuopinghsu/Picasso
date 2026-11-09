@@ -46,7 +46,7 @@ endif
 # `make` alone builds the release binary; `make help` lists every target.
 .DEFAULT_GOAL := release
 
-.PHONY: help release debug run run-stats version check lint test corpus bench bench-check check-docs deny ci \
+.PHONY: help release debug run run-stats version check lint test corpus bench bench-check check-docs deny ci translations \
 	sign-identity notices release-notes guide guide-pdf theme appimage install uninstall world-map clean
 
 # Each target's `##` text is what `make help` prints; `##@` starts a section.
@@ -172,11 +172,17 @@ guide-pdf: ## Build the User Guide as PDF in target/guide (needs asciidoctor-pdf
 
 # The optional WordPress theme in wordpress/voyagelight and the Picasso Places
 # plugin in wordpress/picasso-places, as the ZIPs that Upload Theme and Upload
-# Plugin take. Fails if a text lacks a translation or the plugin's copy of a
+# Plugin take, an English and a Traditional Chinese one of each, in wordpress/. Fails if a text lacks a translation or the plugin's copy of a
 # file shared with the theme differs from the theme's.
-theme: ## Build the optional WordPress theme and plugin ZIPs in target/theme
+theme: ## Build the WordPress theme and plugin ZIPs, English and Chinese, in wordpress/
 	$(PYTHON) scripts/build-theme.py --check
 	$(PYTHON) scripts/build-theme.py
+
+# After a text is added to or changed in the theme's or plugin's PHP: rewrites
+# each .pot from the PHP and brings each .po in line, listing the texts left
+# to translate. `make theme` fails until they are translated.
+translations: ## Update the WordPress theme's and plugin's .pot and .po files from their PHP
+	$(PYTHON) scripts/build-theme.py --translations
 
 # Linux AppImage for this machine (x86_64 or aarch64) in dist/, the same AppDir
 # as the CI AppImage job.

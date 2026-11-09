@@ -271,9 +271,8 @@ fn trip(report: &mut Report, count: usize) {
     report.spread("Open one Day", 50, Duration::from_millis(100), || db.trip_photos(trip_id, &middle, Sort::DateOldest));
     report.spread("Starred photos of the Trip", 20, second, || db.trip_photos(trip_id, &filtered, Sort::DateOldest));
     report.time_within("Suggest Places", 10 * second, || db.suggest_places(trip_id, 300.0, 3 * 3_600).unwrap());
-    let day_ids: Vec<i64> = days.iter().map(|day| day.id).collect();
     report.time_within("A Story from all 365 Days", 5 * second, || {
-        db.create_story_from_days(trip_id, "A year", &day_ids, |date| date.to_string()).unwrap()
+        db.create_story_from_days(trip_id, "A year", None, |date| date.to_string()).unwrap()
     });
     report.spread("List Trips", 50, Duration::from_millis(100), || db.trips(&TripQuery::default()));
     let _ = std::fs::remove_dir_all(&dir);
@@ -457,6 +456,7 @@ fn publication(report: &mut Report, files: &[PathBuf]) {
         conclusion: String::new(),
         author: String::new(),
         show_date: false,
+        dates: None,
         cover: Some(1),
         cover_crop: crate::trip::CoverCrop::default(),
         template: crate::trip::DEFAULT_TEMPLATE.into(),
@@ -469,8 +469,8 @@ fn publication(report: &mut Report, files: &[PathBuf]) {
     let blocks: Vec<StoryBlock> = media.chunks(20).map(|chunk| StoryBlock::new(Block::Gallery(chunk.to_vec()))).collect();
     let sources: std::collections::HashMap<i64, story_html::Source> =
         files.iter().enumerate().map(|(index, path)| (index as i64 + 1, Some((path.clone(), crate::edit::Settings::default(), 0)))).collect();
-    let words = Words { lang: "en", untitled: "Untitled story".into(), unavailable: "Photo unavailable".into(), contents: "Contents".into() };
-    let page = story_html::Page { story: &story, dates: None, blocks: &blocks, sources: &sources, words: &words, map: None, profiles: &std::collections::HashMap::new() };
+    let words = Words { lang: "en", untitled: "Untitled story".into(), unavailable: "Photo unavailable".into(), video_unavailable: "Video unavailable".into(), contents: "Contents".into(), watch: "Watch on YouTube".into() };
+    let page = story_html::Page { story: &story, dates: None, blocks: &blocks, sources: &sources, words: &words, map: None, profiles: &std::collections::HashMap::new(), videos: &story_html::Videos::default() };
     let dir = scratch("publication");
     let started = Instant::now();
     let (_, outcome) = story_html::export_story(&dir, "A year", Format::Html, Profile::default(), &page, &Progress::default()).unwrap();
@@ -482,8 +482,10 @@ fn publication(report: &mut Report, files: &[PathBuf]) {
         credentials: crate::wordpress::Credentials { user: "ana".into(), password: "abcd efgh".into() },
         policy: crate::wordpress::Policy::default(),
         story: story.clone(),
+        dates: None,
         blocks: blocks.clone(),
         sources: sources.clone(),
+        videos: crate::story_html::Videos::default(),
         size: crate::upload::UploadSize::Low,
         exif: false,
         uploads: std::collections::HashMap::new(),

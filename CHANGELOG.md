@@ -7,6 +7,50 @@ section of this file as the release notes.
 
 ### Added
 
+- Table blocks in Stories: pick the number of columns and rows on a grid of squares in the
+  + menu, or type /table 4x5; add or remove a row or column at a cell from its right-click
+  menu or Rows and columns above the table, or with + Add a row and + Add a column below
+  it, and resize it on the same grid, which marks the cells with text and never removes
+  them; the grid takes the arrow keys and Enter too. Enter goes to the cell below, adding a
+  row after the last, ↑ and ↓ move between rows, and the format buttons work in cells. The
+  first row is the header row unless turned off. Exports style tables to fit each template,
+  leaving out empty rows and columns; Markdown gets a table, and WordPress a core table
+  block, which the VoyageLight theme styles.
+- Table column widths: drag the line between two columns, or Tab to it and use ← and →;
+  double-click it, or Fit columns to their text in a cell's menu, to let the columns fit
+  their text again. Exported pages keep the widths, and so do WordPress posts under the
+  VoyageLight theme or the Picasso Places plugin, which draw them from the table block.
+- Text color in Stories: the A button among the format buttons gives the selection red,
+  orange, green, blue, purple or gray, or takes its color away. Each color has a lighter
+  shade for dark pages: exported pages switch with the reader's system and the Photo Essay
+  always uses it, WordPress posts get Gutenberg's own inline color, which the VoyageLight
+  theme lightens in dark mode, and Markdown gets an HTML span.
+- YouTube video blocks in Stories: paste a video's address from youtube.com or youtu.be,
+  starting where its t= says, and add a caption. The editor and exported pages show a card
+  for it that plays the video on YouTube, and fetch nothing, so pages still work offline
+  and in the preview; Markdown links to it, and WordPress posts embed YouTube's player,
+  which the VoyageLight theme and the Picasso Places plugin start where the address says.
+  Export and publishing point out blocks whose address isn't a YouTube video's.
+- Video blocks in Stories: add one of the trip's videos from the + or / menu, or with Add to
+  Story, and play it in place with sound. Drag the two handles on the timeline under it, or
+  use ← and →, to choose the part the Story shows; the video shows the exact frame and time
+  where a handle is as it is dragged. Drag along the timeline, or play and pause, to find a
+  moment, and the start and end buttons make the part start or end there. Exported pages play that part in the
+  browser's own player, made with FFmpeg into an H.264 MP4 of at most 1080p without where it
+  was taken, and Markdown links its first frame to it. WordPress posts get it as a core video
+  block, uploaded as it is read from disk so a long video never fills memory; a site that
+  refuses it as too large stops the save and says how large it was. Parts already made or
+  uploaded are reused.
+- A Story can have its own dates: New story's For some dates… chooses a first and last
+  date, typed or picked in the calendar, to start blank or with their photos, and Dates
+  under the byline changes them later; left empty, the Story is about the whole Trip.
+  Add photos… then shows the photos on those dates first, by their Day's date or else by
+  when they were taken, so it works before the Trip has Days, with All days or one Day a
+  choice away. The dates under the title, in the editor, preview, export and WordPress,
+  are the Story's own (⚙ Show the story's dates). Trip packages keep each Story's dates.
+- The calendar beside a date zooms out: click the month's name to see the
+  year's months, and click the year to see a decade of years. Picking a year shows its
+  months and picking a month shows its days, and ‹ › turn a month, a year or ten years.
 - After a Story is exported, its bar says Exported, which opens the folder, and Changed
   since the export once the Story or one of its photos changes, which exports it again.
 - Suggest days and Suggest places show how many photos' times they have read, with
@@ -75,12 +119,19 @@ section of this file as the release notes.
   The dialog shows the site, the post, categories and tags read from the site, new ones added there from the dialog, the photo size
   (Standard web or Low resolution), whether to keep camera details, a photo preview and the
   post's state. Photos never carry their location; each new upload carries its description and is named for the Story and the photo's file.
+  The saved post opens in the site's editor at the address WordPress gives itself, where the
+  browser stays signed in, even when the site was connected as 127.0.0.1 rather than localhost;
+  Day posts link to each other at the address WordPress gives its pages.
 - A Story is saved as a draft unless you choose to publish it; publishing first confirms what
   readers will see, at once or at a date and time in the site's time zone. A Summary in the dialog lists what saving will change on the site. A Story with Days can go out as an index post and one post per Day, linked to each other. Later saves update the same post. A post edited on the site is never
   overwritten without your choice, and a post Picasso has no record of is found before another
   is made.
 - Uploads of the same bytes are reused, interrupted or lost requests are recovered without
   duplicates, safe requests are retried with backoff, and each job is kept under History.
+- Photos and videos a saved post no longer shows are offered for deletion from the site's media
+  library: a window opens after the save, listing them to tick, with Delete from site and Keep.
+  Only Picasso's own uploads that no other Story's post uses are offered, and any still shown
+  in another post or page on the site is kept.
 - Publishing can show a Story's Places: off until ticked, with Places to leave out, exact or
   to about 1 km, and named in the confirmation; Day posts show their Day's Places. A site with
   the VoyageLight theme or the Picasso Places plugin shows them on its own map; with any other
@@ -135,6 +186,11 @@ section of this file as the release notes.
 - Reorganized the English and Traditional Chinese READMEs around the project overview,
   features, installation, common workflows, data storage and development. Simplified the
   English wording for readers who use English as an additional language.
+- The VoyageLight theme and Picasso Places plugin bring Leaflet with them, so a map fetches
+  only OpenStreetMap's tiles, and are easier to use with a keyboard, a screen reader or a
+  touch screen: the light and dark button, the header's sub-menus and a loaded map. The
+  theme's header turns to the phone menu whenever its links don't fit, and Chinese headings
+  keep their own letter spacing.
 - Updated both user guides with clearer navigation, separate export and GPS track workflows,
   supported formats, storage locations, backup coverage and troubleshooting steps.
 - Expanded the release guide with preparation and verification steps, the complete release
@@ -143,6 +199,13 @@ section of this file as the release notes.
 
 ### Fixed
 
+- WordPress: a password-protected story or Journey no longer shows its places before the
+  password is entered, on its page, on the VoyageLight Travel atlas or in the REST API.
+  VoyageLight's map pins show titles such as Mom's café as written, not as `Mom&#8217;s café`.
+  A Journey line's note can hold a `|`, with the post ID still read from the last column.
+  The Journey editor no longer loads every story on the site, and a location a metre from
+  the equator or the prime meridian reads back in the editor. Picasso Places now needs
+  WordPress 6.4, the first that draws its maps with block themes.
 - Screen readers now name the sidebar's items and folders, with their counts and whether
   they are chosen or open; photos in the grid and the tray, by file name; the timeline
   beside the grid, with the month in view; the Help and Settings buttons; the thumbnail

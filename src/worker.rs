@@ -205,6 +205,9 @@ pub enum UiEvent {
     PublishProgress(i64, Option<i64>, crate::publish::Event),
     /// A Story's draft was saved on a site, or why not.
     StoryPublished(Box<crate::publish::Finished>),
+    /// Uploads a post stopped using were deleted from site `.0`, named `.1`,
+    /// or as many as could be.
+    UploadsDeleted(i64, String, crate::publish::Deleted),
     /// A Trip package was saved, with how many photos were unavailable, or why not.
     TripPackaged(Result<(std::path::PathBuf, usize), String>),
     /// A Trip package's photos were written to a folder, ready to import.

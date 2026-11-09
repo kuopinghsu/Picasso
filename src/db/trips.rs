@@ -209,7 +209,11 @@ pub(super) fn upgrade(db: &Database) -> Result<(), String> {
     db.ensure_column("stories", "introduction", "TEXT NOT NULL DEFAULT ''")?;
     db.ensure_column("stories", "conclusion", "TEXT NOT NULL DEFAULT ''")?;
     // The part of the cover shown; empty for the whole photo.
-    db.ensure_column("stories", "cover_crop", "TEXT NOT NULL DEFAULT ''")
+    db.ensure_column("stories", "cover_crop", "TEXT NOT NULL DEFAULT ''")?;
+    // The first and last dates the Story is about (`YYYY-MM-DD`); both NULL
+    // for the whole Trip.
+    db.ensure_column("stories", "first_date", "TEXT")?;
+    db.ensure_column("stories", "last_date", "TEXT")
 }
 
 const CLOCK_FORMAT: &str = "%Y-%m-%d %H:%M:%S";
@@ -238,7 +242,7 @@ t.created_at, t.updated_at, t.trip_time,
 (SELECT COUNT(*) FROM trip_days d WHERE d.trip_id = t.id),
 (SELECT COUNT(*) FROM stories s WHERE s.trip_id = t.id)";
 
-const STORY_COLS: &str = "id, trip_id, title, subtitle, author, show_date, cover_ref, template, archived, revision, updated_at, finished, introduction, conclusion, cover_crop";
+const STORY_COLS: &str = "id, trip_id, title, subtitle, author, show_date, cover_ref, template, archived, revision, updated_at, finished, introduction, conclusion, cover_crop, first_date, last_date";
 
 fn sql_err(err: rusqlite::Error) -> String {
     err.to_string()
@@ -281,6 +285,7 @@ fn read_story(row: &rusqlite::Row) -> rusqlite::Result<Story> {
         subtitle: row.get(3)?,
         author: row.get(4)?,
         show_date: row.get(5)?,
+        dates: read_day(row.get(15)?).zip(read_day(row.get(16)?)),
         cover: row.get(6)?,
         cover_crop: crate::trip::CoverCrop::from_text(&row.get::<_, String>(14)?),
         template: row.get(7)?,
@@ -345,6 +350,8 @@ fn member_filter(query: &MemberQuery) -> String {
         DayFilter::Any => filter.push_str(" AND ?2 = ?2"),
         DayFilter::Unassigned => filter.push_str(" AND tm.day_id IS NULL AND ?2 = ?2"),
         DayFilter::Day(_) => filter.push_str(" AND tm.day_id = ?2"),
+        // The members themselves are listed by `dated_filter`.
+        DayFilter::Dates(..) => filter.push_str(" AND ?2 = ?2"),
         DayFilter::Review => filter.push_str(" AND tm.review != 0 AND ?2 = ?2"),
     }
     if query.starred {
@@ -371,6 +378,16 @@ fn member_filter(query: &MemberQuery) -> String {
     }
     filter
 }
+
+/// [`member_filter`] for [`DayFilter::Dates`], with the members of `dated`
+/// from `first` to `last` listed.
+fn dated_filter(query: &MemberQuery, dated: &[(i64, NaiveDate)], first: NaiveDate, last: NaiveDate) -> String {
+    let ids: Vec<String> = dated.iter().filter(|(_, date)| (first..=last).contains(date)).map(|(id, _)| id.to_string()).collect();
+    format!("{} AND tm.media_id IN ({})", member_filter(query), ids.join(","))
+}
+
+/// The order of members on some dates: when they were taken.
+const DATES_ORDER: &str = "coalesce(p.taken_at, m.file_taken_at), tm.position";
 
 fn day_param(query: &MemberQuery) -> i64 {
     match query.day {
@@ -617,18 +634,58 @@ impl Database {
         self.remove_from_trip(trip_id, &media)
     }
 
+    /// [`member_filter`], with the members on [`DayFilter::Dates`] listed.
+    fn member_where(&self, trip_id: i64, query: &MemberQuery) -> String {
+        match query.day {
+            DayFilter::Dates(first, last) => dated_filter(query, &self.member_dates(trip_id), first, last),
+            _ => member_filter(query),
+        }
+    }
+
+    /// The date of each of the Trip's members that has one: its Day's, else
+    /// the day it was taken in the Trip's zone, else the day the library
+    /// shows for it.
+    pub fn member_dates(&self, trip_id: i64) -> Vec<(i64, NaiveDate)> {
+        use chrono::TimeZone;
+        let trip = self.trip(trip_id);
+        let zone = trip.as_ref().and_then(|trip| TripZone::parse(&trip.zone));
+        let trip_time = trip.is_some_and(|trip| trip.trip_time);
+        let rows: Vec<(i64, Option<String>, Capture, i64, i64)> = self.map_rows(
+            "SELECT tm.media_id, d.day, m.clock_kind, m.clock, m.clock_offset, m.clock_utc,
+                    coalesce(p.taken_at - p.file_taken_at, 0), coalesce(p.taken_at, m.file_taken_at)
+             FROM trip_media tm JOIN media_refs m ON m.id = tm.media_id LEFT JOIN photos p ON p.id = m.photo_id
+             LEFT JOIN trip_days d ON d.id = tm.day_id
+             WHERE tm.trip_id = ?1",
+            [trip_id],
+            |row| Ok((row.get(0)?, row.get(1)?, read_capture_row(row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?), row.get(6)?, row.get(7)?)),
+        );
+        rows.into_iter()
+            .filter_map(|(media_id, day, capture, shift, taken_at)| {
+                let taken = zone.as_ref().and_then(|zone| capture_day(capture, shift, zone, trip_time).ok());
+                let shown = || chrono::Local.timestamp_opt(taken_at, 0).earliest().map(|at| at.date_naive()).filter(|_| taken_at > 0);
+                Some((media_id, read_day(day).or(taken).or_else(shown)?))
+            })
+            .collect()
+    }
+
     /// Members matching `query`, `limit` of them from `offset`: in a Day,
-    /// in the Day's order; otherwise in the order they joined the Trip.
+    /// in its order; on some dates, in the order they were taken; otherwise
+    /// in the order they joined the Trip.
     pub fn trip_members(&self, trip_id: i64, query: &MemberQuery, offset: usize, limit: usize) -> Vec<Member> {
+        self.members_where(trip_id, query, &self.member_where(trip_id, query), offset, limit)
+    }
+
+    /// [`Database::trip_members`] with `filter`, the condition `query` makes.
+    fn members_where(&self, trip_id: i64, query: &MemberQuery, filter: &str, offset: usize, limit: usize) -> Vec<Member> {
         let order = match query.day {
             DayFilter::Day(_) => "tm.day_position, tm.position",
+            DayFilter::Dates(..) => DATES_ORDER,
             _ => "tm.position",
         };
         let sql = format!(
             "SELECT tm.media_id, m.photo_id, m.path, m.filename, tm.day_id, tm.day_source
              FROM trip_media tm JOIN media_refs m ON m.id = tm.media_id LEFT JOIN photos p ON p.id = m.photo_id
-             WHERE {} ORDER BY {order} LIMIT ?3 OFFSET ?4",
-            member_filter(query)
+             WHERE {filter} ORDER BY {order} LIMIT ?3 OFFSET ?4"
         );
         self.map_rows(&sql, params![trip_id, day_param(query), limit as i64, offset as i64], |row| {
             let path: String = row.get(2)?;
@@ -645,17 +702,18 @@ impl Database {
     }
 
     /// The catalog photos of the members matching `query`, for the photo
-    /// grid: in a Day, in the Day's order; otherwise in `sort` order.
-    /// Unavailable members have none.
+    /// grid: in a Day, in its order; on some dates, in the order they were
+    /// taken; otherwise in `sort` order. Unavailable members have none.
     pub fn trip_photos(&self, trip_id: i64, query: &MemberQuery, sort: Sort) -> Vec<Photo> {
         let order = match query.day {
             DayFilter::Day(_) => "tm.day_position, tm.position",
+            DayFilter::Dates(..) => DATES_ORDER,
             _ => order_sql(sort),
         };
         let sql = format!(
             "SELECT {PHOTO_COLS} FROM trip_media tm JOIN media_refs m ON m.id = tm.media_id JOIN photos p ON p.id = m.photo_id
              WHERE {} ORDER BY {order}",
-            member_filter(query)
+            self.member_where(trip_id, query)
         );
         self.map_rows(&sql, params![trip_id, day_param(query)], read_photo)
     }
@@ -670,7 +728,7 @@ impl Database {
     pub fn count_trip_members(&self, trip_id: i64, query: &MemberQuery) -> i64 {
         let sql = format!(
             "SELECT COUNT(*) FROM trip_media tm JOIN media_refs m ON m.id = tm.media_id LEFT JOIN photos p ON p.id = m.photo_id WHERE {}",
-            member_filter(query)
+            self.member_where(trip_id, query)
         );
         self.conn.query_row(&sql, params![trip_id, day_param(query)], |row| row.get(0)).unwrap_or(0)
     }
@@ -1369,37 +1427,73 @@ impl Database {
         Ok(outcome)
     }
 
+    /// A Story about the whole Trip.
     pub fn create_story(&self, trip_id: i64, title: &str) -> Result<i64, String> {
+        self.create_story_about(trip_id, title, None)
+    }
+
+    /// A Story about the dates `dates`, first to last, or about the whole Trip.
+    pub fn create_story_about(&self, trip_id: i64, title: &str, dates: Option<(NaiveDate, NaiveDate)>) -> Result<i64, String> {
         let tx = self.conn.unchecked_transaction().map_err(sql_err)?;
         check_trip(&tx, trip_id)?;
-        let id = insert_story(&tx, trip_id, title)?;
+        let id = insert_story(&tx, trip_id, title, dates)?;
         tx.commit().map_err(sql_err)?;
         Ok(id)
     }
 
-    /// A Story with a heading for each of `day_ids`, in that order, followed
-    /// by a photo block for each of the Day's photos in the Day's order.
-    /// Videos are left out. Headings are the Day titles, or `date_heading`
-    /// of the Day's date; Days with neither get none. Later changes to the
-    /// Days don't change the Story. Returns the Story and the videos left out.
+    /// A Story about the dates `dates`, first to last, or about the whole
+    /// Trip, starting with its photos. For the whole Trip, each Day that has
+    /// photos, in the Days' order, gets a heading followed by a photo block
+    /// for each of its photos in the Day's order. For some dates, each date
+    /// with photos on it gets one, followed by those photos in the order they
+    /// were taken. Videos are left out. Headings are the Day titles, or
+    /// `date_heading` of the date; Days with neither get none. Later changes
+    /// to the Days don't change the blocks. Returns the Story and the videos
+    /// left out.
     pub fn create_story_from_days(
         &self,
         trip_id: i64,
         title: &str,
-        day_ids: &[i64],
+        dates: Option<(NaiveDate, NaiveDate)>,
         date_heading: impl Fn(NaiveDate) -> String,
     ) -> Result<(i64, usize), String> {
-        let days = self.trip_days(trip_id);
+        let dates = dates.map(|(first, last)| (first.min(last), first.max(last)));
+        let all = self.trip_days(trip_id);
+        let mut groups: Vec<(String, Vec<Member>)> = Vec::new();
+        match dates {
+            None => {
+                for day in all.iter().filter(|day| day.members > 0) {
+                    let heading = if day.title.is_empty() { day.day.map(&date_heading).unwrap_or_default() } else { day.title.clone() };
+                    let query = MemberQuery { day: DayFilter::Day(day.id), ..MemberQuery::default() };
+                    groups.push((heading, self.trip_members(trip_id, &query, 0, usize::MAX >> 1)));
+                }
+            }
+            Some((first, last)) => {
+                let dated = self.member_dates(trip_id);
+                let on: std::collections::HashMap<i64, NaiveDate> = dated.iter().copied().collect();
+                let query = MemberQuery { day: DayFilter::Dates(first, last), ..MemberQuery::default() };
+                let filter = dated_filter(&query, &dated, first, last);
+                let mut by_date: std::collections::BTreeMap<NaiveDate, Vec<Member>> = Default::default();
+                for member in self.members_where(trip_id, &query, &filter, 0, usize::MAX >> 1) {
+                    if let Some(date) = on.get(&member.media_id) {
+                        by_date.entry(*date).or_default().push(member);
+                    }
+                }
+                for (date, members) in by_date {
+                    // The title of the Day the date's photos are all in, if it has one.
+                    let day = members.first().and_then(|member| member.day_id).filter(|id| members.iter().all(|member| member.day_id == Some(*id)));
+                    let titled = day.and_then(|id| all.iter().find(|day| day.id == id)).map(|day| day.title.clone()).filter(|title| !title.is_empty());
+                    groups.push((titled.unwrap_or_else(|| date_heading(date)), members));
+                }
+            }
+        }
         let mut blocks = Vec::new();
         let mut videos = 0;
-        for day_id in day_ids {
-            let day = days.iter().find(|day| day.id == *day_id).ok_or_else(|| format!("day {day_id} is not in trip {trip_id}"))?;
-            let heading = if day.title.is_empty() { day.day.map(&date_heading).unwrap_or_default() } else { day.title.clone() };
+        for (heading, members) in groups {
             if !heading.is_empty() {
                 blocks.push(StoryBlock::new(Block::Heading(heading)));
             }
-            let query = MemberQuery { day: DayFilter::Day(day.id), ..MemberQuery::default() };
-            for member in self.trip_members(trip_id, &query, 0, usize::MAX >> 1) {
+            for member in members {
                 if member.is_video {
                     videos += 1;
                 } else {
@@ -1408,7 +1502,8 @@ impl Database {
             }
         }
         let tx = self.conn.unchecked_transaction().map_err(sql_err)?;
-        let id = insert_story(&tx, trip_id, title)?;
+        check_trip(&tx, trip_id)?;
+        let id = insert_story(&tx, trip_id, title, dates)?;
         write_blocks(&tx, id, &blocks)?;
         tx.commit().map_err(sql_err)?;
         Ok((id, videos))
@@ -1497,7 +1592,7 @@ impl Database {
             .map_err(sql_err)?;
         }
         for crate::trip_package::PackStory { story, blocks } in &package.stories {
-            let story_id = insert_story(&tx, trip_id, &story.title)?;
+            let story_id = insert_story(&tx, trip_id, &story.title, story.dates)?;
             tx.execute(
                 "UPDATE stories SET subtitle = ?2, author = ?3, show_date = ?4, template = ?5, finished = ?6, cover_ref = ?7, archived = ?8,
                     introduction = ?9, conclusion = ?10, cover_crop = ?11 WHERE id = ?1",
@@ -1507,7 +1602,7 @@ impl Database {
             let mut blocks = blocks.clone();
             for block in &mut blocks {
                 let media = match &mut block.block {
-                    Block::Photo(one) => std::slice::from_mut(one),
+                    Block::Photo(one) | Block::Video { media: one, .. } => std::slice::from_mut(one),
                     Block::Gallery(items)
                     | Block::Grid { media: items, .. }
                     | Block::Unknown { media: items, .. } => items.as_mut_slice(),
@@ -1632,11 +1727,12 @@ impl Database {
     }
 }
 
-fn insert_story(tx: &Transaction, trip_id: i64, title: &str) -> Result<i64, String> {
+fn insert_story(tx: &Transaction, trip_id: i64, title: &str, dates: Option<(NaiveDate, NaiveDate)>) -> Result<i64, String> {
     let now = unix_now();
+    let (first, last) = dates_text(dates);
     tx.execute(
-        "INSERT INTO stories(trip_id, title, template, created_at, updated_at) VALUES(?1, ?2, ?3, ?4, ?4)",
-        params![trip_id, title.trim(), DEFAULT_TEMPLATE, now],
+        "INSERT INTO stories(trip_id, title, template, first_date, last_date, created_at, updated_at) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?6)",
+        params![trip_id, title.trim(), DEFAULT_TEMPLATE, first, last, now],
     )
     .map_err(sql_err)?;
     let id = tx.last_insert_rowid();
@@ -1691,9 +1787,17 @@ fn move_members(tx: &Connection, trip_id: i64, day_id: Option<i64>, before: Vec<
     Ok(moved)
 }
 
+/// A Story's first and last dates as stored, earlier first.
+fn dates_text(dates: Option<(NaiveDate, NaiveDate)>) -> (Option<String>, Option<String>) {
+    let dates = dates.map(|(first, last)| (first.min(last), first.max(last)));
+    (day_text(dates.map(|dates| dates.0)), day_text(dates.map(|dates| dates.1)))
+}
+
 fn write_details(tx: &Transaction, story: &Story) -> Result<(), String> {
+    let (first, last) = dates_text(story.dates);
     tx.execute(
-        "UPDATE stories SET title = ?2, subtitle = ?3, author = ?4, show_date = ?5, template = ?6, finished = ?7, introduction = ?8, conclusion = ?9, cover_crop = ?10 WHERE id = ?1",
+        "UPDATE stories SET title = ?2, subtitle = ?3, author = ?4, show_date = ?5, template = ?6, finished = ?7, introduction = ?8, conclusion = ?9, cover_crop = ?10,
+            first_date = ?11, last_date = ?12 WHERE id = ?1",
         params![
             story.id,
             story.title.trim(),
@@ -1704,7 +1808,9 @@ fn write_details(tx: &Transaction, story: &Story) -> Result<(), String> {
             story.finished,
             story.introduction.trim(),
             story.conclusion.trim(),
-            story.cover_crop.to_text()
+            story.cover_crop.to_text(),
+            first,
+            last
         ],
     )
     .map_err(sql_err)?;
@@ -2250,9 +2356,11 @@ mod tests {
         let empty = db.add_trip_day(trip_id, None, "").unwrap();
         db.move_to_day(trip_id, Some(first), &[refs[1], refs[0], refs[2]], DaySource::User).unwrap();
         db.move_to_day(trip_id, Some(second), &[refs[3]], DaySource::User).unwrap();
+        db.reorder_trip_days(trip_id, &[second, first, empty]).unwrap();
 
-        let (story, videos) = db.create_story_from_days(trip_id, "Summer", &[second, first, empty], |date| date.format("%b %-d").to_string()).unwrap();
+        let (story, videos) = db.create_story_from_days(trip_id, "Summer", None, |date| date.format("%b %-d").to_string()).unwrap();
         assert_eq!(videos, 1);
+        assert_eq!(db.story(story).unwrap().dates, None, "the story is about the whole trip");
         let blocks: Vec<Block> = db.story_blocks(story).into_iter().map(|item| item.block).collect();
         assert_eq!(
             blocks,
@@ -2266,9 +2374,44 @@ mod tests {
         );
         db.reorder_trip_days(trip_id, &[first, second, empty]).unwrap();
         assert_eq!(db.story_blocks(story).len(), 5, "changing the days later leaves the story");
-        let other = trip(&db, "Other");
-        let foreign = db.add_trip_day(other, None, "").unwrap();
-        assert!(db.create_story_from_days(trip_id, "", &[foreign], |_| String::new()).is_err());
+    }
+
+    #[test]
+    fn a_storys_dates_pick_its_photos_by_their_day_or_when_they_were_taken() {
+        let (db, _, _, ids) = photos("trip-story-dates", &["a.jpg", "b.jpg", "c.jpg", "d.jpg"]);
+        let trip_id = trip(&db, "Dates");
+        let refs = db.add_to_trip(trip_id, &ids).unwrap();
+        let first = db.add_trip_day(trip_id, day("2026-08-01"), "").unwrap();
+        let lake = db.add_trip_day(trip_id, day("2026-08-02"), "Lake").unwrap();
+        db.move_to_day(trip_id, Some(first), &[refs[0]], DaySource::User).unwrap();
+        db.move_to_day(trip_id, Some(lake), &[refs[1]], DaySource::User).unwrap();
+        // 17:00 UTC on the 2nd is past midnight in Taipei, the Trip's zone.
+        let utc = NaiveDate::from_ymd_opt(2026, 8, 2).unwrap().and_hms_opt(17, 0, 0).unwrap().and_utc().timestamp();
+        db.store_capture(refs[2], Capture::Utc(utc), 0);
+        let on = |first: &str, last: &str| {
+            let query = MemberQuery { day: DayFilter::Dates(day(first).unwrap(), day(last).unwrap()), ..MemberQuery::default() };
+            db.trip_members(trip_id, &query, 0, 10).into_iter().map(|member| member.media_id).collect::<Vec<_>>()
+        };
+        assert_eq!(on("2026-08-01", "2026-08-02"), [refs[0], refs[1]], "by their Day's date");
+        assert_eq!(on("2026-08-03", "2026-08-03"), [refs[2]], "by when it was taken, in the trip's zone");
+        assert!(on("2026-08-04", "2026-12-31").is_empty(), "a photo of no known date is on none");
+
+        let (story, _) = db.create_story_from_days(trip_id, "Lake", day("2026-08-03").zip(day("2026-08-02")), |date| date.format("%b %-d").to_string()).unwrap();
+        assert_eq!(db.story(story).unwrap().dates, day("2026-08-02").zip(day("2026-08-03")), "earlier first");
+        let blocks: Vec<Block> = db.story_blocks(story).into_iter().map(|item| item.block).collect();
+        assert_eq!(
+            blocks,
+            [Block::Heading("Lake".into()), Block::Photo(MediaUse::new(refs[1])), Block::Heading("Aug 3".into()), Block::Photo(MediaUse::new(refs[2]))],
+            "a date takes the title of the Day its photos are in"
+        );
+
+        let mut details = db.story(story).unwrap();
+        details.dates = None;
+        db.save_story_details(&details, details.revision).unwrap();
+        assert_eq!(db.story(story).unwrap().dates, None);
+        let blank = db.create_story_about(trip_id, "", day("2026-08-01").zip(day("2026-08-01"))).unwrap();
+        assert_eq!(db.story(blank).unwrap().dates, day("2026-08-01").zip(day("2026-08-01")));
+        assert!(db.story_blocks(blank).is_empty());
     }
 
     #[test]

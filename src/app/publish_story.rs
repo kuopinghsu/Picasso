@@ -496,8 +496,12 @@ impl PicassoApp {
                                 }
                             });
                             theme::name_picker(&combo.response, tr("Photo size"), name(dialog.size).0.to_string());
-                            let estimate = crate::upload::estimated_bytes(&dialog.dimensions, dialog.size);
-                            ui.label(RichText::new(trf("{} photos, about {} before upload", &[&dialog.check.photos, &format_bytes(estimate)])).color(theme::muted()));
+                            let estimate = crate::upload::estimated_bytes(&dialog.dimensions, dialog.size) + story_html::video_bytes(dialog.check.video_ms);
+                            let label = match dialog.check.videos {
+                                0 => trf("{} photos, about {} before upload", &[&dialog.check.photos, &format_bytes(estimate)]),
+                                videos => trf("{} photos and {} videos, about {} before upload", &[&(dialog.check.photos - videos), &videos, &format_bytes(estimate)]),
+                            };
+                            ui.label(RichText::new(label).color(theme::muted()));
                         });
                         if earlier.as_ref().is_some_and(|publication| publication.size == UploadSize::Standard.code()) && dialog.size == UploadSize::Low {
                             let kept = site.as_ref().map_or(0, |site| self.db.publication_media(story_id, site.id).len());
@@ -586,8 +590,17 @@ impl PicassoApp {
                     blocked = true;
                     ui.label(RichText::new(trf("{} blocks from a newer Picasso can't be published.", &[&check.unknown])).color(theme::DANGER));
                 }
+                if check.no_ffmpeg > 0 {
+                    blocked = true;
+                    ui.label(RichText::new(trf("Install FFmpeg to publish the story's {} videos; Picasso makes them play in any browser with it.", &[&check.no_ffmpeg])).color(theme::DANGER));
+                }
                 if check.low_res > 0 {
                     ui.label(RichText::new(trf("{} photos are small and may look soft across the page.", &[&check.low_res])).color(theme::muted()));
+                }
+                if check.not_youtube > 0 {
+                    ui.label(
+                        RichText::new(trf("{} YouTube video blocks don't have a YouTube video's address; only their captions go in.", &[&check.not_youtube])).color(theme::muted()),
+                    );
                 }
 
                 // What saving changes on the site, folded away: read only, nothing is sent.
@@ -601,7 +614,7 @@ impl PicassoApp {
                         } else {
                         match earlier.as_ref().filter(|_| update) {
                             Some(publication) => lines.push(trf("Changes post {} on {}, titled “{}”; its address stays as it is.", &[&publication.post_id, &site.label, &title])),
-                            None => lines.push(trf("Makes a new post on {}, titled “{}”, at about {} (WordPress adds a number if it is taken).", &[&site.label, &title, &address_of(&site.site_url, &dialog.title)])),
+                            None => lines.push(trf("Makes a new post on {}, titled “{}”, at about {} (WordPress adds a number if it is taken).", &[&site.label, &title, &address_of(if site.home_url.is_empty() { &site.site_url } else { &site.home_url }, &dialog.title)])),
                         }
                         }
                         let schedule = if dialog.at_time { schedule_of(&dialog.date, &dialog.time) } else { None };
@@ -611,7 +624,13 @@ impl PicassoApp {
                             (false, _) if public => tr("Readers: it keeps its status on the site.").to_string(),
                             _ => tr("Readers: none; it is a draft.").to_string(),
                         });
-                        lines.push(trf("Photos: {}, uploaded and named like {}, or reused when already on the site.", &[&dialog.check.photos, &dialog.sample_name]));
+                        lines.push(trf("Photos: {}, uploaded and named like {}, or reused when already on the site.", &[&(dialog.check.photos - dialog.check.videos), &dialog.sample_name]));
+                        if dialog.check.videos > 0 {
+                            lines.push(trf(
+                                "Videos: {}, each the part chosen on its timeline, made to play in any browser (H.264, at most 1080p) and uploaded with the picture shown before it plays, or reused when already on the site.",
+                                &[&dialog.check.videos],
+                            ));
+                        }
                         if dialog.routes > 0 {
                             lines.push(trf("Route maps: {}, uploaded as pictures.", &[&dialog.routes]));
                         }
@@ -666,10 +685,16 @@ impl PicassoApp {
                 }
                 ui.horizontal(|ui| {
                     let ready = site.as_ref().is_some_and(usable) && !blocked && (dialog.by_day || ((!(published || changed) || dialog.update.is_some()) && (found.is_none() || dialog.adopt.is_some()))) && !(dialog.publish && dialog.at_time && schedule_of(&dialog.date, &dialog.time).is_none());
-                    let photos = dialog.check.photos;
+                    let videos = dialog.check.videos;
+                    let photos = dialog.check.photos - videos;
                     let update = (published || changed) && dialog.update == Some(true);
                     let publish = dialog.publish && !public;
                     let action = match (photos, update, publish) {
+                        _ if videos > 0 && dialog.by_day && publish => trf("Upload {} photos and {} videos and publish {} posts…", &[&photos, &videos, &(dialog.days + 1)]),
+                        _ if videos > 0 && dialog.by_day => trf("Upload {} photos and {} videos and save {} posts", &[&photos, &videos, &(dialog.days + 1)]),
+                        _ if videos > 0 && publish => trf("Upload {} photos and {} videos and publish…", &[&photos, &videos]),
+                        _ if videos > 0 && update => trf("Upload {} photos and {} videos and update the post", &[&photos, &videos]),
+                        _ if videos > 0 => trf("Upload {} photos and {} videos and save the draft", &[&photos, &videos]),
                         _ if dialog.by_day && publish => trf("Upload {} photos and publish {} posts…", &[&photos, &(dialog.days + 1)]),
                         _ if dialog.by_day => trf("Upload {} photos and save {} posts", &[&photos, &(dialog.days + 1)]),
                         (0, _, true) => tr("Publish…").to_string(),
@@ -731,12 +756,15 @@ impl PicassoApp {
                     for line in [
                         trf("The title “{}”, the text, captions and photo descriptions", &[&title]),
                         if dialog.exif {
-                            trf("{} photos, with their camera details but never where they were taken", &[&dialog.check.photos])
+                            trf("{} photos, with their camera details but never where they were taken", &[&(dialog.check.photos - dialog.check.videos)])
                         } else {
-                            trf("{} photos, without camera details or where they were taken", &[&dialog.check.photos])
+                            trf("{} photos, without camera details or where they were taken", &[&(dialog.check.photos - dialog.check.videos)])
                         },
                         if dialog.routes > 0 { trf("{} route maps, which show where the trip went", &[&dialog.routes]) } else { tr("No route maps").to_string() },
-                    ] {
+                    ]
+                    .into_iter()
+                    .chain((dialog.check.videos > 0).then(|| trf("{} videos, the parts chosen, without camera details or where they were taken", &[&dialog.check.videos])))
+                    {
                         ui.label(format!("• {line}"));
                     }
                     let shown = shown_places(dialog);
@@ -833,6 +861,10 @@ impl PicassoApp {
         if self.story.as_ref().is_some_and(|editor| self.is_publishing(editor.story.id, site.id)) {
             return Err(tr("This story is still being published to this site. Try again once that has finished.").into());
         }
+        // A job could reuse an upload the deletion is about to remove.
+        if self.deleting_from(site.id) {
+            return Err(trf("Uploads are being deleted from {}. Try again once that has finished.", &[&site.label]));
+        }
         let (api, credentials, policy) = connection(&self.vault, site)?;
         if !self.save_story() {
             return Err(tr("The story couldn't be saved").into());
@@ -843,7 +875,7 @@ impl PicassoApp {
         let before = self.db.place_choice(page.story.id, site.id);
         self.db.save_place_choice(page.story.id, site.id, &places)?;
         let trip_id = page.story.trip_id;
-        let media: Vec<i64> = page.sources.keys().copied().collect();
+        let media: Vec<i64> = page.sources.keys().chain(page.videos.sources.keys()).copied().collect();
         let map_places = match (places.places, before.places) {
             (true, _) => Some(self.map_places(trip_id, &media, &places)),
             (false, true) => Some(MapPlaces::default()),
@@ -867,8 +899,10 @@ impl PicassoApp {
             credentials,
             policy,
             story: page.story,
+            dates: page.dates,
             blocks: page.blocks,
             sources: page.sources,
+            videos: page.videos,
             size,
             exif,
             uploads: self.db.uploads(site.id),
@@ -914,6 +948,12 @@ impl PicassoApp {
             let mut job = job;
             super::story::read_profiles(&mut job.profiles, unread);
             let network = Network::new();
+            // A site that moved since it was checked opens and links where it is now.
+            if let Some(found) = Client::new(&network, job.policy).reread(&job.api) {
+                let url = |address: &Option<SiteUrl>| address.as_ref().map(SiteUrl::to_url).unwrap_or_default();
+                let _ = events.send(UiEvent::PublishProgress(site_id, log, Event::WordPress { url: url(&found.wordpress), home: url(&found.home) }));
+                (job.api.wordpress, job.api.home) = (found.wordpress, found.home);
+            }
             let run = if job.days.is_some() { publish::run_days } else { publish::run };
             let outcome = run(&network, &job, &progress, &mut |event| {
                 let _ = events.send(UiEvent::PublishProgress(site_id, log, event));
@@ -928,6 +968,7 @@ impl PicassoApp {
 
     /// Keeps what the job learned the moment it did, so a retry reuses it.
     pub(super) fn on_publish_progress(&mut self, site_id: i64, log: Option<i64>, event: Event) {
+        let upload = matches!(event, Event::Uploaded { .. } | Event::Gone { .. });
         let kept = match event {
             Event::Uploaded { hash, size, media_id, url, details } => {
                 let kept = self.db.record_upload(site_id, &hash, size.code(), media_id, &url, &details);
@@ -953,13 +994,14 @@ impl PicassoApp {
                 self.db.save_day_post(&key, &publication)
             }
             Event::Journey { trip_id, post_id } => self.db.set_journey_post(trip_id, site_id, post_id),
+            Event::WordPress { url, home } => self.db.set_wordpress_urls(site_id, &url, &home),
             Event::Prepared { photos, bytes } => {
                 self.activity = trf("{} photos ready, {} in all; sending those not on the site yet…", &[&photos, &format_bytes(bytes)]);
                 Ok(())
             }
         };
         if let Err(err) = kept {
-            self.activity = trf("Couldn't record an upload: {}", &[&err]);
+            self.activity = if upload { trf("Couldn't record an upload: {}", &[&err]) } else { trf("Couldn't record what the site confirmed: {}", &[&err]) };
         }
     }
 
@@ -1001,9 +1043,15 @@ impl PicassoApp {
                 notes.push(trf("The Journey's places couldn't be written: {}", &[&failure_text(failure)]));
             }
         }
+        let used_before = self.db.publication_media(story_id, site_id);
         self.activity = match outcome {
             // Each post was recorded as it was saved; the index opens.
             Ok(saved) if saved.days > 0 => {
+                let _ = self.db.save_publication_media(story_id, site_id, &saved.media);
+                // A post saved as one before stays on the site with what it shows.
+                if self.db.publication(story_id, site_id).is_none() {
+                    self.offer_leftovers(site_id, &site, &used_before, &saved.media);
+                }
                 let _ = open::that(&saved.edit_link);
                 if saved.published && saved.status == "future" {
                     trf("Scheduled on {}: the index and {} Day posts go public at the time chosen. {} photos uploaded, {} already there.", &[&site, &saved.days, &saved.uploaded, &saved.reused])
@@ -1015,7 +1063,12 @@ impl PicassoApp {
             }
             Ok(saved) => {
                 let _ = self.db.clear_pending_draft(story_id, site_id);
+                // A post saved anew leaves the earlier one on the site with what it shows.
+                let same_post = self.db.publication(story_id, site_id).is_some_and(|earlier| earlier.post_id == saved.post_id) && self.db.day_posts(story_id, site_id).is_empty();
                 let _ = self.db.save_publication_media(story_id, site_id, &saved.media);
+                if same_post {
+                    self.offer_leftovers(site_id, &site, &used_before, &saved.media);
+                }
                 let publication = Publication {
                     story_id,
                     site_id,
@@ -1050,6 +1103,11 @@ impl PicassoApp {
             }
             Err(Stopped::Site { failure, .. }) => failure_text(&failure),
             Err(Stopped::Photo { .. }) => tr("A photo became unavailable or couldn't be read. The draft wasn't changed; nothing is left out of a post.").into(),
+            Err(Stopped::Video { .. }) => tr("A video became unavailable, or FFmpeg couldn't make it for the web. The draft wasn't changed; nothing is left out of a post.").into(),
+            Err(Stopped::VideoTooLarge { bytes, .. }) => trf(
+                "The site refused a video of {} as larger than it accepts. The draft wasn't changed. Choose a shorter part on the video's timeline in the story, or raise the site's upload limit.",
+                &[&crate::types::format_bytes(bytes)],
+            ),
             Err(Stopped::Unsupported(_)) => tr("This story has blocks from a newer Picasso, which can't be published.").into(),
             Err(Stopped::NotDraft(status)) => {
                 if status == "trash" {
@@ -1091,6 +1149,159 @@ impl PicassoApp {
             self.activity = format!("{} {note}", self.activity);
         }
     }
+
+    /// Offers to delete the uploads the Story's posts on the site used
+    /// before a save, `before`, and no post there uses now.
+    fn offer_leftovers(&mut self, site_id: i64, site: &str, before: &[i64], now: &[i64]) {
+        let ids: Vec<i64> = before.iter().filter(|id| !now.contains(id)).copied().collect();
+        self.queue_leftovers(site_id, site, ids, None);
+    }
+
+    /// Offers the uploads among `ids` that no post on the site uses, with
+    /// those already offered for the site. One whose file name is too short
+    /// to look for on the site is never deleted, so never offered.
+    pub(super) fn queue_leftovers(&mut self, site_id: i64, site: &str, mut ids: Vec<i64>, error: Option<String>) {
+        let at = self.publish_leftovers.iter().position(|earlier| earlier.site_id == site_id);
+        if let Some(at) = at {
+            ids.extend(self.publish_leftovers[at].uploads.iter().map(|(upload, _)| upload.media_id));
+        }
+        let uploads: Vec<_> = self.db.unused_uploads(site_id, &ids).into_iter().filter(|upload| publish::upload_stem(&upload.url).is_some()).map(|upload| (upload, true)).collect();
+        let offer = Leftovers { site_id, site: site.to_string(), uploads, error };
+        match at {
+            Some(at) if offer.uploads.is_empty() => {
+                self.publish_leftovers.remove(at);
+            }
+            Some(at) => self.publish_leftovers[at] = offer,
+            None if offer.uploads.is_empty() => {}
+            None => self.publish_leftovers.push(offer),
+        }
+    }
+
+    /// Asks whether to delete the uploads posts on a site stopped using;
+    /// closing it any way but Delete keeps them all.
+    pub(super) fn delete_uploads_modal(&mut self, ctx: &egui::Context) {
+        let Some(leftovers) = self.publish_leftovers.first_mut() else {
+            self.modal = Modal::None;
+            return;
+        };
+        let mut close = false;
+        let mut delete = false;
+        let response = egui::Modal::new(egui::Id::unique("delete-uploads")).frame(about::dialog_frame()).show(ctx, |ui| {
+            ui.set_width(440.0);
+            about::title_bar(ui, &self.logo, &trf("Delete uploads from {}?", &[&leftovers.site]), &mut close);
+            egui::Frame::new().inner_margin(Margin::symmetric(20, 14)).show(ui, |ui| {
+                ui.add(egui::Label::new(tr("Picasso uploaded these, and the post no longer uses them. They are deleted from the site's media library for good: WordPress keeps no trash for uploads.")).wrap());
+                ui.add_space(6.0);
+                egui::ScrollArea::vertical().max_height(220.0).show(ui, |ui| {
+                    for (upload, ticked) in &mut leftovers.uploads {
+                        let name = upload.url.split(['?', '#']).next().unwrap_or_default().rsplit('/').next().unwrap_or_default().to_string();
+                        let label = if upload.video { trf("{} (video)", &[&name]) } else { name };
+                        ui.checkbox(ticked, label);
+                    }
+                });
+                ui.add_space(6.0);
+                note(ui, tr("Any still shown in another post or page on the site is kept. An earlier revision of the post restored in WordPress would show the deleted ones as missing."));
+                note(ui, tr("Deleting uploads requires permission to edit all posts and pages, including drafts and private content."));
+                if let Some(error) = &leftovers.error {
+                    ui.add_space(6.0);
+                    ui.add(egui::Label::new(RichText::new(error).color(theme::DANGER)).wrap());
+                }
+                ui.add_space(6.0);
+                let any = leftovers.uploads.iter().any(|(_, ticked)| *ticked);
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    delete = ui.add_enabled(any, theme::danger_button(tr("Delete from site"))).clicked();
+                    close |= ui.button(tr("Keep")).on_hover_text(tr("Leave them in the site's media library")).clicked();
+                });
+            });
+        });
+        if delete {
+            self.modal = Modal::None;
+            self.delete_leftovers(ctx);
+        } else if close || response.should_close() {
+            self.modal = Modal::None;
+            self.publish_leftovers.remove(0);
+        }
+    }
+
+    /// Deletes the ticked uploads of the first in `publish_leftovers` on a
+    /// thread, each only once nothing on the site is found to show it.
+    fn delete_leftovers(&mut self, ctx: &egui::Context) {
+        if self.publish_leftovers.is_empty() {
+            return;
+        }
+        let leftovers = self.publish_leftovers.remove(0);
+        let busy = self.publishing.iter().any(|((_, site_id), alive)| *site_id == leftovers.site_id && alive.strong_count() > 0);
+        let site = self.db.site(leftovers.site_id);
+        let connected = match (&site, busy) {
+            _ if self.deleting_from(leftovers.site_id) => Err(trf("Uploads are being deleted from {}. Try again once that has finished.", &[&leftovers.site])),
+            (_, true) => Err(trf("Wait until publishing to {} has finished, then delete the uploads.", &[&leftovers.site])),
+            (None, _) => Err(trf("{} is no longer connected.", &[&leftovers.site])),
+            (Some(site), _) => connection(&self.vault, site),
+        };
+        let (api, credentials, policy) = match connected {
+            Ok(connected) => connected,
+            Err(err) => {
+                self.publish_leftovers.insert(0, Leftovers { error: Some(err), ..leftovers });
+                return;
+            }
+        };
+        // Another Story saved since may use some again.
+        let ticked: Vec<i64> = leftovers.uploads.iter().filter(|(_, ticked)| *ticked).map(|(upload, _)| upload.media_id).collect();
+        let chosen: Vec<(i64, String)> = self.db.unused_uploads(leftovers.site_id, &ticked).into_iter().map(|upload| (upload.media_id, upload.url)).collect();
+        let (site_id, label) = (leftovers.site_id, leftovers.site);
+        self.activity = trf("Deleting from {}: {} uploads…", &[&label, &chosen.len()]);
+        let events = self.events_tx.clone();
+        let ctx = ctx.clone();
+        let alive = Arc::new(());
+        self.deleting_uploads.insert(site_id, Arc::downgrade(&alive));
+        let _ = std::thread::Builder::new().name("picasso-delete-uploads".into()).spawn(move || {
+            let network = Network::new();
+            let deleted = publish::delete_unused(&network, &api, &credentials, policy, &chosen);
+            // Let go first, so the frame the answer wakes sees the site free.
+            drop(alive);
+            let _ = events.send(UiEvent::UploadsDeleted(site_id, label, deleted));
+            ctx.request_repaint();
+        });
+    }
+
+    /// Whether uploads are being deleted from site `site_id`.
+    fn deleting_from(&self, site_id: i64) -> bool {
+        self.deleting_uploads.get(&site_id).is_some_and(|alive| alive.strong_count() > 0)
+    }
+
+    /// Whether an offer to delete uploads is waiting to be shown, once none
+    /// is being deleted from its site.
+    pub(super) fn leftovers_due(&self) -> bool {
+        self.publish_leftovers.first().is_some_and(|first| !self.deleting_from(first.site_id))
+    }
+
+    pub(super) fn on_uploads_deleted(&mut self, site_id: i64, site: &str, deleted: publish::Deleted) {
+        for id in &deleted.gone {
+            let _ = self.db.forget_media(site_id, *id);
+        }
+        let mut text = trf("Deleted from {}: {} uploads.", &[&site, &deleted.gone.len()]);
+        if deleted.in_use > 0 {
+            text = format!("{text} {}", trf("{} were kept, as another post or page there still shows them.", &[&deleted.in_use]));
+        }
+        if let Some(failure) = &deleted.failure {
+            text = format!("{} {text}", failure_text(failure));
+            if *failure != Failure::CleanupAccess {
+                self.queue_leftovers(site_id, site, deleted.left, Some(text.clone()));
+            }
+        }
+        self.activity = text;
+    }
+}
+
+/// Uploads a Story's posts stopped using, still on their site.
+pub(super) struct Leftovers {
+    site_id: i64,
+    /// The site's name.
+    site: String,
+    /// Each upload, ticked to be deleted.
+    uploads: Vec<(crate::db::Upload, bool)>,
+    /// Why the last Delete couldn't start.
+    error: Option<String>,
 }
 
 /// The names of the Places the posts will show; none unless chosen.
@@ -1213,7 +1424,7 @@ fn connection(vault: &crate::keychain::Vault, site: &Site) -> Result<(Api, Crede
         return Err(failure_text(&Failure::InvalidUrl));
     };
     let policy = Policy { development: site_url.scheme == "http" };
-    let api = Api { site: site_url, root, name: site.label.clone(), namespaces: vec!["wp/v2".into()] };
+    let api = Api { name: site.label.clone(), namespaces: vec!["wp/v2".into()], ..saved_api(site, site_url, root) };
     Ok((api, Credentials { user: site.user.clone(), password }, policy))
 }
 
@@ -1225,7 +1436,12 @@ fn post_edit_link(site: &Site, post_id: i64) -> Option<String> {
 /// The site's API as saved, for what anyone may read of it.
 fn site_api(site: &Site) -> Option<Api> {
     let (site_url, root) = (SiteUrl::parse(&site.site_url).ok()?, SiteUrl::parse(&site.api_root).ok()?);
-    Some(Api { site: site_url, root, name: String::new(), namespaces: Vec::new() })
+    Some(saved_api(site, site_url, root))
+}
+
+fn saved_api(site: &Site, site_url: SiteUrl, root: SiteUrl) -> Api {
+    let address = |url: &str| SiteUrl::parse(url).ok();
+    Api { site: site_url, root, wordpress: address(&site.wordpress_url), home: address(&site.home_url), name: String::new(), namespaces: Vec::new() }
 }
 
 /// Reads what `site` keeps of a trip in the background, without its password.

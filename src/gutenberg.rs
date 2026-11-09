@@ -31,6 +31,15 @@ pub enum Unsupported {
     Unknown(usize),
     /// The photo with this media reference has no upload.
     Photo(i64),
+    /// The video with this media reference has no upload.
+    Video(i64),
+}
+
+/// A video's part as uploaded to the site, and the picture shown before it plays.
+#[derive(Clone, Debug, PartialEq)]
+pub struct UploadedVideo {
+    pub video: Uploaded,
+    pub poster: Uploaded,
 }
 
 /// A route drawn on its map and uploaded, with the credit its tiles ask for.
@@ -51,18 +60,27 @@ pub struct Post {
     pub featured: Option<i64>,
 }
 
+impl Post {
+    /// Puts the Story dates at the start of the post in an editable core block.
+    pub fn prepend_dates(&mut self, dates: &str) {
+        let dates = esc(dates);
+        self.content.insert_str(0, &format!("<!-- wp:paragraph {{\"className\":\"picasso-story-dates\"}} -->\n<p class=\"picasso-story-dates\">{dates}</p>\n<!-- /wp:paragraph -->\n\n"));
+    }
+}
+
 /// The Story as a post. The introduction comes before the blocks and the
 /// conclusion after them, as paragraphs; the title and the subtitle, as
 /// its excerpt, are the post's own, and the byline is the site's author. `maps` gives each Route block's map picture by the
-/// block's uid; a route without one is drawn on its own.
-pub fn post(story: &Story, blocks: &[StoryBlock], media: &dyn Fn(i64) -> Option<Uploaded>, maps: &dyn Fn(&str) -> Option<RouteMap>) -> Result<Post, Unsupported> {
+/// block's uid; a route without one is drawn on its own. `videos` gives
+/// each Video block's part as uploaded, by the block's uid.
+pub fn post(story: &Story, blocks: &[StoryBlock], media: &dyn Fn(i64) -> Option<Uploaded>, maps: &dyn Fn(&str) -> Option<RouteMap>, videos: &dyn Fn(&str) -> Option<UploadedVideo>) -> Result<Post, Unsupported> {
     let mut out = String::new();
     paragraphs(&mut out, &story.introduction, None);
     for (index, block) in blocks.iter().enumerate() {
         match &block.block {
             Block::Heading(text) => {
                 if !text.trim().is_empty() {
-                    let _ = write!(out, "<!-- wp:heading -->\n<h2 class=\"wp-block-heading\">{}</h2>\n<!-- /wp:heading -->\n\n", inline::to_html(text.trim()));
+                    let _ = write!(out, "<!-- wp:heading -->\n<h2 class=\"wp-block-heading\">{}</h2>\n<!-- /wp:heading -->\n\n", inline::to_post_html(text.trim()));
                 }
             }
             Block::Subheading(text) => {
@@ -70,7 +88,7 @@ pub fn post(story: &Story, blocks: &[StoryBlock], media: &dyn Fn(i64) -> Option<
                     let _ = write!(
                         out,
                         "<!-- wp:heading {{\"level\":3}} -->\n<h3 class=\"wp-block-heading\">{}</h3>\n<!-- /wp:heading -->\n\n",
-                        inline::to_html(text.trim())
+                        inline::to_post_html(text.trim())
                     );
                 }
             }
@@ -79,7 +97,7 @@ pub fn post(story: &Story, blocks: &[StoryBlock], media: &dyn Fn(i64) -> Option<
                     .iter()
                     .map(|item| item.trim())
                     .filter(|item| !item.is_empty())
-                    .map(|item| format!("<!-- wp:list-item -->\n<li>{}</li>\n<!-- /wp:list-item -->", inline::to_html(item)))
+                    .map(|item| format!("<!-- wp:list-item -->\n<li>{}</li>\n<!-- /wp:list-item -->", inline::to_post_html(item)))
                     .collect();
                 if !items.is_empty() {
                     let (attrs, tag) = if *ordered { (" {\"ordered\":true}", "ol") } else { ("", "ul") };
@@ -89,7 +107,7 @@ pub fn post(story: &Story, blocks: &[StoryBlock], media: &dyn Fn(i64) -> Option<
             Block::Quote { text, citation } => {
                 let mut inner = String::new();
                 paragraphs(&mut inner, text, None);
-                let cite = if citation.trim().is_empty() { String::new() } else { format!("<cite>{}</cite>", inline::to_html(citation.trim())) };
+                let cite = if citation.trim().is_empty() { String::new() } else { format!("<cite>{}</cite>", inline::to_post_html(citation.trim())) };
                 let _ = write!(out, "<!-- wp:quote -->\n<blockquote class=\"wp-block-quote\">{}{cite}</blockquote>\n<!-- /wp:quote -->\n\n", inner.trim_end());
             }
             Block::Info { title, items } => {
@@ -99,7 +117,7 @@ pub fn post(story: &Story, blocks: &[StoryBlock], media: &dyn Fn(i64) -> Option<
                     .filter(|(label, value)| !label.is_empty() || !value.is_empty())
                     .map(|(label, value)| {
                         let label = if label.is_empty() { String::new() } else { format!("<strong>{}:</strong> ", esc(label)) };
-                        format!("<!-- wp:list-item -->\n<li>{label}{}</li>\n<!-- /wp:list-item -->", inline::to_html(value))
+                        format!("<!-- wp:list-item -->\n<li>{label}{}</li>\n<!-- /wp:list-item -->", inline::to_post_html(value))
                     })
                     .collect();
                 if !title.trim().is_empty() || !items.is_empty() {
@@ -120,8 +138,45 @@ pub fn post(story: &Story, blocks: &[StoryBlock], media: &dyn Fn(i64) -> Option<
                         Some(url) => format!("<a href=\"{}\" rel=\"noopener\">{}</a>", esc(url), esc(shown)),
                         None => esc(shown),
                     };
-                    let note = if note.trim().is_empty() { String::new() } else { format!("<br>{}", inline::to_html(note.trim())) };
+                    let note = if note.trim().is_empty() { String::new() } else { format!("<br>{}", inline::to_post_html(note.trim())) };
                     let _ = write!(out, "<!-- wp:paragraph {{\"className\":\"picasso-link\"}} -->\n<p class=\"picasso-link\">{link}{note}</p>\n<!-- /wp:paragraph -->\n\n");
+                }
+            }
+            // WordPress asks YouTube for the player of the address on its
+            // own line, so the post plays it as the site's theme sizes it.
+            // That player starts at the beginning; the VoyageLight theme and
+            // the Picasso Places plugin start it where the address says.
+            Block::YouTube { url, caption } => {
+                let caption = caption.trim();
+                match crate::trip::youtube(url) {
+                    Some(video) => {
+                        let url = video.watch();
+                        // Escaped as Gutenberg writes them; a video's id can hold "--", which would end the comment.
+                        let attrs = json!({ "url": url, "type": "video", "providerNameSlug": "youtube", "responsive": true, "className": "wp-embed-aspect-16-9 wp-has-aspect-ratio" })
+                            .to_string()
+                            .replace("--", "\\u002d\\u002d")
+                            .replace('&', "\\u0026");
+                        let caption = if caption.is_empty() { String::new() } else { format!("<figcaption class=\"wp-element-caption\">{}</figcaption>", esc(caption)) };
+                        let _ = write!(
+                            out,
+                            "<!-- wp:embed {attrs} -->\n<figure class=\"wp-block-embed is-type-video is-provider-youtube wp-block-embed-youtube wp-embed-aspect-16-9 wp-has-aspect-ratio\"><div class=\"wp-block-embed__wrapper\">\n{}\n</div>{caption}</figure>\n<!-- /wp:embed -->\n\n",
+                            esc(&url)
+                        );
+                    }
+                    None if !caption.is_empty() => paragraphs(&mut out, caption, None),
+                    None => {}
+                }
+            }
+            // The columns fit their text unless given widths. A core table's
+            // markup has no place for those, so they go in an attribute of
+            // their own, which the Picasso Places plugin and the VoyageLight
+            // theme draw as a <colgroup>.
+            Block::Table { header, rows, widths, caption } => {
+                let (sections, widths) = crate::story_html::table_sections(*header, rows, widths, false, inline::to_post_html);
+                if !sections.is_empty() {
+                    let caption = if caption.trim().is_empty() { String::new() } else { format!("<figcaption class=\"wp-element-caption\">{}</figcaption>", esc(caption.trim())) };
+                    let attrs = if widths.is_empty() { json!({ "hasFixedLayout": false }) } else { json!({ "hasFixedLayout": false, "picassoColumnWidths": widths }) };
+                    let _ = write!(out, "<!-- wp:table {attrs} -->\n<figure class=\"wp-block-table\"><table>{sections}</table>{caption}</figure>\n<!-- /wp:table -->\n\n");
                 }
             }
             Block::Paragraph(text) => paragraphs(&mut out, text, None),
@@ -130,6 +185,23 @@ pub fn post(story: &Story, blocks: &[StoryBlock], media: &dyn Fn(i64) -> Option<
                 let uploaded = media(item.media_id).ok_or(Unsupported::Photo(item.media_id))?;
                 out.push_str(&image(item, &uploaded));
                 out.push('\n');
+            }
+            // The core block has no place for a description, which only
+            // the site's media library keeps.
+            Block::Video { media: item, .. } => {
+                let uploaded = videos(&block.uid).ok_or(Unsupported::Video(item.media_id))?;
+                let caption = if item.caption.trim().is_empty() {
+                    String::new()
+                } else {
+                    format!("<figcaption class=\"wp-element-caption\">{}</figcaption>", esc(item.caption.trim()))
+                };
+                let _ = write!(
+                    out,
+                    "<!-- wp:video {} -->\n<figure class=\"wp-block-video\"><video controls poster=\"{}\" src=\"{}\"></video>{caption}</figure>\n<!-- /wp:video -->\n\n",
+                    json!({ "id": uploaded.video.id }),
+                    esc(&uploaded.poster.url),
+                    esc(&uploaded.video.url)
+                );
             }
             Block::Gallery(items) => out.push_str(&gallery(items, None, "", media)?),
             Block::Grid { columns, caption, media: items, .. } => out.push_str(&gallery(items, Some(*columns), caption, media)?),
@@ -158,7 +230,8 @@ pub fn post(story: &Story, blocks: &[StoryBlock], media: &dyn Fn(i64) -> Option<
         }
     }
     paragraphs(&mut out, &story.conclusion, None);
-    let featured = match story.cover_key().or_else(|| blocks.iter().find_map(|block| block.block.media().first().map(|first| first.media_id))) {
+    let first_photo = || blocks.iter().filter(|block| !matches!(block.block, Block::Video { .. })).find_map(|block| block.block.media().first().map(|first| first.media_id));
+    let featured = match story.cover_key().or_else(first_photo) {
         Some(cover) => Some(media(cover).ok_or(Unsupported::Photo(cover.abs()))?.id),
         None => None,
     };
@@ -201,7 +274,7 @@ pub fn places(heading: &str, alt: &str, places: &[&crate::publish::MapPlace], ma
 /// kept with line breaks.
 fn paragraphs(out: &mut String, text: &str, class: Option<&str>) {
     for part in text.split("\n\n").map(str::trim).filter(|part| !part.is_empty()) {
-        let lines: Vec<String> = part.lines().map(|line| inline::to_html(line.trim_end())).collect();
+        let lines: Vec<String> = part.lines().map(|line| inline::to_post_html(line.trim_end())).collect();
         match class {
             Some(class) => {
                 let _ = write!(
@@ -285,6 +358,7 @@ mod tests {
             conclusion: "Back & again".into(),
             author: String::new(),
             show_date: false,
+            dates: None,
             cover: Some(3),
             cover_crop: crate::trip::CoverCrop::default(),
             template: DEFAULT_TEMPLATE.into(),
@@ -316,7 +390,7 @@ mod tests {
             StoryBlock::new(Block::List { ordered: true, items: vec!["**Tea**".into(), String::new(), "[Map](https://x.test)".into()] }),
             StoryBlock::new(Block::Quote { text: "Go *slowly*".into(), citation: "Bashō".into() }),
         ];
-        let post = post(&story(), &blocks, &uploads, &|_| None).unwrap();
+        let post = post(&story(), &blocks, &uploads, &|_| None, &|_| None).unwrap();
         assert_eq!((post.title.as_str(), post.featured), ("Kyoto", Some(103)));
         let content = &post.content;
         let order = [
@@ -351,16 +425,16 @@ mod tests {
         let mut story = story();
         story.cover = None;
         let blocks = [StoryBlock::new(Block::Paragraph("Hola".into())), StoryBlock::new(Block::Gallery(vec![MediaUse::new(2), MediaUse::new(1)]))];
-        assert_eq!(post(&story, &blocks, &uploads, &|_| None).unwrap().featured, Some(102));
-        assert_eq!(post(&story, &blocks[..1], &uploads, &|_| None).unwrap().featured, None, "no photo, nothing featured");
+        assert_eq!(post(&story, &blocks, &uploads, &|_| None, &|_| None).unwrap().featured, Some(102));
+        assert_eq!(post(&story, &blocks[..1], &uploads, &|_| None, &|_| None).unwrap().featured, None, "no photo, nothing featured");
     }
 
     #[test]
     fn a_block_without_a_core_form_or_a_photo_without_an_upload_stops_it() {
         let unknown = StoryBlock::new(Block::Unknown { kind: "map".into(), version: 9, payload: "{}".into(), media: Vec::new() });
-        assert_eq!(post(&story(), &[StoryBlock::new(Block::Separator), unknown], &uploads, &|_| None), Err(Unsupported::Unknown(1)));
+        assert_eq!(post(&story(), &[StoryBlock::new(Block::Separator), unknown], &uploads, &|_| None, &|_| None), Err(Unsupported::Unknown(1)));
         let missing = StoryBlock::new(Block::Photo(MediaUse::new(42)));
-        assert_eq!(post(&story(), &[missing], &uploads, &|_| None), Err(Unsupported::Photo(42)));
+        assert_eq!(post(&story(), &[missing], &uploads, &|_| None, &|_| None), Err(Unsupported::Photo(42)));
     }
 
     #[test]
@@ -370,7 +444,7 @@ mod tests {
             StoryBlock::new(Block::Link { url: "https://example.com/?a=1&b=2".into(), title: String::new(), note: "Timetable".into() }),
             StoryBlock::new(Block::Link { url: "javascript:alert(1)".into(), title: "Trick".into(), note: String::new() }),
         ];
-        let content = post(&story(), &blocks, &uploads, &|_| None).unwrap().content;
+        let content = post(&story(), &blocks, &uploads, &|_| None, &|_| None).unwrap().content;
         assert!(content.contains("<!-- wp:group {\"className\":\"picasso-info\",\"layout\":{\"type\":\"constrained\"}} -->"), "{content}");
         assert!(content.contains("<h3 class=\"wp-block-heading\">Getting there</h3>") && content.contains("<li><strong>Train:</strong> 2 h</li>") && content.contains("<li>Book &lt;ahead&gt;</li>"), "{content}");
         assert!(content.contains("<a href=\"https://example.com/?a=1&amp;b=2\" rel=\"noopener\">https://example.com/?a=1&amp;b=2</a><br>Timetable"), "{content}");
@@ -378,13 +452,89 @@ mod tests {
     }
 
     #[test]
+    fn a_youtube_video_is_a_core_embed() {
+        let blocks = [
+            StoryBlock::new(Block::YouTube { url: "https://youtu.be/ab--DEF_123?t=90".into(), caption: "The <ferry>".into() }),
+            StoryBlock::new(Block::YouTube { url: "https://www.youtube.com/watch?v=xyz-UVW_789".into(), caption: String::new() }),
+            StoryBlock::new(Block::YouTube { url: "https://vimeo.com/123456789".into(), caption: "Elsewhere".into() }),
+            StoryBlock::new(Block::YouTube { url: String::new(), caption: " ".into() }),
+        ];
+        let content = post(&story(), &blocks, &uploads, &|_| None, &|_| None).unwrap().content;
+        let started = "<!-- wp:embed {\"className\":\"wp-embed-aspect-16-9 wp-has-aspect-ratio\",\"providerNameSlug\":\"youtube\",\"responsive\":true,\"type\":\"video\",\"url\":\"https://www.youtube.com/watch?v=ab\\u002d\\u002dDEF_123\\u0026t=90s\"} -->\n\
+                       <figure class=\"wp-block-embed is-type-video is-provider-youtube wp-block-embed-youtube wp-embed-aspect-16-9 wp-has-aspect-ratio\"><div class=\"wp-block-embed__wrapper\">\n\
+                       https://www.youtube.com/watch?v=ab--DEF_123&amp;t=90s\n</div><figcaption class=\"wp-element-caption\">The &lt;ferry&gt;</figcaption></figure>\n<!-- /wp:embed -->";
+        assert!(content.contains(started), "{content}");
+        assert!(content.contains("<div class=\"wp-block-embed__wrapper\">\nhttps://www.youtube.com/watch?v=xyz-UVW_789\n</div></figure>"), "{content}");
+        assert!(content.contains("<p>Elsewhere</p>") && !content.contains("vimeo"), "{content}");
+        assert_eq!(content.matches("<!-- wp:embed").count(), 2);
+    }
+
+    #[test]
+    fn a_video_is_a_core_video_with_its_poster_and_caption() {
+        let mut item = MediaUse::new(7);
+        item.caption = "The <ferry>".into();
+        item.alt = "Waves".into();
+        let video = StoryBlock::new(Block::Video { media: item, start: 1_000, end: 5_000 });
+        let uid = video.uid.clone();
+        let uploaded = |key: &str| {
+            (key == uid).then(|| UploadedVideo { video: Uploaded { id: 31, url: "https://x.test/v.mp4".into() }, poster: Uploaded { id: 32, url: "https://x.test/v.jpg".into() } })
+        };
+        let mut story = story();
+        story.cover = None;
+        let made = post(&story, std::slice::from_ref(&video), &uploads, &|_| None, &uploaded).unwrap();
+        let block = "<!-- wp:video {\"id\":31} -->\n<figure class=\"wp-block-video\"><video controls poster=\"https://x.test/v.jpg\" src=\"https://x.test/v.mp4\"></video>\
+                     <figcaption class=\"wp-element-caption\">The &lt;ferry&gt;</figcaption></figure>\n<!-- /wp:video -->";
+        assert!(made.content.contains(block), "{}", made.content);
+        assert_eq!(made.featured, None, "a video is never the featured image");
+        assert_eq!(post(&story, &[video], &uploads, &|_| None, &|_| None), Err(Unsupported::Video(7)));
+    }
+
+    #[test]
+    fn a_table_is_a_core_table_with_its_header_row_and_caption() {
+        let rows = vec![vec!["Ferry".to_string(), "Leaves".to_string()], vec!["<Lisbon>".to_string(), "9:00".to_string()]];
+        let blocks = [
+            StoryBlock::new(Block::Table { header: true, rows: rows.clone(), widths: Vec::new(), caption: "Summer".into() }),
+            StoryBlock::new(Block::Table { header: false, rows, widths: vec![30, 70], caption: String::new() }),
+            StoryBlock::new(Block::table(2, 2)),
+        ];
+        let content = post(&story(), &blocks, &uploads, &|_| None, &|_| None).unwrap().content;
+        assert!(content.contains("<!-- wp:table {\"hasFixedLayout\":false,\"picassoColumnWidths\":[30,70]} -->\n<figure class=\"wp-block-table\"><table><tbody>"), "{content}");
+        let head = "<!-- wp:table {\"hasFixedLayout\":false} -->\n<figure class=\"wp-block-table\"><table><thead><tr><th>Ferry</th><th>Leaves</th></tr></thead>\
+                    <tbody><tr><td>&lt;Lisbon&gt;</td><td>9:00</td></tr></tbody></table><figcaption class=\"wp-element-caption\">Summer</figcaption></figure>\n<!-- /wp:table -->";
+        assert!(content.contains(head), "{content}");
+        assert!(content.contains("<table><tbody><tr><td>Ferry</td><td>Leaves</td></tr><tr><td>&lt;Lisbon&gt;</td><td>9:00</td></tr></tbody></table></figure>"), "{content}");
+        assert_eq!(content.matches("<!-- wp:table").count(), 2, "an empty table is left out");
+    }
+
+    #[test]
+    fn coloured_text_is_gutenbergs_inline_colour_in_every_block_that_has_text() {
+        let red = "**{red}Dinner: Botín 8:00 PM{/red}**";
+        let blocks = [
+            Block::Heading(red.into()),
+            Block::Subheading(red.into()),
+            Block::Paragraph(red.into()),
+            Block::List { ordered: false, items: vec![red.into()] },
+            Block::Quote { text: red.into(), citation: red.into() },
+            Block::Info { title: "Evening".into(), items: vec![("Where".into(), red.into())] },
+            Block::Link { url: "https://example.com".into(), title: "Botín".into(), note: red.into() },
+            Block::Table { header: true, rows: vec![vec![red.into()], vec![red.into()]], widths: Vec::new(), caption: String::new() },
+            Block::Credits(red.into()),
+        ];
+        let blocks: Vec<StoryBlock> = blocks.into_iter().map(StoryBlock::new).collect();
+        let content = post(&story(), &blocks, &uploads, &|_| None, &|_| None).unwrap().content;
+        let colored = "<mark style=\"background-color:transparent;color:#c62828\" class=\"has-inline-color picasso-color-red\"><strong>Dinner: Botín 8:00 PM</strong></mark>";
+        assert_eq!(content.matches(colored).count(), 11, "{content}");
+        assert!(!content.contains("class=\"color-") && !content.contains("{red}"), "the page's classes and the marks stay out of the post: {content}");
+    }
+
+    #[test]
     fn a_route_with_its_map_is_an_image_and_without_one_a_drawing() {
         let route = StoryBlock::new(Block::Route { caption: "Walk".into(), source: String::new(), route: vec![vec![[0, 0], [100_000, 100_000]]] });
         let uid = route.uid.clone();
         let map = |key: &str| (key == uid).then(|| RouteMap { uploaded: Uploaded { id: 9, url: "https://x.test/m.jpg".into() }, credit: "© Maps" });
-        let with = post(&story(), std::slice::from_ref(&route), &uploads, &map).unwrap().content;
+        let with = post(&story(), std::slice::from_ref(&route), &uploads, &map, &|_| None).unwrap().content;
         assert!(with.contains("<!-- wp:image {") && with.contains("wp-image-9") && with.contains("© Maps") && !with.contains("<svg"), "{with}");
-        let without = post(&story(), &[route], &uploads, &|_| None).unwrap().content;
+        let without = post(&story(), &[route], &uploads, &|_| None, &|_| None).unwrap().content;
         assert!(without.contains("<!-- wp:html -->") && without.contains("<svg"), "{without}");
     }
 }

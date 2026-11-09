@@ -70,13 +70,7 @@ impl PicassoApp {
             return;
         };
         if self.video.as_ref().map(|view| view.id) != Some(photo.id) {
-            if !self.audio_tried {
-                self.audio_tried = true;
-                self.audio_out = rodio::DeviceSinkBuilder::open_default_sink().ok().map(|mut sink| {
-                    sink.log_on_drop(false);
-                    sink
-                });
-            }
+            self.open_audio();
             self.video = Some(VideoView {
                 id: photo.id,
                 player: Player::open(std::path::Path::new(&photo.path)),
@@ -97,6 +91,17 @@ impl PicassoApp {
         }
         if view.player.playing() || view.player.loading() {
             ctx.request_repaint();
+        }
+    }
+
+    /// Opens the sound output the first time a video needs it.
+    pub(super) fn open_audio(&mut self) {
+        if !self.audio_tried {
+            self.audio_tried = true;
+            self.audio_out = rodio::DeviceSinkBuilder::open_default_sink().ok().map(|mut sink| {
+                sink.log_on_drop(false);
+                sink
+            });
         }
     }
 
@@ -721,14 +726,14 @@ fn chevron(ui: &mut egui::Ui, rect: Rect, glyph: &str) -> bool {
 }
 
 #[derive(Clone, Copy)]
-enum Control {
+pub(super) enum Control {
     Play,
     Pause,
     Sound,
     Muted,
 }
 
-fn control_button(ui: &mut egui::Ui, control: Control) -> egui::Response {
+pub(super) fn control_button(ui: &mut egui::Ui, control: Control) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(Vec2::new(32.0, 28.0), Sense::click());
     let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
     let painter = ui.painter();

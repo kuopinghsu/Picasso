@@ -53,8 +53,9 @@ CREATE TABLE IF NOT EXISTS publications (
     UNIQUE (site_id, post_id)
 );
 CREATE INDEX IF NOT EXISTS idx_publications_story ON publications(story_id);
--- The site's media a Story's post uses, as of its last confirmed save, so
--- what a post depends on is known; nothing is deleted on the site.
+-- The site's media a Story's posts use, as of their last confirmed save, so
+-- what a post depends on is known; an upload no post uses is deleted on the
+-- site only when the person asks.
 CREATE TABLE IF NOT EXISTS publication_media (
     story_id INTEGER NOT NULL,
     site_id INTEGER NOT NULL,
@@ -125,7 +126,11 @@ pub(super) fn upgrade(db: &Database) -> Result<(), String> {
     db.ensure_column("publications", "fingerprint", "TEXT NOT NULL DEFAULT ''")?;
     db.ensure_column("publications", "changed_on_site", "INTEGER NOT NULL DEFAULT 0")?;
     // What the site made of an upload: its size, type and the smaller sizes it made.
-    db.ensure_column("publish_media", "details", "TEXT NOT NULL DEFAULT ''")
+    db.ensure_column("publish_media", "details", "TEXT NOT NULL DEFAULT ''")?;
+    // Where WordPress and its pages say they are; empty until the site is
+    // checked again or published to.
+    db.ensure_column("publish_sites", "wordpress_url", "TEXT NOT NULL DEFAULT ''")?;
+    db.ensure_column("publish_sites", "home_url", "TEXT NOT NULL DEFAULT ''")
 }
 
 /// Publishing jobs kept in `publish_log`; older ones are dropped.
@@ -160,6 +165,12 @@ pub struct Site {
     pub site_url: String,
     /// Where its REST API was found.
     pub api_root: String,
+    /// Where WordPress says it is, which the editor opens under; empty
+    /// when it didn't say, and `site_url` is used.
+    pub wordpress_url: String,
+    /// Where WordPress says its pages are, which posts link to; empty when
+    /// it didn't say, and `site_url` is used.
+    pub home_url: String,
     pub user: String,
     /// What the Application Password is kept under in the credential store.
     pub secret_ref: String,
@@ -172,7 +183,7 @@ pub struct Site {
     pub checked_at: Option<i64>,
 }
 
-const COLS: &str = "id, label, site_url, api_root, user, secret_ref, account, can_upload, can_edit, can_publish, checked_at";
+const COLS: &str = "id, label, site_url, api_root, user, secret_ref, account, can_upload, can_edit, can_publish, checked_at, wordpress_url, home_url";
 
 fn read_site(row: &Row) -> rusqlite::Result<Site> {
     Ok(Site {
@@ -180,6 +191,8 @@ fn read_site(row: &Row) -> rusqlite::Result<Site> {
         label: row.get(1)?,
         site_url: row.get(2)?,
         api_root: row.get(3)?,
+        wordpress_url: row.get(11)?,
+        home_url: row.get(12)?,
         user: row.get(4)?,
         secret_ref: row.get(5)?,
         account: row.get(6)?,
@@ -226,6 +239,8 @@ impl Database {
             site.can_edit,
             site.can_publish,
             site.checked_at,
+            site.wordpress_url,
+            site.home_url,
         ];
         match existing {
             Some(id) => {
@@ -233,7 +248,7 @@ impl Database {
                     .conn
                     .execute(
                         "UPDATE publish_sites SET label = ?1, site_url = ?2, api_root = ?3, user = ?4, secret_ref = ?5, account = ?6,
-                         can_upload = ?7, can_edit = ?8, can_publish = ?9, checked_at = ?10 WHERE id = ?11",
+                         can_upload = ?7, can_edit = ?8, can_publish = ?9, checked_at = ?10, wordpress_url = ?11, home_url = ?12 WHERE id = ?13",
                         rusqlite::params_from_iter(values.iter().copied().chain([&id as &dyn rusqlite::ToSql])),
                     )
                     .map_err(|err| err.to_string())?;
@@ -245,8 +260,8 @@ impl Database {
             None => {
                 self.conn
                     .execute(
-                        "INSERT INTO publish_sites(label, site_url, api_root, user, secret_ref, account, can_upload, can_edit, can_publish, checked_at, created_at)
-                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                        "INSERT INTO publish_sites(label, site_url, api_root, user, secret_ref, account, can_upload, can_edit, can_publish, checked_at, wordpress_url, home_url, created_at)
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
                         rusqlite::params_from_iter(values.iter().copied().chain([&unix_now() as &dyn rusqlite::ToSql])),
                     )
                     .map_err(|err| err.to_string())?;
@@ -259,6 +274,14 @@ impl Database {
     /// by the caller, which knows the store.
     pub fn delete_site(&self, id: i64) -> Result<(), String> {
         self.conn.execute("DELETE FROM publish_sites WHERE id = ?1", [id]).map(|_| ()).map_err(|err| err.to_string())
+    }
+
+    /// Keeps where WordPress and its pages say site `id` is, as read while publishing.
+    pub fn set_wordpress_urls(&self, id: i64, url: &str, home: &str) -> Result<(), String> {
+        self.conn
+            .execute("UPDATE publish_sites SET wordpress_url = ?1, home_url = ?2 WHERE id = ?3", params![url, home, id])
+            .map(|_| ())
+            .map_err(|err| err.to_string())
     }
 }
 
@@ -284,6 +307,15 @@ pub struct PlaceChoice {
     pub left_out: Vec<i64>,
     /// The posts link to the Trip's Journey.
     pub journey: bool,
+}
+
+/// A photo or video Picasso uploaded to a site.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Upload {
+    pub media_id: i64,
+    /// Its address as the site gave it.
+    pub url: String,
+    pub video: bool,
 }
 
 /// A Story's post on a site, as last saved there.
@@ -333,6 +365,40 @@ impl Database {
     /// Forgets an upload the site no longer has.
     pub fn forget_upload(&self, site_id: i64, hash: &str) -> Result<(), String> {
         self.conn.execute("DELETE FROM publish_media WHERE site_id = ?1 AND hash = ?2", params![site_id, hash]).map(|_| ()).map_err(|err| err.to_string())
+    }
+
+    /// Of the site's media `media`, those Picasso uploaded there that no
+    /// Story's post on the site uses as of its last confirmed save, by id.
+    pub fn unused_uploads(&self, site_id: i64, media: &[i64]) -> Vec<Upload> {
+        let mut found: Vec<Upload> = media
+            .iter()
+            .filter_map(|id| {
+                self.conn
+                    .query_row(
+                        "SELECT url, details FROM publish_media WHERE site_id = ?1 AND media_id = ?2
+                         AND NOT EXISTS (SELECT 1 FROM publication_media WHERE site_id = ?1 AND media_id = ?2) LIMIT 1",
+                        params![site_id, id],
+                        |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+                    )
+                    .optional()
+                    .ok()
+                    .flatten()
+                    .map(|(url, details)| {
+                        let mime = serde_json::from_str::<serde_json::Value>(&details).ok().and_then(|details| details.get("mime")?.as_str().map(str::to_string));
+                        let video = mime.map_or_else(|| url.to_ascii_lowercase().ends_with(".mp4"), |mime| mime.starts_with("video/"));
+                        Upload { media_id: *id, url, video }
+                    })
+            })
+            .collect();
+        found.sort_by_key(|upload| upload.media_id);
+        found.dedup_by_key(|upload| upload.media_id);
+        found
+    }
+
+    /// Forgets every upload to the site that became media `media_id`, once
+    /// it was deleted there.
+    pub fn forget_media(&self, site_id: i64, media_id: i64) -> Result<(), String> {
+        self.conn.execute("DELETE FROM publish_media WHERE site_id = ?1 AND media_id = ?2", params![site_id, media_id]).map(|_| ()).map_err(|err| err.to_string())
     }
 
     /// Story `story_id`'s main post on site `site_id`, if one was made.
@@ -657,10 +723,14 @@ mod tests {
         assert!(!columns.iter().any(|name| name.contains("password")), "{columns:?}");
 
         // Connecting the same account again updates its row.
-        let again = Site { label: "Blog".into(), can_publish: true, ..site("https://example.com", "ana") };
+        let again = Site { label: "Blog".into(), can_publish: true, wordpress_url: "https://www.example.com/".into(), ..site("https://example.com", "ana") };
         assert_eq!(db.save_site(&again).unwrap(), id);
         assert_eq!(db.sites().len(), 1);
         assert!(db.site(id).unwrap().can_publish);
+        assert_eq!(db.site(id).unwrap().wordpress_url, "https://www.example.com/");
+        db.set_wordpress_urls(id, "https://example.com/wp", "https://example.com").unwrap();
+        let saved = db.site(id).unwrap();
+        assert_eq!((saved.wordpress_url.as_str(), saved.home_url.as_str()), ("https://example.com/wp", "https://example.com"));
 
         // Another account on the same site is another row; an empty label is the address.
         let other = db.save_site(&Site { label: " ".into(), ..site("https://example.com", "ben") }).unwrap();
@@ -811,5 +881,28 @@ mod tests {
         // Disconnecting the site keeps what is known to be on it.
         db.delete_site(site_id).unwrap();
         assert!(db.publication(3, site_id).is_some());
+    }
+
+    #[test]
+    fn uploads_no_post_uses_are_told_apart_and_forgotten_once_deleted() {
+        let (db, _, _) = library("unused-uploads");
+        let site_id = db.save_site(&site("https://example.com", "ana")).unwrap();
+        db.record_upload(site_id, "a", "standard", 41, "https://example.com/a.jpg", r#"{"mime":"image/jpeg"}"#).unwrap();
+        // The same upload reached by two sizes' bytes.
+        db.record_upload(site_id, "b", "standard", 42, "https://example.com/b.mp4", r#"{"mime":"video/mp4"}"#).unwrap();
+        db.record_upload(site_id, "c", "low", 42, "https://example.com/b.mp4", r#"{"mime":"video/mp4"}"#).unwrap();
+        db.record_upload(site_id, "d", "standard", 43, "https://example.com/d.jpg", "").unwrap();
+        // 43 is still in another Story's post; 50 was never Picasso's upload.
+        db.save_publication_media(4, site_id, &[43]).unwrap();
+        let unused = db.unused_uploads(site_id, &[42, 41, 43, 50, 42]);
+        assert_eq!(
+            unused,
+            [Upload { media_id: 41, url: "https://example.com/a.jpg".into(), video: false }, Upload { media_id: 42, url: "https://example.com/b.mp4".into(), video: true }]
+        );
+        assert!(db.unused_uploads(site_id + 1, &[41]).is_empty(), "another site's uploads are its own");
+
+        db.forget_media(site_id, 42).unwrap();
+        let left = db.uploads(site_id);
+        assert!(left.contains_key("a") && !left.contains_key("b") && !left.contains_key("c"), "deleted, so sent again if used again");
     }
 }

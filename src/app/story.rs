@@ -10,7 +10,7 @@ use eframe::egui::{self, Align, Layout, Margin, Modifiers, Pos2, Rect, RichText,
 
 use crate::i18n::{tr, trf};
 use crate::inline::{self, Mark};
-use crate::trip::{grid_layout_for, Block, CoverCrop, DayFilter, MediaUse, MemberQuery, Story, StoryBlock, GRID_LAYOUTS};
+use crate::trip::{grid_layout_for, spread_widths, table_widths_fit, Block, CoverCrop, DayFilter, MediaUse, MemberQuery, Story, StoryBlock, GRID_LAYOUTS, TABLE_COLUMNS_MAX, TABLE_ROWS_MAX, TABLE_WIDTH_MIN};
 use crate::story_html;
 use crate::types::{Nav, Photo};
 
@@ -108,6 +108,47 @@ pub(super) struct StoryEditor {
     queued: Vec<Action>,
     /// Quitting without the changes that couldn't be saved was chosen.
     leaving: bool,
+    /// The Video block playing in place, or showing where a handle of its
+    /// part was dragged to.
+    clip: Option<ClipPlayer>,
+    /// Where a video of the Trip is being chosen for.
+    choosing_video: Option<VideoChoice>,
+}
+
+/// A Video block's video, played or shown at a moment in the block.
+struct ClipPlayer {
+    /// The block's id, which stays while blocks move.
+    uid: String,
+    media_id: i64,
+    player: crate::video::Player,
+    texture: Option<egui::TextureHandle>,
+    /// The frames where a handle or the playhead is dragged to, once one is.
+    scrub: Option<crate::video::Scrubber>,
+    /// The pass it was last drawn in: once its block isn't, it stops.
+    drawn: u64,
+}
+
+impl ClipPlayer {
+    /// A player for the block `uid` asked for in the pass `pass`, which
+    /// counts as drawn in it: the check for blocks no longer drawn runs
+    /// before the next pass draws it.
+    fn new(uid: &str, media_id: i64, player: crate::video::Player, pass: u64) -> Self {
+        Self { uid: uid.into(), media_id, player, texture: None, scrub: None, drawn: pass }
+    }
+
+    /// Its block wasn't drawn in the pass before `pass`.
+    fn unseen(&self, pass: u64) -> bool {
+        self.drawn + 1 < pass
+    }
+}
+
+/// Choosing one of the Trip's videos for a Video block: added at `at`, or
+/// in place of the block there when `replace`.
+struct VideoChoice {
+    at: usize,
+    replace: bool,
+    /// The Trip's videos, as media references, once read.
+    choices: Option<Vec<i64>>,
 }
 
 /// A frame for the cover being chosen: its shape (an index of
@@ -294,13 +335,14 @@ pub(super) struct PageJob {
     pub(super) story: Story,
     pub(super) blocks: Vec<StoryBlock>,
     pub(super) sources: HashMap<i64, story_html::Source>,
-    dates: Option<String>,
+    pub(super) dates: Option<String>,
     words: story_html::Words,
     pub(super) map: story_html::MapTiles,
     pub(super) profiles: HashMap<String, crate::elevation::Profile>,
     /// Route blocks, by id, whose elevation the editor hasn't read yet, with
     /// their track files.
     pub(super) unread: Vec<(String, Vec<std::path::PathBuf>)>,
+    pub(super) videos: story_html::Videos,
 }
 
 /// The elevation along the tracks in `paths`, read from their files.
@@ -325,7 +367,16 @@ impl PageJob {
     }
 
     pub(super) fn page(&self) -> story_html::Page<'_> {
-        story_html::Page { story: &self.story, dates: self.dates.as_deref(), blocks: &self.blocks, sources: &self.sources, words: &self.words, map: Some(&self.map), profiles: &self.profiles }
+        story_html::Page {
+            story: &self.story,
+            dates: self.dates.as_deref(),
+            blocks: &self.blocks,
+            sources: &self.sources,
+            words: &self.words,
+            map: Some(&self.map),
+            profiles: &self.profiles,
+            videos: &self.videos,
+        }
     }
 }
 
@@ -431,11 +482,41 @@ enum Action {
     ListBack(usize, usize),
     /// Puts a style around the selection of the field last typed in.
     Format(Mark),
-    /// Moves the caret from the block at `i` to the text block before it
-    /// (true) or after it.
+    /// Moves the caret from the block at `i` to the text block or table
+    /// before it (true) or after it.
     Step(usize, bool),
     /// Joins the text block at `i` to the end of the text block before it.
     Merge(usize),
+    /// Changes the rows or columns of the table at `i`.
+    Table(usize, TableEdit),
+}
+
+/// A change to a table's rows or columns. Rows and columns are counted
+/// from 0, the header row being row 0.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum TableEdit {
+    /// Adds an empty row before row `n`, or after the last.
+    AddRow(usize),
+    /// Removes the row of cell (row, column); the caret goes to the cell
+    /// that takes its place.
+    RemoveRow(usize, usize),
+    /// Adds an empty column before column `n`, or after the last.
+    AddColumn(usize),
+    /// Removes the column of cell (row, column), like [`TableEdit::RemoveRow`].
+    RemoveColumn(usize, usize),
+    /// Makes it (columns, rows), adding empty cells at the end or taking
+    /// away the last empty ones; cells with text stay. The caret goes back
+    /// to cell (row, column), or the nearest one left.
+    Resize((usize, usize), (usize, usize)),
+    /// Gives the columns these widths, when they fit them.
+    Widths(Vec<u8>),
+    /// Lets the columns fit their text again, forgetting their widths.
+    FitText,
+    /// Whether the first row is the header row.
+    Header(bool),
+    /// Enter in cell (row, column): on to the cell below, adding a row
+    /// after the last.
+    Down(usize, usize),
 }
 
 /// How a block's photos are laid out.
@@ -512,6 +593,8 @@ impl PicassoApp {
             choosing_cover: false,
             queued: Vec::new(),
             leaving: false,
+            clip: None,
+            choosing_video: None,
         });
     }
 
@@ -687,7 +770,12 @@ impl PicassoApp {
                     ui.add(egui::Spinner::new().size(13.0));
                     ui.add_space(4.0);
                     let (done, total) = (job.done.load(Ordering::Relaxed), job.total.load(Ordering::Relaxed));
-                    ui.label(RichText::new(trf("Rendering photos: {} of {}", &[&done, &total])).size(13.0).color(theme::muted()));
+                    let status = match job.converting.load(Ordering::Relaxed) {
+                        _ if job.sending.load(Ordering::Relaxed) => tr("Uploading a video to the site…").to_string(),
+                        0 => trf("Rendering photos: {} of {}", &[&done, &total]),
+                        percent => trf("Making a video for the web: {}%", &[&(percent - 1)]),
+                    };
+                    ui.label(RichText::new(status).size(13.0).color(theme::muted()));
                     if tool_button(ui, true, tr("Cancel")).clicked() {
                         job.cancel.store(true, Ordering::Relaxed);
                     }
@@ -795,15 +883,17 @@ impl PicassoApp {
             let used = page.min_rect();
             outer.allocate_rect(used, Sense::hover());
         });
+        self.choose_video_modal(&ctx, &mut actions);
 
+        let story_days = self.story_day_filter();
         let Some(editor) = &mut self.story else { return };
         let structural = !actions.is_empty();
         for action in actions {
             apply(editor, action);
         }
         if let Some(gallery) = editor.blocks.first().filter(|_| add_photos) {
-            let choices = trip_photos(&self.db, editor.story.trip_id, DayFilter::Any, false);
-            editor.picking = Some(Picker { uid: gallery.uid.clone(), day: DayFilter::Any, starred: false, unused: false, choices });
+            let choices = trip_photos(&self.db, editor.story.trip_id, story_days, false);
+            editor.picking = Some(Picker { uid: gallery.uid.clone(), day: story_days, starred: false, unused: false, choices });
         }
         let now = editor.snapshot();
         if now != before {
@@ -905,18 +995,28 @@ impl PicassoApp {
     pub(super) fn story_job(&mut self) -> Option<PageJob> {
         let editor = self.story.as_ref()?;
         let (story, blocks) = (editor.story.clone(), editor.blocks.clone());
-        let media: Vec<i64> = story.cover.into_iter().chain(blocks.iter().flat_map(|block| block.block.media().iter().map(|m| m.media_id))).collect();
+        let photos = blocks.iter().filter(|block| !matches!(block.block, Block::Video { .. })).flat_map(|block| block.block.media().iter().map(|m| m.media_id));
+        let media: Vec<i64> = story.cover.into_iter().chain(photos).collect();
         let mut sources = HashMap::new();
         for media_id in media {
             let source = self.story_photo(media_id).map(|photo| (std::path::PathBuf::from(&photo.path), self.edit_settings(photo.id), photo.rotation));
             sources.insert(media_id, source);
         }
-        let dates = self.trips.iter().find(|trip| trip.id == story.trip_id).and_then(super::trips::trip_dates);
+        let mut videos = story_html::Videos { sources: HashMap::new(), cache: Some(self.cache_dir.join("story-videos")) };
+        for block in &blocks {
+            if let Block::Video { media, .. } = &block.block {
+                let source = self.story_photo(media.media_id).map(|video| (std::path::PathBuf::from(&video.path), video.duration));
+                videos.sources.insert(media.media_id, source);
+            }
+        }
+        let dates = super::trips::story_dates(self.trips.iter().find(|trip| trip.id == story.trip_id), story.dates);
         let words = story_html::Words {
             lang: crate::i18n::current().code(),
             untitled: tr("Untitled story").into(),
             unavailable: tr("Photo unavailable").into(),
+            video_unavailable: tr("Video unavailable").into(),
             contents: tr("Contents").into(),
+            watch: tr("Watch on YouTube").into(),
         };
         let map = story_html::MapTiles { source: self.map_source, key: self.carto_key.clone(), cache: self.cache_dir.clone() };
         let (mut profiles, mut unread) = (HashMap::new(), Vec::new());
@@ -933,7 +1033,7 @@ impl PicassoApp {
                 None => unread.push((block.uid.clone(), self.route_paths(story.trip_id, source))),
             }
         }
-        Some(PageJob { story, blocks, sources, dates, words, map, profiles, unread })
+        Some(PageJob { story, blocks, sources, dates, words, map, profiles, unread, videos })
     }
 
     /// The track files a route drawn from `source` comes from: the one
@@ -1061,7 +1161,17 @@ impl PicassoApp {
                     }
                     show_link(ui, check.first[3], &mut show);
                 }
-                let needed = story_html::estimated_bytes(check.photos, dialog.profile);
+                if check.no_ffmpeg > 0 {
+                    ui.label(
+                        RichText::new(trf("Install FFmpeg to export the story's {} videos; Picasso makes them play in any browser with it.", &[&check.no_ffmpeg]))
+                            .color(theme::DANGER),
+                    );
+                    if check.missing + check.unreadable == 0 {
+                        ui.checkbox(&mut dialog.skip_missing, tr("Export anyway, with “Video unavailable” in their place"));
+                    }
+                    show_link(ui, check.first[6], &mut show);
+                }
+                let needed = story_html::estimated_bytes(check.photos, check.video_ms, dialog.profile);
                 let free = story_html::free_space(std::path::Path::new(&dialog.folder));
                 if let Some(free) = free.filter(|free| *free < needed) {
                     ui.label(
@@ -1088,6 +1198,12 @@ impl PicassoApp {
                         RichText::new(trf("{} photos are small and may look soft across the page.", &[&check.low_res])).color(theme::muted()),
                     );
                     show_link(ui, check.first[4], &mut show);
+                }
+                if check.not_youtube > 0 {
+                    ui.label(
+                        RichText::new(trf("{} YouTube video blocks don't have a YouTube video's address; only their captions go in.", &[&check.not_youtube])).color(theme::muted()),
+                    );
+                    show_link(ui, check.first[5], &mut show);
                 }
                 if check.no_cover && !check.empty {
                     ui.label(RichText::new(tr("The story has no cover; it starts with its title. Add one with Add cover… above the title.")).color(theme::muted()));
@@ -1253,8 +1369,7 @@ impl PicassoApp {
                 // pointed at or the keyboard is on it or them, as a cover's do
                 // on a page.
                 let tools = egui::Id::unique("cover-tools");
-                let pointer = ui.input(|input| input.pointer.hover_pos());
-                let over_tools = ui.ctx().memory(|memory| memory.area_rect(tools)).zip(pointer).is_some_and(|(tools, at)| tools.contains(at));
+                let over_tools = pointer_on_tools(ui, tools);
                 let tools_focused = ui.ctx().data(|data| data.get_temp::<bool>(tools)).unwrap_or(false);
                 let mut frame = false;
                 let mut focused = false;
@@ -1290,8 +1405,11 @@ impl PicassoApp {
             None => self.cover_placeholder(ui, width, actions),
         }
         let trip_id = self.story.as_ref().map(|editor| editor.story.trip_id);
-        let trip_dates = self.trips.iter().find(|trip| Some(trip.id) == trip_id).and_then(super::trips::trip_dates);
+        let days = trip_id.map(|id| self.days_of(id)).unwrap_or_default();
+        let trip = self.trips.iter().find(|trip| Some(trip.id) == trip_id);
+        let span = super::trips::trip_span(trip, &days);
         let Some(editor) = &mut self.story else { return };
+        let dates = super::trips::story_dates(trip, editor.story.dates);
         let story = &mut editor.story;
         let title = egui::TextEdit::singleline(&mut story.title)
             .hint_text(RichText::new(tr("Untitled story")).size(32.0).color(theme::muted()))
@@ -1317,9 +1435,16 @@ impl PicassoApp {
             if ui.add(author).changed() {
                 *typed = Some((String::new(), 2));
             }
-            if let Some(dates) = trip_dates.filter(|_| story.show_date) {
+            if let Some(dates) = dates.filter(|_| story.show_date) {
                 ui.label(RichText::new(format!("·  {dates}")).color(theme::muted()));
             }
+        });
+        // The dates it is about, shown in the byline and offered first by Add photos….
+        ui.horizontal(|ui| {
+            ui.label(RichText::new(tr("Dates")).size(13.0).color(theme::muted()))
+                .on_hover_text(tr("The dates this story is about, shown under its title. Add photos… shows the photos taken on them first. Leave them empty for the whole trip."));
+            tool_style(ui, Surface::Page);
+            super::trips::date_range(ui, &format!("story-dates-{}", story.id), &mut story.dates, span.map(|span| span.0));
         });
         ui.add_space(8.0);
         ui.separator();
@@ -1331,7 +1456,7 @@ impl PicassoApp {
         let Some(editor) = &self.story else { return };
         // Each photo once, named as it is where it was first used.
         let mut photos: Vec<(i64, String)> = Vec::new();
-        for item in editor.blocks.iter().flat_map(|block| block.block.media()) {
+        for item in editor.blocks.iter().filter(|block| !matches!(block.block, Block::Video { .. })).flat_map(|block| block.block.media()) {
             if !photos.iter().any(|(media_id, _)| *media_id == item.media_id) {
                 photos.push((item.media_id, photo_name(&item.alt, photos.len())));
             }
@@ -1392,7 +1517,7 @@ impl PicassoApp {
         let id = field_id("story", usize::from(field));
         let named = !text.is_empty() || ui.memory(|memory| memory.has_focus(id));
         ui.label(RichText::new(label).size(13.0).color(if named { theme::muted() } else { egui::Color32::TRANSPARENT }));
-        if styled_field(ui, text, id, 16.0, true, hint, ctl, None).0.changed() {
+        if styled_field(ui, text, id, (16.0, false), true, hint, ctl, None).0.changed() {
             *typed = Some((String::new(), field));
         }
         ui.add_space(6.0);
@@ -1420,10 +1545,7 @@ impl PicassoApp {
         // The block, or its tools as last drawn: they float over the gap
         // above, so pointing at the gap itself leaves them to its +.
         let tools = egui::Id::unique(("block-tools", &uid));
-        // The tools are a layer above the page, so the pointer is checked
-        // against where they are, not against what is on top there.
-        let pointer = ui.input(|input| input.pointer.hover_pos());
-        let over_tools = ui.ctx().memory(|memory| memory.area_rect(tools)).zip(pointer).is_some_and(|(tools, at)| tools.contains(at));
+        let over_tools = pointer_on_tools(ui, tools);
         let pointed = ui.rect_contains_pointer(rect) || over_tools;
         // The keys arriving in it, by Tab or a new block, choose it too.
         let focus = ui.ctx().memory(|memory| memory.focused()).filter(|&id| ui.ctx().read_response(id).is_some_and(|field| rect.contains_rect(field.rect)));
@@ -1480,6 +1602,10 @@ impl PicassoApp {
             _ => None,
         };
         let photos = matches!(block, Block::Photo(_)) || gallery || grid.is_some();
+        let table = match block {
+            Block::Table { header, rows, widths, .. } => Some((*header, rows, widths)),
+            _ => None,
+        };
         let label = block_label(block);
         let handle = drag_handle(ui);
         if handle.drag_started() || handle.dragged() {
@@ -1491,12 +1617,24 @@ impl PicassoApp {
         ui.label(RichText::new(tr(label)).size(12.0).color(theme::muted()));
         ui.add_space(4.0);
         // Groups: what the block is; how it looks; where it is; the rest.
-        let styles = active && is_text(block);
-        if photos || styles {
+        let styles = active && (is_text(block) || table.is_some());
+        if photos || styles || table.is_some() {
             tool_divider(ui);
         }
         if photos {
             layout_menu(ui, index, uid, media, grid, gallery, actions);
+        }
+        if matches!(block, Block::Video { .. }) {
+            tool_divider(ui);
+            if tool_button(ui, true, tr("Replace video…")).on_hover_text(tr("Choose another of the trip's videos; the caption stays")).clicked() {
+                actions.push(Action::Replace(index, video_to_choose()));
+            }
+        }
+        if let Some((header, rows, widths)) = table {
+            table_tools(ui, index, uid, header, rows, widths, actions);
+            if styles {
+                tool_divider(ui);
+            }
         }
         if styles {
             text_tools(ui, index, block, actions);
@@ -1606,6 +1744,11 @@ impl PicassoApp {
         if gallery || grid.is_some() {
             self.photo_picker(ui, index, uid, &media, pick, actions);
         }
+        let part = match self.story.as_ref().map(|editor| &editor.blocks[index].block) {
+            Some(Block::Video { media, start, end }) => Some((media.media_id, *start, *end)),
+            _ => None,
+        };
+        let trimmed = part.and_then(|(media_id, start, end)| self.video_body(ui, uid, media_id, (start, end), width));
         let mut chosen: Option<(String, Vec<Vec<[i32; 2]>>)> = None;
         if let Some(Block::Route { route, source, .. }) = self.story.as_ref().map(|editor| &editor.blocks[index].block) {
             let (route, source) = (route.clone(), source.clone());
@@ -1637,7 +1780,16 @@ impl PicassoApp {
             Block::Quote { text, citation } => quote_block(ui, text, citation, &uid, ctl, typed),
             Block::Info { title, items } => info_block(ui, title, items, &uid, typed),
             Block::Link { url, title, note } => link_block(ui, url, title, note, &shareable, &uid, typed),
-            Block::Photo(media) => media_words(ui, media, &uid, 0, open, typed),
+            Block::YouTube { url, caption } => youtube_block(ui, url, caption, open, &uid, typed),
+            Block::Table { header, rows, widths, caption } => table_block(ui, *header, rows, widths.as_slice(), caption, &uid, index, open, ctl, actions, typed),
+            Block::Photo(media) => media_words(ui, media, &uid, 0, open, typed, tr("Description for people who can't see the photo")),
+            Block::Video { media, start, end } => {
+                if let Some((new_start, new_end, field)) = trimmed {
+                    (*start, *end) = (new_start, new_end);
+                    *typed = field.map(|field| (uid.clone(), field));
+                }
+                media_words(ui, media, &uid, 0, open, typed, tr("Description for people who can't see the video"));
+            }
             Block::Grid { columns, rows, caption, media } => {
                 let places = usize::from(*columns) * usize::from(*rows);
                 if media.len() > places {
@@ -1798,31 +1950,45 @@ impl PicassoApp {
         Some((source, crate::trip::route_of(&tracks)))
     }
 
+    /// The photo strip's photos to begin with: those on the open Story's
+    /// dates, or all of the Trip's when it is about the whole Trip.
+    fn story_day_filter(&self) -> DayFilter {
+        let dates = self.story.as_ref().and_then(|editor| editor.story.dates);
+        dates.map_or(DayFilter::Any, |(first, last)| DayFilter::Dates(first, last))
+    }
+
     /// The Add photos button of a gallery or grid, and while it is on, a
     /// strip of the Trip's photos, one Day or all: a click puts a photo in
     /// the block, or takes it out again.
     fn photo_picker(&mut self, ui: &mut egui::Ui, index: usize, uid: &str, media: &[i64], start: bool, actions: &mut Vec<Action>) {
+        let story_days = self.story_day_filter();
         let Some(editor) = &self.story else { return };
         let trip_id = editor.story.trip_id;
         let open = editor.picking.as_ref().is_some_and(|picker| picker.uid == uid);
-        let mut day = editor.picking.as_ref().filter(|_| open).map_or(DayFilter::Any, |picker| picker.day);
+        let mut day = editor.picking.as_ref().filter(|_| open).map_or(story_days, |picker| picker.day);
         let (mut starred, mut unused) = editor.picking.as_ref().filter(|_| open).map_or((false, false), |picker| (picker.starred, picker.unused));
         let mut toggle = start && !open;
         if open {
-            // The strip's filters as a toolbar: which Day, then narrowing
+            // The strip's filters as a toolbar: which Days, then narrowing
             // chips, then Done.
             let days = self.days_of(trip_id);
             let shown = match day {
                 DayFilter::Day(id) => days.iter().find(|d| d.id == id).map(super::trips::day_name).unwrap_or_default(),
+                DayFilter::Dates(..) => tr("This story's dates").to_string(),
                 _ => tr("All days").to_string(),
             };
             tool_bar(ui, Surface::Page, |ui| {
-                egui::ComboBox::from_id_salt(("pick-day", uid)).selected_text(shown).height(320.0).show_ui(ui, |ui| {
+                let picker = egui::ComboBox::from_id_salt(("pick-day", uid)).selected_text(&shown).height(320.0).show_ui(ui, |ui| {
                     ui.selectable_value(&mut day, DayFilter::Any, tr("All days"));
+                    if story_days != DayFilter::Any {
+                        ui.selectable_value(&mut day, story_days, tr("This story's dates"));
+                    }
+                    ui.separator();
                     for d in &days {
                         ui.selectable_value(&mut day, DayFilter::Day(d.id), super::trips::day_name(d));
                     }
                 });
+                theme::name_picker(&picker.response, tr("Days"), shown);
                 tool_divider(ui);
                 ui.toggle_value(&mut starred, format!("★  {}", tr("Starred only"))).on_hover_text(tr("Your stars are only read, never changed"));
                 ui.toggle_value(&mut unused, tr("Not in the story yet")).on_hover_text(tr("Hide photos already used elsewhere in this story"));
@@ -1841,13 +2007,17 @@ impl PicassoApp {
             if open && media.is_empty() && matches!(editor.blocks[index].block, Block::Gallery(_)) {
                 actions.push(Action::Remove(index));
             }
-            editor.picking = if open { None } else { Some(Picker { uid: uid.into(), day: DayFilter::Any, starred: false, unused: false, choices: Vec::new() }) };
+            editor.picking = if open { None } else { Some(Picker { uid: uid.into(), day: story_days, starred: false, unused: false, choices: Vec::new() }) };
             if let Some(picker) = &mut editor.picking {
                 picker.choices = trip_photos(&self.db, trip_id, picker.day, false);
             }
             return;
         }
         let Some(picker) = editor.picking.as_mut().filter(|picker| picker.uid == uid) else { return };
+        // A strip on the Story's dates follows them when they change.
+        if matches!(day, DayFilter::Dates(..)) {
+            day = story_days;
+        }
         if (picker.day, picker.starred) != (day, starred) {
             (picker.day, picker.starred) = (day, starred);
             picker.choices = trip_photos(&self.db, trip_id, day, starred);
@@ -2086,6 +2256,247 @@ impl PicassoApp {
         }
     }
 
+    /// A Video block's video `media_id`: its poster, or its frames while it
+    /// plays in place, with a play button and how long the part from
+    /// `start` to `end` milliseconds is; below, the whole video as a line
+    /// with that part between two handles to drag. Returns the part when a
+    /// handle moved it, with the field it counts as for undo, or none when
+    /// a button set it, as a step of its own.
+    fn video_body(&mut self, ui: &mut egui::Ui, uid: &str, media_id: i64, (start, end): (u32, u32), width: f32) -> Option<(u32, u32, Option<u8>)> {
+        let video = self.story_photo(media_id);
+        let aspect = self.media_width(media_id, 1.0);
+        let height = (width / aspect).min(PHOTO_MAX_HEIGHT);
+        let (rect, response) = ui.allocate_exact_size(Vec2::new((height * aspect).min(width), height), Sense::click());
+        let ctx = ui.ctx().clone();
+        let edge = (rect.size().max_elem() * ctx.pixels_per_point()).ceil() as u32;
+        let mixer = self.audio_out.as_ref().map(|sink| sink.mixer());
+        let clip = self.story.as_mut().and_then(|editor| editor.clip.as_mut()).filter(|clip| clip.uid == uid && clip.media_id == media_id);
+        let known = video.as_ref().map_or(0.0, |video| video.duration);
+        let duration = if known > 0.0 { known } else { clip.as_ref().map_or(0.0, |clip| clip.player.duration()) };
+        let (from, to) = crate::trip::clip_range(start, end, duration);
+        let mut shown = None;
+        let (mut playing, mut position) = (false, None);
+        if let Some(clip) = clip {
+            // Every block is laid out, but only one in view counts as seen.
+            if ui.is_rect_visible(rect) {
+                clip.drawn = ctx.cumulative_pass_nr();
+            }
+            let scrubbed = clip.scrub.as_ref().and_then(crate::video::Scrubber::frame).filter(|_| !clip.player.playing());
+            if let Some(frame) = clip.player.tick(mixer).or(scrubbed) {
+                let image = egui::ColorImage::from_rgba_unmultiplied([frame.width, frame.height], &frame.rgba);
+                match clip.texture.as_mut() {
+                    Some(texture) => texture.set(image, egui::TextureOptions::LINEAR),
+                    None => clip.texture = Some(ctx.load_texture(format!("story-clip-{uid}"), image, egui::TextureOptions::LINEAR)),
+                }
+            }
+            // The part ends where it was cut.
+            if clip.player.playing() && to > 0.0 && clip.player.position() >= to {
+                clip.player.pause();
+            }
+            if clip.player.playing() || clip.player.loading() {
+                ctx.request_repaint();
+            }
+            (playing, position) = (clip.player.playing(), Some(clip.player.position()));
+            shown = clip.texture.clone();
+        }
+        match (&shown, &video) {
+            (Some(texture), Some(video)) => {
+                let painter = ui.painter_at(rect);
+                painter.rect_filled(rect, 4, egui::Color32::BLACK);
+                theme::paint_image_rounded(&painter, texture, rect, Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)), video.rotation, 4.0);
+            }
+            _ => self.paint_media(ui, media_id, rect, false),
+        }
+        let painter = ui.painter_at(rect);
+        if !playing && video.is_some() {
+            super::viewer::paint_play_button(&painter, rect.center(), (rect.height() * 0.12).clamp(18.0, 34.0));
+        }
+        if duration > 0.0 {
+            let length = crate::types::format_duration(to - from);
+            let label = if to - from < duration - 0.05 { trf("{} of the video's {}", &[&length, &crate::types::format_duration(duration)]) } else { length };
+            let text = painter.layout_no_wrap(label, egui::FontId::proportional(12.0), egui::Color32::WHITE);
+            let chip = Rect::from_min_size(rect.right_bottom() - text.size() - Vec2::new(18.0, 12.0), text.size() + Vec2::new(12.0, 4.0));
+            painter.rect_filled(chip, 4, egui::Color32::from_black_alpha(170));
+            painter.galley(chip.min + Vec2::new(6.0, 2.0), text, egui::Color32::WHITE);
+        }
+        let name = if playing { tr("Pause") } else { tr("Play") };
+        response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, video.is_some(), name));
+        theme::focus_ring(ui, &response, rect);
+        let path = std::path::PathBuf::from(&video?.path);
+        let mut toggle = response.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(name).clicked();
+        let mut set = None;
+        ui.add_space(4.0);
+        let event = ui.horizontal(|ui| {
+            let icon = if playing { super::viewer::Control::Pause } else { super::viewer::Control::Play };
+            toggle |= theme::named(super::viewer::control_button(ui, icon), name).clicked();
+            let times = format!("{} – {}", clip_time(from), clip_time(to));
+            ui.label(RichText::new(times).size(12.5).color(theme::muted()).monospace());
+            let least = f64::from(crate::trip::CLIP_MIN_MS) / 1000.0;
+            let shown = position.filter(|_| duration > least);
+            let starts = shown.is_some_and(|at| at < to - least);
+            if tool_icon(ui, starts, tr("Start the part at the frame shown"), |painter, center, ink| paint_bracket(painter, center, ink, false)).clicked() {
+                if let Some(at) = shown {
+                    set = Some((at.max(0.0), to));
+                }
+            }
+            let ends = shown.is_some_and(|at| at > from + least);
+            if tool_icon(ui, ends, tr("End the part at the frame shown"), |painter, center, ink| paint_bracket(painter, center, ink, true)).clicked() {
+                if let Some(at) = shown {
+                    set = Some((from, at.min(duration)));
+                }
+            }
+            let rest = ui.available_width().max(80.0);
+            timeline(ui, uid, rest, duration, (from, to), position)
+        })
+        .inner;
+        let source = (path.as_path(), edge);
+        if toggle {
+            self.toggle_clip(uid, media_id, source, (from, to), ui.ctx());
+        }
+        if let Some(at) = event.seek {
+            // Playing stays within the part.
+            let at = if playing && !event.dragging { at.clamp(from, to) } else { at };
+            self.show_clip_at(uid, media_id, source, at, event.dragging, ui.ctx());
+        }
+        let (new_from, new_to, field) = match event.moved {
+            Some((new_from, new_to, handle)) => (new_from, new_to, Some(2 + handle)),
+            None => set.map(|(new_from, new_to)| (new_from, new_to, None))?,
+        };
+        let ms = |seconds: f64| (seconds * 1000.0).round() as u32;
+        // Cut no shorter than the video, the part runs to its end.
+        let new_end = if new_to >= duration - 0.001 { 0 } else { ms(new_to) };
+        Some((ms(new_from), new_end, field))
+    }
+
+    /// Plays the Video block `uid` in place from where its part starts, or
+    /// pauses it.
+    fn toggle_clip(&mut self, uid: &str, media_id: i64, (path, edge): (&std::path::Path, u32), (from, to): (f64, f64), ctx: &egui::Context) {
+        let mine = self.story.as_ref().and_then(|editor| editor.clip.as_ref()).is_some_and(|clip| clip.uid == uid && clip.media_id == media_id);
+        // Also for a player first opened paused by a drag, which had none.
+        self.open_audio();
+        let Some(editor) = self.story.as_mut() else { return };
+        match editor.clip.as_mut().filter(|_| mine) {
+            Some(clip) if clip.player.playing() => clip.player.pause(),
+            Some(clip) => {
+                let at = clip.player.position();
+                if at < from || (to > 0.0 && at >= to - 0.05) {
+                    clip.player.seek(from);
+                }
+                clip.player.play();
+            }
+            None => {
+                let mut player = crate::video::Player::open_within(path, edge);
+                player.seek(from);
+                editor.clip = Some(ClipPlayer::new(uid, media_id, player, ctx.cumulative_pass_nr()));
+            }
+        }
+    }
+
+    /// Shows the Video block `uid` paused at the frame `at` seconds in, as
+    /// where a handle or the playhead is dragged to; playing goes on from
+    /// there. A click while it plays only moves it.
+    fn show_clip_at(&mut self, uid: &str, media_id: i64, (path, edge): (&std::path::Path, u32), at: f64, dragging: bool, ctx: &egui::Context) {
+        let Some(editor) = self.story.as_mut() else { return };
+        if !editor.clip.as_ref().is_some_and(|clip| clip.uid == uid && clip.media_id == media_id) {
+            let mut player = crate::video::Player::open_within(path, edge);
+            player.pause();
+            editor.clip = Some(ClipPlayer::new(uid, media_id, player, ctx.cumulative_pass_nr()));
+        }
+        let Some(clip) = editor.clip.as_mut() else { return };
+        if !dragging && clip.player.playing() {
+            clip.player.seek(at);
+            return;
+        }
+        clip.player.pause();
+        clip.player.set_position(at);
+        let ctx = ctx.clone();
+        clip.scrub.get_or_insert_with(|| crate::video::Scrubber::open(path, edge, move || ctx.request_repaint())).show(at);
+    }
+
+    /// Stops the video playing in place once its block is no longer drawn:
+    /// scrolled away, removed, or the Story left.
+    pub(super) fn stop_unseen_clip(&mut self, ctx: &egui::Context) {
+        let Some(editor) = self.story.as_mut() else { return };
+        if editor.clip.as_ref().is_some_and(|clip| clip.unseen(ctx.cumulative_pass_nr())) {
+            editor.clip = None;
+        }
+    }
+
+    /// The Trip's videos to choose one from for a Video block, each its
+    /// poster and length; a click adds it, or puts it in the block's place.
+    fn choose_video_modal(&mut self, ctx: &egui::Context, actions: &mut Vec<Action>) {
+        let Some(editor) = self.story.as_ref() else { return };
+        let Some(choice) = &editor.choosing_video else { return };
+        let (at, replace) = (choice.at, choice.replace);
+        let choices = match &choice.choices {
+            Some(choices) => choices.clone(),
+            None => {
+                let query = MemberQuery { day: self.story_day_filter(), ..MemberQuery::default() };
+                let mut videos = trip_media(&self.db, editor.story.trip_id, &query, true);
+                if videos.is_empty() {
+                    videos = trip_media(&self.db, editor.story.trip_id, &MemberQuery::default(), true);
+                }
+                if let Some(choice) = self.story.as_mut().and_then(|editor| editor.choosing_video.as_mut()) {
+                    choice.choices = Some(videos.clone());
+                }
+                videos
+            }
+        };
+        let logo = self.logo.clone();
+        let mut close = false;
+        let mut chosen = None;
+        let response = egui::Modal::new(egui::Id::unique("choose-video")).frame(about::dialog_frame()).show(ctx, |ui| {
+            ui.set_width(560.0);
+            about::title_bar(ui, &logo, tr("Choose a video"), &mut close);
+            egui::Frame::new().inner_margin(Margin::symmetric(20, 14)).show(ui, |ui| {
+                if choices.is_empty() {
+                    ui.label(RichText::new(tr("This trip has no videos. Add some to it from the library first.")).color(theme::muted()));
+                    return;
+                }
+                egui::ScrollArea::vertical().max_height(420.0).show(ui, |ui| {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.spacing_mut().item_spacing = Vec2::splat(6.0);
+                        for &media_id in &choices {
+                            let (tile, response) = ui.allocate_exact_size(Vec2::new(126.0, 84.0), Sense::click());
+                            self.paint_media(ui, media_id, tile, true);
+                            let video = self.story_photo(media_id);
+                            if let Some(video) = &video {
+                                let painter = ui.painter_at(tile);
+                                let text = painter.layout_no_wrap(crate::types::format_duration(video.duration), egui::FontId::proportional(11.0), egui::Color32::WHITE);
+                                let chip = Rect::from_min_size(tile.right_bottom() - text.size() - Vec2::new(10.0, 8.0), text.size() + Vec2::new(8.0, 4.0));
+                                painter.rect_filled(chip, 3, egui::Color32::from_black_alpha(170));
+                                painter.galley(chip.min + Vec2::new(4.0, 2.0), text, egui::Color32::WHITE);
+                            }
+                            let name = video.as_ref().map_or_else(|| tr("Unavailable").to_string(), |video| video.filename.clone());
+                            response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &name));
+                            theme::focus_ring(ui, &response, tile);
+                            if response.hovered() {
+                                ui.painter().rect_stroke(tile, 4, egui::Stroke::new(3.0, theme::ACCENT), egui::StrokeKind::Inside);
+                            }
+                            if response.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(&name).clicked() {
+                                chosen = Some(media_id);
+                            }
+                        }
+                    });
+                });
+            });
+        });
+        let Some(editor) = self.story.as_mut() else { return };
+        if let Some(media_id) = chosen {
+            // A video put in another's place keeps the block's words.
+            let words = match editor.blocks.get(at).map(|block| &block.block) {
+                Some(Block::Video { media, .. }) if replace => MediaUse { media_id, ..media.clone() },
+                _ => MediaUse::new(media_id),
+            };
+            let block = Block::Video { media: words, start: 0, end: 0 };
+            actions.push(if replace && at < editor.blocks.len() { Action::Replace(at, block) } else { Action::Insert(at, block) });
+            close = true;
+        }
+        if close || response.should_close() {
+            editor.choosing_video = None;
+        }
+    }
+
     pub(super) fn unsaved_story_modal(&mut self, ctx: &egui::Context) {
         let Some(editor) = &mut self.story else {
             self.modal = Modal::None;
@@ -2164,10 +2575,12 @@ impl PicassoApp {
     }
 
     /// Adds the selected photos to the end of Story `story_id`, each as a
-    /// photo block or all as one gallery. Photos not in the Trip yet join it.
+    /// photo block or all as one gallery, and the videos each as a video
+    /// block after them. Photos not in the Trip yet join it.
     pub(super) fn add_selection_to_story(&mut self, story_id: i64, group: Group) {
         let Some(story) = self.db.story(story_id) else { return };
         let photos = self.selection_in_order();
+        let is_video: Vec<bool> = photos.iter().map(|id| self.index_of(*id).and_then(|index| self.photos.get(index)).is_some_and(Photo::is_video)).collect();
         let media = match self.db.add_to_trip(story.trip_id, &photos) {
             Ok(media) => media,
             Err(err) => {
@@ -2175,16 +2588,19 @@ impl PicassoApp {
                 return;
             }
         };
+        let (videos, media): (Vec<_>, Vec<_>) = media.into_iter().zip(is_video).partition(|(_, video)| *video);
+        let media: Vec<i64> = media.into_iter().map(|(media_id, _)| media_id).collect();
         let mut blocks = self.db.story_blocks(story_id);
-        let added = media.len();
-        if group == Group::Gallery && added > 1 {
+        let added = media.len() + videos.len();
+        if group == Group::Gallery && media.len() > 1 {
             blocks.push(StoryBlock::new(Block::Gallery(media.into_iter().map(MediaUse::new).collect())));
-        } else if group == Group::Grid && added > 1 {
-            let (columns, rows) = grid_layout_for(added);
+        } else if group == Group::Grid && media.len() > 1 {
+            let (columns, rows) = grid_layout_for(media.len());
             blocks.push(StoryBlock::new(Block::Grid { columns, rows, caption: String::new(), media: media.into_iter().map(MediaUse::new).collect() }));
         } else {
             blocks.extend(media.into_iter().map(|id| StoryBlock::new(Block::Photo(MediaUse::new(id)))));
         }
+        blocks.extend(videos.into_iter().map(|(id, _)| StoryBlock::new(Block::Video { media: MediaUse::new(id), start: 0, end: 0 })));
         self.activity = match self.db.save_story_blocks(story_id, story.revision, &blocks) {
             Ok(_) => trf("Added {} photos to “{}”", &[&added, &story_name(&story)]),
             Err(err) => err,
@@ -2241,15 +2657,25 @@ fn field_id(uid: &str, field: usize) -> egui::Id {
     egui::Id::unique(("block-text", uid, field))
 }
 
+/// Text in colour `color`, in its shade for the app's light or dark look,
+/// as the page shows it.
+fn text_color(color: inline::Color, dark: bool) -> egui::Color32 {
+    egui::Color32::from_hex(color.hex(dark)).unwrap_or(egui::Color32::GRAY)
+}
+
 /// The text with its styles: the words between marks bold, italic,
-/// struck, as code, or as a link, and the marks dimmed while the field is
+/// struck, as code, as a link, or in a colour, and the marks dimmed while the field is
 /// being edited and hidden otherwise, so it reads as it will on the page.
-fn styled_job(ui: &egui::Ui, text: &str, size: f32, wrap: f32, marks: bool) -> egui::text::LayoutJob {
+/// With `bold`, all of it is bold, as a table's header row.
+fn styled_job(ui: &egui::Ui, text: &str, size: f32, bold: bool, wrap: f32, marks: bool) -> egui::text::LayoutJob {
     let visuals = ui.visuals();
     let (normal, strong) = (visuals.text_color(), visuals.strong_text_color());
     let mut job = egui::text::LayoutJob::default();
     job.wrap.max_width = wrap;
-    let plain = egui::TextFormat::simple(egui::FontId::proportional(size), normal);
+    let mut plain = egui::TextFormat::simple(egui::FontId::proportional(size), if bold { strong } else { normal });
+    if bold {
+        plain.coords = egui::epaint::text::VariationCoords::new([(b"wght", 700.0)]);
+    }
     for (n, line) in text.split('\n').enumerate() {
         if n > 0 {
             job.append("\n", 0.0, plain.clone());
@@ -2279,6 +2705,14 @@ fn styled_job(ui: &egui::Ui, text: &str, size: f32, wrap: f32, marks: bool) -> e
                     format.color = theme::accent();
                     format.underline = egui::Stroke::new(1.0, theme::accent());
                 }
+                if let Some(color) = style.color {
+                    format.color = text_color(color, visuals.dark_mode);
+                    for stroke in [&mut format.strikethrough, &mut format.underline] {
+                        if stroke.width > 0.0 {
+                            stroke.color = format.color;
+                        }
+                    }
+                }
             }
             job.append(span.text, 0.0, format);
         }
@@ -2298,7 +2732,7 @@ fn styled_field(
     ui: &mut egui::Ui,
     text: &mut String,
     id: egui::Id,
-    size: f32,
+    (size, bold): (f32, bool),
     multiline: bool,
     hint: &str,
     ctl: &mut TextCtl,
@@ -2330,7 +2764,7 @@ fn styled_field(
         select = Some(inline::wrap(text, start.min(count), end.min(count), mark));
     }
     let marks = select.is_some() || focus.is_some() || ui.memory(|memory| memory.has_focus(id));
-    let mut layouter = |ui: &egui::Ui, buffer: &dyn egui::TextBuffer, wrap: f32| ui.painter().layout_job(styled_job(ui, buffer.as_str(), size, wrap, marks));
+    let mut layouter = |ui: &egui::Ui, buffer: &dyn egui::TextBuffer, wrap: f32| ui.painter().layout_job(styled_job(ui, buffer.as_str(), size, bold, wrap, marks));
     let edit = if multiline { egui::TextEdit::multiline(text).desired_rows(1) } else { egui::TextEdit::singleline(text) };
     let edit = edit.id(id).frame(egui::Frame::NONE).font(egui::FontId::proportional(size)).hint_text(RichText::new(hint).size(size).color(theme::muted())).desired_width(f32::INFINITY).layouter(&mut layouter);
     let output = edit.show(ui);
@@ -2429,7 +2863,7 @@ fn keys(text: &str) -> String {
 }
 
 /// The ⚙ of the Story's bar: how the preview and export look, and whether
-/// the trip's dates show under the title.
+/// the dates of its Days show under the title.
 fn story_settings(ui: &mut egui::Ui, story: &mut Story) {
     let gear = tool_icon(ui, true, tr("Story settings"), theme::paint_settings_icon);
     egui::Popup::from_toggle_button_response(&gear).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
@@ -2440,7 +2874,7 @@ fn story_settings(ui: &mut egui::Ui, story: &mut Story) {
         }
         ui.label(RichText::new(tr("How the preview and export look. The blocks stay the same.")).size(11.5).color(theme::muted()));
         ui.separator();
-        ui.checkbox(&mut story.show_date, tr("Show the trip's dates"));
+        ui.checkbox(&mut story.show_date, tr("Show the story's dates"));
     });
 }
 
@@ -2537,6 +2971,8 @@ fn empty_strip(day: DayFilter, starred: bool, all_used: bool) -> &'static str {
         tr("Every photo here is already in the story. Turn off “Not in the story yet” to use one again.")
     } else if starred {
         tr("None of these photos has a star. Turn off “Starred only” to see them all.")
+    } else if matches!(day, DayFilter::Dates(..)) {
+        tr("No photos on this story's dates. Choose “All days” to pick from the whole trip.")
     } else if day != DayFilter::Any {
         tr("No photos on this day. Choose “All days” to pick from the whole trip.")
     } else {
@@ -2599,6 +3035,15 @@ fn block_row(ui: &mut egui::Ui, block: &Block, label: &str, hint: Option<&str>, 
         None => painter.galley(egui::pos2(left, rect.center().y - name.size().y / 2.0), name, ink),
     }
     row.on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+
+/// Whether the pointer is on the toolbar `tools` as it was last shown, with
+/// nothing over it there. Where a hidden toolbar was, or a dialog over a
+/// shown one, doesn't count: the toolbar would come back on top of the
+/// dialog and take its clicks.
+fn pointer_on_tools(ui: &egui::Ui, tools: egui::Id) -> bool {
+    let at = ui.input(|input| input.pointer.hover_pos());
+    at.is_some_and(|at| ui.ctx().layer_id_at(at) == Some(egui::LayerId::new(egui::Order::Foreground, tools)))
 }
 
 /// Whether the pointer was just pressed on the page outside `rect`: not on
@@ -2736,6 +3181,9 @@ fn block_icon(block: &Block) -> &'static str {
         Block::Route { .. } => "🗺",
         Block::Info { .. } => "i",
         Block::Link { .. } => "🔗",
+        Block::YouTube { .. } => "▶",
+        Block::Video { .. } => "🎬",
+        Block::Table { .. } => "▤",
         _ => "▦",
     }
 }
@@ -2754,6 +3202,9 @@ fn block_hint(block: &Block) -> &'static str {
         Block::Route { .. } => "A GPS track of the trip, drawn as a line",
         Block::Info { .. } => "Facts to plan with: how to get there, prices, hours",
         Block::Link { .. } => "A web page to read more, with a note",
+        Block::YouTube { .. } => "A video on YouTube to watch, with a caption",
+        Block::Video { .. } => "One of the trip's videos, or the part of it you choose, with a caption",
+        Block::Table { .. } => "Text in rows and columns, such as times or prices",
         _ => "Photos in rows and columns",
     }
 }
@@ -2826,7 +3277,7 @@ fn text_block(
         TextKind::Credits => (13.0, tr("Credits")),
     };
     let focus = take_focus(ctl, uid, 0);
-    let (response, _) = styled_field(ui, text, id, size, kind != TextKind::Heading && kind != TextKind::Subheading, hint, ctl, focus);
+    let (response, _) = styled_field(ui, text, id, (size, false), kind != TextKind::Heading && kind != TextKind::Subheading, hint, ctl, focus);
     if response.changed() {
         *typed = Some((uid.to_string(), 0));
         if ctl.slash_shut == Some(id) {
@@ -2901,7 +3352,7 @@ fn list_block(
             // item's first line once the field has its place.
             ui.add_space(LIST_INDENT);
             let focus = take_focus(ctl, uid, n);
-            let (field, line) = styled_field(ui, item, id, 16.0, false, tr("List item"), ctl, focus);
+            let (field, line) = styled_field(ui, item, id, (16.0, false), false, tr("List item"), ctl, focus);
             if field.changed() {
                 *typed = Some((uid.to_string(), n as u8));
             }
@@ -2925,11 +3376,11 @@ fn quote_block(ui: &mut egui::Ui, text: &mut String, citation: &mut String, uid:
     let frame = egui::Frame::new().inner_margin(Margin { left: 14, ..Margin::ZERO });
     let shown = frame.show(ui, |ui| {
         let focus = take_focus(ctl, uid, 0);
-        if styled_field(ui, text, field_id(uid, 0), 17.0, true, tr("Quote"), ctl, focus).0.changed() {
+        if styled_field(ui, text, field_id(uid, 0), (17.0, false), true, tr("Quote"), ctl, focus).0.changed() {
             *typed = Some((uid.to_string(), 0));
         }
         let focus = take_focus(ctl, uid, 1);
-        if styled_field(ui, citation, field_id(uid, 1), 13.0, false, tr("Who said it (optional)"), ctl, focus).0.changed() {
+        if styled_field(ui, citation, field_id(uid, 1), (13.0, false), false, tr("Who said it (optional)"), ctl, focus).0.changed() {
             *typed = Some((uid.to_string(), 1));
         }
     });
@@ -3015,6 +3466,245 @@ fn link_block(ui: &mut egui::Ui, url: &mut String, title: &mut String, note: &mu
     ui.painter().vline(rect.left() + 2.0, rect.y_range(), egui::Stroke::new(3.0, theme::accent()));
 }
 
+/// A YouTube video block: a card in the player's place, which opens the
+/// video on YouTube, its address, and its caption. Nothing is fetched from
+/// YouTube while writing.
+fn youtube_block(ui: &mut egui::Ui, url: &mut String, caption: &mut String, open: bool, uid: &str, typed: &mut Option<(String, u8)>) {
+    let video = crate::trip::youtube(url);
+    let width = ui.available_width().min(VIDEO_CARD_HEIGHT * 16.0 / 9.0);
+    let sense = if video.is_some() { Sense::click() } else { Sense::hover() };
+    let (rect, card) = ui.allocate_exact_size(Vec2::new(width, width * 9.0 / 16.0), sense);
+    let painter = ui.painter();
+    let center = rect.center();
+    match &video {
+        Some(video) => {
+            painter.rect_filled(rect, CORNER, egui::Color32::from_gray(if card.hovered() { 34 } else { 22 }));
+            let button = Rect::from_center_size(center, Vec2::new(68.0, 48.0));
+            painter.rect_filled(button, 12.0, egui::Color32::from_rgb(0xFF, 0x00, 0x33));
+            let tip = center + Vec2::new(12.0, 0.0);
+            painter.add(egui::Shape::convex_polygon(vec![tip, tip + Vec2::new(-22.0, -12.0), tip + Vec2::new(-22.0, 12.0)], egui::Color32::WHITE, egui::Stroke::NONE));
+            let start = match video.start_label().as_str() {
+                "" => String::new(),
+                start => format!("  ·  {start}"),
+            };
+            let text = format!("YouTube  ·  {}{start}", video.id);
+            painter.text(egui::pos2(center.x, rect.bottom() - 18.0), egui::Align2::CENTER_CENTER, text, egui::FontId::proportional(12.0), egui::Color32::from_gray(200));
+        }
+        None => {
+            painter.rect_filled(rect, CORNER, ui.visuals().faint_bg_color);
+            painter.rect_stroke(rect, CORNER, egui::Stroke::new(1.0, theme::hairline()), egui::StrokeKind::Inside);
+            painter.text(center - Vec2::new(0.0, 12.0), egui::Align2::CENTER_CENTER, "▶", egui::FontId::proportional(28.0), theme::muted());
+            painter.text(center + Vec2::new(0.0, 18.0), egui::Align2::CENTER_CENTER, tr("A YouTube video"), egui::FontId::proportional(13.0), theme::muted());
+        }
+    }
+    if let Some(video) = &video {
+        if card.has_focus() {
+            ui.painter().rect_stroke(rect.expand(2.0), CORNER, egui::Stroke::new(2.0, theme::accent()), egui::StrokeKind::Outside);
+        }
+        let card = theme::named(card, tr("Watch on YouTube")).on_hover_text(tr("Watch on YouTube")).on_hover_cursor(egui::CursorIcon::PointingHand);
+        if card.clicked() {
+            let _ = open::that(video.watch());
+        }
+    }
+    let edit = egui::TextEdit::singleline(url).hint_text(tr("YouTube address, such as https://youtu.be/…")).desired_width(f32::INFINITY);
+    if ui.add(edit).changed() {
+        *typed = Some((uid.to_string(), 0));
+    }
+    if !url.trim().is_empty() && video.is_none() {
+        ui.label(RichText::new(tr("Paste the address of a video on YouTube")).size(12.0).color(theme::DANGER));
+    }
+    if open || !caption.is_empty() {
+        let edit = egui::TextEdit::singleline(caption).hint_text(tr("Caption of this video")).text_color(theme::muted()).frame(egui::Frame::NONE).desired_width(f32::INFINITY);
+        if ui.add(edit).changed() {
+            *typed = Some((uid.to_string(), 1));
+        }
+    }
+}
+
+/// Tallest a Video block's card is drawn while writing.
+const VIDEO_CARD_HEIGHT: f32 = 240.0;
+
+/// A table, its cells typed in where they are and the header row shaded.
+/// Enter goes on to the cell below, adding a row after the last, and
+/// Shift+Enter breaks the line. A cell's menu, on a right click, adds
+/// and removes rows and columns beside it, and so do the buttons below
+/// the chosen table. The lines between columns are dragged, or moved
+/// with ← and → in the chosen table, to give them widths; until then they
+/// share the width. Each drag, key press, or double-click to forget the
+/// widths is one undo step.
+#[allow(clippy::too_many_arguments)]
+fn table_block(
+    ui: &mut egui::Ui,
+    header: bool,
+    rows: &mut [Vec<String>],
+    widths: &[u8],
+    caption: &mut String,
+    uid: &str,
+    index: usize,
+    open: bool,
+    ctl: &mut TextCtl,
+    actions: &mut Vec<Action>,
+    typed: &mut Option<(String, u8)>,
+) {
+    let (columns, count) = (rows.first().map_or(1, Vec::len), rows.len());
+    let origin = ui.cursor().min;
+    let full = ui.available_width();
+    let stored = if widths.len() == columns { widths.to_vec() } else { spread_widths(&vec![1.0; columns]) };
+    // A drag left behind, by a table that changed under it, is forgotten.
+    let drag_id = egui::Id::unique(("table-drag", uid));
+    let ctx = ui.ctx().clone();
+    let dragging = |drag: &ColumnDrag| [ctx.dragged_id(), ctx.drag_stopped_id()].contains(&Some(drag.handle)) && drag.widths.len() == columns;
+    let shares = ui.data(|data| data.get_temp::<ColumnDrag>(drag_id)).filter(dragging).map_or_else(|| stored.clone(), |drag| drag.widths);
+    // Where each column starts, and the right edge last.
+    let edges: Vec<f32> = (0..=columns).map(|c| origin.x + (full * shares[..c].iter().map(|&width| f32::from(width)).sum::<f32>() / 100.0).round()).collect();
+    let widened = !widths.is_empty();
+    // The header row's shade goes under its cells, once their height is known.
+    let shade = ui.painter().add(egui::Shape::Noop);
+    let mut bottoms = Vec::with_capacity(count);
+    ui.scope(|ui| {
+        ui.spacing_mut().item_spacing = Vec2::ZERO;
+        for (r, row) in rows.iter_mut().enumerate() {
+            let shown = ui.horizontal_top(|ui| {
+                for (c, cell) in row.iter_mut().enumerate() {
+                    let field = table_field(r, c, columns);
+                    let id = field_id(uid, field);
+                    if ui.memory(|memory| memory.has_focus(id)) {
+                        ui.data_mut(|data| data.insert_temp(table_cell_id(uid), (r, c)));
+                        if ui.input_mut(|input| !input.modifiers.shift && input.consume_key(Modifiers::NONE, egui::Key::Enter)) {
+                            actions.push(Action::Table(index, TableEdit::Down(r, c)));
+                        } else if let Some(up) = arrow_step(ui, id, cell) {
+                            match (up, r) {
+                                (true, 0) => actions.push(Action::Step(index, true)),
+                                (true, _) => ctl.focus = Some((uid.to_string(), table_field(r - 1, c, columns), END)),
+                                (false, _) if r + 1 == count => actions.push(Action::Step(index, false)),
+                                (false, _) => ctl.focus = Some((uid.to_string(), table_field(r + 1, c, columns), 0)),
+                            }
+                        }
+                    }
+                    let cell_width = edges[c + 1] - edges[c];
+                    ui.allocate_ui_with_layout(Vec2::new(cell_width, 0.0), Layout::top_down(Align::Min), |ui| {
+                        ui.set_width(cell_width);
+                        egui::Frame::new().inner_margin(Margin::symmetric(8, 6)).show(ui, |ui| {
+                            let head = r == 0 && header;
+                            let hint = if head && cell.is_empty() { trf("Column {}", &[&(c + 1)]) } else { String::new() };
+                            let focus = take_focus(ctl, uid, field);
+                            let (response, _) = styled_field(ui, cell, id, (15.0, head), true, &hint, ctl, focus);
+                            ui.ctx().accesskit_node_builder(response.id, |node| node.set_label(trf("Row {}, column {}", &[&(r + 1), &(c + 1)])));
+                            if response.changed() {
+                                *typed = Some((uid.to_string(), field as u8));
+                            }
+                            response.context_menu(|ui| table_menu(ui, index, (r, c), (columns, count), widened, actions));
+                        });
+                    });
+                }
+            });
+            bottoms.push(shown.response.rect.bottom());
+        }
+    });
+    let right = edges[columns];
+    let bottom = bottoms.last().copied().unwrap_or(origin.y);
+    let line = egui::Stroke::new(1.0, theme::hairline());
+    if let Some(&first) = bottoms.first().filter(|_| header) {
+        let corners = egui::CornerRadius { nw: 4, ne: 4, ..egui::CornerRadius::ZERO };
+        ui.painter().set(shade, egui::epaint::RectShape::filled(Rect::from_min_max(origin, egui::pos2(right, first)), corners, theme::hover()));
+    }
+    for &y in &bottoms[..count.saturating_sub(1)] {
+        ui.painter().hline(origin.x..=right, y, line);
+    }
+    // Only the chosen table's lines take the keys, so Tab doesn't stop at
+    // every line of every table.
+    let sense = if open { Sense::click_and_drag() } else { Sense::CLICK | Sense::DRAG };
+    for c in 1..columns {
+        let x = edges[c];
+        let handle = egui::Id::unique(("table-column", uid, c));
+        let response = ui.interact(Rect::from_x_y_ranges(x - 4.0..=x + 4.0, origin.y..=bottom), handle, sense);
+        if response.drag_started() {
+            let grip = response.interact_pointer_pos().map_or(0.0, |pos| pos.x - x);
+            ui.data_mut(|data| data.insert_temp(drag_id, ColumnDrag { handle, grip, widths: shares.clone() }));
+        }
+        if let Some(pos) = response.interact_pointer_pos().filter(|_| response.dragged()) {
+            if let Some(mut drag) = ui.data(|data| data.get_temp::<ColumnDrag>(drag_id)) {
+                let moved = move_line(&shares, c, ((pos.x - drag.grip - edges[c - 1]) / full * 100.0).round() as i32);
+                if moved != drag.widths {
+                    drag.widths = moved;
+                    ui.data_mut(|data| data.insert_temp(drag_id, drag));
+                    ui.ctx().request_repaint();
+                }
+            }
+        }
+        if response.drag_stopped() {
+            let drag = ui.data_mut(|data| {
+                let drag = data.get_temp::<ColumnDrag>(drag_id);
+                data.remove::<ColumnDrag>(drag_id);
+                drag
+            });
+            if let Some(drag) = drag.filter(|drag| drag.widths != stored) {
+                actions.push(Action::Table(index, TableEdit::Widths(drag.widths)));
+            }
+        }
+        // ← and → by keys, or Decrement and Increment by a screen reader.
+        let focused = response.has_focus();
+        let steps = ui.input_mut(|input| {
+            let mut steps = input.num_accesskit_action_requests(handle, egui::accesskit::Action::Increment) as i32
+                - input.num_accesskit_action_requests(handle, egui::accesskit::Action::Decrement) as i32;
+            if focused {
+                steps += input.count_and_consume_key(Modifiers::NONE, egui::Key::ArrowRight) as i32 - input.count_and_consume_key(Modifiers::NONE, egui::Key::ArrowLeft) as i32;
+            }
+            steps
+        });
+        if focused {
+            let arrows = egui::EventFilter { horizontal_arrows: true, ..Default::default() };
+            ui.memory_mut(|memory| memory.set_focus_lock_filter(handle, arrows));
+        }
+        if steps != 0 {
+            let moved = move_line(&stored, c, i32::from(stored[c - 1]) + 5 * steps);
+            if moved != stored {
+                actions.push(Action::Table(index, TableEdit::Widths(moved)));
+            }
+        }
+        if response.double_clicked() && !widths.is_empty() {
+            actions.push(Action::Table(index, TableEdit::FitText));
+        }
+        let hot = response.hovered() || response.dragged() || response.has_focus();
+        if hot {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeColumn);
+        }
+        ui.painter().vline(x, origin.y..=bottom, if hot { egui::Stroke::new(2.0, theme::accent()) } else { line });
+        let pair = shares[c - 1] + shares[c];
+        response.widget_info(|| egui::WidgetInfo::slider(true, f64::from(shares[c - 1]), trf("Width of column {}", &[&c])));
+        ui.ctx().accesskit_node_builder(handle, |node| {
+            node.set_min_numeric_value(f64::from(TABLE_WIDTH_MIN));
+            node.set_max_numeric_value(f64::from(pair - TABLE_WIDTH_MIN));
+            node.set_numeric_value_step(5.0);
+            node.add_action(egui::accesskit::Action::Increment);
+            node.add_action(egui::accesskit::Action::Decrement);
+        });
+        response.on_hover_text(tr("Drag to change the columns' widths, or double-click to let them fit their text"));
+    }
+    ui.painter().rect_stroke(Rect::from_min_max(origin, egui::pos2(right, bottom)), 4, line, egui::StrokeKind::Inside);
+    if open || !caption.is_empty() {
+        ui.add_space(4.0);
+        let edit = egui::TextEdit::multiline(caption).hint_text(tr("Caption")).text_color(theme::muted()).frame(egui::Frame::NONE).desired_rows(1).desired_width(f32::INFINITY);
+        if ui.add(edit).changed() {
+            *typed = Some((uid.to_string(), 0));
+        }
+    }
+    if open {
+        ui.horizontal(|ui| {
+            if ui.add_enabled_ui(count < TABLE_ROWS_MAX, |ui| page_button(ui, tr("Add a row"), true)).inner.clicked() {
+                actions.push(Action::Table(index, TableEdit::AddRow(count)));
+            }
+            if ui.add_enabled_ui(columns < TABLE_COLUMNS_MAX, |ui| page_button(ui, tr("Add a column"), true)).inner.clicked() {
+                actions.push(Action::Table(index, TableEdit::AddColumn(columns)));
+            }
+            if count == TABLE_ROWS_MAX || columns == TABLE_COLUMNS_MAX {
+                let limit = trf("A table has at most {} columns and {} rows", &[&TABLE_COLUMNS_MAX, &TABLE_ROWS_MAX]);
+                ui.label(RichText::new(limit).size(12.0).color(theme::muted()));
+            }
+        });
+    }
+}
+
 /// The format buttons of a text block: styles for the selection, the
 /// heading's level, and the list's kind.
 fn text_tools(ui: &mut egui::Ui, index: usize, block: &Block, actions: &mut Vec<Action>) {
@@ -3033,6 +3723,7 @@ fn text_tools(ui: &mut egui::Ui, index: usize, block: &Block, actions: &mut Vec<
     if tool_icon(ui, true, &name(tr("Link"), "Ctrl+K"), paint_link_icon).clicked() {
         actions.push(Action::Format(Mark::Link));
     }
+    color_tool(ui, actions);
     let other = match block {
         Block::Heading(text) => Some(("H3", "Make it a subheading", Block::Subheading(text.clone()))),
         Block::Subheading(text) => Some(("H2", "Make it a heading", Block::Heading(text.clone()))),
@@ -3052,16 +3743,69 @@ fn text_tools(ui: &mut egui::Ui, index: usize, block: &Block, actions: &mut Vec<
     }
 }
 
+/// The text colour button, which opens the colours to give the selection,
+/// and one to take its colour away.
+fn color_tool(ui: &mut egui::Ui, actions: &mut Vec<Action>) {
+    let dark = ui.visuals().dark_mode;
+    let button = tool_icon(ui, true, tr("Text color"), |painter, center, ink| {
+        painter.text(center - Vec2::new(0.0, 2.0), egui::Align2::CENTER_CENTER, "A", egui::FontId::proportional(14.0), ink);
+        let bar = Rect::from_center_size(center + Vec2::new(0.0, 7.0), Vec2::new(12.0, 3.0));
+        painter.rect_filled(bar, 1.0, text_color(inline::Color::Red, dark));
+    });
+    egui::Popup::menu(&button).show(|ui| {
+        ui.horizontal(|ui| {
+            for color in inline::Color::ALL {
+                let (rect, response) = ui.allocate_exact_size(Vec2::splat(24.0), Sense::click());
+                let fill = text_color(color, dark);
+                ui.painter().circle_filled(rect.center(), 8.0, fill);
+                if response.hovered() {
+                    ui.painter().circle_stroke(rect.center(), 10.5, egui::Stroke::new(1.5, fill));
+                }
+                if theme::named(response, color_name(color)).clicked() {
+                    actions.push(Action::Format(Mark::Color(Some(color))));
+                    ui.close();
+                }
+            }
+        });
+        if ui.button(tr("No color")).on_hover_text(tr("Take the color away from the selection")).clicked() {
+            actions.push(Action::Format(Mark::Color(None)));
+        }
+    });
+}
+
+fn color_name(color: inline::Color) -> &'static str {
+    match color {
+        inline::Color::Red => tr("Red"),
+        inline::Color::Orange => tr("Orange"),
+        inline::Color::Green => tr("Green"),
+        inline::Color::Blue => tr("Blue"),
+        inline::Color::Purple => tr("Purple"),
+        inline::Color::Gray => tr("Gray"),
+    }
+}
+
 /// Blocks whose name has `query` in it, in English or as shown, for "/".
+/// A size such as "4x5" after a table's name makes the table that size.
 fn slash_choices(query: &str) -> Vec<(String, Block)> {
-    let query = query.to_lowercase();
+    let sizes = |text: &str| text.to_lowercase().replace(" × ", "x").replace('×', "x");
+    let query = sizes(query);
     let mut all: Vec<(String, String, Block)> = new_blocks().into_iter().map(|(name, block)| (tr(name).to_string(), name.to_lowercase(), block)).collect();
     for (columns, rows) in GRID_LAYOUTS {
         let label = format!("{} {columns} × {rows}", tr("Photo grid"));
         let block = Block::Grid { columns, rows, caption: String::new(), media: Vec::new() };
         all.push((label, format!("photo grid {columns}x{rows}"), block));
     }
-    all.into_iter().filter(|(label, english, _)| english.contains(&query) || label.to_lowercase().contains(&query)).map(|(label, _, block)| (label, block)).collect()
+    let (columns, rows) = typed_table_size(&query).unwrap_or((3, 3));
+    all.push((format!("{} {columns} × {rows}", tr("Table")), format!("table {columns}x{rows}"), Block::table(columns, rows)));
+    all.into_iter().filter(|(label, english, _)| english.contains(&query) || sizes(label).contains(&query)).map(|(label, _, block)| (label, block)).collect()
+}
+
+/// The size at the end of `query`, as columns x rows, when a table can
+/// be that size.
+fn typed_table_size(query: &str) -> Option<(usize, usize)> {
+    let (columns, rows) = query.rsplit(' ').next()?.split_once('x')?;
+    let (columns, rows) = (columns.parse().ok()?, rows.parse().ok()?);
+    ((1..=TABLE_COLUMNS_MAX).contains(&columns) && (1..=TABLE_ROWS_MAX).contains(&rows)).then_some((columns, rows))
 }
 
 /// The gap before block `at`: a line with + when pointed at, which opens
@@ -3086,7 +3830,8 @@ fn inserter(ui: &mut egui::Ui, at: usize, actions: &mut Vec<Action>) {
 }
 
 /// The blocks that can be added at `at`, in the rows of the "/" menu with
-/// what each is for on hover, and the Photo grid's layouts beside.
+/// what each is for on hover, and the Photo grid's layouts and a table's
+/// sizes beside.
 fn block_menu(ui: &mut egui::Ui, at: usize, actions: &mut Vec<Action>) {
     ui.set_min_width(220.0);
     ui.spacing_mut().item_spacing.y = 2.0;
@@ -3097,17 +3842,329 @@ fn block_menu(ui: &mut egui::Ui, at: usize, actions: &mut Vec<Action>) {
             ui.close();
         }
     }
+    let sub_row = |ui: &mut egui::Ui, block: &Block, label: &str| {
+        let row = block_row(ui, block, label, None, None);
+        let arrow = Rect::from_center_size(egui::pos2(row.rect.right() - 12.0, row.rect.center().y), Vec2::splat(ui.spacing().icon_width));
+        ui.painter().add(egui::containers::menu::SubMenuButton::arrow_shape(arrow, theme::muted()));
+        row
+    };
+    let row = sub_row(ui, &Block::table(3, 3), tr("Table"));
+    egui::containers::menu::SubMenu::new().show(ui, &row, |ui| {
+        if let Some((columns, rows)) = size_grid(ui, None) {
+            actions.push(Action::Insert(at, Block::table(columns, rows)));
+            ui.close();
+        }
+    });
     let grid = Block::Grid { columns: 2, rows: 2, caption: String::new(), media: Vec::new() };
-    let row = block_row(ui, &grid, tr("Photo grid"), None, None);
-    let arrow = Rect::from_center_size(egui::pos2(row.rect.right() - 12.0, row.rect.center().y), Vec2::splat(ui.spacing().icon_width));
-    ui.painter().add(egui::containers::menu::SubMenuButton::arrow_shape(arrow, theme::muted()));
+    let row = sub_row(ui, &grid, tr("Photo grid"));
     egui::containers::menu::SubMenu::new().show(ui, &row, |ui| grid_menu(ui, at, actions));
+}
+
+/// Squares to choose a table's size on, a column of them for each column
+/// and a row for each row: those up to the one pointed at light up, a row
+/// more shows when the pointer reaches the last, and a click takes that
+/// size. The arrow keys choose a size too, and Enter takes it. For the
+/// table `cells`, its size is lit while none is chosen, and its cells
+/// with text are marked and kept: it can't be made smaller than they are.
+fn size_grid(ui: &mut egui::Ui, cells: Option<&[Vec<String>]>) -> Option<(usize, usize)> {
+    const SQUARE: f32 = 18.0;
+    const STEP: f32 = SQUARE + 3.0;
+    const SHOWN_ROWS: usize = 8;
+    let wide = TABLE_COLUMNS_MAX;
+    let current = cells.map(|cells| (cells.first().map_or(1, Vec::len), cells.len()));
+    let least = cells.map_or((1, 1), table_filled);
+    let fit = |(columns, rows): (usize, usize)| (columns.clamp(least.0, wide), rows.clamp(least.1, TABLE_ROWS_MAX));
+    // The rows the last choice reached, and the size the keys chose.
+    let state = ui.scope_id().with("table-size");
+    let (reached, keyed) = ui.data(|data| data.get_temp::<(usize, Option<(usize, usize)>)>(state)).unwrap_or((0, None));
+    let high = (current.map_or(0, |(_, rows)| rows).max(reached) + 1).clamp(SHOWN_ROWS, TABLE_ROWS_MAX);
+    ui.label(RichText::new(tr("Columns × rows")).size(12.0).color(theme::muted()));
+    let (rect, response) = ui.allocate_exact_size(Vec2::new(wide as f32 * STEP - 3.0, high as f32 * STEP - 3.0), Sense::click());
+    let pointed = response.hover_pos().map(|pos| {
+        let column = ((pos.x - rect.left()) / STEP).floor().max(0.0) as usize;
+        let row = ((pos.y - rect.top()) / STEP).floor().max(0.0) as usize;
+        (column.min(wide - 1) + 1, row.min(high - 1) + 1)
+    });
+    let keyed = response.has_focus().then(|| {
+        let arrows = egui::EventFilter { horizontal_arrows: true, vertical_arrows: true, ..Default::default() };
+        ui.memory_mut(|memory| memory.set_focus_lock_filter(response.id, arrows));
+        let (mut columns, mut rows) = keyed.or(current).unwrap_or((3, 3));
+        ui.input_mut(|input| {
+            for (key, step) in [(egui::Key::ArrowLeft, (-1, 0)), (egui::Key::ArrowRight, (1, 0)), (egui::Key::ArrowUp, (0, -1)), (egui::Key::ArrowDown, (0, 1))] {
+                if input.consume_key(Modifiers::NONE, key) {
+                    columns = columns.saturating_add_signed(step.0);
+                    rows = rows.saturating_add_signed(step.1);
+                }
+            }
+        });
+        fit((columns, rows))
+    });
+    let chosen = pointed.map(fit).or(keyed);
+    ui.data_mut(|data| data.insert_temp(state, (chosen.map_or(0, |(_, rows)| rows), keyed)));
+    let lit = chosen.or(current);
+    let filled = |column: usize, row: usize| cells.and_then(|cells| cells.get(row)?.get(column)).is_some_and(|cell| !cell.trim().is_empty());
+    for row in 0..high {
+        for column in 0..wide {
+            let square = Rect::from_min_size(rect.min + Vec2::new(column as f32 * STEP, row as f32 * STEP), Vec2::splat(SQUARE));
+            if lit.is_some_and(|(columns, rows)| column < columns && row < rows) {
+                ui.painter().rect_filled(square, 2, theme::accent().gamma_multiply(0.3));
+                ui.painter().rect_stroke(square, 2, egui::Stroke::new(1.0, theme::accent()), egui::StrokeKind::Inside);
+            } else {
+                ui.painter().rect_stroke(square, 2, egui::Stroke::new(1.0, theme::hairline()), egui::StrokeKind::Inside);
+            }
+            if filled(column, row) {
+                ui.painter().circle_filled(square.center(), 2.5, theme::accent());
+            }
+        }
+    }
+    let size = lit.map_or_else(String::new, |(columns, rows)| format!("{columns} × {rows}"));
+    response.widget_info(|| {
+        let mut info = egui::WidgetInfo::labeled(egui::Role::Button, true, tr("Table size"));
+        info.current_text_value = Some(size.clone());
+        info
+    });
+    ui.label(RichText::new(&size).size(13.0));
+    if pointed.is_some_and(|pointed| pointed != fit(pointed)) {
+        ui.scope(|ui| {
+            ui.set_max_width(rect.width());
+            ui.label(RichText::new(tr("Rows and columns with text stay. Remove them from a cell's menu.")).size(11.5).color(theme::muted()));
+        });
+    }
+    response.clicked().then(|| chosen.or(current).unwrap_or((3, 3)))
+}
+
+/// What can be done at cell (row, column) of the table at `index`: a row
+/// or column added beside it, or its own taken away; and, when the
+/// columns were `widened`, letting them fit their text again.
+fn table_menu(ui: &mut egui::Ui, index: usize, (row, column): (usize, usize), (columns, rows): (usize, usize), widened: bool, actions: &mut Vec<Action>) {
+    let mut item = |ui: &mut egui::Ui, enabled: bool, text: &'static str, edit: TableEdit| {
+        if ui.add_enabled(enabled, egui::Button::new(tr(text))).clicked() {
+            actions.push(Action::Table(index, edit));
+            ui.close();
+        }
+    };
+    let (more_rows, more_columns) = (rows < TABLE_ROWS_MAX, columns < TABLE_COLUMNS_MAX);
+    item(ui, more_rows, "Add a row above", TableEdit::AddRow(row));
+    item(ui, more_rows, "Add a row below", TableEdit::AddRow(row + 1));
+    item(ui, rows > 1, "Remove this row", TableEdit::RemoveRow(row, column));
+    ui.separator();
+    item(ui, more_columns, "Add a column to the left", TableEdit::AddColumn(column));
+    item(ui, more_columns, "Add a column to the right", TableEdit::AddColumn(column + 1));
+    item(ui, columns > 1, "Remove this column", TableEdit::RemoveColumn(row, column));
+    ui.separator();
+    item(ui, widened, "Fit columns to their text", TableEdit::FitText);
+}
+
+/// The field of cell (row, column) of a table `columns` wide; field 0 is
+/// its caption.
+fn table_field(row: usize, column: usize, columns: usize) -> usize {
+    1 + row * columns + column
+}
+
+// The field typed in is kept as a u8 to tell runs of typing apart.
+const _: () = assert!(TABLE_ROWS_MAX * TABLE_COLUMNS_MAX <= u8::MAX as usize);
+
+/// A line between a table's columns being dragged: its handle, how far
+/// right of the line it was taken, and the widths it has made so far,
+/// which become one edit when it is let go.
+#[derive(Clone)]
+struct ColumnDrag {
+    handle: egui::Id,
+    grip: f32,
+    widths: Vec<u8>,
+}
+
+/// `widths` with the line before column `column` moved so the column left
+/// of it is `wanted` percent wide, the one right of it making up the
+/// difference, neither narrower than [`TABLE_WIDTH_MIN`].
+fn move_line(widths: &[u8], column: usize, wanted: i32) -> Vec<u8> {
+    let mut moved = widths.to_vec();
+    let pair = moved[column - 1] + moved[column];
+    let width = wanted.clamp(i32::from(TABLE_WIDTH_MIN), i32::from(pair - TABLE_WIDTH_MIN)) as u8;
+    (moved[column - 1], moved[column]) = (width, pair - width);
+    moved
+}
+
+/// The fewest (columns, rows) that keep every cell of `rows` with text.
+fn table_filled(rows: &[Vec<String>]) -> (usize, usize) {
+    let mut least = (1, 1);
+    for (r, cells) in rows.iter().enumerate() {
+        for (c, cell) in cells.iter().enumerate() {
+            if !cell.trim().is_empty() {
+                least = (least.0.max(c + 1), least.1.max(r + 1));
+            }
+        }
+    }
+    least
+}
+
+/// Where the cell of table `uid` that last had the caret is kept, as
+/// (row, column), for its tools.
+fn table_cell_id(uid: &str) -> egui::Id {
+    egui::Id::unique(("table-cell", uid))
+}
+
+/// A table's tools: its size, chosen on a grid of squares; whether its
+/// first row is the header row; and the rows and columns at the cell
+/// that last had the caret.
+fn table_tools(ui: &mut egui::Ui, index: usize, uid: &str, header: bool, cells: &[Vec<String>], widths: &[u8], actions: &mut Vec<Action>) {
+    let (columns, rows) = (cells.first().map_or(1, Vec::len), cells.len());
+    let (row, column) = ui.data(|data| data.get_temp::<(usize, usize)>(table_cell_id(uid))).unwrap_or((rows - 1, 0));
+    let cell = (row.min(rows - 1), column.min(columns - 1));
+    let shown = format!("{columns} × {rows}");
+    let size = tool_button(ui, true, format!("{shown}  ▾")).on_hover_text(tr("Table size"));
+    theme::name_picker(&size, tr("Table size"), shown);
+    egui::Popup::menu(&size).show(|ui| {
+        if let Some(size) = size_grid(ui, Some(cells)) {
+            actions.push(Action::Table(index, TableEdit::Resize(size, cell)));
+            ui.close();
+        }
+    });
+    let shown = ui.add(egui::Button::selectable(header, tr("Header row")).min_size(Vec2::splat(TOOL)));
+    if shown.on_hover_text(tr("The first row names the columns")).clicked() {
+        actions.push(Action::Table(index, TableEdit::Header(!header)));
+    }
+    let more = tool_button(ui, true, format!("{}  ▾", tr("Rows and columns")));
+    egui::Popup::menu(&more).show(|ui| table_menu(ui, index, cell, (columns, rows), !widths.is_empty(), actions));
+}
+
+/// What was done on a video's timeline.
+#[derive(Default)]
+struct TimelineEvent {
+    /// The part, in seconds, when a handle moved it, and which handle: 0
+    /// where it starts, 1 where it ends.
+    moved: Option<(f64, f64, u8)>,
+    /// Where to show the video: clicked on the line, or a handle moved to.
+    seek: Option<f64>,
+    /// The seek is from a handle still being dragged.
+    dragging: bool,
+}
+
+/// A time in a video to a tenth of a second, as 1:05.3.
+fn clip_time(seconds: f64) -> String {
+    let tenths = (seconds.max(0.0) * 10.0).round() as u64;
+    format!("{}:{:02}.{}", tenths / 600, tenths / 10 % 60, tenths % 10)
+}
+
+/// A video `duration` seconds long as a line `width` wide, the part from
+/// `part` lit between two handles to drag, or to move with the arrow keys
+/// (a tenth of a second, or a second with Shift) while one has the keys,
+/// and `position` as a mark. A click on the line shows the video there,
+/// and a drag along it shows each moment passed.
+fn timeline(ui: &mut egui::Ui, uid: &str, width: f32, duration: f64, part: (f64, f64), position: Option<f64>) -> TimelineEvent {
+    let mut event = TimelineEvent::default();
+    let (rect, line) = ui.allocate_exact_size(Vec2::new(width, 28.0), Sense::click_and_drag());
+    let track = Rect::from_center_size(rect.center(), Vec2::new((rect.width() - 16.0).max(10.0), 6.0));
+    let least = f64::from(crate::trip::CLIP_MIN_MS) / 1000.0;
+    if duration <= least {
+        ui.painter().rect_filled(track, 3, theme::overlay(50));
+        return event;
+    }
+    let x = |seconds: f64| track.left() + (seconds / duration).clamp(0.0, 1.0) as f32 * track.width();
+    let along = |x: f32| f64::from(((x - track.left()) / track.width()).clamp(0.0, 1.0)) * duration;
+    let (mut from, mut to) = part;
+    // Times shown over what is being moved: where, and the time.
+    let mut times: Vec<(f32, f64)> = Vec::new();
+    if line.clicked() || line.dragged() {
+        event.seek = line.interact_pointer_pos().map(|pos| along(pos.x));
+        event.dragging = line.dragged();
+    }
+    if let Some(at) = event.seek.filter(|_| event.dragging) {
+        times.push((x(at), at));
+    } else if let Some(hover) = line.hover_pos() {
+        line.clone().on_hover_text_at_pointer(clip_time(along(hover.x)));
+    }
+    let names = [tr("Where the part starts"), tr("Where the part ends")];
+    let mut grips = [Rect::NOTHING; 2];
+    for (n, name) in names.into_iter().enumerate() {
+        let at = if n == 0 { from } else { to };
+        let grip = Rect::from_center_size(egui::pos2(x(at), rect.center().y), Vec2::new(12.0, 26.0));
+        let handle = ui.interact(grip, egui::Id::unique(("clip-handle", uid, n)), Sense::click_and_drag()).on_hover_cursor(egui::CursorIcon::ResizeHorizontal);
+        handle.widget_info(|| egui::WidgetInfo::slider(true, at, name));
+        let handle = theme::named(handle, name).on_hover_text(tr("Drag to choose the part of the video the story shows"));
+        let mut moved = None;
+        if handle.dragged() {
+            moved = handle.interact_pointer_pos().map(|pos| along(pos.x));
+            event.dragging = true;
+        }
+        let focused = handle.has_focus();
+        if focused {
+            let arrows = egui::EventFilter { horizontal_arrows: true, ..Default::default() };
+            ui.memory_mut(|memory| memory.set_focus_lock_filter(handle.id, arrows));
+            let step = ui.input_mut(|input| {
+                let big = if input.modifiers.shift { 10.0 } else { 1.0 };
+                if input.consume_key(Modifiers::NONE, egui::Key::ArrowLeft) || input.consume_key(Modifiers::SHIFT, egui::Key::ArrowLeft) {
+                    -0.1 * big
+                } else if input.consume_key(Modifiers::NONE, egui::Key::ArrowRight) || input.consume_key(Modifiers::SHIFT, egui::Key::ArrowRight) {
+                    0.1 * big
+                } else {
+                    0.0
+                }
+            });
+            if step != 0.0 {
+                moved = Some(at + step);
+            }
+        }
+        if let Some(seconds) = moved {
+            let seconds = if n == 0 { seconds.clamp(0.0, to - least) } else { seconds.clamp(from + least, duration) };
+            if (seconds - at).abs() > 0.0005 {
+                if n == 0 {
+                    from = seconds;
+                } else {
+                    to = seconds;
+                }
+                event.moved = Some((from, to, n as u8));
+                event.seek = Some(seconds);
+            }
+        }
+        if handle.dragged() || focused {
+            let now = if n == 0 { from } else { to };
+            times.push((x(now), now));
+        }
+        theme::focus_ring(ui, &handle, grip);
+        grips[n] = grip;
+    }
+    let painter = ui.painter();
+    painter.rect_filled(track, 3, theme::overlay(50));
+    let lit = Rect::from_min_max(egui::pos2(x(from), track.top()), egui::pos2(x(to), track.bottom()));
+    painter.rect_filled(lit, 0, theme::accent());
+    if let Some(at) = position {
+        let mark = x(at);
+        painter.line_segment([egui::pos2(mark, rect.top() + 3.0), egui::pos2(mark, rect.bottom() - 3.0)], egui::Stroke::new(2.0, theme::text()));
+    }
+    for grip in grips {
+        let bar = grip.shrink2(Vec2::new(2.0, 1.0));
+        painter.rect_filled(bar, 3, egui::Color32::WHITE);
+        painter.rect_stroke(bar, 3, egui::Stroke::new(1.5, theme::accent()), egui::StrokeKind::Inside);
+        for dx in [-1.5, 1.5] {
+            let at = bar.center().x + dx;
+            painter.line_segment([egui::pos2(at, bar.center().y - 4.0), egui::pos2(at, bar.center().y + 4.0)], egui::Stroke::new(1.0, theme::accent()));
+        }
+    }
+    for (at, seconds) in times {
+        let text = painter.layout_no_wrap(clip_time(seconds), egui::FontId::monospace(11.5), egui::Color32::WHITE);
+        let size = text.size() + Vec2::new(10.0, 4.0);
+        let left = (at - size.x / 2.0).clamp(rect.left(), (rect.right() - size.x).max(rect.left()));
+        let chip = Rect::from_min_size(egui::pos2(left, rect.top() - size.y - 2.0), size);
+        painter.rect_filled(chip, 4, egui::Color32::from_black_alpha(200));
+        painter.galley(chip.min + Vec2::new(5.0, 2.0), text, egui::Color32::WHITE);
+    }
+    event
+}
+
+/// An in or out mark: a bracket opening right, or left when `end`.
+fn paint_bracket(painter: &egui::Painter, center: Pos2, ink: egui::Color32, end: bool) {
+    let stroke = egui::Stroke::new(1.6, ink);
+    let (bar, tip) = if end { (center.x + 3.0, center.x - 2.0) } else { (center.x - 3.0, center.x + 2.0) };
+    painter.line_segment([egui::pos2(bar, center.y - 6.0), egui::pos2(bar, center.y + 6.0)], stroke);
+    painter.line_segment([egui::pos2(bar, center.y - 6.0), egui::pos2(tip, center.y - 6.0)], stroke);
+    painter.line_segment([egui::pos2(bar, center.y + 6.0), egui::pos2(tip, center.y + 6.0)], stroke);
 }
 
 /// The caption and alt text of one photo, as used in this Story.
 /// A photo's caption and alt text. Empty, they stay out of the way until
 /// the block is chosen, and the alt text only shows then.
-fn media_words(ui: &mut egui::Ui, media: &mut MediaUse, uid: &str, field: u8, open: bool, typed: &mut Option<(String, u8)>) {
+fn media_words(ui: &mut egui::Ui, media: &mut MediaUse, uid: &str, field: u8, open: bool, typed: &mut Option<(String, u8)>, alt_hint: &str) {
     if open || !media.caption.is_empty() {
         let caption = egui::TextEdit::singleline(&mut media.caption)
             .hint_text(tr("Caption"))
@@ -3122,7 +4179,7 @@ fn media_words(ui: &mut egui::Ui, media: &mut MediaUse, uid: &str, field: u8, op
         return;
     }
     let alt = egui::TextEdit::singleline(&mut media.alt)
-        .hint_text(tr("Description for people who can't see the photo"))
+        .hint_text(alt_hint)
         .frame(egui::Frame::NONE)
         .desired_width(f32::INFINITY);
     if ui.add(alt).changed() {
@@ -3175,10 +4232,18 @@ fn apply(editor: &mut StoryEditor, action: Action) {
         Action::Remove(i) => {
             blocks.remove(i);
         }
+        Action::Insert(i, block) if is_video_to_choose(&block) => {
+            editor.choosing_video = Some(VideoChoice { at: i.min(blocks.len()), replace: false, choices: None });
+        }
+        Action::Replace(i, block) if is_video_to_choose(&block) => {
+            editor.choosing_video = Some(VideoChoice { at: i, replace: true, choices: None });
+        }
         Action::Insert(i, block) => {
             let block = StoryBlock::new(block);
             if is_text(&block.block) {
                 editor.text.focus = Some((block.uid.clone(), 0, 0));
+            } else if matches!(block.block, Block::Table { .. }) {
+                editor.text.focus = Some((block.uid.clone(), table_field(0, 0, 1), 0));
             }
             blocks.insert(i.min(blocks.len()), block);
         }
@@ -3208,6 +4273,8 @@ fn apply(editor: &mut StoryEditor, action: Action) {
         Action::Replace(i, block) => {
             if is_text(&block) {
                 editor.text.focus = Some((blocks[i].uid.clone(), 0, END));
+            } else if matches!(block, Block::Table { .. }) {
+                editor.text.focus = Some((blocks[i].uid.clone(), table_field(0, 0, 1), 0));
             }
             blocks[i].block = block;
         }
@@ -3252,10 +4319,11 @@ fn apply(editor: &mut StoryEditor, action: Action) {
         Action::Format(mark) => editor.text.pending = Some(mark),
         Action::Step(i, up) => {
             let near: Box<dyn Iterator<Item = &StoryBlock>> = if up { Box::new(blocks[..i].iter().rev()) } else { Box::new(blocks[i + 1..].iter()) };
-            if let Some(block) = near.into_iter().find(|block| is_text(&block.block)) {
+            if let Some(block) = near.into_iter().find(|block| is_text(&block.block) || matches!(block.block, Block::Table { .. })) {
                 let field = match &block.block {
                     Block::List { items, .. } if up => items.len() - 1,
                     Block::Quote { .. } if up => 1,
+                    Block::Table { rows, .. } => table_field(if up { rows.len() - 1 } else { 0 }, 0, rows.first().map_or(1, Vec::len)),
                     _ => 0,
                 };
                 editor.text.focus = Some((block.uid.clone(), field, if up { END } else { 0 }));
@@ -3416,6 +4484,85 @@ fn apply(editor: &mut StoryEditor, action: Action) {
                 }
             };
         }
+        Action::Table(i, edit) => {
+            let uid = blocks[i].uid.clone();
+            let Block::Table { header, rows, widths, .. } = &mut blocks[i].block else { return };
+            let columns = rows.first().map_or(1, Vec::len);
+            // A new column's share, before all are made to fit again.
+            let even = (100 / columns) as u8;
+            // The cell the caret goes to, as (row, column).
+            let caret = match edit {
+                TableEdit::AddRow(n) if rows.len() < TABLE_ROWS_MAX => {
+                    let n = n.min(rows.len());
+                    rows.insert(n, vec![String::new(); columns]);
+                    Some((n, 0))
+                }
+                TableEdit::RemoveRow(row, column) if rows.len() > 1 && row < rows.len() => {
+                    rows.remove(row);
+                    Some((row.min(rows.len() - 1), column))
+                }
+                TableEdit::AddColumn(n) if columns < TABLE_COLUMNS_MAX => {
+                    let n = n.min(columns);
+                    for row in rows.iter_mut() {
+                        row.insert(n, String::new());
+                    }
+                    if !widths.is_empty() {
+                        widths.insert(n, even);
+                    }
+                    Some((0, n))
+                }
+                TableEdit::RemoveColumn(row, column) if columns > 1 && column < columns => {
+                    for cells in rows.iter_mut() {
+                        cells.remove(column);
+                    }
+                    if !widths.is_empty() {
+                        widths.remove(column);
+                    }
+                    Some((row, column.min(columns - 2)))
+                }
+                TableEdit::Resize((wide, high), (row, column)) => {
+                    let (least_wide, least_high) = table_filled(rows);
+                    let (wide, high) = (wide.max(least_wide).clamp(1, TABLE_COLUMNS_MAX), high.max(least_high).clamp(1, TABLE_ROWS_MAX));
+                    for row in rows.iter_mut() {
+                        row.resize(wide, String::new());
+                    }
+                    rows.resize(high, vec![String::new(); wide]);
+                    if !widths.is_empty() {
+                        widths.resize(wide, even);
+                    }
+                    Some((row.min(high - 1), column.min(wide - 1)))
+                }
+                TableEdit::Widths(wanted) => {
+                    if !wanted.is_empty() && table_widths_fit(&wanted, columns) {
+                        *widths = wanted;
+                    }
+                    None
+                }
+                TableEdit::FitText => {
+                    widths.clear();
+                    None
+                }
+                TableEdit::Header(on) => {
+                    *header = on;
+                    None
+                }
+                TableEdit::Down(row, column) if row + 1 < rows.len() => Some((row + 1, column)),
+                TableEdit::Down(_, column) if rows.len() < TABLE_ROWS_MAX => {
+                    rows.push(vec![String::new(); columns]);
+                    Some((rows.len() - 1, column))
+                }
+                _ => None,
+            };
+            let columns = rows.first().map_or(1, Vec::len);
+            if columns == 1 {
+                widths.clear();
+            } else if !widths.is_empty() {
+                *widths = spread_widths(&widths.iter().map(|&width| f32::from(width)).collect::<Vec<_>>());
+            }
+            if let Some((row, column)) = caret {
+                editor.text.focus = Some((uid, table_field(row, column, columns), 0));
+            }
+        }
         Action::Up(_) | Action::Down(_) => {}
     }
 }
@@ -3423,8 +4570,32 @@ fn apply(editor: &mut StoryEditor, action: Action) {
 /// The Trip's photos, without videos, in one Day or all, as media
 /// references in the Trip's order.
 fn trip_photos(db: &crate::db::Database, trip_id: i64, day: DayFilter, starred: bool) -> Vec<i64> {
-    let query = MemberQuery { day, starred, ..MemberQuery::default() };
-    db.trip_members(trip_id, &query, 0, PICK_LIMIT).into_iter().filter(|member| !member.is_video).map(|member| member.media_id).collect()
+    trip_media(db, trip_id, &MemberQuery { day, starred, ..MemberQuery::default() }, false)
+}
+
+/// The first [`PICK_LIMIT`] of the Trip's members matching `query` that
+/// are videos, or that are photos, as media references in the Trip's
+/// order, looked for through all its members.
+fn trip_media(db: &crate::db::Database, trip_id: i64, query: &MemberQuery, videos: bool) -> Vec<i64> {
+    first_of_kind(|offset, limit| db.trip_members(trip_id, query, offset, limit), videos)
+}
+
+/// [`trip_media`] from the members `page` lists from an offset, at most
+/// so many.
+fn first_of_kind(page: impl Fn(usize, usize) -> Vec<crate::trip::Member>, videos: bool) -> Vec<i64> {
+    let mut found = Vec::new();
+    let mut offset = 0;
+    loop {
+        let members = page(offset, PICK_LIMIT);
+        let read = members.len();
+        found.extend(members.into_iter().filter(|member| member.is_video == videos).map(|member| member.media_id));
+        offset += read;
+        if read < PICK_LIMIT || found.len() >= PICK_LIMIT {
+            break;
+        }
+    }
+    found.truncate(PICK_LIMIT);
+    found
 }
 
 /// The layout of a photo, gallery, or grid block, shown in its header: one
@@ -3470,8 +4641,18 @@ fn grid_menu(ui: &mut egui::Ui, at: usize, actions: &mut Vec<Action>) {
     }
 }
 
+/// A Video block of no video, which stands for one to choose: adding it
+/// shows the Trip's videos instead (see [`VideoChoice`]).
+fn video_to_choose() -> Block {
+    Block::Video { media: MediaUse::new(0), start: 0, end: 0 }
+}
+
+fn is_video_to_choose(block: &Block) -> bool {
+    matches!(block, Block::Video { media, .. } if media.media_id == 0)
+}
+
 /// The blocks that can be added as text, with their names.
-fn new_blocks() -> [(&'static str, Block); 11] {
+fn new_blocks() -> [(&'static str, Block); 13] {
     [
         ("Heading", Block::Heading(String::new())),
         ("Subheading", Block::Subheading(String::new())),
@@ -3484,6 +4665,8 @@ fn new_blocks() -> [(&'static str, Block); 11] {
         ("Route map", Block::Route { caption: String::new(), source: String::new(), route: Vec::new() }),
         ("Practical info", Block::Info { title: String::new(), items: vec![(String::new(), String::new())] }),
         ("Link", Block::Link { url: String::new(), title: String::new(), note: String::new() }),
+        ("Video", video_to_choose()),
+        ("YouTube video", Block::YouTube { url: String::new(), caption: String::new() }),
     ]
 }
 
@@ -3507,6 +4690,9 @@ fn block_label(block: &Block) -> &'static str {
         Block::Route { .. } => "Route map",
         Block::Info { .. } => "Practical info",
         Block::Link { .. } => "Link",
+        Block::YouTube { .. } => "YouTube video",
+        Block::Video { .. } => "Video",
+        Block::Table { .. } => "Table",
         Block::Unknown { .. } => "Unknown block",
     }
 }
@@ -3523,6 +4709,8 @@ fn story_words(editor: &StoryEditor) -> usize {
             Block::Quote { text, citation } => texts.extend([text.as_str(), citation.as_str()]),
             Block::Info { title, items } => texts.extend(std::iter::once(title.as_str()).chain(items.iter().flat_map(|(label, value)| [label.as_str(), value.as_str()]))),
             Block::Link { title, note, .. } => texts.extend([title.as_str(), note.as_str()]),
+            Block::YouTube { caption, .. } => texts.push(caption),
+            Block::Table { rows, caption, .. } => texts.extend(rows.iter().flatten().map(String::as_str).chain([caption.as_str()])),
             _ => {}
         }
     }
@@ -3558,6 +4746,7 @@ mod tests {
             conclusion: String::new(),
             author: String::new(),
             show_date: true,
+            dates: None,
             cover: None,
             cover_crop: crate::trip::CoverCrop::default(),
             template: crate::trip::DEFAULT_TEMPLATE.into(),
@@ -3588,6 +4777,8 @@ mod tests {
             choosing_cover: false,
             queued: Vec::new(),
             leaving: false,
+            clip: None,
+            choosing_video: None,
         }
     }
 
@@ -3608,6 +4799,8 @@ mod tests {
         says(DayFilter::Day(1), true, true, "Not in the story yet");
         says(DayFilter::Day(1), true, false, "Starred only");
         says(DayFilter::Day(1), false, false, "All days");
+        let may = chrono::NaiveDate::from_ymd_opt(2026, 5, 1).unwrap();
+        says(DayFilter::Dates(may, may), false, false, "this story's dates");
         says(DayFilter::Unassigned, false, false, "All days");
         says(DayFilter::Any, false, false, "Add to Trip");
     }
@@ -3753,6 +4946,96 @@ mod tests {
     }
 
     #[test]
+    fn a_tables_rows_and_columns_are_added_and_removed_where_asked() {
+        let cells = |editor: &StoryEditor| match &editor.blocks[0].block {
+            Block::Table { rows, .. } => rows.iter().map(|row| row.join(",")).collect::<Vec<_>>(),
+            other => panic!("{other:?}"),
+        };
+        let caret = |editor: &StoryEditor| editor.text.focus.as_ref().map(|focus| focus.1);
+        let mut editor = editor(Vec::new());
+        apply(&mut editor, Action::Insert(0, Block::table(2, 2)));
+        assert_eq!(caret(&editor), Some(table_field(0, 0, 2)), "a new table has the caret in its first cell");
+        if let Block::Table { rows, .. } = &mut editor.blocks[0].block {
+            *rows = vec![vec!["a".into(), "b".into()], vec!["c".into(), "d".into()]];
+        }
+        apply(&mut editor, Action::Table(0, TableEdit::AddRow(1)));
+        assert_eq!(cells(&editor), ["a,b", ",", "c,d"]);
+        assert_eq!(caret(&editor), Some(table_field(1, 0, 2)));
+        apply(&mut editor, Action::Table(0, TableEdit::AddColumn(1)));
+        assert_eq!(cells(&editor), ["a,,b", ",,", "c,,d"]);
+        apply(&mut editor, Action::Table(0, TableEdit::RemoveRow(1, 2)));
+        assert_eq!(caret(&editor), Some(table_field(1, 2, 3)), "the caret goes to the row that took its place");
+        apply(&mut editor, Action::Table(0, TableEdit::RemoveColumn(1, 1)));
+        assert_eq!(cells(&editor), ["a,b", "c,d"]);
+        assert_eq!(caret(&editor), Some(table_field(1, 1, 2)), "and to the column that took its place");
+        apply(&mut editor, Action::Table(0, TableEdit::Down(0, 1)));
+        assert_eq!((cells(&editor).len(), caret(&editor)), (2, Some(table_field(1, 1, 2))), "Enter goes to the cell below");
+        apply(&mut editor, Action::Table(0, TableEdit::Down(1, 1)));
+        assert_eq!((cells(&editor).len(), caret(&editor)), (3, Some(table_field(2, 1, 2))), "and below the last row adds one");
+        apply(&mut editor, Action::Table(0, TableEdit::Resize((1, 1), (2, 1))));
+        assert_eq!(cells(&editor), ["a,b", "c,d"], "cells with text stay");
+        assert_eq!(caret(&editor), Some(table_field(1, 1, 2)));
+        if let Block::Table { rows, .. } = &mut editor.blocks[0].block {
+            *rows = vec![vec!["a".into(), String::new()], vec![String::new(), String::new()]];
+        }
+        apply(&mut editor, Action::Table(0, TableEdit::Resize((1, 1), (1, 1))));
+        assert_eq!((cells(&editor), caret(&editor)), (vec!["a".to_string()], Some(table_field(0, 0, 1))));
+        apply(&mut editor, Action::Table(0, TableEdit::RemoveRow(0, 0)));
+        apply(&mut editor, Action::Table(0, TableEdit::RemoveColumn(0, 0)));
+        assert_eq!(cells(&editor), ["a"], "the last cell stays");
+        apply(&mut editor, Action::Table(0, TableEdit::Resize((TABLE_COLUMNS_MAX + 5, 2), (0, 0))));
+        assert_eq!(cells(&editor), ["a,,,,,,,", ",,,,,,,"]);
+        apply(&mut editor, Action::Table(0, TableEdit::AddColumn(0)));
+        assert_eq!(cells(&editor)[0], "a,,,,,,,", "no more columns than a table has");
+        apply(&mut editor, Action::Table(0, TableEdit::Header(false)));
+        assert!(matches!(editor.blocks[0].block, Block::Table { header: false, .. }));
+        let table = |query: &str| slash_choices(query).into_iter().find_map(|(_, block)| match block {
+            Block::Table { rows, .. } => Some((rows[0].len(), rows.len())),
+            _ => None,
+        });
+        assert_eq!(table("table"), Some((3, 3)));
+        assert_eq!(table("table 4x5"), Some((4, 5)));
+        assert_eq!(table("Table 2×6"), Some((2, 6)));
+        assert_eq!(table("table 9x2"), None, "a size a table can't have names nothing");
+    }
+
+    #[test]
+    fn a_tables_column_widths_follow_its_columns() {
+        let mut editor = editor(vec![Block::table(3, 1)]);
+        let widths = |editor: &StoryEditor| match &editor.blocks[0].block {
+            Block::Table { widths, .. } => widths.clone(),
+            other => panic!("{other:?}"),
+        };
+        let set = |editor: &mut StoryEditor, wanted: Vec<u8>| {
+            if let Block::Table { widths, .. } = &mut editor.blocks[0].block {
+                *widths = wanted;
+            }
+        };
+        apply(&mut editor, Action::Table(0, TableEdit::AddColumn(3)));
+        assert!(widths(&editor).is_empty(), "columns that fit their text go on doing so");
+        set(&mut editor, vec![40, 20, 20, 20]);
+        apply(&mut editor, Action::Table(0, TableEdit::RemoveColumn(0, 0)));
+        assert_eq!(widths(&editor), [34, 33, 33], "the others share a removed column's width");
+        apply(&mut editor, Action::Table(0, TableEdit::AddColumn(1)));
+        assert_eq!(widths(&editor), [25, 25, 25, 25], "a new column gets its share");
+        apply(&mut editor, Action::Table(0, TableEdit::Resize((2, 1), (0, 0))));
+        assert_eq!(widths(&editor), [50, 50]);
+        apply(&mut editor, Action::Table(0, TableEdit::RemoveColumn(0, 1)));
+        assert!(widths(&editor).is_empty(), "one column has no widths");
+        apply(&mut editor, Action::Table(0, TableEdit::AddColumn(1)));
+        set(&mut editor, vec![70, 30]);
+        apply(&mut editor, Action::Table(0, TableEdit::FitText));
+        assert!(widths(&editor).is_empty());
+        apply(&mut editor, Action::Table(0, TableEdit::Widths(vec![60, 40])));
+        assert_eq!(widths(&editor), [60, 40]);
+        apply(&mut editor, Action::Table(0, TableEdit::Widths(vec![90])));
+        assert_eq!(widths(&editor), [60, 40], "widths that don't fit the columns change nothing");
+        assert_eq!(move_line(&[50, 30, 20], 1, 60), [60, 20, 20], "the column right of the line makes up the difference");
+        assert_eq!(move_line(&[50, 30, 20], 2, 0), [50, TABLE_WIDTH_MIN, 45]);
+        assert_eq!(move_line(&[50, 30, 20], 1, 99), [75, TABLE_WIDTH_MIN, 20], "neither gets narrower than the least");
+    }
+
+    #[test]
     fn words_count_runs_of_letters_and_each_wide_character() {
         assert_eq!(words("A day in Kyōto — 5 photos"), 6);
         assert_eq!(words("京都の一日"), 5);
@@ -3775,6 +5058,12 @@ mod tests {
         assert_eq!(list.blocks[0].block, Block::List { ordered: false, items: vec!["a".into(), "bc".into()] });
         apply(&mut list, Action::Step(0, false));
         assert!(list.text.focus.is_some());
+        let mut table = super::tests::editor(vec![Block::Paragraph("a".into()), Block::table(3, 2), Block::Paragraph("b".into())]);
+        let focus = |editor: &StoryEditor| editor.text.focus.clone().map(|(uid, field, caret)| (uid == editor.blocks[1].uid, field, caret));
+        apply(&mut table, Action::Step(0, false));
+        assert_eq!(focus(&table), Some((true, table_field(0, 0, 3), 0)), "down goes into a table's first row");
+        apply(&mut table, Action::Step(2, true));
+        assert_eq!(focus(&table), Some((true, table_field(1, 0, 3), END)), "and up into its last");
     }
 
     #[test]
@@ -3790,6 +5079,9 @@ mod tests {
         assert!(matches!(slash_choices("head").first(), Some((_, Block::Heading(_)))));
         apply(&mut editor, Action::Replace(2, Block::Heading(String::new())));
         assert_eq!(kinds(&editor), ["heading", "separator", "heading"]);
+        assert_eq!(editor.text.focus.as_ref().map(|focus| (focus.0.as_str(), focus.1)), Some((editor.blocks[2].uid.as_str(), 0)));
+        apply(&mut editor, Action::Replace(2, Block::table(2, 2)));
+        assert_eq!(editor.text.focus.as_ref().map(|focus| (focus.0.as_str(), focus.1)), Some((editor.blocks[2].uid.as_str(), table_field(0, 0, 2))), "the caret goes to a table's first cell");
     }
 
     #[test]
@@ -4030,6 +5322,38 @@ mod tests {
         assert_eq!((saved.title.as_str(), saved.revision), ("Kyoto in July", 2), "and after a restart");
         drop(db);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_video_asked_to_play_long_after_starting_is_kept_until_its_block_goes() {
+        // Asked for in pass 100, after its block was drawn in that pass.
+        let player = crate::video::Player::open(std::path::Path::new("missing.mp4"));
+        let mut clip = ClipPlayer::new("video", 7, player, 100);
+        assert!(!clip.unseen(101), "not stopped before its block is drawn again");
+        clip.drawn = 101;
+        assert!(!clip.unseen(102), "kept while its block is drawn");
+        assert!(clip.unseen(103), "stopped once its block isn't");
+    }
+
+    #[test]
+    fn videos_far_into_a_big_trip_can_still_be_chosen() {
+        // 9,000 members: one video early on, the rest past the first 2,000.
+        let members: Vec<crate::trip::Member> = (0..9000)
+            .map(|at| crate::trip::Member {
+                media_id: at,
+                photo_id: Some(at),
+                path: String::new(),
+                filename: String::new(),
+                is_video: at == 500 || (at > 2000 && at % 1000 == 1),
+                day_id: None,
+                day_source: None,
+            })
+            .collect();
+        let page = |offset: usize, limit: usize| members.iter().skip(offset).take(limit).cloned().collect();
+        assert_eq!(first_of_kind(page, true), [500, 2001, 3001, 4001, 5001, 6001, 7001, 8001]);
+        let photos = first_of_kind(page, false);
+        assert_eq!(photos.len(), PICK_LIMIT, "the first so many photos, no fewer for the video among them");
+        assert_eq!(photos.last(), Some(&(PICK_LIMIT as i64)));
     }
 
     #[test]

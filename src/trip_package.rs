@@ -227,6 +227,7 @@ fn header(package: &Package) -> Value {
             "introduction": story.introduction, "conclusion": story.conclusion,
             "template": story.template, "archived": story.archived, "finished": story.finished, "cover": story.cover,
             "cover_crop": story.cover_crop.to_text(),
+            "dates": story.dates.map(|(first, last)| [day_text(Some(first)), day_text(Some(last))]),
             "blocks": blocks.iter().map(|block| json!({
                 "uid": block.uid,
                 "kind": block.block.kind(),
@@ -368,6 +369,14 @@ fn parse(value: &Value) -> Option<Package> {
                 conclusion: text(&item["conclusion"]).unwrap_or_default(),
                 author: text(&item["author"])?,
                 show_date: item["show_date"].as_bool()?,
+                // Packages made before Stories had dates have none.
+                dates: match &item["dates"] {
+                    Value::Null => None,
+                    ends => {
+                        let ends = ends.as_array().filter(|ends| ends.len() == 2)?;
+                        Some((day(&ends[0])??, day(&ends[1])??))
+                    }
+                },
                 cover: match &item["cover"] {
                     Value::Null => None,
                     cover => Some(cover.as_i64().filter(|key| keys.contains(key))?),
@@ -514,6 +523,7 @@ mod tests {
             conclusion: String::new(),
             author: "Ana".into(),
             show_date: true,
+            dates: NaiveDate::from_ymd_opt(2026, 4, 1).zip(NaiveDate::from_ymd_opt(2026, 4, 2)),
             cover: Some(11),
             cover_crop: crate::trip::CoverCrop::default(),
             template: DEFAULT_TEMPLATE.into(),
@@ -556,7 +566,7 @@ mod tests {
         let (mut read, start) = read_package(&path).unwrap();
         assert_eq!((&read.trip, &read.days, &read.stories[0].blocks), (&package.trip, &package.days, &package.stories[0].blocks));
         let story = &read.stories[0].story;
-        assert_eq!((story.title.as_str(), story.cover, story.finished), ("Kyoto", Some(11), true));
+        assert_eq!((story.title.as_str(), story.cover, story.finished, story.dates), ("Kyoto", Some(11), true, package.stories[0].story.dates));
         assert_eq!(read.photos.iter().map(|photo| photo.size.is_some()).collect::<Vec<_>>(), [true, true, false]);
         assert_eq!(read.photos[0].name, "banner.jpg");
         assert_eq!(read.photos[0].hash, file_hash(&banner), "an unedited photo's hash is its file's");

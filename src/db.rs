@@ -1,7 +1,7 @@
 //! SQLite catalog. The UI and the background indexer each open their own connection.
 
 mod sites;
-pub use sites::{PlaceChoice, PostTerms, Publication, PublishJob, Site};
+pub use sites::{PlaceChoice, PostTerms, Publication, PublishJob, Site, Upload};
 mod trips;
 
 use std::collections::{HashMap, HashSet};

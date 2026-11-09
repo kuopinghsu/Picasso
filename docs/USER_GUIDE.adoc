@@ -584,7 +584,7 @@ Everything except publishing works offline.
 === Making a Trip
 
 * Select photos in the library and choose *Add to Trip* to put them in a new or existing Trip.
-* *New trip…* on the *Trips* page makes an empty Trip with a title, destination, dates and timezone.
+* *New trip…* on the *Trips* page makes an empty Trip with a title, destination, dates and timezone. In the calendar beside a date, click the month's name to choose another month, and click the year to choose another year.
 * *Suggest trips…* groups the whole library by when photos were taken, starting a new group after a gap of days with no photos. Pick a group and *Create trip…*. Under *Camera clocks*, shift a camera whose clock was wrong by whole hours; this changes only the grouping, never the photos.
 
 Before photos are added, Picasso shows what will happen: how many photos and videos, their dates, how many are already in this or another Trip, how many have no date, and how many may be copies.
@@ -652,7 +652,9 @@ Videos and photos without a date are left out.
 
 === Writing a Story
 
-*New story* starts a *Blank story*, one made from the selected photos, or one made *From the trip's days* or *From one day*, with a heading for each Day and its photos in order.
+*New story* starts a *Blank story*, one made from the selected photos, or one made *From the trip's days*, with a heading for each Day and its photos in order.
+*For some dates…* asks which dates the Story is about, from a first to a last date typed or picked in the calendar, and whether to *Start with their photos* or blank; a blank Story left on the Trip's own dates is about the whole Trip.
+The *Dates* under the byline change that later; leave both empty for the whole Trip. A photo is on a date by its Day's date, or else by when it was taken, so dates work before the Trip has Days.
 The Story opens in place of the Trip's photos and is saved as you type; the bar at the top shows *Saving…* and then *Saved*.
 If a save fails, as when the disk is full, nothing of it is kept and the bar says so; *Try again* saves everything since the last save.
 Quitting saves the Story first; if that fails, Picasso asks before quitting, with *Try again*, *Keep editing* and *Quit anyway*.
@@ -660,15 +662,19 @@ An empty Story offers *Start writing*, *Add photos*, which adds a gallery with t
 
 * Type in a paragraph; kbd:[Enter] starts a new one. Typing `/` in an empty paragraph lists the blocks, such as `/heading` or `/grid 3x2`.
 * Markdown works at the start of an empty paragraph: `#` and a space make a heading, `##` and a space a subheading, `-` or `*` a list, `1.` a numbered list, `>` a quote, and `---` a separator with a new paragraph after it.
-* Point at a block to show its handle, its kind, *↑*, *↓* and *⋯* above it; the block you are writing in also shows buttons for bold, italic, strikethrough, code and a link. kbd:[Ctrl+Shift+↑] and kbd:[Ctrl+Shift+↓] move the chosen block, and kbd:[Ctrl+D] duplicates it. Click elsewhere or press kbd:[Esc] to let go of it. If something is open, kbd:[Esc] closes that first: the `/` menu (your words stay), framing the cover (like *Cancel*), the cover's photo choices, or the photo strip.
+* Point at a block to show its handle, its kind, *↑*, *↓* and *⋯* above it; the block you are writing in also shows buttons for bold, italic, strikethrough, code, a link and the text color, which gives the selection one of six colors, each lighter on dark pages so it stays easy to read. kbd:[Ctrl+Shift+↑] and kbd:[Ctrl+Shift+↓] move the chosen block, and kbd:[Ctrl+D] duplicates it. Click elsewhere or press kbd:[Esc] to let go of it. If something is open, kbd:[Esc] closes that first: the `/` menu (your words stay), framing the cover (like *Cancel*), the cover's photo choices, or the photo strip.
 * Point between blocks and click *+* to add one there, or use the handle to drag a block.
 * Select photos in the grid and choose *Add to Story* to add them as single photos, a *Gallery* or a *Photo grid*. Each photo has its own caption and alt text in that Story.
-* Blocks include *Heading*, *Subheading*, *Paragraph*, *List*, *Quote*, *Separator*, *Credits*, *Practical info*, *Link* and *Route map*, which draws a linked GPS track on the map.
+* Blocks include *Heading*, *Subheading*, *Paragraph*, *List*, *Quote*, *Separator*, *Credits*, *Practical info*, *Link*, *Table*, *Video*, *YouTube video* and *Route map*, which draws a linked GPS track on the map.
+* A *Table* holds text in rows and columns, up to 8 columns and 30 rows. Point at *Table* in the *+* menu and click a square of the grid beside it to choose how many columns and rows, or type `/table 4x5`. Its first row is the header row until you turn off *Header row* above it. kbd:[Enter] goes to the cell below, adding a row after the last, kbd:[↑] and kbd:[↓] move between rows and on to the blocks around, and kbd:[Shift+Enter] breaks the line. The format buttons work in cells as in paragraphs. Right-click a cell, or use *Rows and columns* above the table, to add a row or column beside that cell or remove its own; *+ Add a row* and *+ Add a column* are below the table, and its size above it resizes it on the same grid. The grid marks the cells that have text, and resizing never removes them. The template, or your WordPress theme, gives it its look.
+* A table's columns fit their text until you drag a line between two columns to set their widths, or, in the chosen table, press kbd:[Tab] until the line is chosen and move it with kbd:[←] and kbd:[→]. Until then the editor shows the columns at equal widths. Double-click the line, or choose *Fit columns to their text* in a cell's menu, to let them fit their text again. Exported pages keep the widths, and so do WordPress sites with the VoyageLight theme or the Picasso Places plugin, until the post is edited in WordPress's block editor.
+* A *YouTube video* shows a video from YouTube. Paste the video's address from YouTube or youtu.be; a time in it, such as t=90, is where it starts. In the editor and in exported pages, a card stands in for the player and plays the video on YouTube, so pages still work offline and Picasso fetches nothing from YouTube. WordPress posts embed YouTube's player; with the VoyageLight theme or the Picasso Places plugin it starts at the time in the address. Export and publishing tell you about blocks whose address isn't a YouTube video's, which show only their caption.
+* A *Video* plays one of the Trip's videos, or the part of it you choose. When you add the block, choose one of the Trip's videos; *Replace video…* in the block's tools chooses another and keeps the caption. The Story shows the part's first frame and its length; click it to play it in place, with sound, and click again to pause. Drag the two handles on the line under it to choose where the part starts and ends, or press kbd:[Tab] until a handle is chosen and move it with kbd:[←] and kbd:[→], a tenth of a second at a time, or a second at a time with kbd:[Shift]. While you drag a handle, the video shows the frame where it is and the time shows above it. To look for the moment first, drag along the line, or play the video and pause it there, then click the start or end button beside the times to make the part start or end at the frame shown. Exported pages and WordPress posts get only that part, made by FFmpeg into a video every browser plays (H.264, at most 1080p), without where it was taken, and starting on its first frame; Markdown links that frame to the video. Picasso keeps the parts it made, so exporting or publishing again doesn't make them again. If a WordPress site refuses a video as larger than it accepts, the save stops and Picasso says how large it was; choose a shorter part, or raise the site's upload limit.
 * *Introduction* and *Conclusion* are optional text before and after the blocks.
 * Point at a photo in the Story to show its tools on its top-right corner: *Use as cover*, and in a gallery or grid *✕* to take the photo out. The photo that is the cover is labelled *Cover*.
 * Until the Story has a cover, *Add cover…* above the title shows the Story's photos; click one to make it the cover.
 * Point at the cover to show its tools on its bottom-right corner: *Frame cover…* chooses its shape, a fixed one or *Free* to drag the corners and edges to any shape, and the part of the photo it shows, in this Story only; *Remove cover* takes the cover away and leaves the photo in the Story.
-* *Add photos…* on a gallery or grid opens a strip of the Trip's photos; *Starred only* and *Not in the story yet* narrow it, and a dot marks photos already used.
+* *Add photos…* on a gallery or grid opens a strip of the Trip's photos, those of *This story's dates* first, in the order they were taken, when the Story has its own dates; choose *All days* or one Day instead. *Starred only* and *Not in the story yet* narrow it, and a dot marks photos already used.
 
 Select text and press kbd:[Ctrl+B], kbd:[Ctrl+I] or kbd:[Ctrl+K] for bold, italic or a link.
 *↶* and *↷* at the top undo and redo, as do kbd:[Ctrl+Z] and kbd:[Ctrl+Shift+Z].
@@ -676,7 +682,7 @@ A Story is a *Draft* until you click *Draft*, beside the way back to the Trip, t
 
 === Templates, preview and export
 
-The *⚙* button at the top of a Story holds its settings: the template, and whether the Trip's dates show under the title.
+The *⚙* button at the top of a Story holds its settings: the template, and whether the Story's dates show under the title, its own or those of the whole Trip.
 The template changes how the page looks, never its content: *Photography Journal*, *Travel Diary*, *Travel Guide*, with a *Contents* list, or *Photo Essay*.
 
 *Preview* opens the page in your web browser.
@@ -708,6 +714,7 @@ Ticking it off again takes them off the post on the next save.
 Journeys need the VoyageLight theme or the Picasso Places plugin; on another site the option is turned off and the dialog says why.
 
 Saving again updates the same draft.
+When it leaves out photos or videos the post showed before, a window lists those still on the site to tick: *Delete from site* deletes them from the site's media library for good, keeping any that another post or page there still shows, and *Keep* leaves them all.
 A post edited on the site since is not replaced unless you choose so, and an interrupted job resumes without uploading the same photos twice.
 *History* lists the last attempts.
 A job cut short because Picasso or the computer stopped shows as *Stopped before it finished*, with the photos that reached the site; publish again to finish it.

@@ -5,19 +5,21 @@
 //!
 //! It runs on a thread and reports each confirmed upload as it happens, so
 //! the library records it at once and a retry after a failure, a cancel, or
-//! a restart reuses it instead of sending it again. Nothing on the site is
-//! deleted, and a post that is no longer a draft is never changed.
+//! a restart reuses it instead of sending it again. Saving deletes nothing
+//! on the site, and a post that is no longer a draft is never changed;
+//! uploads a post stopped using are deleted only when asked
+//! ([`delete_unused`]).
 
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 
-use crate::gutenberg::{self, RouteMap, Unsupported, Uploaded};
-use crate::story_html::{MapTiles, Progress, Source};
-use crate::trip::{Block, Story, StoryBlock};
+use crate::gutenberg::{self, RouteMap, Unsupported, Uploaded, UploadedVideo};
+use crate::story_html::{MapTiles, Progress, Source, Videos};
+use crate::trip::{Block, MediaUse, Story, StoryBlock};
 use crate::upload::{self, UploadSize};
-use crate::wordpress::{edit_link, DraftPost, Api, Client, Credentials, Failure, Http, Media, Policy, TravelSupport};
+use crate::wordpress::{edit_link, post_link, DraftPost, Api, Client, Credentials, Failure, Http, Media, Policy, TravelSupport};
 
 /// The furthest Journey day the VoyageLight reader accepts (`VL_GEO_DAY_MAX`).
 const JOURNEY_DAY_MAX: i64 = 9999;
@@ -34,9 +36,13 @@ pub struct Job {
     pub credentials: Credentials,
     pub policy: Policy,
     pub story: Story,
+    /// The Story's dates as shown in the editor, including the Trip fallback.
+    pub dates: Option<String>,
     pub blocks: Vec<StoryBlock>,
     /// Each photo of the Story by media reference, `None` when it is unavailable.
     pub sources: HashMap<i64, Source>,
+    /// Each video of the Story, and where parts made for the web are kept.
+    pub videos: Videos,
     pub size: UploadSize,
     /// Whether photos keep how they were taken (`upload::render`).
     pub exif: bool,
@@ -167,7 +173,10 @@ fn is_coord_field(text: &str) -> bool {
 /// the fifth. A note that is only a number is not that column.
 fn line_post_id(line: &str) -> Option<i64> {
     let cols: Vec<&str> = line.split('|').map(str::trim).collect();
-    let post = if cols.len() >= 4 && is_coord_field(cols[2]) && is_coord_field(cols[3]) { cols.get(5).copied() } else { cols.get(4).copied() }?;
+    let start = if cols.len() >= 4 && is_coord_field(cols[2]) && is_coord_field(cols[3]) { 4 } else { 3 };
+    // A note can hold a `|`, so the post id is the last column after it, as the site reads it.
+    let rest = cols.get(start..).unwrap_or_default();
+    let post = rest.last().copied().filter(|_| rest.len() >= 2)?;
     (post.bytes().all(|byte| byte.is_ascii_digit()) && !post.is_empty()).then(|| post.parse().ok()).flatten().filter(|id| *id > 0)
 }
 
@@ -314,6 +323,9 @@ pub enum Event {
     Part { story_id: i64, revision: i64, key: String, post: DayPost },
     /// The Trip's Journey was made on the site, as this post.
     Journey { trip_id: i64, post_id: i64 },
+    /// Where WordPress and its pages say they are, as read when the job
+    /// starts; empty when the site didn't say.
+    WordPress { url: String, home: String },
 }
 
 /// One post of a Story published by Day, as the library keeps it.
@@ -341,6 +353,8 @@ pub fn day_key(uid: &str) -> String {
 #[derive(Clone, Debug, PartialEq)]
 pub struct DayPart {
     pub key: String,
+    /// The heading's words without their styles, as titles and the links
+    /// between the posts have none.
     pub heading: String,
     pub blocks: Vec<StoryBlock>,
 }
@@ -349,7 +363,7 @@ pub fn split_days(blocks: &[StoryBlock]) -> Vec<DayPart> {
     let mut parts = vec![DayPart { key: INDEX.into(), heading: String::new(), blocks: Vec::new() }];
     for block in blocks {
         match &block.block {
-            Block::Heading(text) => parts.push(DayPart { key: day_key(&block.uid), heading: text.trim().to_string(), blocks: Vec::new() }),
+            Block::Heading(text) => parts.push(DayPart { key: day_key(&block.uid), heading: crate::inline::plain(text.trim()).trim().to_string(), blocks: Vec::new() }),
             _ => parts.last_mut().expect("the index is first").blocks.push(block.clone()),
         }
     }
@@ -375,7 +389,8 @@ pub struct Saved {
     /// Published by Day: how many Day posts besides the index, which is
     /// the post named here; 0 for one post.
     pub days: usize,
-    /// The site's media the post uses, photos and route maps, by id.
+    /// The site's media the post uses, photos, videos and route maps, by
+    /// id; by Day, those of the index and every Day post.
     pub media: Vec<i64>,
     /// Places were sent, but the site's theme doesn't keep them.
     pub places_dropped: bool,
@@ -397,6 +412,10 @@ pub enum Stopped {
     Site { failure: Failure, uploaded: usize },
     /// A photo is unavailable or can't be read; nothing is left out.
     Photo { media_id: i64, uploaded: usize },
+    /// A video is unavailable, or its part couldn't be made for the web.
+    Video { media_id: i64, uploaded: usize },
+    /// The site refused a video's part, `bytes` long, as larger than it accepts.
+    VideoTooLarge { media_id: i64, bytes: u64, uploaded: usize },
     /// A block from a newer Picasso has no form WordPress takes.
     Unsupported(Unsupported),
     /// The earlier post isn't a draft any more, with the status the site
@@ -483,6 +502,8 @@ pub fn outcome_code(outcome: &Result<Saved, Stopped>) -> String {
         Err(Stopped::Cancelled { .. }) => "cancelled".into(),
         Err(Stopped::Site { failure, .. }) => format!("site: {failure:?}"),
         Err(Stopped::Photo { .. }) => "photo unavailable".into(),
+        Err(Stopped::Video { .. }) => "video unavailable".into(),
+        Err(Stopped::VideoTooLarge { bytes, .. }) => format!("video too large: {bytes} bytes"),
         Err(Stopped::Unsupported(_)) => "unsupported block".into(),
         Err(Stopped::NotDraft(status)) => format!("not a draft: {status}"),
         Err(Stopped::PostGone) => "post gone".into(),
@@ -497,7 +518,7 @@ pub fn outcome_code(outcome: &Result<Saved, Stopped>) -> String {
 pub fn counts(outcome: &Result<Saved, Stopped>) -> (usize, usize) {
     match outcome {
         Ok(saved) => (saved.uploaded, saved.reused),
-        Err(Stopped::Cancelled { uploaded } | Stopped::Site { uploaded, .. } | Stopped::Photo { uploaded, .. }) => (*uploaded, 0),
+        Err(Stopped::Cancelled { uploaded } | Stopped::Site { uploaded, .. } | Stopped::Photo { uploaded, .. } | Stopped::Video { uploaded, .. } | Stopped::VideoTooLarge { uploaded, .. }) => (*uploaded, 0),
         Err(_) => (0, 0),
     }
 }
@@ -564,7 +585,15 @@ fn save_one(http: &dyn Http, job: &Job, meta: Option<serde_json::Value>, shown: 
     // Every photo is rendered before any is sent, to a folder of its own,
     // so the bytes to send are known first and none is held in memory. One
     // that rendered before to bytes the site has is only rendered if sent.
-    progress.total.store(order.len() * 2 + 1, Ordering::Relaxed);
+    let parts: std::collections::HashSet<(i64, u32, u32)> = job
+        .blocks
+        .iter()
+        .filter_map(|block| match &block.block {
+            Block::Video { media, start, end } => Some((media.media_id, *start, *end)),
+            _ => None,
+        })
+        .collect();
+    progress.total.store(order.len() * 2 + parts.len() * 2 + 1, Ordering::Relaxed);
     let staging = Staging::new(job.story.id);
     let made = crate::image_io::render_all(&order, |&media_id| {
         if progress.cancel.load(Ordering::Relaxed) {
@@ -629,6 +658,20 @@ fn save_one(http: &dyn Http, job: &Job, meta: Option<serde_json::Value>, shown: 
         media.insert(media_id, item);
         progress.done.fetch_add(1, Ordering::Relaxed);
     }
+    // Each video's part, once however often the Story shows it.
+    let mut sent_parts: HashMap<(i64, u32, u32), UploadedVideo> = HashMap::new();
+    let mut videos: HashMap<String, UploadedVideo> = HashMap::new();
+    for block in &job.blocks {
+        let Block::Video { media: item, start, end } = &block.block else { continue };
+        let part = (item.media_id, *start, *end);
+        if let std::collections::hash_map::Entry::Vacant(slot) = sent_parts.entry(part) {
+            if progress.cancel.load(Ordering::Relaxed) {
+                return Err(Stopped::Cancelled { uploaded });
+            }
+            slot.insert(place_video(&client, job, item, (*start, *end), &staging, &known, &mut by_hash, progress, &mut uploaded, &mut reused, report)?);
+        }
+        videos.insert(block.uid.clone(), sent_parts[&part].clone());
+    }
     // Each route on its map, as a picture like the photos; a route whose
     // tiles can't be had is drawn on its own instead.
     let mut maps: HashMap<String, RouteMap> = HashMap::new();
@@ -670,7 +713,10 @@ fn save_one(http: &dyn Http, job: &Job, meta: Option<serde_json::Value>, shown: 
     if progress.cancel.load(Ordering::Relaxed) {
         return Err(Stopped::Cancelled { uploaded });
     }
-    let mut post = gutenberg::post(&job.story, &job.blocks, &|id| media.get(&id).cloned(), &|uid| maps.get(uid).cloned()).map_err(Stopped::Unsupported)?;
+    let mut post = gutenberg::post(&job.story, &job.blocks, &|id| media.get(&id).cloned(), &|uid| maps.get(uid).cloned(), &|uid| videos.get(uid).cloned()).map_err(Stopped::Unsupported)?;
+    if let Some(dates) = job.dates.as_deref().filter(|_| job.story.show_date) {
+        post.prepend_dates(dates);
+    }
     if let Some(words) = job.places.as_ref().filter(|_| !shown.is_empty()) {
         post.content.push_str("\n\n");
         post.content.push_str(&gutenberg::places(&words.heading, &words.map_alt, shown, places_map.as_ref()));
@@ -786,12 +832,13 @@ pub fn run_days(http: &dyn Http, job: &Job, progress: &Progress, report: &mut dy
         report(Event::Part { story_id: job.story.id, revision: job.story.revision, key: part.key.clone(), post: post.clone() });
         posts.insert(part.key.clone(), post);
     }
-    let link = |key: &str| format!("{}/?p={}", job.api.site.to_url().trim_end_matches('/'), posts[key].post_id);
+    let link = |key: &str| post_link(&job.api, posts[key].post_id);
     let mut uploads = job.uploads.clone();
     let (mut uploaded, mut reused) = (0, 0);
     let mut index = None;
     let (mut places_dropped, mut places_in_post) = (false, false);
     let mut on_journey: Vec<(i64, Vec<&MapPlace>)> = Vec::new();
+    let mut media = Vec::new();
     for (at, part) in parts.iter().enumerate() {
         // The index shows all the Story's Places; a Day, its own.
         let of = if part.key == INDEX { &job.blocks } else { &part.blocks };
@@ -844,10 +891,13 @@ pub fn run_days(http: &dyn Http, job: &Job, progress: &Progress, report: &mut dy
             Stopped::Cancelled { uploaded: now } => Stopped::Cancelled { uploaded: uploaded + now },
             Stopped::Site { failure, uploaded: now } => Stopped::Site { failure, uploaded: uploaded + now },
             Stopped::Photo { media_id, uploaded: now } => Stopped::Photo { media_id, uploaded: uploaded + now },
+            Stopped::Video { media_id, uploaded: now } => Stopped::Video { media_id, uploaded: uploaded + now },
+            Stopped::VideoTooLarge { media_id, bytes, uploaded: now } => Stopped::VideoTooLarge { media_id, bytes, uploaded: uploaded + now },
             other => other,
         })?;
         uploaded += saved.uploaded;
         reused += saved.reused;
+        media.extend_from_slice(&saved.media);
         places_dropped |= saved.places_dropped;
         places_in_post |= saved.places_in_post;
         if part.key != INDEX {
@@ -861,7 +911,70 @@ pub fn run_days(http: &dyn Http, job: &Job, progress: &Progress, report: &mut dy
     let index = index.expect("the index is saved first");
     let journey_error = journey.and_then(|id| finish_journey(&client, job, id, &on_journey).err());
     let journey_skipped = job.journey.is_some() && journey.is_none();
-    Ok(Saved { uploaded, reused, days: parts.len() - 1, places_dropped, places_in_post, journey_skipped, journey_error, ..index })
+    media.sort_unstable();
+    media.dedup();
+    Ok(Saved { uploaded, reused, days: parts.len() - 1, media, places_dropped, places_in_post, journey_skipped, journey_error, ..index })
+}
+
+/// What deleting uploads a post stopped using came to.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Deleted {
+    /// Deleted now, or already gone from the site, by media id.
+    pub gone: Vec<i64>,
+    /// Kept, as a post or page on the site still shows them.
+    pub in_use: usize,
+    /// Why it stopped before the end.
+    pub failure: Option<Failure>,
+    /// Those not reached before it stopped, left as they were, by media id.
+    pub left: Vec<i64>,
+}
+
+/// Deletes `uploads`, each (media id, address), from the site's media
+/// library, each only once no post or page there is found to show it.
+/// One whose file name is too short to look for is kept.
+pub fn delete_unused(http: &dyn Http, api: &Api, credentials: &Credentials, policy: Policy, uploads: &[(i64, String)]) -> Deleted {
+    let client = Client::new(http, policy);
+    let mut deleted = Deleted::default();
+    if !uploads.iter().any(|(_, url)| upload_stem(url).is_some()) {
+        deleted.in_use = uploads.len();
+        return deleted;
+    }
+    let referenced = match client.referenced_media(api, credentials) {
+        Ok(referenced) => referenced,
+        Err(failure) => {
+            deleted.failure = Some(failure);
+            deleted.left = uploads.iter().map(|(id, _)| *id).collect();
+            return deleted;
+        }
+    };
+    for (at, (id, url)) in uploads.iter().enumerate() {
+        let result = match upload_stem(url) {
+            Some(stem) if !referenced.contains(id) => client.media_in_use(api, credentials, &stem),
+            _ => Ok(true),
+        };
+        let result = result.and_then(|used| if used { Ok(None) } else { client.delete_media(api, credentials, *id).map(Some) });
+        match result {
+            Ok(Some(_)) => deleted.gone.push(*id),
+            Ok(None) => deleted.in_use += 1,
+            Err(failure) => {
+                deleted.failure = Some(failure);
+                deleted.left = uploads[at..].iter().map(|(id, _)| *id).collect();
+                break;
+            }
+        }
+    }
+    deleted
+}
+
+/// The name an upload at `url` is found by in the posts that show it: its
+/// file name without the extension, or the "-scaled" WordPress adds to a
+/// large photo, which its smaller sizes don't have. `None` when too short to
+/// tell it from other words, so it is never deleted.
+pub fn upload_stem(url: &str) -> Option<String> {
+    let file = url.split(['?', '#']).next()?.rsplit('/').next()?;
+    let stem = file.rsplit_once('.').map_or(file, |(stem, _)| stem);
+    let stem = stem.strip_suffix("-scaled").unwrap_or(stem);
+    (stem.chars().count() >= 8).then(|| stem.to_string())
 }
 
 /// `text` as a link's words: square brackets, which would end the link,
@@ -872,7 +985,7 @@ fn escape_marks(text: &str) -> String {
         match ch {
             '[' => out.push('('),
             ']' => out.push(')'),
-            '\\' | '*' | '~' | '`' => {
+            '\\' | '*' | '~' | '`' | '{' => {
                 out.push('\\');
                 out.push(ch);
             }
@@ -1050,25 +1163,40 @@ fn render_photo(job: &Job, media_id: i64, staging: &Staging, uploaded: usize) ->
 /// `bytes` is asked for only when they are sent.
 #[allow(clippy::too_many_arguments)]
 fn place(client: &Client, job: &Job, bytes: &mut dyn FnMut() -> Result<Vec<u8>, Stopped>, hash: &str, stem: &str, alt: &str, known: &HashMap<i64, Media>, uploaded: &mut usize, reused: &mut usize, report: &mut dyn FnMut(Event)) -> Result<Uploaded, Stopped> {
-    let site = |failure: Failure, uploaded: usize| Stopped::Site { failure, uploaded };
-    if let Some((id, url)) = job.uploads.get(hash) {
-        let now = match known.get(id) {
-            Some(now) => Some(Some(now.clone())),
-            None => client.media_now(&job.api, &job.credentials, *id).map_err(|failure| site(failure, *uploaded))?,
-        };
-        if let Some(now) = now {
-            *reused += 1;
-            // An address the site has changed since, as after a move, is the one used and kept.
-            if let Some(now) = now.filter(|now| now.url != *url) {
-                report(Event::Uploaded { hash: hash.to_string(), size: job.size, media_id: now.id, url: now.url.clone(), details: now.details });
-                return Ok(Uploaded { id: now.id, url: now.url });
-            }
-            return Ok(Uploaded { id: *id, url: url.clone() });
-        }
-        report(Event::Gone { hash: hash.to_string() });
+    if let Some(found) = reuse(client, job, hash, known, *uploaded, reused, report)? {
+        return Ok(found);
     }
     let bytes = bytes()?;
-    let sent = match client.upload_media(&job.api, &job.credentials, &bytes, &format!("{stem}.jpg")) {
+    let sent = client.upload_media(&job.api, &job.credentials, &bytes, &format!("{stem}.jpg"));
+    confirmed(client, job, sent, hash, stem, alt, uploaded, report)
+}
+
+/// A confirmed upload of `hash` that is still on the site.
+fn reuse(client: &Client, job: &Job, hash: &str, known: &HashMap<i64, Media>, uploaded: usize, reused: &mut usize, report: &mut dyn FnMut(Event)) -> Result<Option<Uploaded>, Stopped> {
+    let Some((id, url)) = job.uploads.get(hash) else { return Ok(None) };
+    let now = match known.get(id) {
+        Some(now) => Some(Some(now.clone())),
+        None => client.media_now(&job.api, &job.credentials, *id).map_err(|failure| Stopped::Site { failure, uploaded })?,
+    };
+    let Some(now) = now else {
+        report(Event::Gone { hash: hash.to_string() });
+        return Ok(None);
+    };
+    *reused += 1;
+    // An address the site has changed since, as after a move, is the one used and kept.
+    if let Some(now) = now.filter(|now| now.url != *url) {
+        report(Event::Uploaded { hash: hash.to_string(), size: job.size, media_id: now.id, url: now.url.clone(), details: now.details });
+        return Ok(Some(Uploaded { id: now.id, url: now.url }));
+    }
+    Ok(Some(Uploaded { id: *id, url: url.clone() }))
+}
+
+/// What an upload of `hash`, named `stem`, came to, reported once the site
+/// confirmed it.
+#[allow(clippy::too_many_arguments)]
+fn confirmed(client: &Client, job: &Job, sent: Result<Media, Failure>, hash: &str, stem: &str, alt: &str, uploaded: &mut usize, report: &mut dyn FnMut(Event)) -> Result<Uploaded, Stopped> {
+    let site = |failure: Failure, uploaded: usize| Stopped::Site { failure, uploaded };
+    let sent = match sent {
         Ok(sent) => sent,
         // Sent but not answered: the upload is found by its name, as the same
         // bytes are always named the same; any of them is these bytes.
@@ -1085,6 +1213,74 @@ fn place(client: &Client, job: &Job, bytes: &mut dyn FnMut() -> Result<Vec<u8>, 
     }
     report(Event::Uploaded { hash: hash.to_string(), size: job.size, media_id: sent.id, url: sent.url.clone(), details: sent.details.clone() });
     Ok(Uploaded { id: sent.id, url: sent.url })
+}
+
+/// The part of video `item` from `start` to `end` milliseconds on the site,
+/// with the picture shown before it plays, sent like a photo. The part is
+/// known by what it is made from, so one confirmed before is reused without
+/// making it again; otherwise it is made for the web, or taken from the
+/// parts kept from before, and sent as it is read.
+#[allow(clippy::too_many_arguments)]
+fn place_video(
+    client: &Client,
+    job: &Job,
+    item: &MediaUse,
+    (start, end): (u32, u32),
+    staging: &Staging,
+    known: &HashMap<i64, Media>,
+    by_hash: &mut HashMap<String, Uploaded>,
+    progress: &Progress,
+    uploaded: &mut usize,
+    reused: &mut usize,
+    report: &mut dyn FnMut(Event),
+) -> Result<UploadedVideo, Stopped> {
+    let failed = |uploaded: usize| Stopped::Video { media_id: item.media_id, uploaded };
+    let (path, duration) = job.videos.sources.get(&item.media_id).cloned().flatten().ok_or_else(|| failed(*uploaded))?;
+    let file = path.file_stem().map(|stem| stem.to_string_lossy().into_owned()).unwrap_or_default();
+    let (from, _) = crate::trip::clip_range(start, end, duration);
+    let rgba = crate::video::frame_at(&path, from, job.size.edge()).map_err(|_| failed(*uploaded))?;
+    let bytes = crate::image_io::encode_jpeg(&rgba, job.size.quality()).map_err(|_| failed(*uploaded))?;
+    let hash = upload::hash(&bytes);
+    let poster = match by_hash.get(&hash) {
+        Some(same) => same.clone(),
+        None => place(client, job, &mut || Ok(bytes.clone()), &hash, &upload_name(&job.story.title, &file, &hash), "", known, uploaded, reused, report)?,
+    };
+    by_hash.insert(hash, poster.clone());
+    progress.done.fetch_add(1, Ordering::Relaxed);
+    let hash = video_key(&path, start, end);
+    let video = match reuse(client, job, &hash, known, *uploaded, reused, report)? {
+        Some(found) => found,
+        None => {
+            let cache = job.videos.cache.clone().unwrap_or_else(|| staging.0.clone());
+            progress.converting.store(1, Ordering::Relaxed);
+            let done = |part: f64| progress.converting.store(1 + (part * 100.0) as usize, Ordering::Relaxed);
+            let made = crate::story_html::clip_file(&cache, &path, (start, end, duration), &progress.cancel, &done);
+            progress.converting.store(0, Ordering::Relaxed);
+            if progress.cancel.load(Ordering::Relaxed) {
+                return Err(Stopped::Cancelled { uploaded: *uploaded });
+            }
+            let made = made.map_err(|_| failed(*uploaded))?;
+            let bytes = std::fs::metadata(&made).map(|meta| meta.len()).unwrap_or_default();
+            let stem = upload_name(&job.story.title, &file, &hash);
+            progress.sending.store(true, Ordering::Relaxed);
+            let sent = client.upload_file(&job.api, &job.credentials, &made, "video/mp4", &format!("{stem}.mp4"));
+            progress.sending.store(false, Ordering::Relaxed);
+            match sent {
+                Err(_) if progress.cancel.load(Ordering::Relaxed) => return Err(Stopped::Cancelled { uploaded: *uploaded }),
+                Err(Failure::TooLarge) => return Err(Stopped::VideoTooLarge { media_id: item.media_id, bytes, uploaded: *uploaded }),
+                sent => confirmed(client, job, sent, &hash, &stem, item.alt.trim(), uploaded, report)?,
+            }
+        }
+    };
+    by_hash.insert(hash, video.clone());
+    progress.done.fetch_add(1, Ordering::Relaxed);
+    Ok(UploadedVideo { video, poster })
+}
+
+/// What an upload of the part from `start` to `end` milliseconds of the
+/// video at `path` is known by, in place of the hash of its bytes.
+fn video_key(path: &Path, start: u32, end: u32) -> String {
+    upload::hash(format!("video\n{}", crate::story_html::clip_name(path, start, end)).as_bytes())
 }
 
 #[cfg(test)]
@@ -1112,6 +1308,7 @@ mod tests {
             subtitle: String::new(),
             author: String::new(),
             show_date: false,
+            dates: None,
             introduction: String::new(),
             conclusion: String::new(),
             cover: Some(11),
@@ -1129,8 +1326,10 @@ mod tests {
             credentials: Credentials { user: "ana".into(), password: "abcd efgh".into() },
             policy: Policy::default(),
             story,
+            dates: None,
             blocks,
             sources,
+            videos: Videos::default(),
             size: UploadSize::Low,
             exif: true,
             uploads,
@@ -1158,7 +1357,9 @@ mod tests {
     #[test]
     fn a_story_becomes_a_draft_with_its_photo_uploaded_once() {
         let dir = temp_dir("new");
-        let job = job(&dir, None, HashMap::new());
+        let mut job = job(&dir, None, HashMap::new());
+        job.story.show_date = true;
+        job.dates = Some("Nov 3 – Nov 8".into());
         let fake = Fake::default()
             .answer_to("POST", MEDIA, 201, &[], r#"{"id":41,"source_url":"https://example.com/blog/a.jpg"}"#)
             .answer_to("POST", POSTS, 201, &[], r#"{"id":7}"#);
@@ -1173,11 +1374,14 @@ mod tests {
         assert_eq!(post["status"], "draft");
         assert_eq!(post["excerpt"], "", "the subtitle is the excerpt, sent even when empty");
         assert_eq!(post["featured_media"], 41);
-        assert!(post["content"].as_str().unwrap().contains("wp-image-41"));
+        let content = post["content"].as_str().unwrap();
+        assert!(content.starts_with("<!-- wp:paragraph {\"className\":\"picasso-story-dates\"} -->\n<p class=\"picasso-story-dates\">Nov 3 – Nov 8</p>"));
+        assert!(content.contains("wp-image-41"));
         assert!(post.get("categories").is_none() && post.get("tags").is_none(), "none chosen, none sent");
         drop(bodies);
 
         // Chosen categories go with the post; tags left unchosen aren't sent.
+        job.story.show_date = false;
         let chosen = Job { terms: crate::db::PostTerms { categories: vec![(5, "Spain".into())], tags: Vec::new() }, ..job };
         let fake = Fake::default()
             .answer_to("POST", MEDIA, 201, &[], r#"{"id":41,"source_url":"https://example.com/blog/a.jpg"}"#)
@@ -1186,16 +1390,75 @@ mod tests {
         let post: serde_json::Value = serde_json::from_slice(&fake.bodies.borrow().last().unwrap().1).unwrap();
         assert_eq!(post["categories"], serde_json::json!([5]));
         assert!(post.get("tags").is_none());
+        assert!(!post["content"].as_str().unwrap().contains("picasso-story-dates"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_video_is_sent_as_the_part_chosen_with_its_poster_and_reused_after() {
+        let dir = temp_dir("video");
+        let clip = dir.join("clip.mp4");
+        if !crate::video::makes_web_video() || !crate::video::test_clip(&clip, 3) {
+            return;
+        }
+        let mut job = job(&dir, None, HashMap::new());
+        let part = || Block::Video { media: MediaUse { caption: "Waves".into(), ..MediaUse::new(21) }, start: 500, end: 1_500 };
+        job.blocks.extend([StoryBlock::new(part()), StoryBlock::new(part())]);
+        let cache = dir.join("cache");
+        job.videos = Videos { sources: HashMap::from([(21, Some((clip.clone(), 3.0)))]), cache: Some(cache.clone()) };
+        let fake = Fake::default()
+            .answer_to("POST", MEDIA, 201, &[], r#"{"id":41,"source_url":"https://example.com/blog/a.jpg"}"#)
+            .answer_to("POST", POSTS, 201, &[], r#"{"id":7}"#);
+        let mut events = Vec::new();
+        let progress = Progress::default();
+        let saved = run(&fake, &job, &progress, &mut |event| events.push(event)).unwrap();
+        assert_eq!((saved.uploaded, saved.reused), (3, 0), "the photo, the poster, and the part once though shown twice");
+        assert_eq!(progress.done.load(Ordering::Relaxed), progress.total.load(Ordering::Relaxed));
+        let bodies = fake.bodies.borrow();
+        let videos: Vec<&Vec<u8>> = bodies.iter().filter(|(key, body)| key.ends_with("/media") && body.get(4..8) == Some(b"ftyp")).map(|(_, body)| body).collect();
+        assert_eq!(videos.len(), 1);
+        assert_eq!(std::fs::read_dir(&cache).unwrap().count(), 1, "the part is kept for the next export or post");
+        let post: serde_json::Value = serde_json::from_slice(&bodies.last().unwrap().1).unwrap();
+        let content = post["content"].as_str().unwrap();
+        assert_eq!(content.matches("<!-- wp:video {\"id\":41} -->").count(), 2, "{content}");
+        assert!(content.contains("<figcaption class=\"wp-element-caption\">Waves</figcaption>"), "{content}");
+        drop(bodies);
+
+        // Confirmed before: nothing is made or sent again.
+        let uploads = events.iter().filter_map(|event| match event {
+            Event::Uploaded { hash, media_id, url, .. } => Some((hash.clone(), (*media_id, url.clone()))),
+            _ => None,
+        });
+        let again = Job { uploads: uploads.collect(), post_id: Some(7), ..job };
+        std::fs::remove_dir_all(&cache).unwrap();
+        let fake = Fake::default()
+            .answer(&format!("{POSTS}/7?context=edit"), 200, &[], r#"{"status":"draft"}"#)
+            .answer(&format!("{MEDIA}?include=41&per_page=100&context=edit&_fields=id,source_url,mime_type,media_details"), 200, &[], r#"[{"id":41,"source_url":"https://example.com/blog/a.jpg"}]"#)
+            .answer_to("POST", &format!("{POSTS}/7"), 200, &[], r#"{"id":7}"#);
+        let saved = run(&fake, &again, &Progress::default(), &mut |_| {}).unwrap();
+        assert_eq!((saved.uploaded, saved.reused), (0, 3));
+        assert!(!cache.exists(), "the part wasn't made again");
+
+        // The part refused as larger than the site takes: named so, with its size.
+        let mut known = again.uploads.clone();
+        known.remove(&video_key(&clip, 500, 1_500));
+        let refused = Fake::default()
+            .answer(&format!("{POSTS}/7?context=edit"), 200, &[], r#"{"status":"draft"}"#)
+            .answer(&format!("{MEDIA}?include=41&per_page=100&context=edit&_fields=id,source_url,mime_type,media_details"), 200, &[], r#"[{"id":41,"source_url":"https://example.com/blog/a.jpg"}]"#)
+            .answer_to("POST", MEDIA, 413, &[], "");
+        let stopped = run(&refused, &Job { uploads: known, ..again }, &Progress::default(), &mut |_| {});
+        assert!(matches!(stopped, Err(Stopped::VideoTooLarge { media_id: 21, bytes, uploaded: 0 }) if bytes > 0), "{stopped:?}");
         let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
     fn a_story_splits_at_its_headings_into_an_index_and_days() {
-        let blocks = [Block::Paragraph("Why".into()), Block::Heading(" Granada ".into()), Block::Photo(MediaUse::new(11)), Block::Subheading("Evening".into()), Block::Heading("Toledo".into())];
+        let blocks = [Block::Paragraph("Why".into()), Block::Heading(" Granada ".into()), Block::Photo(MediaUse::new(11)), Block::Subheading("Evening".into()), Block::Heading("{red}**Toledo**{/red}".into())];
         let blocks: Vec<StoryBlock> = blocks.into_iter().map(StoryBlock::new).collect();
         let parts = split_days(&blocks);
         let shape: Vec<(&str, usize)> = parts.iter().map(|part| (part.heading.as_str(), part.blocks.len())).collect();
-        assert_eq!(shape, [("", 1), ("Granada", 2), ("Toledo", 0)], "a subheading stays in its Day");
+        assert_eq!(shape, [("", 1), ("Granada", 2), ("Toledo", 0)], "a subheading stays in its Day; a title has no styles");
+        assert_eq!(escape_marks("{red}a*b{/red} [c]"), r"\{red}a\*b\{/red} (c)", "words of a link are only words");
         assert_eq!((parts[0].key.as_str(), parts[1].key.clone()), (INDEX, day_key(&blocks[1].uid)), "a Day is keyed by its heading, not its place");
     }
 
@@ -1210,7 +1473,8 @@ mod tests {
             StoryBlock::new(Block::Paragraph("Rain".into())),
         ];
         let known = HashMap::from([(INDEX.to_string(), DayPost { post_id: 5, status: "draft".into(), ..DayPost::default() })]);
-        let job = Job { blocks, days: Some(known), ..job(&dir, None, HashMap::new()) };
+        let mut job = Job { blocks, days: Some(known), dates: Some("Nov 3 – Nov 8".into()), ..job(&dir, None, HashMap::new()) };
+        job.story.show_date = true;
         let fake = Fake::default()
             .answer("https://example.com/blog/wp-json/wp/v2/posts/5?context=edit&_fields=id,status,title,excerpt,content,featured_media", 200, &[], r#"{"id":5,"status":"draft"}"#)
             .answer_to("POST", MEDIA, 201, &[], r#"{"id":41,"source_url":"https://example.com/blog/a.jpg"}"#)
@@ -1230,8 +1494,10 @@ mod tests {
         let index: serde_json::Value = serde_json::from_slice(&bodies.iter().find(|(key, _)| *key == format!("POST {POSTS}/5")).unwrap().1).unwrap();
         let content = index["content"].as_str().unwrap();
         assert!(content.contains("Why we went") && content.contains(r#"<a href="https://example.com/blog/?p=8">Granada (old)</a>"#), "{content}");
+        assert!(content.contains("Nov 3 – Nov 8"));
         let day: serde_json::Value = serde_json::from_slice(&bodies.iter().find(|(key, _)| *key == format!("POST {POSTS}/8")).unwrap().1).unwrap();
         assert!(day["content"].as_str().unwrap().contains(r#"<a href="https://example.com/blog/?p=5">Spain</a>"#), "a Day links back to the index");
+        assert!(day["content"].as_str().unwrap().contains("Nov 3 – Nov 8"));
         drop(bodies);
         let parts = events.iter().filter(|event| matches!(event, Event::Part { .. })).count();
         assert_eq!(parts, 1 + 2 + 3, "the index checked, two posts made, three saved: each kept as it happens");
@@ -1341,6 +1607,9 @@ mod tests {
         assert_eq!(line_post_id("2 | Harbor | 41.2, -8.6 | note | 9"), Some(9));
         assert_eq!(line_post_id("1 | Cafe | 41.1, 2.2 | 12"), None, "a note that is a number is not a post id");
         assert_eq!(line_post_id("1 | Ilulissat | 69.2 | -51.1 | 12"), None);
+        assert_eq!(line_post_id("1 | Toledo | 39.8, -4.0 | tapas | wine | 42"), Some(42), "a note with a | in it");
+        assert_eq!(line_post_id("1 | Toledo | 39.8 | -4.0 | tapas | wine | 42"), Some(42));
+        assert_eq!(line_post_id("1 | Toledo | 39.8, -4.0 | tapas | wine"), None);
         assert_eq!((journey_day(0), journey_day(40), journey_day(10_000)), (1, 40, 9999));
         let none = map_meta(&[]);
         assert!(none.values().all(serde_json::Value::is_null), "{none:?}");
@@ -1966,5 +2235,70 @@ mod tests {
         }
         assert_eq!(checksums(&originals), before, "the originals are never written");
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn an_upload_a_post_stopped_using_is_deleted_only_when_nothing_on_the_site_shows_it() {
+        let credentials = Credentials { user: "ana".into(), password: "abcd efgh".into() };
+        let uploads = |names: &[(i64, &str)]| names.iter().map(|(id, name)| (*id, format!("https://example.com/blog/wp-content/uploads/2026/11/{name}"))).collect::<Vec<_>>();
+        let search = |route: &str, stem: &str| format!("https://example.com/blog/wp-json/wp/v2/{route}?search={stem}&per_page=1&_fields=id*");
+        let references = |route: &str, page| format!("https://example.com/blog/wp-json/wp/v2/{route}?context=edit&status=publish,future,draft,pending,private&per_page=20&page={page}&orderby=id&order=asc&_fields=featured_media,content.raw");
+        let delete = |id: i64| format!("https://example.com/blog/wp-json/wp/v2/media/{id}?force=true&_method=DELETE");
+        let first_page = serde_json::to_string(&vec![serde_json::json!({ "featured_media": 0, "content": { "raw": "" } }); 20]).unwrap();
+        let fake = Fake::default()
+            .answer(&references("posts", 1), 200, &[("x-wp-total", "0")], "[]")
+            .answer(&references("pages", 1), 200, &[("x-wp-total", "21")], &first_page)
+            .answer(&references("pages", 2), 200, &[("x-wp-total", "21")], r#"[{"featured_media":47,"content":{"raw":"[gallery ids = '48, 96'] [playlist type=\"video\" include=49]"}}]"#)
+            // Shown in a post the person wrote: kept.
+            .answer(&search("posts", "kyoto-temple-a1b2c3d4"), 200, &[], r#"[{"id":9}]"#)
+            // A large photo, looked for without "-scaled"; on a page only.
+            .answer(&search("posts", "kyoto-garden-e5f6a7b8"), 200, &[], "[]")
+            .answer(&search("pages", "kyoto-garden-e5f6a7b8"), 200, &[], r#"[{"id":3}]"#)
+            .answer(&search("posts", "kyoto-tea-c9d0e1f2"), 200, &[], "[]")
+            .answer(&search("pages", "kyoto-tea-c9d0e1f2"), 200, &[], "[]")
+            .answer_to("POST", &delete(42), 200, &[], r#"{"deleted":true}"#)
+            .answer(&search("posts", "kyoto-walk-0a1b2c3d"), 200, &[], "[]")
+            .answer(&search("pages", "kyoto-walk-0a1b2c3d"), 200, &[], "[]")
+            .answer_to("POST", &delete(43), 404, &[], r#"{"code":"rest_post_invalid_id"}"#)
+            // In another author's draft, which the account may not read: left out of the list, not the count.
+            .answer(&search("posts", "kyoto-shrine-5e6f7a8b"), 200, &[("x-wp-total", "1")], "[]");
+        let sent = uploads(&[
+            (41, "kyoto-temple-a1b2c3d4.jpg"),
+            (44, "kyoto-garden-e5f6a7b8-scaled.jpg"),
+            (42, "kyoto-tea-c9d0e1f2.jpg"),
+            (43, "kyoto-walk-0a1b2c3d.mp4"),
+            (46, "kyoto-shrine-5e6f7a8b.jpg"),
+            (47, "kyoto-featured-1a2b3c4d.jpg"),
+            (48, "kyoto-gallery-1a2b3c4d.jpg"),
+            (49, "kyoto-playlist-1a2b3c4d.mp4"),
+            (45, "a.jpg"),
+        ]);
+        let deleted = delete_unused(&fake, &local_api(), &credentials, Policy::default(), &sent);
+        assert_eq!(deleted, Deleted { gone: vec![42, 43], in_use: 7, failure: None, left: Vec::new() }, "featured images and shortcode references are kept");
+        let posts = fake.bodies.borrow().iter().filter(|(key, _)| key.starts_with("POST")).count();
+        assert_eq!(posts, 2, "only the two found nowhere were asked to be deleted");
+
+        // An account that may not delete uploads: it stops there.
+        let refused = Fake::default()
+            .answer(&references("posts", 1), 200, &[("x-wp-total", "0")], "[]")
+            .answer(&references("pages", 1), 200, &[("x-wp-total", "0")], "[]")
+            .answer(&search("posts", "kyoto-tea-c9d0e1f2"), 200, &[], "[]")
+            .answer(&search("pages", "kyoto-tea-c9d0e1f2"), 200, &[], "[]")
+            .answer_to("POST", &delete(42), 403, &[], r#"{"code":"rest_cannot_delete"}"#);
+        let deleted = delete_unused(&refused, &local_api(), &credentials, Policy::default(), &uploads(&[(42, "kyoto-tea-c9d0e1f2.jpg"), (43, "kyoto-walk-0a1b2c3d.mp4")]));
+        assert_eq!(deleted, Deleted { gone: Vec::new(), in_use: 0, failure: Some(Failure::Forbidden), left: vec![42, 43] }, "those not reached are told, to be offered again");
+
+        let incomplete = Fake::default().answer(&references("posts", 1), 200, &[("x-wp-total", "1")], "[]");
+        let deleted = delete_unused(&incomplete, &local_api(), &credentials, Policy::default(), &sent);
+        assert_eq!(deleted.failure, Some(Failure::CleanupAccess));
+        assert_eq!(deleted.left, sent.iter().map(|(id, _)| *id).collect::<Vec<_>>());
+        assert!(incomplete.bodies.borrow().iter().all(|(key, _)| !key.starts_with("POST")));
+
+        let author = Fake::default()
+            .answer(&references("posts", 1), 200, &[("x-wp-total", "0")], "[]")
+            .answer(&references("pages", 1), 400, &[], r#"{"code":"rest_invalid_param","data":{"details":{"status":{"code":"rest_forbidden_status"}}}}"#);
+        let deleted = delete_unused(&author, &local_api(), &credentials, Policy::default(), &sent);
+        assert_eq!(deleted.failure, Some(Failure::CleanupAccess));
+        assert!(author.bodies.borrow().iter().all(|(key, _)| !key.starts_with("POST")));
     }
 }

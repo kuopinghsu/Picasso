@@ -89,6 +89,8 @@ impl Headless {
             app.ui(ui, window);
         });
         self.ctx.tessellate(std::mem::take(&mut output.shapes), output.pixels_per_point);
+        // The headless window has no renderer to apply texture updates.
+        output.textures_delta.clear();
         let time = begun.elapsed();
         self.access = output.platform_output.accesskit_update.take();
         time
@@ -339,9 +341,53 @@ mod tests {
     }
 
     #[test]
+    fn uploads_saves_left_unused_are_asked_about_one_site_at_a_time_once_nothing_else_is_open() {
+        let (_scratch, mut window) = library("leftovers", 1);
+        let escape = || vec![Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE }];
+        let db = &window.app.db;
+        db.record_upload(7, "a", "standard", 41, "https://example.com/wp-content/uploads/kyoto-tea-c9d0e1f2.jpg", r#"{"mime":"image/jpeg"}"#).unwrap();
+        db.record_upload(7, "b", "standard", 42, "https://example.com/wp-content/uploads/a.jpg", r#"{"mime":"image/jpeg"}"#).unwrap();
+        db.record_upload(8, "c", "standard", 51, "https://example.com/wp-content/uploads/kyoto-walk-0a1b2c3d.mp4", r#"{"mime":"video/mp4"}"#).unwrap();
+
+        window.app.queue_leftovers(7, "Travel blog", vec![42], None);
+        assert!(window.app.publish_leftovers.is_empty(), "a name too short to look for on the site is never deleted, so never offered");
+
+        // Two saves finish while another window is open.
+        window.app.modal = Modal::About;
+        window.app.queue_leftovers(7, "Travel blog", vec![41, 42], None);
+        window.app.queue_leftovers(8, "Food blog", vec![51], None);
+        window.draw(Vec::new());
+        assert!(matches!(window.app.modal, Modal::About), "it waits for the window open");
+        window.app.modal = Modal::None;
+        window.draw(Vec::new());
+        assert!(matches!(window.app.modal, Modal::DeleteUploads));
+
+        // Closing it keeps them, and the other site's are asked about next.
+        window.draw(escape());
+        assert!(window.app.db.uploads(7).contains_key("a"), "nothing deleted");
+        assert_eq!(window.app.publish_leftovers.len(), 1);
+        window.draw(Vec::new());
+        assert!(matches!(window.app.modal, Modal::DeleteUploads));
+        window.draw(escape());
+        window.draw(Vec::new());
+        assert!(matches!(window.app.modal, Modal::None));
+
+        // Deleting from the site stops partway: those not reached are asked about again, once no deletion runs there.
+        let alive = std::sync::Arc::new(());
+        window.app.deleting_uploads.insert(8, std::sync::Arc::downgrade(&alive));
+        let stopped = crate::publish::Deleted { gone: Vec::new(), in_use: 0, failure: Some(crate::wordpress::Failure::Forbidden), left: vec![51] };
+        window.app.on_uploads_deleted(8, "Food blog", stopped);
+        window.draw(Vec::new());
+        assert!(matches!(window.app.modal, Modal::None), "not while uploads are still being deleted from the site");
+        drop(alive);
+        window.draw(Vec::new());
+        assert!(matches!(window.app.modal, Modal::DeleteUploads));
+    }
+
+    #[test]
     fn every_screen_names_its_controls_and_fits_the_window() {
         use super::super::ThemeMode;
-        use crate::trip::{Capture, TripDraft};
+        use crate::trip::{Block, Capture, StoryBlock, TripDraft};
         const PHOTOS: usize = 12;
         let (_scratch, mut window) = library("screens", PHOTOS);
         let long = "A long walk from the Atlantic coast of Galicia across the Meseta to the Mediterranean at Barcelona, with every village between";
@@ -354,8 +400,16 @@ mod tests {
             db.store_capture(*id, Capture::Clock { clock, offset: Some(7200) }, clock.and_utc().timestamp() - 7200);
         }
         db.suggest_days(trip).unwrap();
-        let days: Vec<i64> = db.trip_days(trip).iter().map(|day| day.id).collect();
-        let (story, _) = db.create_story_from_days(trip, long, &days, |date| date.to_string()).unwrap();
+        let (story, _) = db.create_story_from_days(trip, long, None, |date| date.to_string()).unwrap();
+        let mut blocks = db.story_blocks(story);
+        let mut table = Block::table(3, 2);
+        if let Block::Table { rows, widths, .. } = &mut table {
+            rows[0] = vec!["Ferry".into(), "Leaves".into(), "Price".into()];
+            *widths = vec![50, 25, 25];
+        }
+        blocks.push(StoryBlock::new(table));
+        blocks.push(StoryBlock::new(Block::YouTube { url: "https://youtu.be/abc-DEF_123?t=90".into(), caption: "The ferry leaving".into() }));
+        db.save_story_blocks(story, db.story(story).unwrap().revision, &blocks).unwrap();
         // Two Places, a track beside the photos linked to the Trip, and a site whose posts show the Places.
         db.set_pins(&ids[..6], 42.88, -8.54);
         db.set_pins(&ids[6..], 41.38, 2.17);
@@ -391,7 +445,7 @@ mod tests {
         // Each screen as it is now, with what was found on it.
         let walk = |window: &mut Headless, how: &str| {
             let mut found = Vec::new();
-            let screens = ["the library", "the Trips page", "a Trip", "a Story", "Geotag", "a Trip's Geotag", "Publish to WordPress"];
+            let screens = ["the library", "the Trips page", "a Trip", "a Story", "Geotag", "a Trip's Geotag", "Publish to WordPress", "New story"];
             for screen in screens {
                 match screen {
                     "the library" => window.app.set_nav(Nav::Library),
@@ -409,6 +463,10 @@ mod tests {
                         window.app.open_story(story);
                         window.app.ask_publish_story();
                     }
+                    "New story" => {
+                        window.app.set_nav(Nav::Trip(trip));
+                        window.app.ask_new_story(trip);
+                    }
                     _ => {
                         window.app.open_story(story);
                     }
@@ -423,14 +481,17 @@ mod tests {
                     let opened = match &window.app.modal {
                         Modal::Geotag(_) => "Geotag",
                         Modal::PublishStory(_) => "Publish",
+                        Modal::NewStory(_) => "New story",
                         _ => "nothing",
                     };
                     assert!(screen.contains(opened), "{screen}, {how}: {opened} open");
                     let wanted = match screen {
                         "Publish to WordPress" => [tr("Show places on the post's map"), tr("About 1 km"), tr("Link to the trip's Journey")],
+                        "New story" => [tr("First day"), tr("Last day"), tr("Start with their photos")],
                         _ => [tr("Photos that have GPS"), tr("Add tracks…"), tr("Check")],
                     };
-                    for wanted in wanted.iter().chain([&"camino.gpx"].into_iter().filter(|_| screen != "Publish to WordPress")) {
+                    let geotag = screen.contains("Geotag");
+                    for wanted in wanted.iter().chain([&"camino.gpx"].into_iter().filter(|_| geotag)) {
                         let drawn = tree.nodes.iter().any(|(_, node)| name(node).is_some_and(|name| name.contains(wanted)));
                         assert!(drawn, "{screen}, {how}: {wanted} is not drawn");
                     }
@@ -656,7 +717,7 @@ mod tests {
         let harbor = db.add_trip_day(trip, None, "Harbor").unwrap();
         db.move_to_day(trip, Some(arrival), &members[..1], DaySource::User).unwrap();
         db.move_to_day(trip, Some(harbor), &members[1..], DaySource::User).unwrap();
-        let (story, _) = db.create_story_from_days(trip, "Coast story", &[arrival, harbor], |day| day.to_string()).unwrap();
+        let (story, _) = db.create_story_from_days(trip, "Coast story", None, |day| day.to_string()).unwrap();
         let mut blocks = db.story_blocks(story);
         for block in &mut blocks {
             if let Block::Photo(media) = &mut block.block {

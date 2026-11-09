@@ -20,7 +20,7 @@ use crate::image_io::Probe;
 use crate::types::format_duration;
 
 /// Longest edge of frames decoded for playback.
-const PLAY_EDGE: u32 = 1920;
+pub const PLAY_EDGE: u32 = 1920;
 const AUDIO_RATE: u32 = 48_000;
 const AUDIO_CHANNELS: u16 = 2;
 /// Audio samples per pipe read: 2048 stereo frames, about 43 ms.
@@ -41,6 +41,11 @@ fn tools() -> Option<&'static Tools> {
 /// Whether `ffmpeg` and `ffprobe` were found.
 pub fn available() -> bool {
     tools().is_some()
+}
+
+/// Whether [`web_video`] can make videos: FFmpeg with an H.264 encoder.
+pub fn makes_web_video() -> bool {
+    available() && h264_encoder().is_some()
 }
 
 fn exe(name: &str) -> String {
@@ -376,6 +381,147 @@ fn grab(path: &Path, at: f64, width: u32, height: u32) -> Result<RgbaImage, Stri
     RgbaImage::from_raw(width, height, output.stdout[..len].to_vec()).ok_or_else(|| "Bad frame".into())
 }
 
+/// The frame `at` seconds into the video, scaled to fit `edge`.
+pub fn frame_at(path: &Path, at: f64, edge: u32) -> Result<RgbaImage, String> {
+    let info = info(path)?;
+    let (width, height) = fit(info.width, info.height, edge);
+    grab(path, at.max(0.0), width, height).or_else(|_| grab(path, 0.0, width, height))
+}
+
+/// Raised when [`web_video`] would make a different file of the same part
+/// of a video, so files made before aren't taken for the new ones.
+pub const WEB_VIDEO_VERSION: u32 = 2;
+
+/// Frame size of a video for the web: within 1080p either way up, never
+/// enlarged, in even pixels.
+pub fn web_size(width: u32, height: u32) -> (u32, u32) {
+    let (width, height) = if width == 0 || height == 0 { (1280, 720) } else { (width, height) };
+    let scale = (1920.0 / f64::from(width.max(height))).min(1080.0 / f64::from(width.min(height))).min(1.0);
+    let even = |n: u32| ((f64::from(n) * scale).round() as u32 / 2 * 2).max(2);
+    (even(width), even(height))
+}
+
+/// H.264 encoders, best first: x264 where FFmpeg has it, then the
+/// system's own, then Cisco's.
+const H264_ENCODERS: [&str; 4] = ["libx264", "h264_videotoolbox", "h264_mf", "libopenh264"];
+
+/// The best H.264 encoder this FFmpeg has.
+fn h264_encoder() -> Option<&'static str> {
+    static FOUND: OnceLock<Option<&'static str>> = OnceLock::new();
+    *FOUND.get_or_init(|| {
+        let output = command(&tools()?.ffmpeg).args(["-hide_banner", "-encoders"]).stdout(Stdio::piped()).output().ok()?;
+        let listed = String::from_utf8_lossy(&output.stdout);
+        H264_ENCODERS.into_iter().find(|name| listed.split_whitespace().any(|word| word == *name))
+    })
+}
+
+/// How `encoder` is asked for a frame `width` × `height` at `fps`: x264 by
+/// quality, the others by a bit rate that suits the size.
+fn encoder_args(encoder: &'static str, width: u32, height: u32, fps: f64) -> Vec<String> {
+    let mut args: Vec<String> = ["-c:v", encoder].map(String::from).to_vec();
+    if encoder == "libx264" {
+        args.extend(["-preset", "medium", "-crf", "23", "-profile:v", "high"].map(String::from));
+    } else {
+        let bits = f64::from(width) * f64::from(height) * fps.min(60.0) * 0.1;
+        args.extend(["-b:v".to_string(), format!("{}", bits.round() as u64)]);
+        if encoder == "h264_videotoolbox" {
+            args.extend(["-allow_sw", "1", "-profile:v", "high"].map(String::from));
+        }
+    }
+    args
+}
+
+/// Writes the part from `start` to `end` seconds of the video at `path` as
+/// an MP4 at `out` that plays in every browser: H.264 within 1080p and 60
+/// frames a second, AAC stereo sound, its index first so it plays while it
+/// loads, and none of the original's metadata, such as where it was taken.
+/// An `end` no later than `start` is the video's end. `done` hears how far
+/// it is, from 0 to 1. Setting `cancel` stops it; nothing is left at `out`
+/// unless it was made whole.
+pub fn web_video(path: &Path, out: &Path, start: f64, end: f64, cancel: &AtomicBool, done: &dyn Fn(f64)) -> Result<(), String> {
+    let tools = tools().ok_or(tr("Install FFmpeg to read and play videos"))?;
+    let encoder = h264_encoder().ok_or(tr("This FFmpeg can't make H.264 video"))?;
+    let source = info(path)?;
+    let (width, height) = web_size(source.width, source.height);
+    let until = (end > start).then(|| format!("{:.3}", end - start));
+    let length = if end > start { end - start } else { (source.duration - start).max(0.1) };
+    let mut filters = format!("scale={width}:{height},format=yuv420p");
+    if source.fps > 60.5 {
+        filters.push_str(",fps=60");
+    }
+    static RUN: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let partial = out.with_extension(format!("partial-{}-{}", std::process::id(), RUN.fetch_add(1, Ordering::Relaxed)));
+    let mut child = command(&tools.ffmpeg)
+        .args(["-nostdin", "-v", "error", "-y", "-ss", &format!("{start:.3}"), "-i"])
+        .arg(path)
+        .args(until.iter().flat_map(|until| ["-t", until.as_str()]))
+        .args(["-map", "0:v:0", "-map", "0:a:0?", "-sn", "-dn", "-map_metadata", "-1", "-map_chapters", "-1"])
+        .args(["-vf", &filters])
+        .args(encoder_args(encoder, width, height, source.fps))
+        .args(["-c:a", "aac", "-b:a", "128k", "-ac", "2", "-movflags", "+faststart", "-progress", "pipe:1", "-nostats", "-f", "mp4"])
+        .arg(&partial)
+        .stdout(Stdio::piped())
+        .spawn()
+        .map_err(|err| trf("Can't start FFmpeg: {}", &[&err]))?;
+    let reached = Arc::new(std::sync::atomic::AtomicU64::new(0));
+    if let Some(stdout) = child.stdout.take() {
+        let reached = Arc::clone(&reached);
+        let _ = std::thread::Builder::new().name("picasso-video-progress".into()).spawn(move || {
+            use std::io::BufRead;
+            for line in std::io::BufReader::new(stdout).lines().map_while(Result::ok) {
+                if let Some(micros) = line.strip_prefix("out_time_us=").and_then(|micros| micros.trim().parse::<u64>().ok()) {
+                    reached.store(micros, Ordering::Relaxed);
+                }
+            }
+        });
+    }
+    let status = loop {
+        if cancel.load(Ordering::Relaxed) {
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = std::fs::remove_file(&partial);
+            return Err("cancelled".into());
+        }
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => std::thread::sleep(Duration::from_millis(100)),
+            Err(err) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = std::fs::remove_file(&partial);
+                return Err(err.to_string());
+            }
+        }
+        done((reached.load(Ordering::Relaxed) as f64 / 1e6 / length).clamp(0.0, 1.0));
+    };
+    // FFmpeg can successfully write an audio-only or empty container when
+    // the selected range has no video frames.
+    if !status.success() || info(&partial).is_err() {
+        let _ = std::fs::remove_file(&partial);
+        return Err(tr("FFmpeg couldn't convert this video").into());
+    }
+    std::fs::rename(&partial, out).map_err(|err| {
+        let _ = std::fs::remove_file(&partial);
+        err.to_string()
+    })?;
+    done(1.0);
+    Ok(())
+}
+
+/// Writes a 320×240 test picture with a tone, `seconds` long, at `path`;
+/// false without FFmpeg.
+#[cfg(test)]
+pub fn test_clip(path: &Path, seconds: u32) -> bool {
+    let Some(tools) = tools() else { return false };
+    command(&tools.ffmpeg)
+        .args(["-nostdin", "-v", "error", "-y", "-f", "lavfi", "-i", &format!("testsrc=duration={seconds}:size=320x240:rate=25")])
+        .args(["-f", "lavfi", "-i", &format!("sine=frequency=440:duration={seconds}")])
+        .args(["-c:v", "mpeg4", "-c:a", "aac", "-shortest", "-metadata", "location=+25.0330+121.5654/", "-metadata", "creation_time=2024-05-01T10:00:00Z"])
+        .arg(path)
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
 /// A decoded frame ready to upload.
 pub struct Frame {
     pub width: usize,
@@ -391,6 +537,8 @@ pub struct Player {
     info_rx: Option<Receiver<Result<VideoInfo, String>>>,
     error: Option<String>,
     stream: Option<Stream>,
+    /// Longest edge of the frames it decodes.
+    edge: u32,
     want_play: bool,
     /// Show a frame at `position` even while paused, after a seek.
     want_frame: bool,
@@ -403,6 +551,12 @@ pub struct Player {
 impl Player {
     /// Opens `path` and starts playing as soon as it can.
     pub fn open(path: &Path) -> Self {
+        Self::open_within(path, PLAY_EDGE)
+    }
+
+    /// [`Player::open`] with frames that fit within `edge`, for a video
+    /// shown smaller than the screen.
+    pub fn open_within(path: &Path, edge: u32) -> Self {
         let (tx, rx) = bounded(1);
         let owned = path.to_path_buf();
         let _ = std::thread::Builder::new()
@@ -416,6 +570,7 @@ impl Player {
             info_rx: Some(rx),
             error: None,
             stream: None,
+            edge: edge.clamp(2, PLAY_EDGE),
             want_play: true,
             want_frame: false,
             position: 0.0,
@@ -535,7 +690,7 @@ impl Player {
         let info = self.info.as_ref()?;
         if self.stream.is_none() && !self.ended && (self.want_play || self.want_frame) {
             let volume = if self.muted { 0.0 } else { self.volume };
-            match Stream::start(&self.path, info, self.position, !self.want_play, mixer, volume) {
+            match Stream::start(&self.path, info, (self.position, self.edge), !self.want_play, mixer, volume) {
                 Ok(stream) => self.stream = Some(stream),
                 Err(err) => self.error = Some(err),
             }
@@ -551,6 +706,60 @@ impl Player {
             self.want_play = false;
         }
         frame
+    }
+
+    /// Moves to `to` seconds without showing it, for a frame shown from
+    /// elsewhere; playing goes on from there.
+    pub fn set_position(&mut self, to: f64) {
+        self.seek(to);
+        self.want_frame = false;
+    }
+}
+
+/// Single frames of one video, each as soon as FFmpeg finds it, and only
+/// the one asked for last: frames asked for meanwhile are skipped, so the
+/// frame shown keeps up with a handle being dragged.
+pub struct Scrubber {
+    asks: Sender<f64>,
+    frames: Receiver<Frame>,
+}
+
+impl Scrubber {
+    /// Opens `path` for frames that fit within `edge`, calling `wake`
+    /// whenever one is ready.
+    pub fn open(path: &Path, edge: u32, wake: impl Fn() + Send + 'static) -> Self {
+        let edge = edge.clamp(2, PLAY_EDGE);
+        let (asks, asked) = crossbeam_channel::unbounded::<f64>();
+        let (found, frames) = bounded(2);
+        let path = path.to_path_buf();
+        let _ = std::thread::Builder::new()
+            .name("picasso-video-scrub".into())
+            .spawn(move || {
+                let Ok(info) = info(&path) else { return };
+                let (width, height) = fit(info.width, info.height, edge);
+                while let Ok(first) = asked.recv() {
+                    let at = asked.try_iter().last().unwrap_or(first);
+                    // The very end has no frame to decode.
+                    let at = if info.duration > 0.0 { at.min(info.duration - 0.1) } else { at };
+                    let Ok(image) = grab(&path, at.max(0.0), width, height) else { continue };
+                    let frame = Frame { width: width as usize, height: height as usize, rgba: image.into_raw() };
+                    if found.send(frame).is_err() {
+                        return;
+                    }
+                    wake();
+                }
+            });
+        Self { asks, frames }
+    }
+
+    /// Asks for the frame `at` seconds in.
+    pub fn show(&self, at: f64) {
+        let _ = self.asks.send(at);
+    }
+
+    /// The frame found last, once, if one was found since.
+    pub fn frame(&self) -> Option<Frame> {
+        self.frames.try_iter().last()
     }
 }
 
@@ -577,13 +786,13 @@ impl Stream {
     fn start(
         path: &Path,
         info: &VideoInfo,
-        at: f64,
+        (at, edge): (f64, u32),
         paused: bool,
         mixer: Option<&rodio::mixer::Mixer>,
         volume: f32,
     ) -> Result<Self, String> {
         let tools = tools().ok_or(tr("FFmpeg is not installed"))?;
-        let (width, height) = fit(info.width, info.height, PLAY_EDGE);
+        let (width, height) = fit(info.width, info.height, edge);
         let start = format!("{at:.3}");
         let mut video = command(&tools.ffmpeg)
             .args(["-nostdin", "-v", "error", "-ss", &start, "-i"])
@@ -860,6 +1069,81 @@ mod tests {
         assert_eq!(fit(3840, 2160, 1920), (1920, 1080));
         assert_eq!(fit(641, 481, 1920), (640, 480));
         assert_eq!(fit(1080, 1920, 256), (144, 256));
+    }
+
+    #[test]
+    fn a_video_for_the_web_fits_1080p_either_way_up() {
+        assert_eq!(web_size(3840, 2160), (1920, 1080));
+        assert_eq!(web_size(2160, 3840), (1080, 1920));
+        assert_eq!(web_size(1440, 1440), (1080, 1080));
+        assert_eq!(web_size(4096, 1716), (1920, 804), "wider than 16:9 fits its width");
+        assert_eq!(web_size(641, 481), (640, 480), "never enlarged");
+        let x264 = encoder_args("libx264", 1920, 1080, 30.0);
+        assert!(x264.windows(2).any(|pair| pair == ["-crf", "23"]));
+        let system = encoder_args("h264_mf", 1920, 1080, 120.0);
+        assert!(system.windows(2).any(|pair| pair == ["-b:v", "12441600"]), "{system:?}: at most 60 frames a second");
+    }
+
+    #[test]
+    fn scrubbing_shows_the_frame_asked_for_last() {
+        let dir = std::env::temp_dir().join(format!("picasso-scrub-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let source = dir.join("source.mp4");
+        if !test_clip(&source, 3) {
+            return;
+        }
+        let woken = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counted = woken.clone();
+        let scrubber = Scrubber::open(&source, 160, move || {
+            counted.fetch_add(1, Ordering::Relaxed);
+        });
+        for at in [0.2, 0.9, 2.5] {
+            scrubber.show(at);
+        }
+        let wanted = grab(&source, 2.5, 160, 120).unwrap().into_raw();
+        let mut last = None;
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while Instant::now() < deadline && last.as_ref().is_none_or(|frame: &Frame| frame.rgba != wanted) {
+            if let Some(frame) = scrubber.frame() {
+                last = Some(frame);
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let last = last.expect("a frame was shown");
+        assert_eq!((last.width, last.height), (160, 120), "made to fit the edge asked for");
+        assert!(last.rgba == wanted, "the frame asked for last is shown");
+        assert!(woken.load(Ordering::Relaxed) >= 1, "the screen is woken for it");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_part_of_a_video_is_made_for_the_web_without_where_it_was_taken() {
+        let dir = std::env::temp_dir().join(format!("picasso-web-video-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let source = dir.join("source.mp4");
+        if !makes_web_video() || !test_clip(&source, 3) {
+            return;
+        }
+        let out = dir.join("web.mp4");
+        let last = std::sync::Mutex::new(0.0);
+        web_video(&source, &out, 1.0, 2.0, &AtomicBool::new(false), &|part| *last.lock().unwrap() = part).unwrap();
+        let made = info(&out).unwrap();
+        assert_eq!((made.video_codec.as_str(), made.width, made.height), ("h264", 320, 240));
+        assert!((made.duration - 1.0).abs() < 0.3, "{}", made.duration);
+        assert!(made.has_audio && made.gps.is_none() && made.taken_at.is_none(), "{made:?}");
+        assert_eq!(*last.lock().unwrap(), 1.0, "progress was reported to the end");
+        let original = info(&source).unwrap();
+        assert!(original.gps.is_some() && original.taken_at.is_some(), "the test's own clip has both: {original:?}");
+        let empty = dir.join("empty.mp4");
+        assert!(web_video(&source, &empty, original.duration, 0.0, &AtomicBool::new(false), &|_| {}).is_err());
+        assert!(!empty.exists());
+        assert!(std::fs::read_dir(&dir).unwrap().flatten().all(|entry| !entry.file_name().to_string_lossy().contains("partial")), "nothing half made is left");
+
+        // Cancelled before it starts: nothing is made.
+        let cancelled = dir.join("cancelled.mp4");
+        assert_eq!(web_video(&source, &cancelled, 0.0, 0.0, &AtomicBool::new(true), &|_| {}), Err("cancelled".into()));
+        assert!(!cancelled.exists());
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

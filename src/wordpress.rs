@@ -824,10 +824,10 @@ impl Client<'_> {
     }
 
     /// The API as its index describes it now, with where WordPress and
-    /// its pages say they are.
-    pub fn reread(&self, api: &Api) -> Option<Api> {
-        let (_, reply) = self.get(&api.root, None).ok()?;
-        api_index(&api.site, &api.root, &reply)
+    /// its pages say they are; `None` when the index can't be read.
+    pub fn reread(&self, api: &Api) -> Result<Option<Api>, Failure> {
+        let (_, reply) = self.get(&api.root, None)?;
+        Ok(api_index(&api.site, &api.root, &reply))
     }
 
     /// The time now on the site's clock, in its time zone, read from the
@@ -1045,7 +1045,9 @@ fn query_value(text: &str) -> String {
 
 /// Where post `id` is read on the site, by its id.
 pub fn post_link(api: &Api, id: i64) -> String {
-    format!("{}/?p={id}", api.home.as_ref().unwrap_or(&api.site).to_url().trim_end_matches('/'))
+    let site = api.home.as_ref().unwrap_or(&api.site);
+    let base = site.path.split('?').next().unwrap_or("/").trim_end_matches('/');
+    format!("{}{base}/?p={id}", site.origin())
 }
 
 pub fn edit_link(api: &Api, id: i64) -> String {
@@ -1382,7 +1384,9 @@ pub(crate) mod tests {
         assert_eq!(post_link(&api, 7), "http://localhost:10005/?p=7");
         let saved_before = Api { wordpress: None, home: None, ..api.clone() };
         assert_eq!((edit_link(&saved_before, 7), post_link(&saved_before, 7)), ("http://127.0.0.1:10005/wp-admin/post.php?post=7&action=edit".into(), "http://127.0.0.1:10005/?p=7".into()));
-        assert_eq!(Client::new(&local, Policy { development: true }).reread(&saved_before), Some(api), "a site connected earlier reads them when publishing");
+        assert_eq!(Client::new(&local, Policy { development: true }).reread(&saved_before), Ok(Some(api)), "a site connected earlier reads them when publishing");
+        let in_english = Api { home: Some(SiteUrl::parse("https://example.com/?lang=en").unwrap()), ..saved_before };
+        assert_eq!(post_link(&in_english, 7), "https://example.com/?p=7");
 
         let own_folder = Fake::default()
             .answer("https://example.com/", 200, &[], "<html>")

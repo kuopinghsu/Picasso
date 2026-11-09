@@ -948,12 +948,6 @@ impl PicassoApp {
             let mut job = job;
             super::story::read_profiles(&mut job.profiles, unread);
             let network = Network::new();
-            // A site that moved since it was checked opens and links where it is now.
-            if let Some(found) = Client::new(&network, job.policy).reread(&job.api) {
-                let url = |address: &Option<SiteUrl>| address.as_ref().map(SiteUrl::to_url).unwrap_or_default();
-                let _ = events.send(UiEvent::PublishProgress(site_id, log, Event::WordPress { url: url(&found.wordpress), home: url(&found.home) }));
-                (job.api.wordpress, job.api.home) = (found.wordpress, found.home);
-            }
             let run = if job.days.is_some() { publish::run_days } else { publish::run };
             let outcome = run(&network, &job, &progress, &mut |event| {
                 let _ = events.send(UiEvent::PublishProgress(site_id, log, event));

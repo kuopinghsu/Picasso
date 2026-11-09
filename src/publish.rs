@@ -19,7 +19,7 @@ use crate::gutenberg::{self, RouteMap, Unsupported, Uploaded, UploadedVideo};
 use crate::story_html::{MapTiles, Progress, Source, Videos};
 use crate::trip::{Block, MediaUse, Story, StoryBlock};
 use crate::upload::{self, UploadSize};
-use crate::wordpress::{edit_link, post_link, DraftPost, Api, Client, Credentials, Failure, Http, Media, Policy, TravelSupport};
+use crate::wordpress::{edit_link, post_link, DraftPost, Api, Client, Credentials, Failure, Http, Media, Policy, SiteUrl, TravelSupport};
 
 /// The furthest Journey day the VoyageLight reader accepts (`VL_GEO_DAY_MAX`).
 const JOURNEY_DAY_MAX: i64 = 9999;
@@ -324,7 +324,7 @@ pub enum Event {
     /// The Trip's Journey was made on the site, as this post.
     Journey { trip_id: i64, post_id: i64 },
     /// Where WordPress and its pages say they are, as read when the job
-    /// starts; empty when the site didn't say.
+    /// starts; empty when the site never said.
     WordPress { url: String, home: String },
 }
 
@@ -523,8 +523,27 @@ pub fn counts(outcome: &Result<Saved, Stopped>) -> (usize, usize) {
     }
 }
 
+/// `job` with where WordPress and its pages say they are now, so a site
+/// that moved since it was checked opens and links where it is. An index
+/// that can't be read leaves the addresses kept; a site that can't be
+/// reached stops the job here.
+fn located(client: &Client, job: &Job, progress: &Progress, report: &mut dyn FnMut(Event)) -> Result<Job, Stopped> {
+    let found = match client.reread(&job.api) {
+        Ok(found) => found,
+        Err(_) if progress.cancel.load(Ordering::Relaxed) => return Err(Stopped::Cancelled { uploaded: 0 }),
+        Err(failure @ (Failure::Timeout | Failure::Unreachable | Failure::Tls)) => return Err(Stopped::Site { failure, uploaded: 0 }),
+        Err(_) => None,
+    };
+    let Some(found) = found else { return Ok(job.clone()) };
+    let api = Api { wordpress: found.wordpress.or_else(|| job.api.wordpress.clone()), home: found.home.or_else(|| job.api.home.clone()), ..job.api.clone() };
+    let url = |address: &Option<SiteUrl>| address.as_ref().map(SiteUrl::to_url).unwrap_or_default();
+    report(Event::WordPress { url: url(&api.wordpress), home: url(&api.home) });
+    Ok(Job { api, ..job.clone() })
+}
+
 pub fn run(http: &dyn Http, job: &Job, progress: &Progress, report: &mut dyn FnMut(Event)) -> Result<Saved, Stopped> {
     let client = Client::new(http, job.policy).cancelled_by(&progress.cancel);
+    let job = &located(&client, job, progress, report)?;
     let support = travel(&client, job);
     let journey = start_journey(&client, job, support, report)?;
     let shown = shown_in_post(job, &job.blocks, support);
@@ -782,6 +801,7 @@ fn save_one(http: &dyn Http, job: &Job, meta: Option<serde_json::Value>, shown: 
 /// reported as it is, so a job that stops resumes where it was.
 pub fn run_days(http: &dyn Http, job: &Job, progress: &Progress, report: &mut dyn FnMut(Event)) -> Result<Saved, Stopped> {
     let client = Client::new(http, job.policy).cancelled_by(&progress.cancel);
+    let job = &located(&client, job, progress, report)?;
     let site = |failure: Failure| Stopped::Site { failure, uploaded: 0 };
     let parts = split_days(&job.blocks);
     let mut posts = job.days.clone().unwrap_or_default();
@@ -1476,6 +1496,7 @@ mod tests {
         let mut job = Job { blocks, days: Some(known), dates: Some("Nov 3 – Nov 8".into()), ..job(&dir, None, HashMap::new()) };
         job.story.show_date = true;
         let fake = Fake::default()
+            .answer("https://example.com/blog/wp-json/", 200, &[], r#"{"url":"https://example.com/blog","home":"https://www.example.com/travel","namespaces":["wp/v2"]}"#)
             .answer("https://example.com/blog/wp-json/wp/v2/posts/5?context=edit&_fields=id,status,title,excerpt,content,featured_media", 200, &[], r#"{"id":5,"status":"draft"}"#)
             .answer_to("POST", MEDIA, 201, &[], r#"{"id":41,"source_url":"https://example.com/blog/a.jpg"}"#)
             .answer_to("POST", POSTS, 201, &[], r#"{"id":8,"status":"draft"}"#)
@@ -1493,14 +1514,46 @@ mod tests {
         assert_eq!(titles, ["Spain – Granada [old]", "Spain – Toledo"], "only the Days without a post get one, empty");
         let index: serde_json::Value = serde_json::from_slice(&bodies.iter().find(|(key, _)| *key == format!("POST {POSTS}/5")).unwrap().1).unwrap();
         let content = index["content"].as_str().unwrap();
-        assert!(content.contains("Why we went") && content.contains(r#"<a href="https://example.com/blog/?p=8">Granada (old)</a>"#), "{content}");
+        assert!(content.contains("Why we went") && content.contains(r#"<a href="https://www.example.com/travel/?p=8">Granada (old)</a>"#), "posts link where the site's pages are: {content}");
         assert!(content.contains("Nov 3 – Nov 8"));
         let day: serde_json::Value = serde_json::from_slice(&bodies.iter().find(|(key, _)| *key == format!("POST {POSTS}/8")).unwrap().1).unwrap();
-        assert!(day["content"].as_str().unwrap().contains(r#"<a href="https://example.com/blog/?p=5">Spain</a>"#), "a Day links back to the index");
+        assert!(day["content"].as_str().unwrap().contains(r#"<a href="https://www.example.com/travel/?p=5">Spain</a>"#), "a Day links back to the index");
+        assert_eq!(saved.edit_link, "https://example.com/blog/wp-admin/post.php?post=5&action=edit");
+        assert!(events.contains(&Event::WordPress { url: "https://example.com/blog".into(), home: "https://www.example.com/travel".into() }), "kept for next time");
         assert!(day["content"].as_str().unwrap().contains("Nov 3 – Nov 8"));
         drop(bodies);
         let parts = events.iter().filter(|event| matches!(event, Event::Part { .. })).count();
         assert_eq!(parts, 1 + 2 + 3, "the index checked, two posts made, three saved: each kept as it happens");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_job_reads_where_the_site_is_keeps_what_it_knew_and_stops_when_it_cant_be_reached() {
+        struct Down;
+        impl Http for Down {
+            fn send(&self, _: &crate::wordpress::Request) -> Result<crate::wordpress::Reply, Failure> {
+                Err(Failure::Unreachable)
+            }
+        }
+        let dir = temp_dir("located");
+        let known = SiteUrl::parse("http://localhost:10005").unwrap();
+        let job = Job { api: Api { wordpress: Some(known.clone()), home: Some(known.clone()), ..job(&dir, None, HashMap::new()).api }, ..job(&dir, None, HashMap::new()) };
+        let progress = Progress::default();
+        let mut events = Vec::new();
+
+        let silent = Fake::default().answer("https://example.com/blog/wp-json/", 200, &[], r#"{"namespaces":["wp/v2"]}"#);
+        let found = located(&Client::new(&silent, job.policy), &job, &progress, &mut |event| events.push(event)).unwrap();
+        assert_eq!((found.api.wordpress.as_ref(), found.api.home.as_ref()), (Some(&known), Some(&known)), "an index that doesn't say leaves them as they were");
+        assert_eq!(events, [Event::WordPress { url: "http://localhost:10005/".into(), home: "http://localhost:10005/".into() }]);
+
+        let blocked = Fake::default();
+        assert_eq!(located(&Client::new(&blocked, job.policy), &job, &progress, &mut |_| {}).unwrap().api, job.api, "an index that can't be read changes nothing");
+
+        let stopped = located(&Client::new(&Down, job.policy), &job, &progress, &mut |_| {});
+        assert_eq!(stopped.err(), Some(Stopped::Site { failure: Failure::Unreachable, uploaded: 0 }), "stops before anything else is tried");
+        let cancelled = Progress::default();
+        cancelled.cancel.store(true, Ordering::Relaxed);
+        assert_eq!(located(&Client::new(&Down, job.policy).cancelled_by(&cancelled.cancel), &job, &cancelled, &mut |_| {}).err(), Some(Stopped::Cancelled { uploaded: 0 }));
         let _ = std::fs::remove_dir_all(dir);
     }
 

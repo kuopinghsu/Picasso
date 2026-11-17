@@ -1,0 +1,133 @@
+# Deletes old workflow runs that did not succeed and did not publish a
+# release, so the Actions tab and its artifact storage stay small. A run is
+# deleted when all of these hold:
+#   - it finished (queued and in-progress runs are left alone),
+#   - its conclusion is not `success` (failure, cancelled, skipped,
+#     timed_out, startup_failure, action_required, neutral, stale),
+#   - it was created more than `days` days ago,
+#   - it was not triggered by a tag that has a GitHub release.
+# It runs weekly with the default of 30 days, or by hand with any number of
+# days (0 means every finished, unsuccessful run) and an optional dry run that
+# only lists what it would delete. To stay inside the token's API limits, one
+# run deletes at most MAX_DELETES runs, a second apart; the next run carries
+# on with the rest. The job fails if any deletion fails.
+name: Cleanup workflow runs
+
+on:
+  schedule:
+    - cron: "17 3 * * 0" # Sundays 03:17 UTC
+  workflow_dispatch:
+    inputs:
+      days:
+        description: Delete runs created more than this many days ago (0 = all)
+        type: number
+        default: 30
+      dry_run:
+        description: Only list the runs that would be deleted
+        type: boolean
+        default: false
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: cleanup-runs
+  cancel-in-progress: false
+
+jobs:
+  cleanup:
+    name: Delete old unsuccessful runs
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Delete runs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          # Empty on a scheduled run; the script then uses 30. Not `|| 30`
+          # here, which would also turn an entered 0 into 30.
+          DAYS_INPUT: ${{ inputs.days }}
+          DRY_RUN: ${{ inputs.dry_run == true }}
+          MAX_DELETES: 500
+        run: |
+          set -euo pipefail
+
+          DAYS="${DAYS_INPUT:-30}"
+          if ! [[ "$DAYS" =~ ^[0-9]+$ ]]; then
+            echo "::error::days must be a whole number, got '$DAYS'"
+            exit 1
+          fi
+          cutoff=$(date -u -d "$DAYS days ago" +%Y-%m-%dT%H:%M:%SZ)
+          echo "Looking for finished, unsuccessful runs created before $cutoff"
+
+          # Tags that have a release (drafts and pre-releases included): runs
+          # for them are kept whatever their conclusion.
+          released=$(gh api --paginate "repos/$REPO/releases?per_page=100" \
+            --jq '.[].tag_name' | jq -Rsc 'split("\n") | map(select(length > 0))')
+
+          # No server-side filters: with `created`, `status`, or similar the
+          # listing stops at 1,000 runs. Without them it pages through every
+          # run, and the age and conclusion are checked here instead.
+          gh api --paginate "repos/$REPO/actions/runs?per_page=100" \
+            --jq '.workflow_runs[]' \
+            | jq -c --arg cutoff "$cutoff" '
+                select(.status == "completed"
+                       and .conclusion != "success"
+                       and .created_at < $cutoff)' > old.jsonl
+
+          kept=$(jq -s --argjson released "$released" \
+            'map(select((.head_branch // "") | IN($released[]))) | length' old.jsonl)
+
+          # Unit-separator delimited, not tabs: read collapses empty
+          # tab-separated fields, which would shift the columns.
+          jq -r --argjson released "$released" '
+              select((.head_branch // "") | IN($released[]) | not)
+              | [.id, (.head_branch // "-"), .conclusion, .created_at, .name]
+              | join("\u001f")' old.jsonl > candidates.txt
+          total=$(wc -l < candidates.txt)
+          echo "Found $total run(s) to delete; keeping $kept for released tags"
+
+          deleted=0 failed=0
+          # Read from fd 3 so nothing gh does with stdin can eat the list.
+          while IFS=$'\x1f' read -r -u 3 id ref conclusion created name; do
+            if (( deleted + failed >= MAX_DELETES )); then
+              echo "::notice::Stopped at $MAX_DELETES runs; the next run continues"
+              break
+            fi
+            line="#$id  $created  $conclusion  $name ($ref)"
+            if [[ "$DRY_RUN" == "true" ]]; then
+              echo "Would delete $line"
+              deleted=$((deleted + 1))
+              continue
+            fi
+            if out=$(gh api -X DELETE "repos/$REPO/actions/runs/$id" 2>&1 </dev/null); then
+              echo "Deleted $line"
+              deleted=$((deleted + 1))
+            else
+              echo "::warning::Could not delete $line: $out"
+              failed=$((failed + 1))
+              if grep -qiE 'rate limit|HTTP 429' <<< "$out"; then
+                echo "::error::Hit the API rate limit; stopping"
+                break
+              fi
+            fi
+            # GitHub asks for a pause between mutating requests to avoid
+            # secondary rate limits.
+            sleep 1
+          done 3< candidates.txt
+
+          verb=$([[ "$DRY_RUN" == "true" ]] && echo "Would delete" || echo "Deleted")
+          {
+            echo "### Workflow run cleanup"
+            echo ""
+            echo "- Cutoff: runs created before \`$cutoff\` ($DAYS days)"
+            echo "- Matching runs: $total"
+            echo "- $verb: $deleted"
+            echo "- Kept for released tags: $kept"
+            echo "- Failed to delete: $failed"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+          if (( failed > 0 )); then
+            echo "::error::$failed run(s) could not be deleted"
+            exit 1
+          fi

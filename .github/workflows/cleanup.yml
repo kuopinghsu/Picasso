@@ -9,7 +9,8 @@
 #     included). Draft releases are not protected: a read-only token cannot
 #     see them.
 # It runs daily with the default of 30 days, or by hand with any number of
-# days (0 means every finished, unsuccessful run), an optional dry run that
+# days (0, or the `all` option, means every finished, unsuccessful run whatever
+# its age), an optional dry run that
 # lists every run found, and an optional full scan. GitHub returns at most
 # 1,000 runs per filtered query, so a large backlog is found, and deleted, over
 # several runs; the log notes when a query was capped. Runs that failed to
@@ -31,6 +32,10 @@ on:
         description: Delete runs created more than this many days ago (0 = all)
         type: number
         default: 30
+      all:
+        description: Delete every unsuccessful run, whatever its age (ignores days)
+        type: boolean
+        default: false
       dry_run:
         description: Only list the runs that would be deleted
         type: boolean
@@ -62,6 +67,7 @@ jobs:
           # Empty on a scheduled run; the script then uses 30. Not `|| 30`
           # here, which would also turn an entered 0 into 30.
           DAYS_INPUT: ${{ inputs.days }}
+          ALL: ${{ inputs.all == true }}
           DRY_RUN: ${{ inputs.dry_run == true }}
           FULL_SCAN: ${{ inputs.full_scan == true }}
           MAX_DELETES: 500
@@ -71,6 +77,10 @@ jobs:
           set -euo pipefail
 
           DAYS="${DAYS_INPUT:-30}"
+          # `all` is the same as days=0: the cutoff is now, so every
+          # finished, unsuccessful run qualifies. Runs still in progress,
+          # including this one, are left alone.
+          [[ "$ALL" == "true" ]] && DAYS=0
           if ! [[ "$DAYS" =~ ^[0-9]+$ ]]; then
             echo "::error::days must be a whole number, got '$DAYS'"
             exit 1

@@ -5,17 +5,26 @@
 #   - its conclusion is not `success` (failure, cancelled, skipped,
 #     timed_out, startup_failure, action_required, neutral, stale),
 #   - it was created more than `days` days ago,
-#   - it was not triggered by a tag that has a GitHub release.
-# It runs weekly with the default of 30 days, or by hand with any number of
-# days (0 means every finished, unsuccessful run) and an optional dry run that
-# only lists what it would delete. To stay inside the token's API limits, one
-# run deletes at most MAX_DELETES runs, a second apart; the next run carries
-# on with the rest. The job fails if any deletion fails.
+#   - it was not run for a tag that has a published release (pre-releases
+#     included). Draft releases are not protected: a read-only token cannot
+#     see them.
+# It runs daily with the default of 30 days, or by hand with any number of
+# days (0 means every finished, unsuccessful run), an optional dry run that
+# lists every run found, and an optional full scan. GitHub returns at most
+# 1,000 runs per filtered query, so a large backlog is found, and deleted, over
+# several runs; the log notes when a query was capped. Runs that failed to
+# start can't be filtered for directly: the daily run catches them as the
+# cutoff passes them, and a full scan (run once by hand) catches older ones.
+# To stay inside the token's API limits, one run deletes at most MAX_DELETES
+# runs, and fewer when listing used up part of the hourly budget, a second
+# apart; the next day's run carries on with the rest. Each run is checked just
+# before it is deleted, and skipped if it was re-run meanwhile. The job fails
+# if any check or deletion fails.
 name: Cleanup workflow runs
 
 on:
   schedule:
-    - cron: "17 3 * * 0" # Sundays 03:17 UTC
+    - cron: "17 3 * * *" # daily 03:17 UTC
   workflow_dispatch:
     inputs:
       days:
@@ -24,6 +33,10 @@ on:
         default: 30
       dry_run:
         description: Only list the runs that would be deleted
+        type: boolean
+        default: false
+      full_scan:
+        description: Also scan the whole history month by month (costs more requests)
         type: boolean
         default: false
 
@@ -39,6 +52,8 @@ jobs:
   cleanup:
     name: Delete old unsuccessful runs
     runs-on: ubuntu-24.04
+    # 500 deletions a second apart take about 10 minutes.
+    timeout-minutes: 30
     steps:
       - name: Delete runs
         env:
@@ -48,7 +63,10 @@ jobs:
           # here, which would also turn an entered 0 into 30.
           DAYS_INPUT: ${{ inputs.days }}
           DRY_RUN: ${{ inputs.dry_run == true }}
+          FULL_SCAN: ${{ inputs.full_scan == true }}
           MAX_DELETES: 500
+          # API requests left untouched for other workflows in the same hour.
+          RESERVE: 100
         run: |
           set -euo pipefail
 
@@ -60,38 +78,116 @@ jobs:
           cutoff=$(date -u -d "$DAYS days ago" +%Y-%m-%dT%H:%M:%SZ)
           echo "Looking for finished, unsuccessful runs created before $cutoff"
 
-          # Tags that have a release (drafts and pre-releases included): runs
-          # for them are kept whatever their conclusion.
+          # Tags that have a published release: runs for them are kept
+          # whatever their conclusion.
           released=$(gh api --paginate "repos/$REPO/releases?per_page=100" \
             --jq '.[].tag_name' | jq -Rsc 'split("\n") | map(select(length > 0))')
 
-          # No server-side filters: with `created`, `status`, or similar the
-          # listing stops at 1,000 runs. Without them it pages through every
-          # run, and the age and conclusion are checked here instead.
-          gh api --paginate "repos/$REPO/actions/runs?per_page=100" \
-            --jq '.workflow_runs[]' \
-            | jq -c --arg cutoff "$cutoff" '
-                select(.status == "completed"
-                       and .conclusion != "success"
-                       and .created_at < $cutoff)' > old.jsonl
+          # Lists runs matching a status and `created` range into
+          # listed.jsonl, and notes the query when GitHub's cap of 1,000
+          # results per filtered query cut it short.
+          : > listed.jsonl
+          capped=""
+          list_runs() {
+            gh api --paginate \
+              "repos/$REPO/actions/runs?per_page=100&status=$1&created=$2" \
+              --jq '.workflow_runs[]
+                    | {id, status, conclusion, created_at, head_branch,
+                       name, event}' > page.jsonl
+            local n
+            n=$(jq -s length page.jsonl)
+            cat page.jsonl >> listed.jsonl
+            if (( n >= 1000 )); then
+              capped="$capped $1@$2"
+              return 1
+            fi
+          }
 
+          # Only runs older than the cutoff are listed, one query per
+          # unsuccessful conclusion, so recent and successful runs cost no
+          # requests. A capped query drains over later runs, since deleted
+          # runs drop out of its results. The `completed` query catches
+          # conclusions the status filter doesn't accept (such as
+          # startup_failure); its results are mostly successes that are
+          # never deleted, so it only ever sees the newest 1,000 runs before
+          # the cutoff. That covers each new run as the cutoff moves past
+          # it, and FULL_SCAN covers older ones.
+          for status in failure cancelled timed_out action_required \
+                        neutral skipped stale completed; do
+            list_runs "$status" "%3C$cutoff" || true
+          done
+
+          # A full scan lists every finished run before the cutoff a month
+          # at a time, splitting a month into days when it has more than
+          # 1,000 runs, from the repository's creation onward.
+          if [[ "$FULL_SCAN" == "true" ]]; then
+            month=$(gh api "repos/$REPO" --jq '.created_at[:7]')-01
+            while [[ "$month" < "${cutoff:0:10}" ]]; do
+              next=$(date -u -d "$month +1 month" +%Y-%m-%d)
+              if ! list_runs completed "${month}..${next}"; then
+                # The days below cover the month, so it isn't capped.
+                capped="${capped% completed@${month}..${next}}"
+                day=$month
+                while [[ "$day" < "$next" ]]; do
+                  list_runs completed "$day" || true
+                  day=$(date -u -d "$day +1 day" +%Y-%m-%d)
+                done
+              fi
+              month=$next
+            done
+          fi
+
+          # Runs created before the cutoff can't be added during listing, so
+          # pages don't shift; unique_by only merges overlapping queries.
+          # The age is checked again because whole months and days overshoot
+          # the cutoff.
+          jq -sc --arg cutoff "$cutoff" '
+              unique_by(.id)[]
+              | select(.status == "completed" and .conclusion != "success"
+                       and .created_at < $cutoff)' listed.jsonl > old.jsonl
+          if [[ -n "$capped" ]]; then
+            echo "::notice::Listing capped at 1,000 runs for:$capped; later runs see the rest"
+          fi
+
+          # A run belongs to a release when it ran for a released tag, not
+          # for a pull request whose branch happens to share the tag's name.
+          protected='((.head_branch // "") | IN($released[]))
+                     and (.event | startswith("pull_request") | not)'
           kept=$(jq -s --argjson released "$released" \
-            'map(select((.head_branch // "") | IN($released[]))) | length' old.jsonl)
+            "map(select($protected)) | length" old.jsonl)
 
-          # Unit-separator delimited, not tabs: read collapses empty
-          # tab-separated fields, which would shift the columns.
-          jq -r --argjson released "$released" '
-              select((.head_branch // "") | IN($released[]) | not)
-              | [.id, (.head_branch // "-"), .conclusion, .created_at, .name]
-              | join("\u001f")' old.jsonl > candidates.txt
+          # One record per line, fields split by the unit separator, not
+          # tabs (read collapses empty tab-separated fields). Line breaks in
+          # run names are flattened so a record stays on one line.
+          jq -r --argjson released "$released" "
+              select($protected | not)
+              | [.id, (.head_branch // \"-\"), .conclusion, .created_at,
+                 ((.name // \"\") | gsub(\"[\\r\\n\\u001f]\"; \" \"))]
+              | map(tostring) | join(\"\\u001f\")" old.jsonl > candidates.txt
           total=$(wc -l < candidates.txt)
           echo "Found $total run(s) to delete; keeping $kept for released tags"
+
+          # Deletions allowed this run: MAX_DELETES, or what is left of the
+          # hourly API budget after listing, whichever is smaller. Each run
+          # costs two requests, a check and a delete. A dry run makes no
+          # requests per run, so it lists every run found.
+          limit=$total
+          if [[ "$DRY_RUN" != "true" ]]; then
+            remaining=$(gh api rate_limit --jq '.resources.core.remaining')
+            limit=$(( (remaining - RESERVE) / 2 ))
+            (( limit > MAX_DELETES )) && limit=$MAX_DELETES
+            (( limit < 0 )) && limit=0
+            echo "API requests remaining: $remaining; deleting at most $limit"
+            if (( limit == 0 && total > 0 )); then
+              echo "::warning::No API budget left to delete $total run(s); try again later"
+            fi
+          fi
 
           deleted=0 failed=0
           # Read from fd 3 so nothing gh does with stdin can eat the list.
           while IFS=$'\x1f' read -r -u 3 id ref conclusion created name; do
-            if (( deleted + failed >= MAX_DELETES )); then
-              echo "::notice::Stopped at $MAX_DELETES runs; the next run continues"
+            if (( deleted + failed >= limit )); then
+              echo "::notice::Stopped at $limit runs; the next run continues"
               break
             fi
             line="#$id  $created  $conclusion  $name ($ref)"
@@ -100,7 +196,14 @@ jobs:
               deleted=$((deleted + 1))
               continue
             fi
-            if out=$(gh api -X DELETE "repos/$REPO/actions/runs/$id" 2>&1 </dev/null); then
+            # Someone may have re-run it since it was listed; deleting it
+            # now would kill the re-run.
+            if ! now=$(gh api "repos/$REPO/actions/runs/$id" --jq '.status' 2>&1 </dev/null); then
+              echo "::warning::Could not check $line: $now"
+              failed=$((failed + 1))
+            elif [[ "$now" != "completed" ]]; then
+              echo "Skipped $line: now $now"
+            elif out=$(gh api -X DELETE "repos/$REPO/actions/runs/$id" 2>&1 </dev/null); then
               echo "Deleted $line"
               deleted=$((deleted + 1))
             else
@@ -123,6 +226,7 @@ jobs:
             echo "- Cutoff: runs created before \`$cutoff\` ($DAYS days)"
             echo "- Matching runs: $total"
             echo "- $verb: $deleted"
+            echo "- Left for the next run: $(( total - deleted ))"
             echo "- Kept for released tags: $kept"
             echo "- Failed to delete: $failed"
           } | tee -a "$GITHUB_STEP_SUMMARY"

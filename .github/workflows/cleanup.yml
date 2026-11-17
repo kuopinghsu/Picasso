@@ -1,12 +1,13 @@
-# Deletes workflow runs that did not succeed and did not publish a release,
-# so the Actions tab and its artifact storage stay small.
+# Deletes old workflow runs, by default only those that did not succeed, so
+# the Actions tab and its artifact storage stay small.
 #
 # Which runs are deleted: every run that
 #   - finished (queued and in-progress runs, this one included, are left
 #     alone, and a run is checked again just before it is deleted in case it
 #     was re-run meanwhile),
 #   - did not succeed (failure, cancelled, skipped, timed_out,
-#     startup_failure, action_required, neutral, stale),
+#     startup_failure, action_required, neutral, stale), or, with
+#     `result: any`, succeeded too,
 #   - is old enough (see `age` and `days`),
 #   - was not run for a tag with a published release (pre-releases included;
 #     drafts are not protected, since a read-only token cannot see them),
@@ -17,8 +18,10 @@
 # hand from the Actions tab with these options:
 #   mode   preview  lists what would be deleted and deletes nothing (default)
 #          delete   deletes them
+#   result unsuccessful  only runs that did not succeed (default)
+#          any           successful runs too (their logs and artifacts go)
 #   age    older-than-days  only runs older than `days` (default)
-#          any              every unsuccessful run, whatever its age
+#          any              runs of any age
 #   days   the age for `older-than-days` (default 30, at least 1)
 #   scan   recent  reads the newest 1,000 runs per result (default, cheap)
 #          full    also reads the whole history month by month, to catch
@@ -42,8 +45,13 @@ on:
         type: choice
         options: [preview, delete]
         default: preview
+      result:
+        description: "unsuccessful: only runs that did not succeed. any: successful runs too (their logs and artifacts are lost)."
+        type: choice
+        options: [unsuccessful, any]
+        default: unsuccessful
       age:
-        description: "older-than-days: only runs older than Days. any: every unsuccessful run, each branch's newest run is always kept."
+        description: "older-than-days: only runs older than Days. any: runs of any age. Each branch's newest run and released tags' runs are always kept."
         type: choice
         options: [older-than-days, any]
         default: older-than-days
@@ -67,7 +75,7 @@ concurrency:
 
 jobs:
   cleanup:
-    name: Delete old unsuccessful runs
+    name: Delete old workflow runs
     runs-on: ubuntu-24.04
     # 500 runs, each a check, a delete and a one-second pause, take
     # 15 to 20 minutes.
@@ -78,9 +86,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           # Inputs are empty on a scheduled run, which therefore deletes
-          # (not preview), uses 30 days, and scans recent runs only.
+          # (not preview) only unsuccessful runs, uses 30 days, and scans
+          # recent runs only.
           DAYS_INPUT: ${{ inputs.days }}
           ALL: ${{ inputs.age == 'any' }}
+          WITH_SUCCESS: ${{ inputs.result == 'any' }}
           DRY_RUN: ${{ inputs.mode == 'preview' }}
           FULL_SCAN: ${{ inputs.scan == 'full' }}
           MAX_DELETES: 500
@@ -106,9 +116,10 @@ jobs:
           mode_text=$([[ "$DRY_RUN" == "true" ]] && echo preview || echo delete)
           age_text=$([[ "$ALL" == "true" ]] && echo "any" || echo "older than $DAYS days")
           scan_text=$([[ "$FULL_SCAN" == "true" ]] && echo full || echo recent)
-          echo "Mode: $mode_text, age: $age_text, scan: $scan_text"
+          result_text=$([[ "$WITH_SUCCESS" == "true" ]] && echo any || echo unsuccessful)
+          echo "Mode: $mode_text, result: $result_text, age: $age_text, scan: $scan_text"
           cutoff=$(date -u -d "$DAYS days ago" +%Y-%m-%dT%H:%M:%SZ)
-          echo "Looking for finished, unsuccessful runs created before $cutoff"
+          echo "Looking for finished runs ($result_text) created before $cutoff"
 
           # Tags that have a published release: runs for them are kept
           # whatever their conclusion.
@@ -149,8 +160,11 @@ jobs:
           # never deleted, so it only ever sees the newest 1,000 runs before
           # the cutoff. That covers each new run as the cutoff moves past
           # it, and FULL_SCAN covers older ones.
-          for status in failure cancelled timed_out action_required \
-                        neutral skipped stale completed; do
+          # With result: any, successes get their own query too, so a
+          # capped one drains as they are deleted.
+          statuses="failure cancelled timed_out action_required neutral skipped stale completed"
+          [[ "$WITH_SUCCESS" == "true" ]] && statuses="$statuses success"
+          for status in $statuses; do
             list_runs "status=$status&created=%3C$cutoff" listed.jsonl || true
           done
 
@@ -180,9 +194,10 @@ jobs:
           # pages don't shift; unique_by only merges overlapping queries.
           # The age is checked again because whole months and days overshoot
           # the cutoff.
-          jq -sc --arg cutoff "$cutoff" '
+          jq -sc --arg cutoff "$cutoff" --argjson with_success "$WITH_SUCCESS" '
               unique_by(.id)[]
-              | select(.status == "completed" and .conclusion != "success"
+              | select(.status == "completed"
+                       and ($with_success or .conclusion != "success")
                        and .created_at < $cutoff)' listed.jsonl > old.jsonl
           if [[ -n "$capped" ]]; then
             echo "::notice::Listing capped at 1,000 runs for:$capped; later runs see the rest"
@@ -269,7 +284,8 @@ jobs:
                   break
                 fi
               fi
-            elif [[ "$now" != completed* || "$now" == "completed success" ]]; then
+            elif [[ "$now" != completed* ]] ||
+                 [[ "$WITH_SUCCESS" != "true" && "$now" == "completed success" ]]; then
               echo "Skipped $line: now $now"
               skipped=$((skipped + 1))
             elif out=$(gh api -X DELETE "repos/$REPO/actions/runs/$id" 2>&1 </dev/null); then
@@ -292,7 +308,7 @@ jobs:
           {
             echo "### Workflow run cleanup"
             echo ""
-            echo "- Mode: $mode_text; age: $age_text; scan: $scan_text"
+            echo "- Mode: $mode_text; result: $result_text; age: $age_text; scan: $scan_text"
             echo "- Cutoff: runs created before \`$cutoff\`"
             echo "- Matching runs: $total"
             echo "- $verb: $deleted"

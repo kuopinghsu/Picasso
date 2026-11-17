@@ -20,7 +20,7 @@ image = { version = "0.25", default-features = false, features = ["jpeg", "png",
 notify = "8"
 open = "5"
 rfd = "0.15"
-rusqlite = { version = "0.40", features = ["bundled"] }
+rusqlite = { version = "0.41", features = ["bundled"] }
 trash = "5"
 ureq = "3.1"
 rodio = { version = "0.23.0", default-features = false, features = ["playback"] }

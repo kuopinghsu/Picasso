@@ -772,6 +772,7 @@ impl PicassoApp {
                     let (done, total) = (job.done.load(Ordering::Relaxed), job.total.load(Ordering::Relaxed));
                     let status = match job.converting.load(Ordering::Relaxed) {
                         _ if job.sending.load(Ordering::Relaxed) => tr("Uploading a video to the site…").to_string(),
+                        0 if job.uploading.load(Ordering::Relaxed) => trf("Sending to the site: {} of {}", &[&done, &total]),
                         0 => trf("Rendering photos: {} of {}", &[&done, &total]),
                         percent => trf("Making a video for the web: {}%", &[&(percent - 1)]),
                     };
@@ -1411,22 +1412,30 @@ impl PicassoApp {
         let Some(editor) = &mut self.story else { return };
         let dates = super::trips::story_dates(trip, editor.story.dates);
         let story = &mut editor.story;
-        let title = egui::TextEdit::singleline(&mut story.title)
-            .hint_text(RichText::new(tr("Untitled story")).size(32.0).color(theme::muted()))
-            .font(egui::FontId::proportional(32.0))
-            .frame(egui::Frame::NONE)
-            .desired_width(f32::INFINITY);
-        if ui.add(title).changed() {
+        // The title and subtitle wrap onto more lines, as on the page, rather
+        // than run past the edge; they stay one paragraph each.
+        let title = heading_edit(&mut story.title).hint_text(RichText::new(tr("Untitled story")).size(32.0).color(theme::muted())).font(egui::FontId::proportional(32.0));
+        let title = ui.add(title);
+        if title.changed() {
+            one_line(&mut story.title);
             *typed = Some((String::new(), 0));
         }
-        let subtitle = egui::TextEdit::singleline(&mut story.subtitle)
+        // Enter adds no line break: in the title it goes on to the subtitle,
+        // and in the subtitle it ends editing, as in a one-line field.
+        let title_done = enter_pressed(ui, &title);
+        let subtitle = heading_edit(&mut story.subtitle)
             .hint_text(RichText::new(tr("Subtitle")).size(18.0).color(theme::muted()))
             .font(egui::FontId::proportional(18.0))
-            .text_color(theme::muted())
-            .frame(egui::Frame::NONE)
-            .desired_width(f32::INFINITY);
-        if ui.add(subtitle).changed() {
+            .text_color(theme::muted());
+        let subtitle = ui.add(subtitle);
+        if subtitle.changed() {
+            one_line(&mut story.subtitle);
             *typed = Some((String::new(), 1));
+        }
+        if title_done {
+            subtitle.request_focus();
+        } else if enter_pressed(ui, &subtitle) {
+            subtitle.surrender_focus();
         }
         ui.add_space(4.0);
         // The byline as the page has it: who wrote it, and when the trip was.
@@ -2785,6 +2794,24 @@ fn styled_field(
         ctl.last = Some((id, start, end));
     }
     (response, first)
+}
+
+/// A field for the Story's title or subtitle: it wraps at the page's width,
+/// and Enter adds no line break, since each is a single paragraph.
+fn heading_edit(text: &mut String) -> egui::TextEdit<'_> {
+    egui::TextEdit::multiline(text).desired_rows(1).return_key(None).frame(egui::Frame::NONE).desired_width(f32::INFINITY)
+}
+
+/// Whether Enter was pressed in the field `response` belongs to.
+fn enter_pressed(ui: &egui::Ui, response: &egui::Response) -> bool {
+    response.has_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter))
+}
+
+/// `text` with its line breaks, which a paste can bring, made spaces.
+fn one_line(text: &mut String) {
+    if text.contains(['\n', '\r']) {
+        *text = text.replace("\r\n", " ").replace(['\n', '\r'], " ");
+    }
 }
 
 /// Whether field `field` of block `uid` is to get the caret, and where.
@@ -4736,6 +4763,34 @@ pub(super) fn story_name(story: &Story) -> String {
 mod tests {
     use super::*;
 
+    #[test]
+    fn a_long_title_wraps_onto_more_lines_instead_of_running_past_the_edge() {
+        let ctx = egui::Context::default();
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, Vec2::new(320.0, 600.0));
+        let mut heights = (0.0, 0.0, 0.0);
+        let mut output = ctx.run_ui(egui::RawInput { screen_rect: Some(screen), ..Default::default() }, |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                let font = egui::FontId::proportional(32.0);
+                let short = ui.add(heading_edit(&mut String::from("Harbour")).font(font.clone()));
+                let long = ui.add(heading_edit(&mut "Along the coast, part one: eighteen days from harbour to harbour".to_string()).font(font));
+                heights = (short.rect.height(), long.rect.height(), long.rect.width());
+            });
+        });
+        output.textures_delta.clear();
+        assert!(heights.1 > heights.0 * 1.5, "a long title takes more than one line: {heights:?}");
+        assert!(heights.2 <= 320.0, "and stays within the page: {heights:?}");
+    }
+
+    #[test]
+    fn a_pasted_title_stays_one_line() {
+        let mut title = String::from("Coast\r\npart one\nday 1\r");
+        one_line(&mut title);
+        assert_eq!(title, "Coast part one day 1 ");
+        let mut plain = String::from("Coast");
+        one_line(&mut plain);
+        assert_eq!(plain, "Coast");
+    }
+
     fn editor(blocks: Vec<Block>) -> StoryEditor {
         let story = Story {
             id: 1,
@@ -5038,8 +5093,8 @@ mod tests {
     #[test]
     fn words_count_runs_of_letters_and_each_wide_character() {
         assert_eq!(words("A day in Kyōto — 5 photos"), 6);
-        assert_eq!(words("京都の一日"), 5);
-        assert_eq!(words("Day 1：東京"), 4);
+        assert_eq!(words("古都の一日"), 5);
+        assert_eq!(words("Day 1：港口"), 4);
     }
 
     #[test]
@@ -5226,8 +5281,8 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("library.db");
         let db = crate::db::Database::open(&path).unwrap();
-        let trip_id = db.create_trip(&crate::trip::TripDraft::new("Kyoto", "Asia/Tokyo")).unwrap();
-        let story_id = db.create_story(trip_id, "Kyoto").unwrap();
+        let trip_id = db.create_trip(&crate::trip::TripDraft::new("Temple", "Asia/Tokyo")).unwrap();
+        let story_id = db.create_story(trip_id, "Temple").unwrap();
         let newer = Block::read("paragraph", crate::trip::BLOCK_VERSION + 1, r#"{"text":"hi","style":"lead"}"#, Vec::new());
         let written: Vec<StoryBlock> = [Block::Paragraph("Before".into()), newer, Block::Paragraph("After".into())].into_iter().map(StoryBlock::new).collect();
         db.save_story_blocks(story_id, 1, &written).unwrap();
@@ -5284,12 +5339,12 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("library.db");
         let db = crate::db::Database::open(&path).unwrap();
-        let trip_id = db.create_trip(&crate::trip::TripDraft::new("Kyoto", "Asia/Tokyo")).unwrap();
-        let story_id = db.create_story(trip_id, "Kyoto").unwrap();
+        let trip_id = db.create_trip(&crate::trip::TripDraft::new("Temple", "Asia/Tokyo")).unwrap();
+        let story_id = db.create_story(trip_id, "Temple").unwrap();
         let mut editor = editor(Vec::new());
         editor.story = db.story(story_id).unwrap();
 
-        editor.story.title = "Kyoto in July".into();
+        editor.story.title = "Temple in July".into();
         editor.touch();
         assert!(!editor.due(), "not while typing");
         let now = Instant::now();
@@ -5308,7 +5363,7 @@ mod tests {
         // Picasso stopping now: the library has the Story as last saved.
         drop((reader, db));
         let db = crate::db::Database::open(&path).unwrap();
-        assert_eq!(db.story(story_id).unwrap().title, "Kyoto");
+        assert_eq!(db.story(story_id).unwrap().title, "Temple");
 
         // Try again.
         editor.error = None;
@@ -5319,7 +5374,7 @@ mod tests {
         drop(db);
         let db = crate::db::Database::open(&path).unwrap();
         let saved = db.story(story_id).unwrap();
-        assert_eq!((saved.title.as_str(), saved.revision), ("Kyoto in July", 2), "and after a restart");
+        assert_eq!((saved.title.as_str(), saved.revision), ("Temple in July", 2), "and after a restart");
         drop(db);
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -5376,7 +5431,7 @@ mod tests {
 
     #[test]
     fn the_last_export_is_compared_after_each_change_and_only_the_newest_answer_counts() {
-        let mut last = LastExport::new("/out/Kyoto".into(), "made".into(), None);
+        let mut last = LastExport::new("/out/Temple".into(), "made".into(), None);
         let saved = (4, (10, 1));
         let first = last.ask(saved).expect("compared once after the export");
         assert_eq!(last.ask(saved), None, "not again until something changes");
@@ -5390,7 +5445,7 @@ mod tests {
         assert!(last.stale, "an answer to an older comparison is dropped");
 
         // Exported again: what an earlier comparison finds no longer counts.
-        let mut again = LastExport::new("/out/Kyoto 2".into(), "changed".into(), Some(&last));
+        let mut again = LastExport::new("/out/Temple 2".into(), "changed".into(), Some(&last));
         again.answer(newer, "made");
         assert!(!again.stale);
         let fresh = again.ask((6, (13, 1))).unwrap();

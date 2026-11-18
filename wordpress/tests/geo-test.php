@@ -57,11 +57,11 @@ foreach ( array( 'theme' => '', 'plugin' => 'PicassoPlaces\\' ) as $reader => $n
 	foreach ( $cases['problems'] as $case ) {
 		vl_test( "$reader problems", $case[0], $case[2], ( $ns . 'vl_geo_problems' )( $case[0], $case[1], 200 ) );
 	}
-	vl_test( "$reader unescape", '39.8628%2C-4.0273 100%25', '39.8628,-4.0273 100%25', ( $ns . 'vl_geo_unescape' )( '39.8628%2C-4.0273 100%25' ) );
+	vl_test( "$reader unescape", '12.5822%2C-65.7225 100%25', '12.5822,-65.7225 100%25', ( $ns . 'vl_geo_unescape' )( '12.5822%2C-65.7225 100%25' ) );
 	vl_test( "$reader line limit", "a\nb\nc", array( 'a', 'b' ), ( $ns . 'vl_geo_lines' )( "a\nb\nc", 2 ) );
 	vl_test( "$reader valid coord", '90.5', null, ( $ns . 'vl_valid_coord' )( '90.5', 'lat' ) );
 	vl_test( "$reader valid coord", '-180', -180.0, ( $ns . 'vl_valid_coord' )( '-180', 'lon' ) );
-	vl_test( "$reader format", '', '39.862806, -4.027306', ( $ns . 'vl_geo_format' )( 39.8628055555, -4.0273055555 ) );
+	vl_test( "$reader format", '', '12.582194, -65.7225', ( $ns . 'vl_geo_format' )( 12.5821944444, -65.7225 ) );
 	vl_test( "$reader format", '', '0.00001, 0', ( $ns . 'vl_geo_format' )( 0.00001, -0.0000001 ) );
 	vl_test( "$reader format reads back", '', array( 0.00001, 30.0 ), ( $ns . 'vl_geo_read' )( ( $ns . 'vl_geo_format' )( 0.00001, 30 ) ) );
 }

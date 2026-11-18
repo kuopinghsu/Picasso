@@ -319,7 +319,11 @@
 		if (!area || !host) return;
 		const stories = Array.isArray(data.stories) ? data.stories : [];
 		const known = new Set(stories.map((s) => String(s.id)));
-		const parse = () => splitLines(area.value).filter((line) => line.trim() !== '').map(geo.splitDay);
+		// Each row keeps the line it came from, and write() puts that text back
+		// unchanged until the row is edited, so editing one row never rewrites
+		// how the others were typed.
+		const parse = () => splitLines(area.value).filter((line) => geo.trim(line) !== '')
+			.map((line) => Object.assign(geo.splitDay(line), { line: line }));
 		let rows = parse();
 		let lastUsed = '';
 		let asText = false;
@@ -332,8 +336,9 @@
 			}
 			return '1';
 		};
+		const hasText = (r) => r.line !== undefined || r.name || r.location || r.note || r.post;
 		function write() {
-			area.value = rows.filter((r) => r.name || r.location || r.note || r.post).map(geo.joinDay).join('\n');
+			area.value = rows.filter(hasText).map((r) => (r.line !== undefined ? r.line : geo.joinDay(r))).join('\n');
 			showProblems(area);
 			if (pick) pick.redraw();
 		}
@@ -350,6 +355,10 @@
 		thead.appendChild(head);
 		const body = el('tbody');
 		table.append(thead, body);
+		// The classic editor's form would take Enter in a cell as Update.
+		body.addEventListener('keydown', (e) => {
+			if (e.key === 'Enter' && e.target instanceof HTMLInputElement) e.preventDefault();
+		});
 		wrap.appendChild(table);
 		const actions = el('div', 'vl-trip-actions');
 		const addRow = button(text.addRow);
@@ -373,20 +382,36 @@
 			o.value = value;
 			return o;
 		}
+		const titles = new Map(stories.map((s) => [String(s.id), s.title || '#' + s.id]));
+		// A row's list holds only its own story until it is opened: every story
+		// in every row would be rows × stories options, rebuilt on each render.
 		function storySelect(value) {
 			const select = el('select');
+			const current = String(value || '');
 			select.setAttribute('aria-label', text.story);
 			select.appendChild(option('', text.noStory));
-			[[text.linkedStories, true], [text.otherStories, false]].forEach(([label, linked]) => {
-				const group = stories.filter((s) => !!s.linked === linked);
-				if (!group.length) return;
-				const optgroup = el('optgroup');
-				optgroup.label = label;
-				group.forEach((s) => optgroup.appendChild(option(String(s.id), s.title || '#' + s.id)));
-				select.appendChild(optgroup);
-			});
-			if (value && !known.has(String(value))) select.appendChild(option(String(value), '#' + value));
-			select.value = String(value || '');
+			if (current) select.appendChild(option(current, titles.get(current) || '#' + current));
+			select.value = current;
+			let full = false;
+			const fill = () => {
+				if (full) return;
+				full = true;
+				const keep = select.value;
+				select.replaceChildren(option('', text.noStory));
+				[[text.linkedStories, true], [text.otherStories, false]].forEach(([label, linked]) => {
+					const group = stories.filter((s) => !!s.linked === linked);
+					if (!group.length) return;
+					const optgroup = el('optgroup');
+					optgroup.label = label;
+					group.forEach((s) => optgroup.appendChild(option(String(s.id), s.title || '#' + s.id)));
+					select.appendChild(optgroup);
+				});
+				if (keep && !known.has(keep)) select.appendChild(option(keep, '#' + keep));
+				select.value = keep;
+			};
+			select.addEventListener('pointerdown', fill);
+			select.addEventListener('focus', fill);
+			select.addEventListener('keydown', fill);
 			return select;
 		}
 
@@ -412,12 +437,14 @@
 			[[day, 'day'], [name, 'name'], [where, 'location'], [note, 'note']].forEach(([input, key]) => {
 				input.addEventListener('input', () => {
 					row[key] = input.value;
+					delete row.line;
 					check();
 					write();
 				});
 			});
 			story.addEventListener('change', () => {
 				row.post = story.value;
+				delete row.line;
 				write();
 			});
 			const up = button('↑', 'button button-small', text.moveUp);
@@ -431,6 +458,10 @@
 				rows.splice(i, 1);
 				render();
 				write();
+				// The button is gone: focus the row that took its place, the one
+				// before, or Add row, rather than losing focus to the page.
+				const next = body.rows[Math.min(i, rows.length - 1)];
+				(next ? next.querySelector('.vl-row-actions button:last-child') : addRow).focus();
 			});
 			const cells = [[day], [name], [where, reading], [note], [story], [up, down, remove]];
 			cells.forEach((items, c) => {
@@ -502,7 +533,7 @@
 
 		if (!root) return;
 		const hooks = {
-			points: () => rows.map((row) => {
+			points: () => rows.map((row, i) => {
 				const point = geo.read(row.location);
 				if (!Array.isArray(point)) return null;
 				return {
@@ -510,7 +541,12 @@
 					lon: point[1],
 					name: (isDay(row.day) ? fill(text.dayLabel, row.day) + ' · ' : '') + row.name,
 					move: (lat, lon) => {
-						row.location = geo.format(lat, lon);
+						// Typing in Edit as text replaces the rows before the map
+						// redraws; then the pin is the row now at its place.
+						const target = rows.includes(row) ? row : rows[i];
+						if (!target) return;
+						target.location = geo.format(lat, lon);
+						delete target.line;
 						render();
 						write();
 					}

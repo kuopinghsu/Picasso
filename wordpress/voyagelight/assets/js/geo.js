@@ -111,7 +111,10 @@
 	}
 
 	const round = (value) => Math.round(value * 1e6) / 1e6;
-	const columns = (line) => String(line).trim().split('|').map((c) => c.trim());
+	// PHP's trim(): only ASCII whitespace, so a no-break or full-width space
+	// reads the same here as in inc/geo.php.
+	const trim = (text) => String(text).replace(/^[ \t\n\r\0\x0B]+|[ \t\n\r\0\x0B]+$/g, '');
+	const columns = (line) => trim(line).split('|').map(trim);
 
 	function splitStop(line) {
 		const cols = columns(line);
@@ -137,7 +140,7 @@
 	}
 
 	function stopLine(line) {
-		if (String(line).trim() === '') return null;
+		if (trim(line) === '') return null;
 		const stop = splitStop(line);
 		if (stop.name === '') return 'name';
 		const point = read(stop.location);
@@ -146,7 +149,7 @@
 	}
 
 	function dayLine(line) {
-		if (String(line).trim() === '') return null;
+		if (trim(line) === '') return null;
 		const cols = columns(line);
 		const row = cols.length === 1 ? { day: cols[0], name: '', location: '' } : splitDay(line);
 		// DAY_MAX matches VL_GEO_DAY_MAX; scripts/build-theme.py checks the two.
@@ -159,7 +162,8 @@
 		return { day: +row.day, name: row.name, lat: point[0], lon: point[1], note: row.note, post_id: /^\d+$/.test(row.post) ? +row.post : 0 };
 	}
 
-	const cell = (value) => String(value === undefined || value === null ? '' : value).replace(/\|/g, '/').replace(/[\r\n\t]+/g, ' ').trim();
+	const text = (value) => String(value === undefined || value === null ? '' : value).replace(/[\r\n\t]+/g, ' ');
+	const cell = (value) => trim(text(value).replace(/\|/g, '/'));
 
 	function join(values, keep) {
 		const cols = values.map(cell);
@@ -168,10 +172,20 @@
 	}
 
 	const joinStop = (s) => join([s.name, s.location, s.note], 2);
-	const joinDay = (r) => join([r.day, r.name, r.location, r.note, r.post], 3);
+	// A Journey note may hold "|", as dayLine() reads it. Then the post ID
+	// column is written even when empty, so that the note's last part isn't
+	// read as one.
+	function joinDay(r) {
+		const note = trim(text(r.note));
+		const line = join([r.day, r.name, r.location, note.includes('|') ? '' : note, r.post], 3);
+		if (!note.includes('|')) return line;
+		const head = join([r.day, r.name, r.location], 3);
+		const post = cell(r.post);
+		return head + ' | ' + note.split('|').map(trim).join(' | ') + ' |' + (post ? ' ' + post : '');
+	}
 	const format = (lat, lon) => round(lat) + ', ' + round(lon);
 
-	const api = { read, isNumber, validCoord, unescape, stopLine, dayLine, splitStop, splitDay, joinStop, joinDay, format, dayMax: DAY_MAX };
+	const api = { trim, read, isNumber, validCoord, unescape, stopLine, dayLine, splitStop, splitDay, joinStop, joinDay, format, dayMax: DAY_MAX };
 	if (typeof module === 'object' && module.exports) {
 		module.exports = api;
 	} else {

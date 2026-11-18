@@ -714,7 +714,7 @@ mod tests {
         assert_eq!(map.bounds.min, [128.0, 128.0]);
         assert!((map.bounds.max[0] - 128.0 - 256.0 / 360.0).abs() < 1e-9);
         assert!(is_track_path(Path::new("ride.GPX")) && is_track_path(Path::new("a.kml")) && !is_track_path(Path::new("a.kmz")));
-        assert!(is_track_path(Path::new("/trip/locations.json")) && is_track_path(Path::new("/2025.07.Spain/spain.JSON")));
+        assert!(is_track_path(Path::new("/trip/locations.json")) && is_track_path(Path::new("/2025.07.Coast/coast.JSON")));
         assert!(!is_track_path(Path::new("IMG_0001.jpg.json")) && !is_track_path(Path::new("IMG_0001.HEIC.supplemental-metadata.json")));
     }
 

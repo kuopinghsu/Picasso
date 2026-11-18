@@ -14,6 +14,7 @@ mod geotagging;
 mod help;
 mod library;
 mod loader;
+mod photo_meta;
 mod places;
 mod publish_story;
 mod publishing;
@@ -65,6 +66,16 @@ const MAX_THUMB: f32 = 320.0;
 const SEARCH_DELAY: Duration = Duration::from_millis(250);
 /// A photo's histogram and its EXIF as label and value.
 type PhotoInfo = (crate::photo_info::Histogram, Vec<(&'static str, String)>);
+
+/// A photo Show in Places was asked from: the view it was in, with that
+/// view's search, and whether it was open in the viewer.
+#[derive(Clone, Debug, PartialEq)]
+struct PlacesReturn {
+    nav: Nav,
+    search: String,
+    photo: i64,
+    viewing: bool,
+}
 /// How long the info and edit panels keep the last photo's histogram and
 /// EXIF while the next photo's load, so a quick change doesn't blank them.
 const PANEL_HOLD: Duration = Duration::from_millis(600);
@@ -322,6 +333,10 @@ pub struct PicassoApp {
     grid_cols: usize,
     thumb_size: f32,
     scroll_to: Option<i64>,
+    /// Where Show in Places was asked from, to go back to with Back to photo.
+    places_return: Option<PlacesReturn>,
+    /// Going back there: done once that view's photos have loaded.
+    returning: Option<PlacesReturn>,
     /// The grid's photo that last had keyboard focus, and its widget, whose
     /// arrow keys move the selection from it rather than the focus.
     photo_focus: Option<(egui::Id, i64)>,
@@ -658,6 +673,8 @@ impl PicassoApp {
             grid_cols: 1,
             thumb_size: 144.0,
             scroll_to: None,
+            places_return: None,
+            returning: None,
             photo_focus: None,
             focus_photo: None,
             library_top: None,
@@ -897,6 +914,7 @@ impl PicassoApp {
             self.loading = false;
             let keep = self.photos.get(self.viewer_index).map(|photo| photo.id);
             self.show_photos(loaded.photos, keep);
+            self.finish_return();
             if std::mem::take(&mut self.frame_after_load) {
                 self.frame_map();
             }
@@ -2051,6 +2069,10 @@ impl PicassoApp {
     }
 
     fn set_nav(&mut self, nav: Nav) {
+        // Leaving Places any other way than Back to photo forgets the way back.
+        if nav != Nav::Places {
+            self.places_return = None;
+        }
         // Places keeps the selection and the search, to show where those
         // photos are; back in the Library, the same search shows them again.
         let places = matches!(nav, Nav::Places);

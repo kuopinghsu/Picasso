@@ -80,6 +80,11 @@ pub(super) struct PublishDialog {
     /// another site.
     travel: Option<TravelSupport>,
     travel_reading: Option<Receiver<Result<TravelSupport, Failure>>>,
+    /// The earlier post as the site has it now, being read: one deleted or
+    /// unpublished there since is not taken as still public.
+    earlier_reading: Option<Receiver<Result<Option<crate::wordpress::PostState>, Failure>>>,
+    /// The earlier post was found gone from the site: a new one is made.
+    earlier_gone: bool,
 }
 
 /// The site's own categories and tags, read when the person asks.
@@ -156,6 +161,8 @@ impl PicassoApp {
             trip_title: self.db.trip(job.story.trip_id).map(|trip| trip.title).unwrap_or_default(),
             travel: None,
             travel_reading: None,
+            earlier_reading: None,
+            earlier_gone: false,
         });
     }
 
@@ -238,6 +245,8 @@ impl PicassoApp {
             dialog.site_terms = SiteTerms::default();
             dialog.travel = None;
             dialog.travel_reading = site.as_ref().and_then(|site| read_travel(ctx, site));
+            dialog.earlier_gone = false;
+            dialog.earlier_reading = site.as_ref().zip(earlier.as_ref()).and_then(|(site, earlier)| connection(&self.vault, site).ok().and_then(|connection| read_post(ctx, connection, earlier.post_id)));
             // As it went to that site last: by Day when its Day posts were saved after its one post.
             dialog.by_day = dialog.days > 0
                 && dialog.site_id.is_some_and(|site_id| {
@@ -245,6 +254,25 @@ impl PicassoApp {
                     let single = self.db.publication(story_id, site_id).map(|publication| publication.synced_at);
                     by_day.is_some_and(|by_day| single.is_none_or(|single| by_day >= single))
                 });
+        }
+        // The earlier post as the site has it now. One deleted or in the
+        // trash is forgotten, so the dialog offers to publish the new post
+        // made in its place; one whose status changed there is kept so.
+        if let Some(Ok(result)) = dialog.earlier_reading.as_ref().map(Receiver::try_recv) {
+            dialog.earlier_reading = None;
+            if let (Some(site), Some(earlier)) = (&site, &earlier) {
+                match earlier_now(earlier, result) {
+                    EarlierNow::Gone => {
+                        let _ = self.db.forget_publication(story_id, site.id);
+                        dialog.earlier_gone = true;
+                    }
+                    EarlierNow::Status(status) => {
+                        let _ = self.db.save_publication(&Publication { remote_status: status, ..earlier.clone() });
+                    }
+                    EarlierNow::AsKnown => {}
+                }
+            }
+            ctx.request_repaint();
         }
         if let Some(Ok(result)) = dialog.travel_reading.as_ref().map(Receiver::try_recv) {
             dialog.travel_reading = None;
@@ -428,6 +456,12 @@ impl PicassoApp {
                                 .on_hover_text(tr("Without this, the job stops before sending anything. Public posts keep their status, and edits made on the site are replaced."));
                             ui.end_row();
                         }
+                    }
+
+                    if dialog.earlier_gone && !dialog.by_day {
+                        ui.label("");
+                        ui.label(RichText::new(tr("The earlier post is gone from the site, so a new one will be made.")).size(12.0).color(theme::muted()));
+                        ui.end_row();
                     }
 
                     // A post already public stays so; a draft is made public only when asked.
@@ -865,6 +899,19 @@ impl PicassoApp {
         if self.deleting_from(site.id) {
             return Err(trf("Uploads are being deleted from {}. Try again once that has finished.", &[&site.label]));
         }
+        // Every Story of a Trip writes the same Journey, which the site can't
+        // change for two at once: each would make one, or undo the other's stops.
+        if places.journey && journeys {
+            if let Some(editor) = &self.story {
+                let (story_id, trip_id) = (editor.story.id, editor.story.trip_id);
+                let busy = self.publishing.iter().any(|(&(other, other_site), alive)| {
+                    other_site == site.id && other != story_id && alive.strong_count() > 0 && self.db.story(other).is_some_and(|story| story.trip_id == trip_id)
+                });
+                if busy {
+                    return Err(tr("Another story of this trip is being published to this site. Try again once that has finished.").into());
+                }
+            }
+        }
         let (api, credentials, policy) = connection(&self.vault, site)?;
         if !self.save_story() {
             return Err(tr("The story couldn't be saved").into());
@@ -892,7 +939,7 @@ impl PicassoApp {
         let pending_since = if earlier.is_none() { self.db.pending_draft(page.story.id, site.id) } else { None };
         let days = by_day.then(|| {
             let known = self.db.day_posts(page.story.id, site.id);
-            known.into_iter().map(|(key, publication)| (key, publish::DayPost { post_id: publication.post_id, status: publication.remote_status, fingerprint: publication.fingerprint, changed_on_site: publication.changed_on_site })).collect()
+            known.into_iter().map(|(key, publication)| (key, publish::DayPost { post_id: publication.post_id, status: publication.remote_status, fingerprint: publication.fingerprint, changed_on_site: publication.changed_on_site, revision: publication.revision })).collect()
         });
         let job = Job {
             api,
@@ -987,6 +1034,7 @@ impl PicassoApp {
                 };
                 self.db.save_day_post(&key, &publication)
             }
+            Event::PartGone { story_id, key } => self.db.forget_day_post(story_id, site_id, &key),
             Event::Journey { trip_id, post_id } => self.db.set_journey_post(trip_id, site_id, post_id),
             Event::WordPress { url, home } => self.db.set_wordpress_urls(site_id, &url, &home),
             Event::Prepared { photos, bytes } => {
@@ -1035,6 +1083,12 @@ impl PicassoApp {
             }
             if let Some(failure) = &saved.journey_error {
                 notes.push(trf("The Journey's places couldn't be written: {}", &[&failure_text(failure)]));
+            }
+            if saved.remade {
+                notes.push(tr("The earlier post was gone from the site, so a new one was made.").to_string());
+            }
+            if !saved.orphaned.is_empty() {
+                notes.push(trf("{} Day posts whose headings were removed from the story are still on the site. Delete or unpublish them there if they are no longer wanted.", &[&saved.orphaned.len()]));
             }
         }
         let used_before = self.db.publication_media(story_id, site_id);
@@ -1439,6 +1493,42 @@ fn saved_api(site: &Site, site_url: SiteUrl, root: SiteUrl) -> Api {
 }
 
 /// Reads what `site` keeps of a trip in the background, without its password.
+/// What the site's answer about the earlier post means for the dialog.
+#[derive(Debug, PartialEq)]
+enum EarlierNow {
+    /// Deleted for good or in the trash: a new post is made, and may be published.
+    Gone,
+    /// Its status changed on the site, as when unpublished there.
+    Status(String),
+    /// As the library knows it, or the site couldn't be asked.
+    AsKnown,
+}
+
+fn earlier_now(earlier: &Publication, answer: Result<Option<crate::wordpress::PostState>, Failure>) -> EarlierNow {
+    match answer {
+        Ok(None) => EarlierNow::Gone,
+        Ok(Some(found)) if found.status == "trash" => EarlierNow::Gone,
+        Ok(Some(found)) if !found.status.is_empty() && found.status != earlier.remote_status => EarlierNow::Status(found.status),
+        _ => EarlierNow::AsKnown,
+    }
+}
+
+/// Post `post_id` as the site has it now, read in the background.
+fn read_post(ctx: &egui::Context, (api, credentials, policy): (Api, Credentials, Policy), post_id: i64) -> Option<Receiver<Result<Option<crate::wordpress::PostState>, Failure>>> {
+    // Tests never reach a site.
+    if cfg!(test) {
+        return None;
+    }
+    let (sender, receiver) = crossbeam_channel::bounded(1);
+    let ctx = ctx.clone();
+    std::thread::spawn(move || {
+        let network = Network::new();
+        let _ = sender.send(Client::new(&network, policy).post_state(&api, &credentials, post_id));
+        ctx.request_repaint();
+    });
+    Some(receiver)
+}
+
 fn read_travel(ctx: &egui::Context, site: &Site) -> Option<Receiver<Result<TravelSupport, Failure>>> {
     // Tests never reach a site.
     if cfg!(test) {
@@ -1580,12 +1670,23 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_post_deleted_or_unpublished_on_the_site_is_seen_when_the_dialog_opens() {
+        let state = |status: &str| Ok(Some(crate::wordpress::PostState { status: status.into(), fingerprint: String::new() }));
+        let earlier = Publication { story_id: 1, site_id: 2, post_id: 7, remote_status: "publish".into(), size: String::new(), revision: 1, synced_at: 0, fingerprint: String::new(), changed_on_site: false };
+        assert_eq!(earlier_now(&earlier, Ok(None)), EarlierNow::Gone, "deleted for good");
+        assert_eq!(earlier_now(&earlier, state("trash")), EarlierNow::Gone, "WordPress's Delete moves it to the trash");
+        assert_eq!(earlier_now(&earlier, state("draft")), EarlierNow::Status("draft".into()), "unpublished there: publishing is offered again");
+        assert_eq!(earlier_now(&earlier, state("publish")), EarlierNow::AsKnown);
+        assert_eq!(earlier_now(&earlier, Err(Failure::Timeout)), EarlierNow::AsKnown, "a site that can't be reached changes nothing");
+    }
+
+    #[test]
     fn a_new_posts_address_is_guessed_from_its_title() {
-        assert_eq!(slug_of("Spain – 2025-07-01"), "spain-2025-07-01");
-        assert_eq!(slug_of("Café in Sevilla!"), "cafe-in-sevilla");
-        assert_eq!(slug_of("京都の秋"), "京都の秋");
+        assert_eq!(slug_of("Coast – 2025-07-01"), "coast-2025-07-01");
+        assert_eq!(slug_of("Café in Valley!"), "cafe-in-valley");
+        assert_eq!(slug_of("古都の秋"), "古都の秋");
         assert_eq!(address_of("http://localhost:10003/", " — "), "http://localhost:10003/?p=…");
-        assert_eq!(address_of("https://example.com/blog", "Spain"), "https://example.com/blog/spain/");
+        assert_eq!(address_of("https://example.com/blog", "Coast"), "https://example.com/blog/coast/");
     }
 
     #[test]
@@ -1598,8 +1699,8 @@ mod tests {
     #[test]
     fn categories_list_each_child_after_its_parent() {
         let term = |id, name: &str, parent| Term { id, name: name.into(), parent };
-        let categories = [term(2, "Europe", 0), term(6, "Granada", 5), term(5, "Spain", 2), term(1, "Uncategorized", 0), term(9, "Orphan", 77), term(4, "Loop", 4)];
+        let categories = [term(2, "Region", 0), term(6, "Hilltop", 5), term(5, "Coast", 2), term(1, "Uncategorized", 0), term(9, "Orphan", 77), term(4, "Loop", 4)];
         let listed: Vec<(usize, &str)> = by_parent(&categories).into_iter().map(|(depth, term)| (depth, term.name.as_str())).collect();
-        assert_eq!(listed, [(0, "Europe"), (1, "Spain"), (2, "Granada"), (0, "Uncategorized"), (0, "Orphan"), (0, "Loop")]);
+        assert_eq!(listed, [(0, "Region"), (1, "Coast"), (2, "Hilltop"), (0, "Uncategorized"), (0, "Orphan"), (0, "Loop")]);
     }
 }

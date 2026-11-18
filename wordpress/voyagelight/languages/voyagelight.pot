@@ -232,6 +232,35 @@ msgstr[0] ""
 msgstr[1] ""
 
 #: inc/content.php
+msgid "Northern Lights"
+msgstr ""
+
+#: inc/content.php
+#: template-parts/home-stories.php
+msgid "Glaciers"
+msgstr ""
+
+#: inc/content.php
+#: template-parts/home-stories.php
+msgid "Old Towns"
+msgstr ""
+
+#: inc/content.php
+#: template-parts/home-stories.php
+msgid "Countryside"
+msgstr ""
+
+#: inc/content.php
+#: template-parts/home-stories.php
+msgid "Gardens"
+msgstr ""
+
+#: inc/content.php
+#: template-parts/home-stories.php
+msgid "Sample"
+msgstr ""
+
+#: inc/content.php
 #: single-vl_trip.php
 #: template-parts/home-stories.php
 msgid "Travel journal"
@@ -242,7 +271,7 @@ msgstr ""
 msgid "Story"
 msgstr ""
 
-#. translators: %s: name of a menu item, such as Europe.
+#. translators: %s: name of a menu item, such as Mountains.
 #: inc/content.php
 #, php-format
 msgid "Show the %s menu"
@@ -550,7 +579,7 @@ msgstr ""
 msgid "No location set."
 msgstr ""
 
-#. translators: %s: latitude and longitude, such as 39.86280, -4.02730.
+#. translators: %s: latitude and longitude, such as 12.58220, -65.72250.
 #: inc/journeys.php
 #: inc/locations.php
 #, php-format
@@ -774,7 +803,7 @@ msgid "VoyageLight · Geotag & Travel Map"
 msgstr ""
 
 #: inc/locations.php
-msgid "Paste coordinates or a map link, such as 39.8628, -4.0273 or 39°51′46″N 4°01′38″W. Links from Google Maps, Apple Maps and OpenStreetMap and geo: addresses work too. Leave it empty for no location."
+msgid "Paste coordinates or a map link, such as 12.5822, -65.7225 or 12°34′56″N 65°43′21″W. Links from Google Maps, Apple Maps and OpenStreetMap and geo: addresses work too. Leave it empty for no location."
 msgstr ""
 
 #: inc/locations.php
@@ -1036,11 +1065,7 @@ msgid "All stories ↗"
 msgstr ""
 
 #: template-parts/home-stories.php
-msgid "Eqi Glacier: A Close Encounter with the Icefjord"
-msgstr ""
-
-#: template-parts/home-stories.php
-msgid "Greenland"
+msgid "A Close Encounter with the Icefjord"
 msgstr ""
 
 #: template-parts/home-stories.php
@@ -1052,7 +1077,7 @@ msgid "Under the Northern Lights"
 msgstr ""
 
 #: template-parts/home-stories.php
-msgid "Nordic"
+msgid "Night Sky"
 msgstr ""
 
 #: template-parts/home-stories.php
@@ -1060,11 +1085,7 @@ msgid "Nature & Scenery"
 msgstr ""
 
 #: template-parts/home-stories.php
-msgid "Toledo: A City of History and Light"
-msgstr ""
-
-#: template-parts/home-stories.php
-msgid "Spain"
+msgid "An Old City of History and Light"
 msgstr ""
 
 #: template-parts/home-stories.php
@@ -1072,11 +1093,7 @@ msgid "Culture"
 msgstr ""
 
 #: template-parts/home-stories.php
-msgid "Tokyo: A Walk Through Spring"
-msgstr ""
-
-#: template-parts/home-stories.php
-msgid "Japan"
+msgid "A City Walk Through Spring"
 msgstr ""
 
 #: template-parts/home-stories.php
@@ -1084,19 +1101,11 @@ msgid "City Walks"
 msgstr ""
 
 #: template-parts/home-stories.php
-msgid "A Morning in the Baltic Old Town"
-msgstr ""
-
-#: template-parts/home-stories.php
-msgid "Baltic"
+msgid "A Morning in the Old Town"
 msgstr ""
 
 #: template-parts/home-stories.php
 msgid "History & Culture"
-msgstr ""
-
-#: template-parts/home-stories.php
-msgid "Sample"
 msgstr ""
 
 #: template-parts/home-stories.php

@@ -100,13 +100,16 @@ impl PicassoApp {
             ui.label(egui::RichText::new(text).size(12.0).color(theme::muted()));
             ui.add_space(4.0);
         }
+        // The details scroll; the actions stay pinned at the bottom.
         egui::ScrollArea::vertical()
             .id_salt("side-panel")
             .auto_shrink([false, false])
+            .max_height((ui.available_height() - ACTION_BAR).max(80.0))
             .show(ui, |ui| match self.side {
                 SidePanel::Map => self.side_map(ui, &photo),
                 _ => self.side_info(ui, &photo),
             });
+        self.photo_actions(ui, &photo);
     }
 
     fn side_preview(&mut self, ui: &mut egui::Ui, photo: &Photo) {
@@ -136,7 +139,6 @@ impl PicassoApp {
             ui.add(egui::Label::new(egui::RichText::new(&photo.caption).italics()).wrap());
         }
 
-        section(ui, tr("Properties"));
         let (w, h) = displayed_size(photo);
         let mut rows = vec![
             ("Taken", format_timestamp(photo.taken_at)),
@@ -149,51 +151,19 @@ impl PicassoApp {
         if photo.is_video() && photo.duration > 0.0 {
             rows.insert(1, ("Duration", crate::types::format_duration(photo.duration)));
         }
-        if !photo.camera.is_empty() {
-            rows.push(("Camera", photo.camera.clone()));
-        }
         if photo.rotation != 0 {
             rows.push(("Rotated", trf("{}° clockwise", &[&photo.rotation])));
         }
         if let Some(folder) = self.folders.iter().find(|folder| folder.id == photo.folder_id) {
             rows.push(("Library folder", folder_label(&folder.path)));
         }
-        if let Some((lat, lon)) = photo.place() {
-            let kind = if photo.pinned() { tr("pinned") } else { "GPS" };
-            rows.push(("Location", format!("{lat:.5}, {lon:.5} ({kind})")));
-        }
-        property_grid(ui, ("props", photo.id), &rows);
+        super::photo_meta::card(ui, tr("Properties"), |ui| property_grid(ui, ("props", photo.id), &rows));
 
-        section(ui, tr(if photo.is_video() { "Video" } else { "Camera EXIF" }));
-        match self.exif_for(photo) {
-            None => {
-                ui.horizontal(|ui| {
-                    ui.add(egui::Spinner::new().size(12.0));
-                    ui.label(egui::RichText::new(tr("Reading EXIF…")).size(12.0).color(theme::muted()));
-                });
-            }
-            Some(exif) => {
-                let rows: Vec<(&'static str, String)> = exif
-                    .into_iter()
-                    .filter(|(label, _)| *label != "Taken" && !(*label == "Camera" && !photo.camera.is_empty()))
-                    .collect();
-                if rows.is_empty() {
-                    ui.label(egui::RichText::new(tr("No EXIF data in this file")).size(12.0).color(theme::muted()));
-                } else {
-                    property_grid(ui, ("exif", photo.id), &rows);
-                }
-            }
-        }
-
-        ui.add_space(12.0);
-        ui.horizontal_wrapped(|ui| {
-            if ui.button(tr("Show in folder")).clicked() {
-                crate::shell::reveal(&photo.path);
-            }
-            if photo.place().is_some() && self.nav != Nav::Places && ui.button(tr("Show map")).clicked() {
-                self.toggle_side(SidePanel::Map);
-            }
-        });
+        let exif = self.exif_for(photo);
+        exif_card(ui, photo, exif.as_deref());
+        let altitude = altitude_of(exif.as_deref());
+        self.location_card(ui, photo, altitude.as_deref());
+        ui.add_space(8.0);
     }
 
     /// EXIF rows of `photo`, read in the background on first request.
@@ -298,41 +268,121 @@ impl PicassoApp {
             }
         }
 
+        // The same location details as the photo's info, under its map.
         ui.add_space(8.0);
-        let kind = tr(if photo.pinned() { "Pinned in Picasso" } else { "From camera GPS" });
-        ui.label(egui::RichText::new(format!("{lat:.5}, {lon:.5}")).color(theme::text()));
-        ui.label(egui::RichText::new(kind).size(12.0).color(theme::muted()));
-        ui.add_space(8.0);
-        ui.horizontal_wrapped(|ui| {
-            if ui.button(tr("Open in OpenStreetMap")).clicked() {
-                super::places::open_osm(lat, lon, self.side_zoom.max(12));
+        let altitude = altitude_of(self.exif_for(photo).as_deref());
+        let action = super::photo_meta::location(ui, photo.id, photo.place(), photo.pinned(), altitude.as_deref(), self.nav == Nav::Places);
+        self.location_action(photo, action);
+    }
+
+    /// The Location card: a small map of where `photo` was taken, which
+    /// opens Places when clicked, then the location's details and actions.
+    pub(super) fn location_card(&mut self, ui: &mut egui::Ui, photo: &Photo, altitude: Option<&str>) {
+        let in_places = self.nav == Nav::Places;
+        let mut action = None;
+        super::photo_meta::card(ui, tr("Location"), |ui| {
+            if let Some((lat, lon)) = photo.place() {
+                if self.mini_map(ui, lat, lon, !in_places) {
+                    action = Some(super::photo_meta::LocationAction::Places);
+                }
+                ui.add_space(8.0);
             }
-            if ui.button(tr("Show in Places")).clicked() {
-                self.show_on_map(photo.id);
+            action = super::photo_meta::location(ui, photo.id, photo.place(), photo.pinned(), altitude, in_places).or(action);
+        });
+        self.location_action(photo, action);
+    }
+
+    fn location_action(&mut self, photo: &Photo, action: Option<super::photo_meta::LocationAction>) {
+        match action {
+            Some(super::photo_meta::LocationAction::Places) => self.show_on_map(photo.id),
+            Some(super::photo_meta::LocationAction::OpenStreetMap) => {
+                if let Some((lat, lon)) = photo.place() {
+                    super::places::open_osm(lat, lon, self.side_zoom.max(12));
+                }
             }
+            None => {}
+        }
+    }
+
+    /// A small map around `lat`, `lon` with a pin on it, from the same tiles
+    /// as Places. True when clicked and `opens` says a click goes to Places.
+    fn mini_map(&mut self, ui: &mut egui::Ui, lat: f64, lon: f64, opens: bool) -> bool {
+        let width = ui.available_width();
+        let sense = if opens { Sense::click() } else { Sense::hover() };
+        let (rect, response) = ui.allocate_exact_size(Vec2::new(width, (width * 0.5).clamp(110.0, 160.0)), sense);
+        let painter = ui.painter_at(rect);
+        painter.rect_filled(rect, 8, super::places::map_backdrop());
+        self.paint_tiles(&painter, rect, MapView { lat, lon, zoom: MINI_MAP_ZOOM, pan: Vec2::ZERO });
+        paint_pin(&painter, rect.center() + Vec2::new(0.0, 8.0));
+        // The tiles are square at their corners; a frame the card's colour rounds them.
+        painter.rect_stroke(rect.expand(3.0), 11, Stroke::new(6.0, theme::bg()), egui::StrokeKind::Inside);
+        painter.rect_stroke(rect, 8, Stroke::new(1.0, theme::hairline()), egui::StrokeKind::Inside);
+        if opens {
+            let response = response.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(tr("Show in Places"));
+            return response.clicked();
+        }
+        false
+    }
+
+    /// The bar pinned under a photo's details: what can be done with the
+    /// file, with deleting apart at the end, in red.
+    pub(super) fn photo_actions(&mut self, ui: &mut egui::Ui, photo: &Photo) {
+        let (line, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 1.0), Sense::hover());
+        ui.painter().rect_filled(line, 0, theme::hairline());
+        ui.add_space(6.0);
+        ui.horizontal(|ui| {
+            if ui.button(tr("Show in folder")).clicked() {
+                crate::shell::reveal(&photo.path);
+            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let trash = egui::Button::new(egui::RichText::new(tr("Move to trash")).color(theme::DANGER));
+                if ui.add(trash).clicked() {
+                    self.modal = super::Modal::trash(vec![photo.id]);
+                }
+            });
         });
     }
 }
 
-fn section(ui: &mut egui::Ui, title: &str) {
-    ui.add_space(14.0);
-    ui.label(egui::RichText::new(title.to_uppercase()).size(11.0).strong().color(theme::muted()));
-    ui.add_space(2.0);
+/// Height kept for the bar of actions under a photo's details.
+pub(super) const ACTION_BAR: f32 = 44.0;
+
+/// How far the small map in the Location card is zoomed in: a town and its streets.
+const MINI_MAP_ZOOM: u8 = 13;
+
+/// The Altitude row of `exif`, which the Location card shows.
+pub(super) fn altitude_of(exif: Option<&[(&'static str, String)]>) -> Option<String> {
+    exif?.iter().find(|(label, _)| *label == "Altitude").map(|(_, value)| value.clone())
 }
 
-/// Two-column grid of `rows`, whose labels are English keys for `tr`.
-fn property_grid(ui: &mut egui::Ui, id: (&str, i64), rows: &[(&'static str, String)]) {
-    egui::Grid::new(id)
-        .num_columns(2)
-        .spacing(Vec2::new(12.0, 5.0))
-        .min_col_width(70.0)
-        .show(ui, |ui| {
-            for (label, value) in rows {
-                ui.label(egui::RichText::new(tr(label)).size(12.0).color(theme::muted()));
-                ui.add(egui::Label::new(egui::RichText::new(value).size(12.5).color(theme::text())).wrap());
-                ui.end_row();
+/// The Camera card, or the Video card for a video, from `exif` as read,
+/// with the library's name for the camera when the file's own is missing.
+pub(super) fn exif_card(ui: &mut egui::Ui, photo: &Photo, exif: Option<&[(&'static str, String)]>) {
+    super::photo_meta::card(ui, tr(if photo.is_video() { "Video" } else { "Camera" }), |ui| match exif {
+        None => {
+            ui.horizontal(|ui| {
+                ui.add(egui::Spinner::new().size(12.0));
+                ui.label(egui::RichText::new(tr("Reading EXIF…")).size(12.0).color(theme::muted()));
+            });
+        }
+        Some(exif) => {
+            let mut rows = exif.to_vec();
+            if !photo.camera.is_empty() && !rows.iter().any(|(label, _)| *label == "Camera") {
+                rows.insert(0, ("Camera", photo.camera.clone()));
             }
-        });
+            if rows.iter().all(|(label, _)| *label == "Taken" || *label == "Altitude") {
+                ui.label(egui::RichText::new(tr("No EXIF data in this file")).size(12.0).color(theme::muted()));
+            } else {
+                super::photo_meta::exif(ui, ("exif", photo.id), &rows, photo.is_video());
+            }
+        }
+    });
+}
+
+/// Two-column grid of `rows`, whose labels are English keys for `tr`; a
+/// right-click on a value copies it.
+fn property_grid(ui: &mut egui::Ui, id: (&str, i64), rows: &[(&'static str, String)]) {
+    super::photo_meta::grid(ui, (id.0, id.1, ""), rows);
 }
 
 fn paint_pin(painter: &egui::Painter, tip: Pos2) {

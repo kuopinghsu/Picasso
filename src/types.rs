@@ -549,7 +549,7 @@ mod tests {
         assert_eq!(parse_utc_offset("+01:02:30"), Some(3750));
         assert_eq!(parse_utc_offset("Z"), Some(0));
         assert_eq!(parse_utc_offset("UTC"), Some(0));
-        for bad in ["", "   ", "+1:60", "+24:00", "1h", "+01:00:00:00", "--1", "+:30", "東京"] {
+        for bad in ["", "   ", "+1:60", "+24:00", "1h", "+01:00:00:00", "--1", "+:30", "港口"] {
             assert_eq!(parse_utc_offset(bad), None, "{bad}");
         }
         assert_eq!(format_utc_offset(3600), "+01:00");

@@ -486,13 +486,17 @@ impl PicassoApp {
         frame.show(ui, |ui| {
             ui.set_min_size(Vec2::new(256.0, height - 24.0));
             ui.set_max_width(256.0);
+            // The details scroll; the actions stay pinned at the bottom.
             egui::ScrollArea::vertical()
                 .id_salt("info-panel")
                 .auto_shrink([false, false])
-                .max_height(height - 24.0)
+                .max_height((height - 24.0 - super::side::ACTION_BAR).max(80.0))
                 .show(ui, |ui| {
                     ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| self.info_contents(ui));
                 });
+            if let Some(photo) = self.photos.get(self.viewer_index).cloned() {
+                self.photo_actions(ui, &photo);
+            }
         });
     }
 
@@ -501,97 +505,44 @@ impl PicassoApp {
             return;
         };
         let info = self.panel_info(photo.id, ui.ctx());
-        {
-            ui.label(egui::RichText::new(tr("Histogram")).strong());
-            ui.add_space(4.0);
-            match &info {
-                Some((histogram, _)) => paint_histogram(ui, histogram),
-                None => paint_histogram_placeholder(ui, true),
-            }
-            ui.add_space(10.0);
-            ui.label(egui::RichText::new(tr("Details")).strong());
-            ui.add_space(6.0);
-            detail(ui, "File", &photo.filename);
-            detail(ui, "Taken", &format_timestamp(photo.taken_at));
-            if photo.modified_at != photo.taken_at {
-                detail(ui, "Modified", &format_timestamp(photo.modified_at));
-            }
-            let (w, h) = displayed_size(&photo);
-            detail(ui, "Size", &format!("{} × {}   {}", w as u32, h as u32, format_bytes(photo.bytes)));
-            if !photo.camera.is_empty() {
-                detail(ui, "Camera", &photo.camera);
-            }
-            if photo.rotation != 0 {
-                detail(ui, "Rotated", &trf("{}° clockwise in Picasso", &[&photo.rotation]));
-            }
-            if let Some(folder) = self.folders.iter().find(|folder| folder.id == photo.folder_id) {
-                detail(ui, "Folder", &folder_label(&folder.path));
-            }
-            if let Some((lat, lon)) = photo.place() {
-                let kind = if photo.pinned() { tr("pinned") } else { "GPS" };
-                detail(ui, "Place", &format!("{lat:.5}, {lon:.5} ({kind})"));
-            }
-            ui.add_space(10.0);
-            ui.label(egui::RichText::new(if photo.is_video() { tr("Video") } else { "EXIF" }).strong());
-            ui.add_space(4.0);
-            match &info {
-                None => {
-                    ui.label(egui::RichText::new(tr("Loading…")).color(theme::muted()).size(12.0));
-                }
-                Some((_, rows)) => {
-                    // Camera and date already appear under Details.
-                    let rows: Vec<&(&'static str, String)> = rows
-                        .iter()
-                        .filter(|(label, _)| *label != "Taken" && !(*label == "Camera" && !photo.camera.is_empty()))
-                        .collect();
-                    if rows.is_empty() {
-                        ui.label(egui::RichText::new(tr("No EXIF data in this file")).color(theme::muted()).size(12.0));
-                    } else {
-                        egui::Grid::new(("exif", photo.id))
-                            .num_columns(2)
-                            .striped(true)
-                            .spacing(Vec2::new(10.0, 3.0))
-                            .show(ui, |ui| {
-                                for (label, value) in rows {
-                                    ui.label(egui::RichText::new(tr(label)).color(theme::muted()).size(12.0));
-                                    ui.add(egui::Label::new(egui::RichText::new(value).size(12.0)).wrap());
-                                    ui.end_row();
-                                }
-                            });
-                    }
-                }
-            }
-            ui.add_space(10.0);
-            ui.label(tr("Caption"));
-            let response = ui.add(
-                egui::TextEdit::multiline(&mut self.caption_buf)
-                    .desired_rows(3)
-                    .desired_width(f32::INFINITY),
-            );
-            if response.changed() {
-                self.db.set_caption(photo.id, &self.caption_buf);
-                if let Some(slot) = self.photos.iter_mut().find(|item| item.id == photo.id) {
-                    slot.caption = self.caption_buf.clone();
-                }
-            }
-            ui.add_space(8.0);
-            if ui.button(tr("Show in folder")).clicked() {
-                crate::shell::reveal(&photo.path);
-            }
-            if ui.button(tr("Show on map")).clicked() {
-                self.show_on_map(photo.id);
-            }
-            if ui.button(tr("Open in OpenStreetMap")).clicked() {
-                let (lat, lon, zoom) = photo
-                    .place()
-                    .map(|(lat, lon)| (lat, lon, 14))
-                    .unwrap_or((self.map_lat, self.map_lon, self.map_zoom.max(2)));
-                super::places::open_osm(lat, lon, zoom);
-            }
-            if ui.button(tr("Move to trash")).clicked() {
-                self.modal = super::Modal::trash(vec![photo.id]);
+        super::photo_meta::card(ui, tr("Histogram"), |ui| match &info {
+            Some((histogram, _)) => paint_histogram(ui, histogram),
+            None => paint_histogram_placeholder(ui, true),
+        });
+
+        let (w, h) = displayed_size(&photo);
+        let mut rows = vec![
+            ("File", photo.filename.clone()),
+            ("Taken", format_timestamp(photo.taken_at)),
+            ("Size", format!("{} × {}   {}", w as u32, h as u32, format_bytes(photo.bytes))),
+        ];
+        if photo.modified_at != photo.taken_at {
+            rows.insert(2, ("Modified", format_timestamp(photo.modified_at)));
+        }
+        if photo.rotation != 0 {
+            rows.push(("Rotated", trf("{}° clockwise in Picasso", &[&photo.rotation])));
+        }
+        if let Some(folder) = self.folders.iter().find(|folder| folder.id == photo.folder_id) {
+            rows.push(("Folder", folder_label(&folder.path)));
+        }
+        super::photo_meta::card(ui, tr("Details"), |ui| super::photo_meta::grid(ui, ("details", photo.id, ""), &rows));
+
+        let exif = info.as_ref().map(|(_, rows)| rows.as_slice());
+        super::side::exif_card(ui, &photo, exif);
+        let altitude = super::side::altitude_of(exif);
+        self.location_card(ui, &photo, altitude.as_deref());
+
+        let mut changed = false;
+        super::photo_meta::card(ui, tr("Caption"), |ui| {
+            changed = ui.add(egui::TextEdit::multiline(&mut self.caption_buf).desired_rows(3).desired_width(f32::INFINITY)).changed();
+        });
+        if changed {
+            self.db.set_caption(photo.id, &self.caption_buf);
+            if let Some(slot) = self.photos.iter_mut().find(|item| item.id == photo.id) {
+                slot.caption = self.caption_buf.clone();
             }
         }
+        ui.add_space(8.0);
     }
 
     fn filmstrip(&mut self, ui: &mut egui::Ui, height: f32) {
@@ -923,9 +874,3 @@ fn full_uv() -> Rect {
     Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0))
 }
 
-fn detail(ui: &mut egui::Ui, label: &'static str, value: &str) {
-    ui.horizontal(|ui| {
-        ui.label(egui::RichText::new(tr(label)).color(theme::muted()).size(12.0));
-        ui.label(egui::RichText::new(value).size(12.0));
-    });
-}

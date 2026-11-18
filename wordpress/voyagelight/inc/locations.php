@@ -111,7 +111,7 @@ function vl_geo_fields( $post ) {
 	$unread  = get_transient( 'vl_location_' . $post->ID . '_' . get_current_user_id() );
 	$reasons = vl_geo_reasons();
 	$value   = null !== $lat && null !== $lon ? vl_geo_format( $lat, $lon ) : '';
-	echo '<p><label for="vl_location"><strong>' . esc_html__( 'Location', 'voyagelight' ) . '</strong></label> · ' . esc_html__( 'Paste coordinates or a map link, such as 39.8628, -4.0273 or 39°51′46″N 4°01′38″W. Links from Google Maps, Apple Maps and OpenStreetMap and geo: addresses work too. Leave it empty for no location.', 'voyagelight' ) . '</p>';
+	echo '<p><label for="vl_location"><strong>' . esc_html__( 'Location', 'voyagelight' ) . '</strong></label> · ' . esc_html__( 'Paste coordinates or a map link, such as 12.5822, -65.7225 or 12°34′56″N 65°43′21″W. Links from Google Maps, Apple Maps and OpenStreetMap and geo: addresses work too. Leave it empty for no location.', 'voyagelight' ) . '</p>';
 	if ( is_array( $unread ) && isset( $unread['text'], $reasons[ $unread['why'] ] ) ) {
 		$value = $unread['text'];
 		/* translators: 1: the location as typed, 2: why it couldn't be read. */
@@ -119,7 +119,7 @@ function vl_geo_fields( $post ) {
 	}
 	$point = vl_geo_read( $value );
 	if ( is_array( $point ) ) {
-		/* translators: %s: latitude and longitude, such as 39.86280, -4.02730. */
+		/* translators: %s: latitude and longitude, such as 12.58220, -65.72250. */
 		$reading = sprintf( __( 'Reads as %s', 'voyagelight' ), sprintf( '%.5F, %.5F', $point[0], $point[1] ) );
 	} else {
 		$reading = 'empty' === $point ? __( 'No location set.', 'voyagelight' ) : $reasons[ $point ];
@@ -128,7 +128,7 @@ function vl_geo_fields( $post ) {
 	echo '<p id="vl-location-reading" class="vl-geo-reading' . ( is_string( $point ) && 'empty' !== $point ? ' is-error' : '' ) . '" aria-live="polite">' . esc_html( $reading ) . '</p>';
 	echo '<p id="vl-location-help" class="description">' . esc_html__( 'Short links such as maps.app.goo.gl can’t be read here: open the link, then copy the full address from the browser’s address bar.', 'voyagelight' ) . '</p>';
 	echo '<p><label for="vl_stops"><strong>' . esc_html__( 'Route stops', 'voyagelight' ) . '</strong> · ' . esc_html__( 'One stop per line: Place name | location | short note. The location takes the same forms as above.', 'voyagelight' ) . '</label></p>';
-	echo '<textarea id="vl_stops" name="vl_stops" rows="7" class="vl-geo-lines" data-kind="stop" data-max-lines="' . esc_attr( VL_STOP_LINES ) . '" data-max-chars="' . esc_attr( VL_STOP_CHARS ) . '" data-problems="vl-stops-problems" style="width:100%;max-width:100%" placeholder="Ilulissat | 69.2194, -51.0986 | ' . esc_attr__( 'Starting point', 'voyagelight' ) . '">' . esc_textarea( $stops ) . '</textarea>';
+	echo '<textarea id="vl_stops" name="vl_stops" rows="7" class="vl-geo-lines" data-kind="stop" data-max-lines="' . esc_attr( VL_STOP_LINES ) . '" data-max-chars="' . esc_attr( VL_STOP_CHARS ) . '" data-problems="vl-stops-problems" style="width:100%;max-width:100%" placeholder="Harbour | 12.5822, -65.7225 | ' . esc_attr__( 'Starting point', 'voyagelight' ) . '">' . esc_textarea( $stops ) . '</textarea>';
 	echo '<div id="vl-stops-problems" class="vl-geo-problems" aria-live="polite">' . vl_geo_problem_list( $stops, 'stop', VL_STOP_LINES ) . '</div>'; // phpcs:ignore WordPress.Security.EscapeOutput -- escaped inside.
 	echo '<p>' . esc_html__( 'The map shows the stops in this order, joined by a straight line that is not a road or walking route. Publish only coordinates you are comfortable sharing. Empty coordinates mean no location.', 'voyagelight' ) . '</p>';
 	vl_geo_picker( 'post' );

@@ -1851,12 +1851,12 @@ mod tests {
     }
 
     fn sample() -> Vec<Photo> {
-        let taipei = Some((25.03, 121.56));
-        let paris = Some((48.85, 2.35));
+        let capital = Some((25.03, 121.56));
+        let uptown = Some((48.85, 2.35));
         vec![
-            photo(1, at(2020, 3, 2, 9), "Canon EOS R5", "RF24-105mm F4 L IS USM", 24.0, taipei),
-            photo(2, at(2020, 3, 2, 10), "Canon EOS R5", "RF24-105mm F4 L IS USM", 105.0, taipei),
-            photo(3, at(2022, 7, 9, 18), "iPhone 13", "", 26.0, paris),
+            photo(1, at(2020, 3, 2, 9), "Canon EOS R5", "RF24-105mm F4 L IS USM", 24.0, capital),
+            photo(2, at(2020, 3, 2, 10), "Canon EOS R5", "RF24-105mm F4 L IS USM", 105.0, capital),
+            photo(3, at(2022, 7, 9, 18), "iPhone 13", "", 26.0, uptown),
             photo(4, at(2022, 7, 10, 18), " ", "", 0.0, None),
         ]
     }

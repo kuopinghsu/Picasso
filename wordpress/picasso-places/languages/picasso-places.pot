@@ -145,7 +145,7 @@ msgid "Location"
 msgstr ""
 
 #: inc/editor.php
-msgid "Paste coordinates or a map link, such as 39.8628, -4.0273 or 39°51′46″N 4°01′38″W. Links from Google Maps, Apple Maps and OpenStreetMap and geo: addresses work too. Leave it empty for no location."
+msgid "Paste coordinates or a map link, such as 12.5822, -65.7225 or 12°34′56″N 65°43′21″W. Links from Google Maps, Apple Maps and OpenStreetMap and geo: addresses work too. Leave it empty for no location."
 msgstr ""
 
 #. translators: 1: the location as typed, 2: why it couldn't be read.
@@ -154,7 +154,7 @@ msgstr ""
 msgid "The location “%1$s” couldn’t be read: %2$s The saved location was kept."
 msgstr ""
 
-#. translators: %s: latitude and longitude, such as 39.86280, -4.02730.
+#. translators: %s: latitude and longitude, such as 12.58220, -65.72250.
 #: inc/editor.php
 #, php-format
 msgid "Reads as %s"

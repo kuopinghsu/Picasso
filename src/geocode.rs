@@ -107,10 +107,10 @@ mod tests {
 
     #[test]
     fn a_place_without_its_own_name_takes_the_area_around_it() {
-        let named: Value = serde_json::json!({"name": "Plaza Mayor", "address": {"city": "Madrid"}});
-        assert_eq!(best_name(&named), "Plaza Mayor");
-        let street: Value = serde_json::json!({"name": "", "address": {"road": "Calle Mayor", "suburb": "Sol", "city": "Madrid"}});
-        assert_eq!(best_name(&street), "Sol");
+        let named: Value = serde_json::json!({"name": "Main Square", "address": {"city": "Midtown"}});
+        assert_eq!(best_name(&named), "Main Square");
+        let street: Value = serde_json::json!({"name": "", "address": {"road": "Main Street", "suburb": "Centre", "city": "Midtown"}});
+        assert_eq!(best_name(&street), "Centre");
         assert_eq!(best_name(&serde_json::json!({})), "");
     }
 

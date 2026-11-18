@@ -40,8 +40,54 @@ pub(super) struct MapView {
 }
 
 impl PicassoApp {
+    /// Goes back to the photo Show in Places was asked from: its view and
+    /// search again, then the photo open in the viewer, or selected and
+    /// scrolled to in the grid, once that view has loaded.
+    pub(super) fn return_from_places(&mut self) {
+        let Some(back) = self.places_return.take() else { return };
+        self.set_nav(back.nav.clone());
+        // Places may hand its own search on to the Library; the view's own comes back.
+        if self.search != back.search {
+            self.search = back.search.clone();
+            self.search_due = None;
+            self.reload_view();
+        }
+        self.returning = Some(back);
+    }
+
+    /// Completes [`Self::return_from_places`] once the view's photos are in.
+    pub(super) fn finish_return(&mut self) {
+        let Some(back) = self.returning.take() else { return };
+        // Only the load asked for last arrives, and it is of this view and search.
+        if self.nav != back.nav || self.search != back.search {
+            return;
+        }
+        let Some(index) = self.index_of(back.photo) else { return };
+        if back.viewing {
+            self.open_at(index);
+        } else {
+            self.selection.clear();
+            self.selection.insert(back.photo);
+            self.anchor = Some(back.photo);
+            self.scroll_to = Some(back.photo);
+        }
+    }
+
     pub(super) fn places_ui(&mut self, ui: &mut egui::Ui) {
+        // Back to the photo Show in Places came from, also with Alt+Left.
+        if self.places_return.is_some() && ui.input_mut(|input| input.consume_key(egui::Modifiers::ALT, egui::Key::ArrowLeft)) {
+            self.return_from_places();
+            return;
+        }
         ui.horizontal(|ui| {
+            if self.places_return.is_some() {
+                let back = ui.add(theme::primary_button(&format!("←  {}", tr("Back to photo"))));
+                if back.on_hover_text("Alt+←").clicked() {
+                    self.return_from_places();
+                    return;
+                }
+                ui.separator();
+            }
             let label = if self.map_place { "Click the map…" } else { "Geotag" };
             if ui.button(tr(label)).on_hover_text(tr("Place the selected photos on the map")).clicked() {
                 if self.selection.is_empty() {
@@ -301,6 +347,10 @@ impl PicassoApp {
     }
 
     pub(super) fn show_on_map(&mut self, id: i64) {
+        // Remembered, so Back to photo returns to it where it was.
+        if self.nav != crate::types::Nav::Places {
+            self.places_return = Some(super::PlacesReturn { nav: self.nav.clone(), search: self.search.clone(), photo: id, viewing: self.mode == super::Mode::View });
+        }
         let place = self.db.photo(id).and_then(|photo| photo.place());
         self.selection.clear();
         self.selection.insert(id);

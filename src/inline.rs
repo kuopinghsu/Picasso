@@ -575,7 +575,7 @@ mod tests {
 
     #[test]
     fn the_spans_are_the_whole_line_so_the_editor_keeps_every_character() {
-        for line in ["a **b** *c", "x [y](https://z) `q` \\* ~~", "日本 **語**", "**", "[a](b c)", "{red}x{/red} {blue}", "{/red}{red}"] {
+        for line in ["a **b** *c", "x [y](https://z) `q` \\* ~~", "古都 **語**", "**", "[a](b c)", "{red}x{/red} {blue}", "{/red}{red}"] {
             assert_eq!(spans(line).iter().map(|span| span.text).collect::<String>(), line);
         }
     }

@@ -59,11 +59,14 @@ function vl_trip_days_box( $post ) {
 	$value = get_post_meta( $post->ID, '_vl_trip_days', true );
 	echo '<p>' . esc_html__( 'One place per line:', 'voyagelight' ) . ' <strong>' . esc_html__( 'Day | Place | location | short note | optional post ID', 'voyagelight' ) . '</strong>. ' . esc_html__( 'The location can be coordinates or a map link, as in a story’s Location field.', 'voyagelight' ) . ' ' . esc_html__( 'The map uses these coordinates, not the photos’ EXIF.', 'voyagelight' ) . '</p>';
 	echo '<div class="vl-trip-rows hide-if-no-js"></div>';
-	echo '<textarea id="vl_trip_days" name="vl_trip_days" rows="11" class="vl-geo-lines" data-kind="day" data-max-lines="' . esc_attr( VL_DAY_LINES ) . '" data-max-chars="' . esc_attr( VL_DAY_CHARS ) . '" data-problems="vl-trip-days-problems" style="width:100%;font-family:monospace" placeholder="1 | Ilulissat | 69.2194, -51.0986 | ' . esc_attr__( 'Arrive and explore', 'voyagelight' ) . '">' . esc_textarea( $value ) . '</textarea>';
+	echo '<textarea id="vl_trip_days" name="vl_trip_days" rows="11" class="vl-geo-lines" data-kind="day" data-max-lines="' . esc_attr( VL_DAY_LINES ) . '" data-max-chars="' . esc_attr( VL_DAY_CHARS ) . '" data-problems="vl-trip-days-problems" style="width:100%;font-family:monospace" placeholder="1 | Harbour | 12.5822, -65.7225 | ' . esc_attr__( 'Arrive and explore', 'voyagelight' ) . '">' . esc_textarea( $value ) . '</textarea>';
 	echo '<div id="vl-trip-days-problems" class="vl-geo-problems" aria-live="polite">' . vl_geo_problem_list( $value, 'day', VL_DAY_LINES ) . '</div>'; // phpcs:ignore WordPress.Security.EscapeOutput -- escaped inside.
 	echo '<p>' . esc_html__( 'Day numbers set the order of the itinerary. Locations are shown to everyone. Dashed lines show the order of stops, not a route to follow. A post ID links a stop to a published story.', 'voyagelight' ) . '</p>';
 	vl_geo_picker( 'trip' );
 }
+
+/** How many other published stories, newest first, the itinerary's story lists offer. */
+const VL_OTHER_STORIES = 500;
 
 /** A title as plain text for the editor's scripts. */
 function vl_plain_title( $post ) {
@@ -105,8 +108,22 @@ function vl_trip_editor_data( $trip_id ) {
 		);
 	}
 	// Only each story's id and title: whole posts, with their content, fields and terms, would load every story on the site.
+	// The newest VL_OTHER_STORIES, and any the itinerary already names, so a large site doesn't put every title in the page.
 	global $wpdb;
-	$others = $wpdb->get_results( $wpdb->prepare( "SELECT ID, post_title FROM {$wpdb->posts} WHERE post_type = %s AND post_status = %s ORDER BY post_date DESC, ID DESC", 'post', 'publish' ) ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery -- a read of two columns, fresh each time the editor opens.
+	$others = $wpdb->get_results( $wpdb->prepare( "SELECT ID, post_title FROM {$wpdb->posts} WHERE post_type = %s AND post_status = %s ORDER BY post_date DESC, ID DESC LIMIT %d", 'post', 'publish', VL_OTHER_STORIES ) ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery -- a read of two columns, fresh each time the editor opens.
+	$named  = array();
+	foreach ( vl_geo_lines( $trip_id ? get_post_meta( $trip_id, '_vl_trip_days', true ) : '', VL_DAY_LINES ) as $line ) {
+		$row = vl_geo_day_line( $line );
+		if ( is_array( $row ) && $row['post_id'] ) {
+			$named[ $row['post_id'] ] = true;
+		}
+	}
+	$have = array_flip( array_map( 'intval', array_merge( $ids, wp_list_pluck( $others, 'ID' ) ) ) );
+	$more = array_diff_key( $named, $have );
+	if ( $more ) {
+		$list   = implode( ',', array_map( 'intval', array_keys( $more ) ) );
+		$others = array_merge( $others, $wpdb->get_results( $wpdb->prepare( "SELECT ID, post_title FROM {$wpdb->posts} WHERE post_type = %s AND post_status = %s AND ID IN ($list)", 'post', 'publish' ) ) ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- integers only.
+	}
 	$skip   = array_flip( array_map( 'intval', $ids ) );
 	foreach ( $others as $story ) {
 		$id = (int) $story->ID;
@@ -126,7 +143,7 @@ function vl_geo_admin_text() {
 		'mapFailed'     => __( 'Unable to load the map. Check your connection or content blockers.', 'voyagelight' ),
 		'storyLocation' => __( 'Story location', 'voyagelight' ),
 		'noLocation'    => __( 'No location set.', 'voyagelight' ),
-		/* translators: %s: latitude and longitude, such as 39.86280, -4.02730. */
+		/* translators: %s: latitude and longitude, such as 12.58220, -65.72250. */
 		'readsAs'       => __( 'Reads as %s', 'voyagelight' ),
 		'reasons'       => vl_geo_reasons(),
 		'problems'      => __( 'These lines couldn’t be read and are not on the map:', 'voyagelight' ),
@@ -191,27 +208,43 @@ add_action( 'admin_enqueue_scripts', 'vl_admin_assets' );
 function vl_trip_link_box( $post ) {
 	wp_nonce_field( 'vl_trip_link_save', 'vl_trip_link_nonce' );
 	$selected = absint( get_post_meta( $post->ID, '_vl_trip_id', true ) );
-	$trips    = vl_collect_posts(
-		array(
-			'post_type'   => 'vl_trip',
-			'post_status' => array( 'publish', 'draft', 'private' ),
-			'orderby'     => array(
-				'title' => 'ASC',
-				'ID'    => 'ASC',
+	// Only Journeys this user may read: get_posts() doesn't check, and
+	// another author's draft or private Journey would show its title here.
+	$trips = array_values(
+		array_filter(
+			vl_collect_posts(
+				array(
+					'post_type'   => 'vl_trip',
+					'post_status' => array( 'publish', 'draft', 'private' ),
+					'orderby'     => array(
+						'title' => 'ASC',
+						'ID'    => 'ASC',
+					),
+				)
 			),
+			function ( $trip ) {
+				return current_user_can( 'read_post', $trip->ID );
+			}
 		)
 	);
 	$ids = array_map( 'absint', wp_list_pluck( $trips, 'ID' ) );
-	if ( $selected && ! in_array( $selected, $ids, true ) ) {
-		$current = get_post( $selected );
-		if ( $current && 'vl_trip' === $current->post_type ) {
-			$trips[] = $current;
+	// The linked Journey in another state, as scheduled, is shown by its
+	// title when this user may read it, and kept under no title otherwise.
+	$hidden = false;
+	if ( $selected && ! in_array( $selected, $ids, true ) && 'vl_trip' === get_post_type( $selected ) ) {
+		if ( current_user_can( 'read_post', $selected ) ) {
+			$trips[] = get_post( $selected );
+		} else {
+			$hidden = true;
 		}
 	}
 	echo '<label for="vl_trip_id">' . esc_html__( 'This story belongs to:', 'voyagelight' ) . '</label>';
 	echo '<select id="vl_trip_id" name="vl_trip_id" style="width:100%"><option value="0">' . esc_html__( '— No journey —', 'voyagelight' ) . '</option>';
 	foreach ( $trips as $trip ) {
 		echo '<option value="' . esc_attr( $trip->ID ) . '" ' . selected( $selected, $trip->ID, false ) . '>' . esc_html( $trip->post_title ) . '</option>';
+	}
+	if ( $hidden ) {
+		echo '<option value="' . esc_attr( $selected ) . '" selected>#' . esc_html( $selected ) . '</option>';
 	}
 	echo '</select><p>' . esc_html__( 'Published stories appear on their journey’s page.', 'voyagelight' ) . '</p>';
 }
@@ -236,7 +269,9 @@ function vl_trip_link_save( $id ) {
 		return;
 	}
 	$trip = isset( $_POST['vl_trip_id'] ) ? absint( $_POST['vl_trip_id'] ) : 0;
-	if ( $trip && 'vl_trip' === get_post_type( $trip ) ) {
+	// A Journey this user can't read can stay linked, but can't be newly picked.
+	$kept = absint( get_post_meta( $id, '_vl_trip_id', true ) ) === $trip;
+	if ( $trip && 'vl_trip' === get_post_type( $trip ) && ( $kept || current_user_can( 'read_post', $trip ) ) ) {
 		update_post_meta( $id, '_vl_trip_id', $trip );
 	} else {
 		delete_post_meta( $id, '_vl_trip_id' );

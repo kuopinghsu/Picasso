@@ -184,7 +184,7 @@ pub fn trf(text: &'static str, args: &[&dyn Display]) -> String {
 }
 
 /// Lookup map for `lang`, built the first time the language is used.
-fn table(lang: Lang) -> &'static HashMap<&'static str, &'static str> {
+pub(crate) fn table(lang: Lang) -> &'static HashMap<&'static str, &'static str> {
     static MAPS: [OnceLock<HashMap<&'static str, &'static str>>; Lang::ALL.len()] =
         [const { OnceLock::new() }; Lang::ALL.len()];
     MAPS[lang.index()].get_or_init(|| lang.strings().iter().copied().collect())

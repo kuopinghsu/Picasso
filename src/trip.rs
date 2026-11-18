@@ -853,7 +853,7 @@ pub enum Block {
     /// the track chosen, or is empty for all of the Trip's.
     Route { caption: String, source: String, route: Vec<Vec<[i32; 2]>> },
     /// Practical information under a title, as label and value lines, such
-    /// as "Getting there" and "Train from Lisbon, 2 h".
+    /// as "Getting there" and "Train from the airport, 2 h".
     Info { title: String, items: Vec<(String, String)> },
     /// A web page to read more, with its title and a note.
     Link { url: String, title: String, note: String },
@@ -1314,7 +1314,7 @@ mod tests {
     #[test]
     fn photos_far_apart_are_separate_trips_the_latest_first() {
         const DAY: i64 = 86_400;
-        let shot = |id: i64, taken_at: i64, in_trip: bool| Shot { id, taken_at, folder: if id < 10 { "Kyoto".into() } else { "Oslo".into() }, camera: "X100".into(), located: id % 2 == 0, in_trip };
+        let shot = |id: i64, taken_at: i64, in_trip: bool| Shot { id, taken_at, folder: if id < 10 { "Temple".into() } else { "Lakeside".into() }, camera: "X100".into(), located: id % 2 == 0, in_trip };
         let shots = vec![
             shot(2, 10 * DAY + 3600, false),
             shot(1, 10 * DAY, false),
@@ -1327,7 +1327,7 @@ mod tests {
         let found = suggest_trips(&shots, 2 * DAY, 2, false);
         assert_eq!(found.iter().map(|group| group.photos.clone()).collect::<Vec<_>>(), vec![vec![11, 12], vec![1, 2, 3]], "alone and timeless are left out");
         assert_eq!((found[1].first, found[1].last, found[1].located, found[1].in_trip), (10 * DAY, 11 * DAY, 1, 1));
-        assert_eq!((found[0].folders.clone(), found[0].cameras.clone()), (vec!["Oslo".to_string()], vec!["X100".to_string()]));
+        assert_eq!((found[0].folders.clone(), found[0].cameras.clone()), (vec!["Lakeside".to_string()], vec!["X100".to_string()]));
         let fresh = suggest_trips(&shots, 2 * DAY, 2, true);
         assert_eq!(fresh[1].photos, vec![1, 2], "photos already in a trip are skipped");
         assert_eq!(suggest_trips(&shots, DAY / 2, 2, false).len(), 2, "a shorter gap splits day 10 from day 11");
@@ -1351,7 +1351,7 @@ mod tests {
         assert!(route[0].len() <= ROUTE_POINTS + 1);
         assert_eq!(route[0].last(), Some(&[3_520_000, 13_500_000]), "the last point stays");
         assert!((route_meters(&route) - 22_240.0).abs() < 100.0);
-        let block = Block::Route { caption: "Kyoto".into(), source: "/w.gpx".into(), route: route.clone() };
+        let block = Block::Route { caption: "Temple".into(), source: "/w.gpx".into(), route: route.clone() };
         assert_eq!(Block::read(block.kind(), block.version(), &block.payload(), Vec::new()), block);
         let (view, shape) = route_shape(&route, 200.0, 100.0, 10.0).unwrap();
         assert!(shape.iter().flatten().all(|&[x, y]| (10.0..=190.0).contains(&x) && (10.0..=90.0).contains(&y)));
@@ -1368,8 +1368,8 @@ mod tests {
         assert_eq!(TripZone::parse("UTC-03:30"), Some(TripZone::Fixed(-(3 * 3600 + 1800))));
         assert_eq!(TripZone::parse("UTC"), Some(TripZone::Fixed(0)));
         assert_eq!(TripZone::Fixed(-(3 * 3600 + 1800)).code(), "-03:30");
-        assert_eq!(TripZone::parse("asia/taipei"), None, "names are spelled as in the timezone data");
-        for bad in ["", "  ", "Asia/", "/Taipei", "Asia Taipei", "Mars/Olympus", "+25:00", "../etc"] {
+        assert_eq!(TripZone::parse("asia/capital"), None, "names are spelled as in the timezone data");
+        for bad in ["", "  ", "Asia/", "/Capital", "Asia Capital", "Mars/Olympus", "+25:00", "../etc"] {
             assert_eq!(TripZone::parse(bad), None, "{bad:?}");
         }
     }
@@ -1384,15 +1384,15 @@ mod tests {
 
     #[test]
     fn a_day_comes_from_the_clock_and_its_offset() {
-        let taipei = TripZone::parse("Asia/Taipei").unwrap();
-        // 00:30 in Tokyo is 23:30 the evening before in Taipei.
-        let tokyo = Capture::Clock { clock: clock("2026-03-02 00:30:00"), offset: Some(9 * 3600) };
-        assert_eq!(capture_day(tokyo, 0, &taipei, false), Ok(date("2026-03-01")));
-        assert_eq!(capture_day(tokyo, 3600, &taipei, false), Ok(date("2026-03-02")), "an Adjust date shift counts once");
+        let capital = TripZone::parse("Asia/Taipei").unwrap();
+        // 00:30 in Metro is 23:30 the evening before in Capital.
+        let metro = Capture::Clock { clock: clock("2026-03-02 00:30:00"), offset: Some(9 * 3600) };
+        assert_eq!(capture_day(metro, 0, &capital, false), Ok(date("2026-03-01")));
+        assert_eq!(capture_day(metro, 3600, &capital, false), Ok(date("2026-03-02")), "an Adjust date shift counts once");
         let video = Capture::Utc(clock("2026-03-01 16:30:00").and_utc().timestamp());
-        assert_eq!(capture_day(video, 0, &taipei, false), Ok(date("2026-03-02")));
-        assert_eq!(capture_day(Capture::Missing, 0, &taipei, true), Err(Review::NoTime));
-        assert_eq!(capture_day(Capture::Unread, 0, &taipei, true), Err(Review::Unread));
+        assert_eq!(capture_day(video, 0, &capital, false), Ok(date("2026-03-02")));
+        assert_eq!(capture_day(Capture::Missing, 0, &capital, true), Err(Review::NoTime));
+        assert_eq!(capture_day(Capture::Unread, 0, &capital, true), Err(Review::Unread));
     }
 
     #[test]
@@ -1418,7 +1418,7 @@ mod tests {
 
     #[test]
     fn a_trip_needs_a_name_a_time_zone_and_days_in_order() {
-        let mut draft = TripDraft::new("Kyoto", "Asia/Tokyo");
+        let mut draft = TripDraft::new("Temple", "Asia/Tokyo");
         assert_eq!(draft.validate(), Ok(TripZone::Named("Asia/Tokyo".into())));
         draft.first_day = NaiveDate::from_ymd_opt(2026, 4, 2);
         draft.last_day = NaiveDate::from_ymd_opt(2026, 4, 1);
@@ -1426,7 +1426,7 @@ mod tests {
         draft.last_day = draft.first_day;
         assert!(draft.validate().is_ok(), "a one-day trip");
         assert!(TripDraft::new(" ", "Asia/Tokyo").validate().is_err());
-        assert!(TripDraft::new("Kyoto", "").validate().is_err(), "the time zone has no default");
+        assert!(TripDraft::new("Temple", "").validate().is_err(), "the time zone has no default");
     }
 
     #[test]
@@ -1475,9 +1475,9 @@ mod tests {
 
     #[test]
     fn blocks_read_back_what_they_store() {
-        let photo = MediaUse { media_id: 3, caption: "Gion at dusk".into(), alt: "Lanterns on a street".into() };
+        let photo = MediaUse { media_id: 3, caption: "Lanes at dusk".into(), alt: "Lanterns on a street".into() };
         let blocks = [
-            Block::Heading("Day 1 — 京都".into()),
+            Block::Heading("Day 1 — 古都".into()),
             Block::Paragraph("<script>\"quoted\" & 'odd'</script>".into()),
             Block::Photo(photo.clone()),
             Block::Gallery(vec![photo.clone(), MediaUse::new(4)]),
@@ -1485,14 +1485,14 @@ mod tests {
             Block::Grid { columns: 3, rows: 2, caption: "Market \"day\"".into(), media: vec![photo.clone(), MediaUse::new(5)] },
             Block::Separator,
             Block::Credits("Photos: me".into()),
-            Block::Info { title: "Getting there".into(), items: vec![("Train".into(), "2 h from Lisbon".into()), (String::new(), "No \"booking\" needed".into())] },
+            Block::Info { title: "Getting there".into(), items: vec![("Train".into(), "2 h from Seaport".into()), (String::new(), "No \"booking\" needed".into())] },
             Block::Link { url: "https://example.com/ferry?a=1&b=2".into(), title: "Ferry times".into(), note: "Summer only".into() },
             Block::YouTube { url: "https://youtu.be/abc-DEF_123?t=90".into(), caption: "The \"ferry\" leaving".into() },
             Block::Video { media: photo.clone(), start: 1500, end: 0 },
             Block::Video { media: MediaUse::new(6), start: 0, end: 12_250 },
             Block::Table {
                 header: true,
-                rows: vec![vec!["Ferry".into(), "Leaves".into()], vec!["Lisbon \"A\"".into(), "9:00\n9:30".into()]],
+                rows: vec![vec!["Ferry".into(), "Leaves".into()], vec!["Seaport \"A\"".into(), "9:00\n9:30".into()]],
                 widths: vec![70, 30],
                 caption: "In summer".into(),
             },
@@ -1652,7 +1652,7 @@ mod resource_tests {
 
     #[test]
     fn a_resource_is_named_by_its_title_else_its_file() {
-        let doc = TripResource { kind: ResourceKind::Document, reference: "/trips/spain/tickets.pdf".into(), ..Default::default() };
+        let doc = TripResource { kind: ResourceKind::Document, reference: "/trips/coast/tickets.pdf".into(), ..Default::default() };
         assert_eq!(doc.shown_name(), "tickets.pdf");
         assert!(doc.missing());
         assert_eq!(TripResource { title: "Train".into(), ..doc }.shown_name(), "Train");

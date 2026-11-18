@@ -14,8 +14,8 @@ const SHOT: [&str; 4] = ["Aperture", "Exposure time", "ISO", "Focal length"];
 /// The camera card's title and the line under it.
 const TITLE: [&str; 2] = ["Camera", "Lens"];
 
-/// The other rows, grouped under headings, in this order. Rows not named in
-/// any group go last under "Other".
+/// The other rows, in groups apart by a thin line, in this order. Rows not
+/// named in any group go last.
 const GROUPS: [(&str, &[&str]); 3] = [
     ("Exposure", &["Program", "Exposure bias", "Metering", "Flash", "White balance", "35 mm equiv."]),
     ("File", &["Color space", "Software"]),
@@ -26,13 +26,13 @@ const GROUPS: [(&str, &[&str]); 3] = [
 /// altitude with its location.
 const ELSEWHERE: [&str; 2] = ["Taken", "Altitude"];
 
-/// Draws `rows`, the photo's EXIF as read, `id` keeping each grid apart.
-/// `heading` draws a group's heading, so each panel keeps its own style.
-/// A video's rows, which are about its file and streams, are one plain list.
-pub(super) fn exif(ui: &mut egui::Ui, id: (&str, i64), rows: &[(&'static str, String)], video: bool, heading: &dyn Fn(&mut egui::Ui, &str)) {
+/// Draws `rows`, the photo's EXIF as read, `id` keeping each grid apart,
+/// and returns how many groups of rows it drew. A video's rows, which are
+/// about its file and streams, are one plain list.
+pub(super) fn exif(ui: &mut egui::Ui, id: (&str, i64), rows: &[(&'static str, String)], video: bool) -> usize {
     if video {
         grid(ui, (id.0, id.1, "video"), rows);
-        return;
+        return 1;
     }
     let value = |label: &str| rows.iter().find(|(name, _)| *name == label).map(|(_, value)| value.as_str());
     // The camera and lens as the card's title, as a photo app names a shot.
@@ -64,29 +64,34 @@ pub(super) fn exif(ui: &mut egui::Ui, id: (&str, i64), rows: &[(&'static str, St
             }
         });
     }
+    // Each group under a thin line rather than a heading: the card says
+    // what they are about and each row's label says the rest.
     let mut shown: Vec<&str> = SHOT.iter().chain(TITLE.iter()).chain(ELSEWHERE.iter()).copied().collect();
+    let mut drawn = 0;
+    let mut before = value("Camera").is_some() || value("Lens").is_some() || !chips.is_empty();
+    let mut groups: Vec<(&str, Vec<(&'static str, String)>)> = Vec::new();
     for (title, labels) in GROUPS {
-        let group: Vec<(&'static str, String)> = rows.iter().filter(|(label, _)| labels.contains(label)).cloned().collect();
+        groups.push((title, rows.iter().filter(|(label, _)| labels.contains(label)).cloned().collect()));
         shown.extend(labels.iter().copied());
-        if !group.is_empty() {
-            // A heading over a single row only repeats it; the row's own
-            // label says what it is.
-            if group.len() > 1 {
-                heading(ui, tr(title));
-            } else {
-                ui.add_space(6.0);
-            }
-            grid(ui, (id.0, id.1, title), &group);
-        }
     }
-    let other: Vec<(&'static str, String)> = rows.iter().filter(|(label, _)| !shown.contains(label)).cloned().collect();
-    if !other.is_empty() {
-        // Without a heading when they are all there is.
-        if !chips.is_empty() || rows.len() != other.len() {
-            heading(ui, tr("Other"));
+    groups.push(("other", rows.iter().filter(|(label, _)| !shown.contains(label)).cloned().collect()));
+    for (title, group) in groups.into_iter().filter(|(_, group)| !group.is_empty()) {
+        if before {
+            divider(ui);
         }
-        grid(ui, (id.0, id.1, "other"), &other);
+        grid(ui, (id.0, id.1, title), &group);
+        before = true;
+        drawn += 1;
     }
+    drawn
+}
+
+/// A thin line across the card between groups of rows.
+fn divider(ui: &mut egui::Ui) {
+    ui.add_space(6.0);
+    let (line, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 1.0), egui::Sense::hover());
+    ui.painter().rect_filled(line, 0, theme::hairline());
+    ui.add_space(6.0);
 }
 
 /// A card: a rounded panel a shade apart from the panel around it, with
@@ -134,29 +139,41 @@ pub(super) fn location(ui: &mut egui::Ui, id: i64, place: Option<(f64, f64)>, pi
             if let Some(altitude) = altitude {
                 grid(ui, ("altitude", id, ""), &[("Altitude", altitude.to_string())]);
             }
-            ui.add_space(6.0);
-            ui.horizontal_wrapped(|ui| {
-                if ui.button(tr("Copy coordinates")).clicked() {
-                    ui.ctx().copy_text(decimal(lat, lon));
-                }
-                if !in_places && ui.button(tr("Show in Places")).clicked() {
-                    action = Some(LocationAction::Places);
-                }
-                if ui.button(tr("Open in OpenStreetMap")).clicked() {
-                    action = Some(LocationAction::OpenStreetMap);
-                }
-            });
+            ui.add_space(8.0);
+            // One column of buttons the same width and height, which line up
+            // whatever the language makes of their words.
+            ui.spacing_mut().item_spacing.y = 6.0;
+            if !in_places && action_button(ui, tr("Show in Places"), true) {
+                action = Some(LocationAction::Places);
+            }
+            if action_button(ui, tr("Copy coordinates"), false) {
+                ui.ctx().copy_text(decimal(lat, lon));
+            }
+            if action_button(ui, tr("Open in OpenStreetMap"), false) {
+                action = Some(LocationAction::OpenStreetMap);
+            }
         }
         None => {
             ui.label(RichText::new(tr("No GPS location")).size(12.0).color(theme::muted()));
-            ui.add_space(4.0);
-            if !in_places && ui.button(tr("Geotag it in Places")).clicked() {
+            ui.add_space(6.0);
+            if !in_places && action_button(ui, tr("Geotag it in Places"), true) {
                 action = Some(LocationAction::Places);
             }
         }
     }
     action
 }
+
+/// A button as wide as the card and [`ACTION_HEIGHT`] tall, its words
+/// centred: filled with the accent when `primary`, the card's first action.
+fn action_button(ui: &mut egui::Ui, text: &str, primary: bool) -> bool {
+    let size = Vec2::new(ui.available_width(), ACTION_HEIGHT);
+    let button = if primary { theme::primary_button(text) } else { egui::Button::new(RichText::new(text).size(13.0)) };
+    ui.add_sized(size, button.corner_radius(8)).clicked()
+}
+
+/// Height of the Location card's buttons.
+const ACTION_HEIGHT: f32 = 28.0;
 
 /// Labels in a muted column beside their values; a right-click on a value
 /// copies it. The labels are English keys for `tr`.
@@ -231,9 +248,7 @@ mod tests {
                 let drawn = ui.allocate_ui(Vec2::new(width, 2000.0), |ui| {
                     ui.set_max_width(width);
                     card(ui, "Camera", |ui| {
-                        exif(ui, ("exif", 1), &rows, false, &|ui: &mut egui::Ui, title: &str| {
-                            ui.label(title);
-                        })
+                        exif(ui, ("exif", 1), &rows, false)
                     });
                     card(ui, "Location", |ui| location(ui, 1, Some((12.582194, -65.7225)), false, Some("1234.5 m"), false));
                 });
@@ -252,7 +267,7 @@ mod tests {
         let mut output = ctx.run_ui(egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, Vec2::new(800.0, 900.0))), ..Default::default() }, |ui| {
             egui::CentralPanel::default().show(ui, |ui| {
                 // Narrower than all four chips side by side.
-                let drawn = ui.allocate_ui(Vec2::new(180.0, 2000.0), |ui| exif(ui, ("exif", 1), &rows, false, &|_: &mut egui::Ui, _: &str| {}));
+                let drawn = ui.allocate_ui(Vec2::new(180.0, 2000.0), |ui| exif(ui, ("exif", 1), &rows, false));
                 height = drawn.response.rect.height();
             });
         });
@@ -261,20 +276,36 @@ mod tests {
     }
 
     #[test]
-    fn a_videos_details_are_one_list_without_headings() {
-        let rows: Vec<(&'static str, String)> = vec![("Duration", "0:12".into()), ("Camera", "Phone".into()), ("Bit rate", "12 Mbit/s".into())];
+    fn a_videos_details_are_one_list_and_a_photos_are_grouped() {
+        let rows: Vec<(&'static str, String)> = vec![("Duration", "0:12".into()), ("Camera", "Phone".into()), ("Software", "18.1".into()), ("Bit rate", "12 Mbit/s".into())];
         let ctx = egui::Context::default();
-        let (video, photo) = (std::cell::Cell::new(0), std::cell::Cell::new(0));
-        // egui may lay a frame out twice, so only whether headings came counts.
+        let (mut video, mut photo) = (0, 0);
         let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
             egui::CentralPanel::default().show(ui, |ui| {
-                exif(ui, ("video", 1), &rows, true, &|_: &mut egui::Ui, _: &str| video.set(video.get() + 1));
-                exif(ui, ("photo", 2), &rows, false, &|_: &mut egui::Ui, _: &str| photo.set(photo.get() + 1));
+                video = exif(ui, ("video", 1), &rows, true);
+                photo = exif(ui, ("photo", 2), &rows, false);
             });
         });
         output.textures_delta.clear();
-        assert_eq!(video.get(), 0, "a video's rows have no headings");
-        assert!(photo.get() > 0, "the same rows of a photo are grouped");
+        assert_eq!(video, 1, "a video's rows are one list");
+        assert!(photo > 1, "the same rows of a photo are grouped: {photo}");
+    }
+
+    #[test]
+    fn the_location_buttons_line_up_the_same_size() {
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        let mut output = ctx.run_ui(egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, Vec2::new(800.0, 900.0))), ..Default::default() }, |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                ui.allocate_ui(Vec2::new(232.0, 900.0), |ui| card(ui, "Location", |ui| location(ui, 1, Some((12.58, -65.72)), false, None, false)));
+            });
+        });
+        output.textures_delta.clear();
+        let update = output.platform_output.accesskit_update.take().expect("accessibility update");
+        let buttons: Vec<egui::accesskit::Rect> = update.nodes.iter().filter(|(_, node)| node.role() == egui::accesskit::Role::Button).filter_map(|(_, node)| node.bounds()).collect();
+        assert_eq!(buttons.len(), 3, "Show in Places, Copy coordinates, Open in OpenStreetMap");
+        let size = |rect: &egui::accesskit::Rect| ((rect.x1 - rect.x0).round(), (rect.y1 - rect.y0).round());
+        assert!(buttons.iter().all(|rect| size(rect) == size(&buttons[0]) && (rect.x0 - buttons[0].x0).abs() < 0.5), "same size, one column: {buttons:?}");
     }
 
     #[test]

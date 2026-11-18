@@ -20,10 +20,10 @@ function vl_pin_icon() {
 }
 
 /** URL of a bundled demo photo; unknown names give the hero photo. */
-function vl_photo( $slug = 'hero-norway' ) {
-	$allowed = array( 'hero-norway', 'stories', 'destinations', 'journeys', 'travel-map', 'food-culture', 'guides' );
+function vl_photo( $slug = 'hero' ) {
+	$allowed = array( 'hero', 'stories', 'destinations', 'journeys', 'travel-map', 'food-culture', 'guides' );
 	if ( ! in_array( $slug, $allowed, true ) ) {
-		$slug = 'hero-norway';
+		$slug = 'hero';
 	}
 	return get_template_directory_uri() . '/assets/images/photos/' . $slug . '.jpg';
 }
@@ -33,15 +33,33 @@ function vl_photo( $slug = 'hero-norway' ) {
  * post's ID, so a row of such cards doesn't repeat one picture and each card keeps its own.
  */
 function vl_card_art( $post_id ) {
-	$art = array( 'arctic', 'nordic', 'greenland', 'japan', 'spain', 'baltic' );
+	$art = array( 'fjord', 'aurora', 'glacier', 'blossom', 'hills', 'old-town' );
 	return vl_image( $art[ absint( $post_id ) % count( $art ) ] );
 }
 
-/** URL of a bundled illustration; unknown names give the Arctic one. */
-function vl_image( $slug = 'arctic' ) {
-	$allowed = array( 'arctic', 'baltic', 'greenland', 'japan', 'nordic', 'spain' );
+/**
+ * The illustration's name for `$slug`. Version 1.7 and earlier named them
+ * after places, and Destinations and child themes may still use those names,
+ * so each old name is taken as the picture it named.
+ */
+function vl_art_name( $slug ) {
+	$renamed = array(
+		'arctic'    => 'fjord',
+		'nordic'    => 'aurora',
+		'greenland' => 'glacier',
+		'japan'     => 'blossom',
+		'spain'     => 'hills',
+		'baltic'    => 'old-town',
+	);
+	return $renamed[ $slug ] ?? $slug;
+}
+
+/** URL of a bundled illustration; unknown names give the fjord. */
+function vl_image( $slug = 'fjord' ) {
+	$slug    = vl_art_name( $slug );
+	$allowed = array( 'aurora', 'blossom', 'fjord', 'glacier', 'hills', 'old-town' );
 	if ( ! in_array( $slug, $allowed, true ) ) {
-		$slug = 'arctic';
+		$slug = 'fjord';
 	}
 	return get_template_directory_uri() . '/assets/images/' . $slug . '.svg';
 }
@@ -130,10 +148,10 @@ function vl_fresh_photo( $query, &$used ) {
  * Once three Destinations have stories of their own, the tiles are the five with the most,
  * named as in Posts > Destinations, with the term's description as the note (or its number
  * of stories) and the featured image of its latest story that has one. Until then, the theme's
- * five sample places, linked to the Destination with the same slug once it exists.
+ * five sample landscapes, linked to the Destination with the same slug once it exists.
  */
 function vl_destination_items() {
-	$art   = array( 'nordic', 'greenland', 'baltic', 'spain', 'japan', 'arctic' );
+	$art   = array( 'aurora', 'glacier', 'old-town', 'hills', 'blossom', 'fjord' );
 	$terms = get_terms(
 		array(
 			'taxonomy'   => 'destination',
@@ -146,10 +164,19 @@ function vl_destination_items() {
 	$terms = is_wp_error( $terms ) ? array() : $terms;
 	if ( count( $terms ) < 3 ) {
 		$items = array();
-		foreach ( array( array( 'nordic', 'Nordic', '北歐' ), array( 'greenland', 'Greenland', '格陵蘭' ), array( 'baltic', 'Baltic', '波羅的海' ), array( 'spain', 'Spain', '西班牙' ), array( 'japan', 'Japan', '日本' ) ) as $sample ) {
-			$term    = get_term_by( 'slug', $sample[0], 'destination' );
+		// Named through the theme's translations, so a translation or Appearance >
+		// Customize > VoyageLight text can rename them.
+		$samples = array(
+			'aurora'   => __( 'Northern Lights', 'voyagelight' ),
+			'glacier'  => __( 'Glaciers', 'voyagelight' ),
+			'old-town' => __( 'Old Towns', 'voyagelight' ),
+			'hills'    => __( 'Countryside', 'voyagelight' ),
+			'blossom'  => __( 'Gardens', 'voyagelight' ),
+		);
+		foreach ( $samples as $slug => $name ) {
+			$term    = get_term_by( 'slug', $slug, 'destination' );
 			$url     = $term ? get_term_link( $term ) : vl_stories_url();
-			$items[] = array( vl_image( $sample[0] ), $sample[1], $sample[2], is_wp_error( $url ) ? vl_stories_url() : $url );
+			$items[] = array( vl_image( $slug ), $name, __( 'Sample', 'voyagelight' ), is_wp_error( $url ) ? vl_stories_url() : $url );
 		}
 		return $items;
 	}
@@ -162,7 +189,7 @@ function vl_destination_items() {
 		}
 		$image = vl_fresh_photo( array( 'tax_query' => array( array( 'taxonomy' => 'destination', 'terms' => $term->term_id ) ) ), $used ); // phpcs:ignore WordPress.DB.SlowDBQuery -- a few posts per tile, on the start page only.
 		if ( ! $image ) {
-			$image = vl_image( in_array( $term->slug, $art, true ) ? $term->slug : $art[ $i % count( $art ) ] );
+			$image = vl_image( in_array( vl_art_name( $term->slug ), $art, true ) ? $term->slug : $art[ $i % count( $art ) ] );
 		}
 		$note = trim( wp_strip_all_tags( $term->description ) );
 		if ( '' === $note ) {
@@ -204,7 +231,7 @@ function vl_card( $post_id, $lead = false ) {
 
 /**
  * Sidebar category list as a nested tree, always expanded: each sub-category
- * (Europe > 2025-spain) is indented under its parent, with its post count in
+ * (Region > 2025-summer) is indented under its parent, with its post count in
  * parentheses. Counts include the children's posts and empty categories are left out.
  */
 function vl_category_tree() {
@@ -251,7 +278,7 @@ function vl_category_current() {
 
 /**
  * Header menu items for the categories, like a travel blog's region menu: each top-level
- * category (Europe, Asia) is an item and its sub-categories (2025-spain) its dropdown.
+ * category (a region) is an item and its sub-categories (2025-summer) its dropdown.
  * Only two levels are shown; the default "Uncategorized" category is left out.
  */
 function vl_category_menu_items() {
@@ -295,7 +322,7 @@ function vl_aria_current( $term ) {
  * and keyboards reach the sub-menu through it; theme.js opens and closes it.
  */
 function vl_sub_toggle( $name ) {
-	/* translators: %s: name of a menu item, such as Europe. */
+	/* translators: %s: name of a menu item, such as Mountains. */
 	$label = sprintf( __( 'Show the %s menu', 'voyagelight' ), $name );
 	return '<button class="sub-toggle" type="button" aria-expanded="false"><span class="screen-reader-text">' . esc_html( $label ) . '</span>'
 		. '<svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true" focusable="false"><path d="M6 9l6 6 6-6" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>';

@@ -42,8 +42,8 @@ function vl_geo_lines( $text, $max ) {
 }
 
 /**
- * Latitude and longitude from text such as 39.8628, -4.0273 or
- * 39°51'46.1"N 4°01'38.3"W, before any range check; null when unreadable.
+ * Latitude and longitude from text such as 12.5822, -65.7225 or
+ * 12°34'55.9"N 65°43'21.0"W, before any range check; null when unreadable.
  */
 function vl_geo_text_pair( $text ) {
 	$text = strtr( $text, array( '′' => "'", '’' => "'", '‘' => "'", '´' => "'", '″' => '"', '”' => '"', '“' => '"', 'º' => '°', '˚' => '°', '，' => ',', '；' => ';' ) );

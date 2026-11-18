@@ -45,16 +45,20 @@ for (const folder of ['voyagelight', 'picasso-places']) {
 	cases.stop.forEach(([input, expected]) => check('stop', input, expected, geo.stopLine(input)));
 	cases.day.forEach(([input, expected]) => check('day', input, expected, geo.dayLine(input)));
 	cases.problems.forEach(([input, kind, expected]) => check('problems', input, expected, problems(input, kind, 200)));
-	check('unescape', '', '39.8628,-4.0273 100%25', geo.unescape('39.8628%2C-4.0273 100%25'));
+	check('unescape', '', '12.5822,-65.7225 100%25', geo.unescape('12.5822%2C-65.7225 100%25'));
 	check('valid coord', '90.5', null, geo.validCoord('90.5', 'lat'));
 	check('split old stop', '', { name: 'A', location: '1, 2', note: 'n' }, geo.splitStop('A | 1 | 2 | n'));
 	check('split old day', '', { day: '1', name: 'A', location: '1, 2', note: 'n', post: '5' }, geo.splitDay('1 | A | 1 | 2 | n | 5'));
 	check('join day', '', '2 | A | 1, 2 |  | 5', geo.joinDay({ day: 2, name: 'A', location: '1, 2', note: '', post: '5' }));
 	check('join day trims', '', '2 | A/B | 1, 2', geo.joinDay({ day: 2, name: 'A|B', location: '1, 2', note: '', post: '' }));
 	check('join stop', '', 'A | 1, 2', geo.joinStop({ name: 'A', location: '1, 2', note: '' }));
-	check('format', '', '39.862806, -4.027306', geo.format(39.8628055555, -4.0273055555));
+	check('format', '', '12.582194, -65.7225', geo.format(12.5821944444, -65.7225));
 	check('format small', '', '0.00001, 30', geo.format(0.00001, 30));
 	check('split day note with |', '', { day: '1', name: 'A', location: '1, 2', note: 'n | m', post: '5' }, geo.splitDay('1 | A | 1, 2 | n | m | 5'));
+	check('join day note with |', '', '1 | A | 1, 2 | n | 12 |', geo.joinDay({ day: 1, name: 'A', location: '1, 2', note: 'n | 12', post: '' }));
+	check('join day note with | and post', '', '1 | A | 1, 2 | n | m | 5', geo.joinDay({ day: 1, name: 'A', location: '1, 2', note: 'n|m', post: '5' }));
+	check('note with | round trip', '', { day: 1, name: 'A', lat: 1, lon: 2, note: 'n | 12', post_id: 0 }, geo.dayLine(geo.joinDay({ day: 1, name: 'A', location: '1, 2', note: 'n | 12', post: '' })));
+	check('trim like PHP', '', ' a ', geo.trim('  a 	'));
 }
 
 console.log(passed + ' passed, ' + failed + ' failed');

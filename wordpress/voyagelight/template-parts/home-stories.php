@@ -58,11 +58,11 @@ $home_side      = $home_widgets || '' !== $category_panel;
 			wp_reset_postdata();
 		} else {
 			$samples = array(
-				array( 'greenland', __( 'Eqi Glacier: A Close Encounter with the Icefjord', 'voyagelight' ), __( 'Greenland', 'voyagelight' ), __( 'Travel stories', 'voyagelight' ) ),
-				array( 'nordic', __( 'Under the Northern Lights', 'voyagelight' ), __( 'Nordic', 'voyagelight' ), __( 'Nature & Scenery', 'voyagelight' ) ),
-				array( 'spain', __( 'Toledo: A City of History and Light', 'voyagelight' ), __( 'Spain', 'voyagelight' ), __( 'Culture', 'voyagelight' ) ),
-				array( 'japan', __( 'Tokyo: A Walk Through Spring', 'voyagelight' ), __( 'Japan', 'voyagelight' ), __( 'City Walks', 'voyagelight' ) ),
-				array( 'baltic', __( 'A Morning in the Baltic Old Town', 'voyagelight' ), __( 'Baltic', 'voyagelight' ), __( 'History & Culture', 'voyagelight' ) ),
+				array( 'glacier', __( 'A Close Encounter with the Icefjord', 'voyagelight' ), __( 'Glaciers', 'voyagelight' ), __( 'Travel stories', 'voyagelight' ) ),
+				array( 'aurora', __( 'Under the Northern Lights', 'voyagelight' ), __( 'Night Sky', 'voyagelight' ), __( 'Nature & Scenery', 'voyagelight' ) ),
+				array( 'hills', __( 'An Old City of History and Light', 'voyagelight' ), __( 'Countryside', 'voyagelight' ), __( 'Culture', 'voyagelight' ) ),
+				array( 'blossom', __( 'A City Walk Through Spring', 'voyagelight' ), __( 'Gardens', 'voyagelight' ), __( 'City Walks', 'voyagelight' ) ),
+				array( 'old-town', __( 'A Morning in the Old Town', 'voyagelight' ), __( 'Old Towns', 'voyagelight' ), __( 'History & Culture', 'voyagelight' ) ),
 			);
 			foreach ( $samples as $i => $sample ) {
 				echo '<article class="story-card' . ( 0 === $i ? ' is-lead' : '' ) . '"><div class="story-visual"><img src="' . esc_url( vl_image( $sample[0] ) ) . '" alt="' . esc_attr( $sample[1] ) . '"><span class="story-badge">' . esc_html( $sample[2] ) . '</span></div>';

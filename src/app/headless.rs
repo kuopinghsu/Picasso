@@ -345,9 +345,9 @@ mod tests {
         let (_scratch, mut window) = library("leftovers", 1);
         let escape = || vec![Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE }];
         let db = &window.app.db;
-        db.record_upload(7, "a", "standard", 41, "https://example.com/wp-content/uploads/kyoto-tea-c9d0e1f2.jpg", r#"{"mime":"image/jpeg"}"#).unwrap();
+        db.record_upload(7, "a", "standard", 41, "https://example.com/wp-content/uploads/temple-tea-c9d0e1f2.jpg", r#"{"mime":"image/jpeg"}"#).unwrap();
         db.record_upload(7, "b", "standard", 42, "https://example.com/wp-content/uploads/a.jpg", r#"{"mime":"image/jpeg"}"#).unwrap();
-        db.record_upload(8, "c", "standard", 51, "https://example.com/wp-content/uploads/kyoto-walk-0a1b2c3d.mp4", r#"{"mime":"video/mp4"}"#).unwrap();
+        db.record_upload(8, "c", "standard", 51, "https://example.com/wp-content/uploads/temple-walk-0a1b2c3d.mp4", r#"{"mime":"video/mp4"}"#).unwrap();
 
         window.app.queue_leftovers(7, "Travel blog", vec![42], None);
         assert!(window.app.publish_leftovers.is_empty(), "a name too short to look for on the site is never deleted, so never offered");
@@ -390,7 +390,7 @@ mod tests {
         use crate::trip::{Block, Capture, StoryBlock, TripDraft};
         const PHOTOS: usize = 12;
         let (_scratch, mut window) = library("screens", PHOTOS);
-        let long = "A long walk from the Atlantic coast of Galicia across the Meseta to the Mediterranean at Barcelona, with every village between";
+        let long = "A long walk from the western coast across the high plains to the eastern sea at the old port, with every village between";
         let db = &window.app.db;
         let trip = db.create_trip(&TripDraft::new(long, "Europe/Madrid")).unwrap();
         let ids: Vec<i64> = window.app.photos.iter().map(|photo| photo.id).collect();
@@ -546,6 +546,30 @@ mod tests {
         for name in ["Search photos", "Settings", "Thumbnail size", "Library", "pics, 12", "Sort by Date", "IMG_000.jpg"] {
             assert!(reached.iter().any(|reached| reached == name), "Tab never reached {name}: {reached:?}");
         }
+    }
+
+    #[test]
+    fn back_to_photo_returns_from_places_to_the_photo_shown() {
+        let (_scratch, mut window) = library("back", 6);
+        window.draw_until("the library", Duration::from_secs(10), |app| app.layout.is_some());
+        // From the viewer: the same photo open again, not the first.
+        window.app.open_at(3);
+        let id = window.app.photos[3].id;
+        window.app.show_on_map(id);
+        window.draw(Vec::new());
+        assert_eq!(window.app.nav, Nav::Places);
+        window.app.return_from_places();
+        window.draw_until("the photo again", Duration::from_secs(10), |app| app.mode == Mode::View);
+        assert_eq!((window.app.nav.clone(), window.app.photos[window.app.viewer_index].id), (Nav::Library, id));
+        // From the grid: the photo selected and scrolled to.
+        window.app.close_viewer();
+        let other = window.app.photos[1].id;
+        window.app.show_on_map(other);
+        window.draw(Vec::new());
+        window.app.return_from_places();
+        window.draw_until("the library again", Duration::from_secs(10), |app| app.nav == Nav::Library && app.returning.is_none() && !app.loading);
+        assert_eq!((window.app.mode, window.app.selection.iter().copied().collect::<Vec<_>>()), (Mode::Browse, vec![other]));
+        assert!(window.app.places_return.is_none(), "used once");
     }
 
     #[test]

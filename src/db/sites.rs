@@ -435,6 +435,15 @@ impl Database {
             .map_err(|err| err.to_string())
     }
 
+    /// Forgets the post of Story `story_id`'s Day `key` on site `site_id`,
+    /// once the site no longer has it.
+    pub fn forget_day_post(&self, story_id: i64, site_id: i64, key: &str) -> Result<(), String> {
+        self.conn
+            .execute("DELETE FROM publications WHERE story_id = ?1 AND site_id = ?2 AND output_key = ?3 AND output_key != 'main' AND edition = 1", params![story_id, site_id, key])
+            .map(|_| ())
+            .map_err(|err| err.to_string())
+    }
+
     /// The site's media the Story's post used at its last confirmed save.
     pub fn publication_media(&self, story_id: i64, site_id: i64) -> Vec<i64> {
         self.map_rows("SELECT media_id FROM publication_media WHERE story_id = ?1 AND site_id = ?2 ORDER BY media_id", params![story_id, site_id], |row| row.get(0))
@@ -764,8 +773,8 @@ mod tests {
     fn a_posts_record_outlives_its_story_and_never_passes_to_another() {
         let (db, _, _) = library("publication-identity");
         let site_id = db.save_site(&site("https://example.com", "ana")).unwrap();
-        let trip = db.create_trip(&crate::trip::TripDraft::new("Spain", "Europe/Madrid")).unwrap();
-        let story = db.create_story(trip, "Granada").unwrap();
+        let trip = db.create_trip(&crate::trip::TripDraft::new("Coast", "Europe/Madrid")).unwrap();
+        let story = db.create_story(trip, "Hilltop").unwrap();
         let publication = Publication { story_id: story, site_id, post_id: 7, remote_status: "publish".into(), size: "standard".into(), revision: 1, synced_at: 1, fingerprint: String::new(), changed_on_site: false };
         db.save_publication(&publication).unwrap();
         db.save_publication_media(story, site_id, &[41]).unwrap();
@@ -777,7 +786,7 @@ mod tests {
         // new Story never takes it up, as Story ids aren't reused.
         db.delete_story(story).unwrap();
         assert_eq!(db.publication(story, site_id).map(|found| found.post_id), Some(7));
-        let next = db.create_story(trip, "Granada").unwrap();
+        let next = db.create_story(trip, "Hilltop").unwrap();
         assert_ne!(next, story);
         assert_eq!(db.publication(next, site_id), None);
         assert!(db.publication_media(next, site_id).is_empty());
@@ -787,8 +796,8 @@ mod tests {
     fn a_new_draft_and_each_day_post_keep_their_own_post() {
         let (db, _, _) = library("publication-outputs");
         let site_id = db.save_site(&site("https://example.com", "ana")).unwrap();
-        let trip = db.create_trip(&crate::trip::TripDraft::new("Spain", "Europe/Madrid")).unwrap();
-        let story = db.create_story(trip, "Granada").unwrap();
+        let trip = db.create_trip(&crate::trip::TripDraft::new("Coast", "Europe/Madrid")).unwrap();
+        let story = db.create_story(trip, "Hilltop").unwrap();
         let post = |post_id: i64, revision: i64| Publication { story_id: story, site_id, post_id, remote_status: "draft".into(), size: "low".into(), revision, synced_at: revision, fingerprint: String::new(), changed_on_site: false };
         db.save_publication(&Publication { changed_on_site: true, ..post(7, 1) }).unwrap();
         // Saved as a new draft beside the post edited on the site: the new one
@@ -869,13 +878,13 @@ mod tests {
 
         // Its categories and tags, kept per Story and site and replaced as a whole.
         assert_eq!(db.post_terms(3, site_id), PostTerms::default());
-        let terms = PostTerms { categories: vec![(5, "Spain".into()), (2, "Europe".into())], tags: vec![(9, "Alhambra".into())] };
+        let terms = PostTerms { categories: vec![(5, "Seaside".into()), (2, "Region".into())], tags: vec![(9, "Castle".into())] };
         db.save_post_terms(3, site_id, &terms).unwrap();
         let read = db.post_terms(3, site_id);
-        assert_eq!(read.categories, [(2, "Europe".to_string()), (5, "Spain".to_string())], "by name");
+        assert_eq!(read.categories, [(2, "Region".to_string()), (5, "Seaside".to_string())], "by name");
         assert_eq!(read.tags, terms.tags);
         assert_eq!(db.post_terms(4, site_id), PostTerms::default());
-        db.save_post_terms(3, site_id, &PostTerms { categories: vec![(2, "Europe".into())], tags: Vec::new() }).unwrap();
+        db.save_post_terms(3, site_id, &PostTerms { categories: vec![(2, "Region".into())], tags: Vec::new() }).unwrap();
         assert_eq!(db.post_terms(3, site_id).tags, []);
 
         // Disconnecting the site keeps what is known to be on it.

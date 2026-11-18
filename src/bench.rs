@@ -216,9 +216,9 @@ fn catalog(report: &mut Report, count: usize) {
 /// sorted into 365 Days, and shown as the Trips view shows it.
 fn trip(report: &mut Report, count: usize) {
     use crate::trip::{Capture, DayFilter, MemberQuery, TripDraft, TripQuery};
-    /// 2025-01-01 00:00 in Taipei.
+    /// 2025-01-01 00:00 at UTC+8.
     const START: i64 = 1_735_660_800;
-    const TAIPEI: i64 = 8 * 3_600;
+    const UTC_PLUS_8: i64 = 8 * 3_600;
     let dir = scratch("trip");
     let root = dir.join("photos");
     std::fs::create_dir_all(&root).unwrap();
@@ -243,9 +243,9 @@ fn trip(report: &mut Report, count: usize) {
     report.time_within(&format!("Keep {count} capture times"), 10 * second, || {
         for (index, &id) in media.iter().enumerate() {
             let taken = START + index as i64 * step;
-            let clock = chrono::DateTime::from_timestamp(taken + TAIPEI, 0).unwrap().naive_utc();
+            let clock = chrono::DateTime::from_timestamp(taken + UTC_PLUS_8, 0).unwrap().naive_utc();
             // One camera in 50 records no offset; its photos wait for review.
-            let offset = (index % 50 != 0).then_some(TAIPEI as i32);
+            let offset = (index % 50 != 0).then_some(UTC_PLUS_8 as i32);
             db.store_capture(id, Capture::Clock { clock, offset }, taken);
         }
     });
@@ -308,7 +308,7 @@ fn made_photos(name: &str, count: usize, width: u32, height: u32) -> PathBuf {
 fn trip_scroll(report: &mut Report, count: usize, frames: usize) {
     use crate::trip::{Capture, TripDraft};
     const START: i64 = 1_735_660_800;
-    const TAIPEI: i64 = 8 * 3_600;
+    const UTC_PLUS_8: i64 = 8 * 3_600;
     let photos = report.time(&format!("Make {count} small Trip photos (first run only)"), || made_photos("bench-trip-photos", count, 480, 320));
     let mut files = walk(&photos);
     files.sort();
@@ -339,8 +339,8 @@ fn trip_scroll(report: &mut Report, count: usize, frames: usize) {
     let trip_id = db.create_trip(&TripDraft::new("A year", "Asia/Taipei")).unwrap();
     for (index, id) in db.add_to_trip(trip_id, &ids).unwrap().into_iter().enumerate() {
         let taken = START + index as i64 * step;
-        let clock = chrono::DateTime::from_timestamp(taken + TAIPEI, 0).unwrap().naive_utc();
-        db.store_capture(id, Capture::Clock { clock, offset: Some(TAIPEI as i32) }, taken);
+        let clock = chrono::DateTime::from_timestamp(taken + UTC_PLUS_8, 0).unwrap().naive_utc();
+        db.store_capture(id, Capture::Clock { clock, offset: Some(UTC_PLUS_8 as i32) }, taken);
     }
     db.suggest_days(trip_id).unwrap();
     drop(db);

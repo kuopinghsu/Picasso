@@ -987,7 +987,7 @@ mod tests {
         // No capture time: the library keeps the file's modification time, an exact moment.
         let saved = add_at(&db, folder_id, &folder, "saved.jpg", start + 60, start + 60, None);
         let gpx = format!(
-            r#"<gpx><trk><name>Lisbon</name><trkseg>
+            r#"<gpx><trk><name>Seaport</name><trkseg>
                 <trkpt lat="38.70" lon="-9.10"><time>{}</time></trkpt>
                 <trkpt lat="38.72" lon="-9.12"><time>{}</time></trkpt>
             </trkseg></trk></gpx>"#,
@@ -1005,7 +1005,7 @@ mod tests {
         let report = run(&options, Some(&db), &|_, _| {}).unwrap();
         assert_eq!((report.photos, report.tagged, report.had_gps, report.hand_pinned, report.unmatched), (6, 3, 1, 1, 1));
         assert_eq!(report.zone_guessed, 0, "the offset was typed");
-        assert_eq!(report.track_name, "Lisbon");
+        assert_eq!(report.track_name, "Seaport");
         assert!(!folder.join(SIDECAR).exists(), "a dry run writes nothing");
         assert_eq!(db.photo(a).unwrap().pin_lat, None);
 
@@ -1063,7 +1063,7 @@ mod tests {
         let utc = |day, minute| chrono::Utc.with_ymd_and_hms(2026, 10, day, 9, minute, 0).unwrap().timestamp();
         let first = folder.parent().unwrap().join("first.gpx");
         let second = folder.parent().unwrap().join("second.gpx");
-        std::fs::write(&first, gpx("Lisbon", &[(utc(11, 0), 38.70, -9.10), (utc(11, 2), 38.72, -9.12)])).unwrap();
+        std::fs::write(&first, gpx("Seaport", &[(utc(11, 0), 38.70, -9.10), (utc(11, 2), 38.72, -9.12)])).unwrap();
         std::fs::write(&second, gpx("", &[(utc(12, 0), 40.0, -8.0), (utc(12, 2), 40.02, -8.02)])).unwrap();
         let options = Options {
             source: Source::Tracks(vec![first.clone(), second.clone()]),
@@ -1074,7 +1074,7 @@ mod tests {
         // A clock read in the wrong zone places nothing; the right one is suggested,
         // and of the zones placing as many, the one nearest the track points.
         let report = run(&options, Some(&db), &|_, _| {}).unwrap();
-        assert_eq!((report.tagged, report.track_name.as_str()), (0, "Lisbon, second"));
+        assert_eq!((report.tagged, report.track_name.as_str()), (0, "Seaport, second"));
         assert_eq!(report.suggestion, Some(Suggestion { offset: 3600, places: 3, of: 3, now: 0 }));
 
         let report = run(&Options { offset: Some(3600), dry_run: false, ..options }, Some(&db), &|_, _| {}).unwrap();

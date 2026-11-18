@@ -164,7 +164,7 @@ add_action( 'wp_head', 'vl_early_theme', 1 );
 function vl_hero_url() {
 	$url = get_theme_mod( 'vl_hero_image', '' );
 	if ( '' === $url ) {
-		return vl_photo( 'hero-norway' );
+		return vl_photo( 'hero' );
 	}
 	$id    = attachment_url_to_postid( $url );
 	$sized = $id ? wp_get_attachment_image_url( $id, 'vl-hero' ) : false;
@@ -192,7 +192,7 @@ function vl_hero_image() {
 			return $image;
 		}
 	}
-	return '<img class="hero-image" src="' . esc_url( '' !== $url ? $url : vl_photo( 'hero-norway' ) ) . '" alt="" fetchpriority="high" decoding="async">';
+	return '<img class="hero-image" src="' . esc_url( '' !== $url ? $url : vl_photo( 'hero' ) ) . '" alt="" fetchpriority="high" decoding="async">';
 }
 
 function vl_taxonomies() {

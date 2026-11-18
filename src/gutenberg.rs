@@ -352,7 +352,7 @@ mod tests {
         Story {
             id: 1,
             trip_id: 1,
-            title: "Kyoto".into(),
+            title: "Temple".into(),
             subtitle: String::new(),
             introduction: "Why we went".into(),
             conclusion: "Back & again".into(),
@@ -391,7 +391,7 @@ mod tests {
             StoryBlock::new(Block::Quote { text: "Go *slowly*".into(), citation: "Bashō".into() }),
         ];
         let post = post(&story(), &blocks, &uploads, &|_| None, &|_| None).unwrap();
-        assert_eq!((post.title.as_str(), post.featured), ("Kyoto", Some(103)));
+        assert_eq!((post.title.as_str(), post.featured), ("Temple", Some(103)));
         let content = &post.content;
         let order = [
             "<p>Why we went</p>",
@@ -491,7 +491,7 @@ mod tests {
 
     #[test]
     fn a_table_is_a_core_table_with_its_header_row_and_caption() {
-        let rows = vec![vec!["Ferry".to_string(), "Leaves".to_string()], vec!["<Lisbon>".to_string(), "9:00".to_string()]];
+        let rows = vec![vec!["Ferry".to_string(), "Leaves".to_string()], vec!["<Seaport>".to_string(), "9:00".to_string()]];
         let blocks = [
             StoryBlock::new(Block::Table { header: true, rows: rows.clone(), widths: Vec::new(), caption: "Summer".into() }),
             StoryBlock::new(Block::Table { header: false, rows, widths: vec![30, 70], caption: String::new() }),
@@ -500,9 +500,9 @@ mod tests {
         let content = post(&story(), &blocks, &uploads, &|_| None, &|_| None).unwrap().content;
         assert!(content.contains("<!-- wp:table {\"hasFixedLayout\":false,\"picassoColumnWidths\":[30,70]} -->\n<figure class=\"wp-block-table\"><table><tbody>"), "{content}");
         let head = "<!-- wp:table {\"hasFixedLayout\":false} -->\n<figure class=\"wp-block-table\"><table><thead><tr><th>Ferry</th><th>Leaves</th></tr></thead>\
-                    <tbody><tr><td>&lt;Lisbon&gt;</td><td>9:00</td></tr></tbody></table><figcaption class=\"wp-element-caption\">Summer</figcaption></figure>\n<!-- /wp:table -->";
+                    <tbody><tr><td>&lt;Seaport&gt;</td><td>9:00</td></tr></tbody></table><figcaption class=\"wp-element-caption\">Summer</figcaption></figure>\n<!-- /wp:table -->";
         assert!(content.contains(head), "{content}");
-        assert!(content.contains("<table><tbody><tr><td>Ferry</td><td>Leaves</td></tr><tr><td>&lt;Lisbon&gt;</td><td>9:00</td></tr></tbody></table></figure>"), "{content}");
+        assert!(content.contains("<table><tbody><tr><td>Ferry</td><td>Leaves</td></tr><tr><td>&lt;Seaport&gt;</td><td>9:00</td></tr></tbody></table></figure>"), "{content}");
         assert_eq!(content.matches("<!-- wp:table").count(), 2, "an empty table is left out");
     }
 

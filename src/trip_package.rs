@@ -517,7 +517,7 @@ mod tests {
         let story = Story {
             id: 5,
             trip_id: 2,
-            title: "Kyoto".into(),
+            title: "Temple".into(),
             subtitle: "Spring".into(),
             introduction: "Cherry blossoms.".into(),
             conclusion: String::new(),
@@ -534,7 +534,7 @@ mod tests {
         };
         let photo = |key, day| PackPhoto { key, name: String::new(), day, size: None, member: true, hash: None };
         Package {
-            trip: PackTrip { title: "Japan".into(), zone: "Asia/Tokyo".into(), first_day: NaiveDate::from_ymd_opt(2026, 4, 1), ..PackTrip::default() },
+            trip: PackTrip { title: "Islands".into(), zone: "Asia/Tokyo".into(), first_day: NaiveDate::from_ymd_opt(2026, 4, 1), ..PackTrip::default() },
             days: vec![PackDay { day: NaiveDate::from_ymd_opt(2026, 4, 1), title: "Arrival".into(), notes: String::new() }],
             stories: vec![PackStory { story, blocks }],
             photos: vec![photo(11, Some(0)), photo(12, None), photo(13, Some(0))],
@@ -558,7 +558,7 @@ mod tests {
             PackTrack { name: "Walk".into(), file: "walk.gpx".into(), day: Some(0), path: Some(gpx.clone()), ..PackTrack::default() },
             PackTrack { name: "Gone".into(), file: "gone.gpx".into(), path: Some(dir.join("gone.gpx")), ..PackTrack::default() },
         ];
-        let path = dir.join("Japan.picassotrip");
+        let path = dir.join("Islands.picassotrip");
         assert_eq!(write_package(&path, &package, &sources, &Progress::default()).unwrap(), 1, "one photo was unavailable");
         std::fs::remove_file(&gpx).unwrap();
         assert!(std::fs::read_dir(&dir).unwrap().count() == 1, "nothing left beside it");
@@ -566,7 +566,7 @@ mod tests {
         let (mut read, start) = read_package(&path).unwrap();
         assert_eq!((&read.trip, &read.days, &read.stories[0].blocks), (&package.trip, &package.days, &package.stories[0].blocks));
         let story = &read.stories[0].story;
-        assert_eq!((story.title.as_str(), story.cover, story.finished, story.dates), ("Kyoto", Some(11), true, package.stories[0].story.dates));
+        assert_eq!((story.title.as_str(), story.cover, story.finished, story.dates), ("Temple", Some(11), true, package.stories[0].story.dates));
         assert_eq!(read.photos.iter().map(|photo| photo.size.is_some()).collect::<Vec<_>>(), [true, true, false]);
         assert_eq!(read.photos[0].name, "banner.jpg");
         assert_eq!(read.photos[0].hash, file_hash(&banner), "an unedited photo's hash is its file's");

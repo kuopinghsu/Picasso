@@ -318,7 +318,7 @@ mod tests {
         db.exclude_dir(&photos.join("skip")).unwrap();
         let broken = Unreadable { path: path("broken.jpg"), reason: "damaged".into(), folder: false, bytes: 5, modified_at: 6 };
         db.store_unreadable(folder_id, &[broken], true, &Default::default());
-        let trip = db.create_trip(&crate::trip::TripDraft::new("Taipei", "Asia/Taipei")).unwrap();
+        let trip = db.create_trip(&crate::trip::TripDraft::new("Capital", "Asia/Taipei")).unwrap();
         let members = db.add_to_trip(trip, &[a, b]).unwrap();
         let day = db.add_trip_day(trip, None, "Arrival").unwrap();
         db.move_to_day(trip, Some(day), &members[..1], crate::trip::DaySource::User).unwrap();
@@ -352,7 +352,7 @@ mod tests {
         assert_eq!(db.unreadable().len(), 1);
         assert_eq!(db.folders().len(), 1);
         let trips = db.trips(&crate::trip::TripQuery::default());
-        assert_eq!(trips.iter().map(|trip| trip.title.as_str()).collect::<Vec<_>>(), ["Taipei"], "trips came along");
+        assert_eq!(trips.iter().map(|trip| trip.title.as_str()).collect::<Vec<_>>(), ["Capital"], "trips came along");
         assert_eq!(db.trip_days(trip)[0].title, "Arrival");
         assert_eq!(db.count_trip_members(trip, &crate::trip::MemberQuery::default()), 2);
         assert_eq!(db.trip_tracks(trip)[0].day_id, Some(day));

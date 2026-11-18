@@ -133,7 +133,7 @@ foreach ( get_declared_classes() as $name ) {
 foreach ( array_keys( get_defined_constants( true )['user'] ) as $name ) {
 	guard_check( "constant $name is the theme's or in the plugin's namespace", 'ABSPATH' === $name || 0 === strpos( $name, 'VL_' ) || 0 === strpos( $name, 'PicassoPlaces\\' ) );
 }
-guard_check( "the plugin's reader and the theme's both work", array( 39.8628, -4.0273 ) === vl_parse_location( '39.8628, -4.0273' ) && array( 39.8628, -4.0273 ) === PicassoPlaces\vl_parse_location( '39.8628, -4.0273' ) );
+guard_check( "the plugin's reader and the theme's both work", array( 12.5822, -65.7225 ) === vl_parse_location( '12.5822, -65.7225' ) && array( 12.5822, -65.7225 ) === PicassoPlaces\vl_parse_location( '12.5822, -65.7225' ) );
 
 $table   = '<figure class="wp-block-table"><table class="has-fixed-layout"><tbody><tr><td>a</td><td>b</td></tr></tbody></table></figure>';
 $widened = '<figure class="wp-block-table"><table class="has-fixed-layout"><colgroup><col style="width:30%"><col style="width:70%"></colgroup><tbody><tr><td>a</td><td>b</td></tr></tbody></table></figure>';

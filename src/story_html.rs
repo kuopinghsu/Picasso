@@ -123,6 +123,9 @@ pub struct Progress {
     pub converting: AtomicUsize,
     /// A video is being sent to a site.
     pub sending: AtomicBool,
+    /// A publishing job has rendered its photos and is sending them; `done`
+    /// and `total` then count what is sent, not what is rendered.
+    pub uploading: AtomicBool,
     pub cancel: AtomicBool,
 }
 
@@ -1667,11 +1670,11 @@ pub(crate) mod tests {
 
     #[test]
     fn names_from_titles_and_files_work_on_every_system() {
-        assert_eq!(folder_name("Madrid: Day 1 / 2025?"), "Madrid Day 1 2025");
+        assert_eq!(folder_name("Midtown: Day 1 / 2025?"), "Midtown Day 1 2025");
         assert_eq!(folder_name("Con"), "Con_");
         assert_eq!(folder_name("Trip."), "Trip");
         assert_eq!(folder_name("..."), "Story");
-        assert_eq!(folder_name("京都の春"), "京都の春");
+        assert_eq!(folder_name("古都の春"), "古都の春");
         assert_eq!(folder_name(&format!("{}.b", "a".repeat(79))), "a".repeat(79), "no dot left at the end once shortened");
         assert_eq!(portable_name("aux.jpg"), "aux_.jpg");
         assert_eq!(portable_name("com1.tar.gz"), "com1_.tar.gz");
@@ -1687,7 +1690,7 @@ pub(crate) mod tests {
         Story {
             id: 1,
             trip_id: 1,
-            title: "Kyoto <in> spring".into(),
+            title: "Temple <in> spring".into(),
             subtitle: String::new(),
             introduction: String::new(),
             conclusion: String::new(),
@@ -1760,7 +1763,7 @@ pub(crate) mod tests {
         let blocks = vec![
             StoryBlock::new(Block::Table {
                 header: true,
-                rows: rows(&[&["", "Ferry", "Leaves"], &[" ", "", ""], &["", "<Lisbon>", "9:00\n*9:30*"]]),
+                rows: rows(&[&["", "Ferry", "Leaves"], &[" ", "", ""], &["", "<Seaport>", "9:00\n*9:30*"]]),
                 widths: vec![20, 20, 60],
                 caption: "In \"summer\"".into(),
             }),
@@ -1769,12 +1772,12 @@ pub(crate) mod tests {
         ];
         let (html, _) = page(&story(), None, &blocks, &HashMap::new(), &HashMap::new(), &HashMap::new(), &words());
         let first = "<figure class=\"table\">\n<table><colgroup><col style=\"width:25%\"><col style=\"width:75%\"></colgroup><thead><tr><th scope=\"col\">Ferry</th><th scope=\"col\">Leaves</th></tr></thead>\
-                     <tbody><tr><td>&lt;Lisbon&gt;</td><td>9:00<br><em>9:30</em></td></tr></tbody></table>\n<figcaption>In &quot;summer&quot;</figcaption>\n</figure>";
+                     <tbody><tr><td>&lt;Seaport&gt;</td><td>9:00<br><em>9:30</em></td></tr></tbody></table>\n<figcaption>In &quot;summer&quot;</figcaption>\n</figure>";
         assert!(html.contains(first), "{html}");
         assert!(html.contains("<table><tbody><tr><td>a|b</td><td><code>c|d</code></td></tr></tbody></table>"), "no header row: {html}");
         assert_eq!(html.matches("<figure class=\"table\">").count(), 2, "an empty table draws nothing");
         let (md, _) = markdown(&story(), None, &blocks, &HashMap::new(), &HashMap::new(), &HashMap::new(), &words());
-        assert!(md.contains("| Ferry | Leaves |\n| --- | --- |\n| &lt;Lisbon&gt; | 9:00<br>*9:30* |\n\n*In \"summer\"*\n\n"), "{md}");
+        assert!(md.contains("| Ferry | Leaves |\n| --- | --- |\n| &lt;Seaport&gt; | 9:00<br>*9:30* |\n\n*In \"summer\"*\n\n"), "{md}");
         assert!(md.contains("|  |  |\n| --- | --- |\n| a\\|b | `c\\|d` |\n\n"), "{md}");
         assert!(!md.contains("Nothing"));
     }
@@ -1852,7 +1855,7 @@ pub(crate) mod tests {
             StoryBlock::new(Block::Paragraph("First \"line\"\nsecond\n\n<script>x</script>".into())),
         ];
         let (html, _) = page(&story(), Some("1 – 3 March"), &blocks, &HashMap::new(), &HashMap::new(), &HashMap::new(), &words());
-        assert!(html.contains("<title>Kyoto &lt;in&gt; spring</title>"));
+        assert!(html.contains("<title>Temple &lt;in&gt; spring</title>"));
         assert!(html.contains("<h2 id=\"section-1\">Day 1 &amp; 2</h2>"));
         assert!(html.contains("<p>First &quot;line&quot;<br>\nsecond</p>"));
         assert!(html.contains("<p>&lt;script&gt;x&lt;/script&gt;</p>"));
@@ -2128,7 +2131,7 @@ pub(crate) mod tests {
         let images = HashMap::from([(1, WebImage { file: "images/ab.jpg".into(), width: 10, height: 10 })]);
         let (text, outcome) = markdown(&story(), None, &blocks, &images, &HashMap::new(), &HashMap::new(), &words());
         assert_eq!(outcome.missing, 1);
-        assert!(text.starts_with("# Kyoto &lt;in&gt; spring\n\nAna\n\n"), "{text}");
+        assert!(text.starts_with("# Temple &lt;in&gt; spring\n\nAna\n\n"), "{text}");
         assert!(text.contains("## \\# Day 1\n"));
         assert!(text.contains("\\- not a list  \n1\\. not a number &lt;b&gt;\n"), "{text}");
         assert!(text.contains("![gate \\[red\\]](images/ab.jpg)\n*\\*Fushimi\\**\n"), "{text}");
@@ -2140,18 +2143,18 @@ pub(crate) mod tests {
     fn export_makes_a_new_folder_and_never_replaces_one() {
         let parent = std::env::temp_dir().join(format!("picasso-export-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&parent);
-        std::fs::create_dir_all(parent.join("Kyoto in spring")).unwrap();
-        std::fs::write(parent.join("Kyoto in spring/mine.txt"), "keep").unwrap();
+        std::fs::create_dir_all(parent.join("Temple in spring")).unwrap();
+        std::fs::write(parent.join("Temple in spring/mine.txt"), "keep").unwrap();
         let (story, words, sources) = (story(), words(), HashMap::new());
         let page = Page { story: &story, dates: None, blocks: &[], sources: &sources, words: &words, map: None, profiles: &HashMap::new(), videos: &Videos::default() };
-        let export = |format| export_story(&parent, "Kyoto: in/spring", format, Profile::default(), &page, &Progress::default());
+        let export = |format| export_story(&parent, "Temple: in/spring", format, Profile::default(), &page, &Progress::default());
         let (first, _) = export(Format::Html).unwrap();
-        assert_eq!(first, parent.join("Kyoto in spring 2"));
+        assert_eq!(first, parent.join("Temple in spring 2"));
         assert!(first.join("index.html").is_file());
         let (second, _) = export(Format::Markdown).unwrap();
-        assert_eq!(second, parent.join("Kyoto in spring 3"));
+        assert_eq!(second, parent.join("Temple in spring 3"));
         assert!(second.join("story.md").is_file());
-        assert_eq!(std::fs::read_to_string(parent.join("Kyoto in spring/mine.txt")).unwrap(), "keep");
+        assert_eq!(std::fs::read_to_string(parent.join("Temple in spring/mine.txt")).unwrap(), "keep");
         let names: Vec<_> = std::fs::read_dir(&parent).unwrap().map(|entry| entry.unwrap().file_name()).collect();
         assert_eq!(names.len(), 3, "no staging folder is left: {names:?}");
         let stopped = Progress::default();
@@ -2237,7 +2240,7 @@ pub(crate) mod tests {
         let raw = originals.join("19.3fr");
         std::fs::write(&raw, raw_with_preview(&preview, 1200, 800)).unwrap();
         sources.insert(19, Some((raw, raw_edit, 0)));
-        let twentieth = originals.join("京都 #20 (copy).jpg");
+        let twentieth = originals.join("古都 #20 (copy).jpg");
         photo(20, 1200, 800).save(&twentieth).unwrap();
         sources.insert(20, Some((twentieth, Settings::default(), 0)));
         let digest = |sources: &HashMap<i64, Source>| -> Vec<String> {
@@ -2328,13 +2331,13 @@ pub(crate) mod tests {
     fn an_export_cut_short_by_a_crash_is_cleared_by_the_next_and_earlier_ones_stay() {
         let parent = std::env::temp_dir().join(format!("picasso-export-crash-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&parent);
-        std::fs::create_dir_all(parent.join("Kyoto")).unwrap();
-        std::fs::write(parent.join("Kyoto/index.html"), "the earlier export").unwrap();
+        std::fs::create_dir_all(parent.join("Temple")).unwrap();
+        std::fs::write(parent.join("Temple/index.html"), "the earlier export").unwrap();
         // One left by a Picasso that has stopped, and one another Picasso is still writing.
         let mut ended = std::process::Command::new("true").spawn().unwrap();
         ended.wait().unwrap();
-        let crashed = parent.join(format!(".Kyoto.partial-{}", ended.id()));
-        let running = parent.join(format!(".Kyoto.partial-{}", std::os::unix::process::parent_id()));
+        let crashed = parent.join(format!(".Temple.partial-{}", ended.id()));
+        let running = parent.join(format!(".Temple.partial-{}", std::os::unix::process::parent_id()));
         for staging in [&crashed, &running] {
             std::fs::create_dir_all(staging.join("images")).unwrap();
             std::fs::write(staging.join("images/half.jpg"), "half written").unwrap();
@@ -2342,11 +2345,11 @@ pub(crate) mod tests {
         let (story, words, sources) = (story(), words(), HashMap::new());
         let blocks = [StoryBlock::new(Block::Paragraph("Hello".into()))];
         let page = Page { story: &story, dates: None, blocks: &blocks, sources: &sources, words: &words, map: None, profiles: &HashMap::new(), videos: &Videos::default() };
-        let (folder, _) = export_story(&parent, "Kyoto", Format::Html, Profile::default(), &page, &Progress::default()).unwrap();
-        assert_eq!(folder, parent.join("Kyoto 2"));
+        let (folder, _) = export_story(&parent, "Temple", Format::Html, Profile::default(), &page, &Progress::default()).unwrap();
+        assert_eq!(folder, parent.join("Temple 2"));
         assert!(!crashed.exists(), "what a stopped export left is cleared");
         assert!(running.join("images/half.jpg").is_file(), "an export still being written is left alone");
-        assert_eq!(std::fs::read_to_string(parent.join("Kyoto/index.html")).unwrap(), "the earlier export");
+        assert_eq!(std::fs::read_to_string(parent.join("Temple/index.html")).unwrap(), "the earlier export");
         let _ = std::fs::remove_dir_all(&parent);
     }
 
@@ -2413,7 +2416,7 @@ pub(crate) mod tests {
         let mut cropped = Settings::default();
         cropped.set(crate::edit::Control::CROP_RIGHT, 0.5);
         let (first, next) = std::thread::scope(|scope| {
-            let running = scope.spawn(|| export_story(&out, "Kyoto", Format::Html, Profile::default(), &started, &progress).unwrap().0);
+            let running = scope.spawn(|| export_story(&out, "Temple", Format::Html, Profile::default(), &started, &progress).unwrap().0);
             // The text and the photo's crop change while it runs; the next export is made of those.
             while progress.done.load(Ordering::Relaxed) < 1 && !running.is_finished() {
                 std::thread::yield_now();
@@ -2421,7 +2424,7 @@ pub(crate) mod tests {
             let (blocks, sources) = page_of("After", cropped);
             let changed = Page { story: &story, dates: None, blocks: &blocks, sources: &sources, words: &words, map: None, profiles: &HashMap::new(), videos: &Videos::default() };
             let first = running.join().unwrap();
-            (first, export_story(&out, "Kyoto", Format::Html, Profile::default(), &changed, &Progress::default()).unwrap().0)
+            (first, export_story(&out, "Temple", Format::Html, Profile::default(), &changed, &Progress::default()).unwrap().0)
         });
         assert_ne!(first, next, "a new folder");
         assert_eq!(shown(&first), (true, false, (1600, 1067)), "the first export as it started");

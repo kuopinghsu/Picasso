@@ -559,7 +559,7 @@ mod tests {
         data.extend(tile(
             "place",
             &["class", "name", "name:en"],
-            &["city", "臺北市", "Taipei"],
+            &["city", "首都", "Capital"],
             &[(1, vec![0, 0, 1, 1, 2, 2], vec![command(1, 1), zz(1024), zz(3072)])],
         ));
         let drawn = draw(&data, 10, Part::default(), &["name:en"]).unwrap();
@@ -571,11 +571,11 @@ mod tests {
         assert_eq!(pixel(100, 100), [0xAA, 0xD4, 0xDB, 255], "water");
         assert_eq!(pixel(400, 400), [0xF8, 0xF4, 0xF0, 255], "land");
         assert_eq!(drawn.labels.len(), 1);
-        assert_eq!(drawn.labels[0].text, "Taipei");
+        assert_eq!(drawn.labels[0].text, "Capital");
         assert_eq!(drawn.labels[0].kind, LabelKind::City);
         assert_eq!(drawn.labels[0].pos, [0.25, 0.75]);
         let local = draw(&data, 10, Part::default(), &["name:ja"]).unwrap();
-        assert_eq!(local.labels[0].text, "臺北市");
+        assert_eq!(local.labels[0].text, "首都");
     }
 
     #[test]

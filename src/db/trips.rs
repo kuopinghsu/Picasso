@@ -1892,15 +1892,15 @@ mod tests {
         db.move_to_day(trip_id, Some(day), &refs[..1], DaySource::User).unwrap();
         db.conn.execute("INSERT INTO trip_places (id, trip_id, position, name, local_name, lat, lon) VALUES (7, ?1, 0, 'Old town', 'Alfama', 38.7, -9.1)", [trip_id]).unwrap();
         db.conn.execute("UPDATE trip_media SET place_id = 7, review = 1 WHERE media_id = ?1", [refs[1]]).unwrap();
-        let story = db.create_story(trip_id, "Lisbon walk").unwrap();
+        let story = db.create_story(trip_id, "Seaport walk").unwrap();
         db.save_story_blocks(story, 1, &[StoryBlock::new(Block::Photo(MediaUse::new(refs[1])))]).unwrap();
         assert_eq!(found("trip:coa"), ids[..2].to_vec());
-        assert!(found("trip:alps").is_empty());
+        assert!(found("trip:peaks").is_empty());
         assert_eq!(found("day:harbor"), vec![ids[0]]);
         assert_eq!(found("place:alfama"), vec![ids[1]]);
         assert_eq!(found("place:old"), vec![ids[1]]);
-        assert_eq!(found("story:lisbon"), vec![ids[1]]);
-        assert_eq!(found("-story:lisbon"), vec![ids[0], ids[2]]);
+        assert_eq!(found("story:seaport"), vec![ids[1]]);
+        assert_eq!(found("-story:seaport"), vec![ids[0], ids[2]]);
         assert_eq!(found("is:review"), vec![ids[1]]);
     }
 
@@ -1970,11 +1970,11 @@ mod tests {
         let mut bare = record(folder_id, &folder, "a.jpg", 1);
         (bare.photo.gps_lat, bare.photo.gps_lon) = (None, None);
         let ids = db.write_batch(&[bare]).unwrap().ids;
-        let mut draft = TripDraft::new("Madrid", "Europe/Madrid");
+        let mut draft = TripDraft::new("Midtown", "Europe/Madrid");
         draft.trip_time = true;
         let trip_id = db.create_trip(&draft).unwrap();
         let refs = db.add_to_trip(trip_id, &ids).unwrap();
-        // Just after the clocks went forward: 03:30 in Madrid is 01:30 UTC.
+        // Just after the clocks went forward: 03:30 in Midtown is 01:30 UTC.
         let clock = NaiveDateTime::parse_from_str("2025-03-30 03:30:00", CLOCK_FORMAT).unwrap();
         db.store_capture(refs[0], Capture::Clock { clock, offset: None }, 1);
         let utc = |text: &str| NaiveDateTime::parse_from_str(text, CLOCK_FORMAT).unwrap().and_utc().timestamp();
@@ -1997,7 +1997,7 @@ mod tests {
     #[test]
     fn library_photos_say_whether_a_trip_has_them() {
         let (db, _, folder, ids) = photos("shots", &["a.jpg", "b.jpg"]);
-        let trip = db.create_trip(&TripDraft::new("Kyoto", "Asia/Tokyo")).unwrap();
+        let trip = db.create_trip(&TripDraft::new("Temple", "Asia/Tokyo")).unwrap();
         db.add_to_trip(trip, &ids[..1]).unwrap();
         let mut shots = db.trip_shots();
         shots.sort_by_key(|shot| shot.id);
@@ -2042,10 +2042,10 @@ mod tests {
         db.add_to_album(album, &[ids[1]]);
         let before: Vec<String> = [ids[0], ids[1], more].iter().map(|id| format!("{:?}", db.photo(*id).unwrap())).collect();
 
-        let mut draft = TripDraft::new("  Taiwan  ", "Asia/Taipei");
+        let mut draft = TripDraft::new("  Island  ", "Asia/Taipei");
         draft.first_day = day("2026-03-01");
         draft.last_day = day("2026-03-07");
-        draft.destination = "Taipei".into();
+        draft.destination = "Capital".into();
         let trip_id = db.create_trip(&draft).unwrap();
         let refs = db.add_to_trip(trip_id, &[more, ids[1], ids[0]]).unwrap();
         let first = db.add_trip_day(trip_id, day("2026-03-01"), "Arrival").unwrap();
@@ -2058,7 +2058,7 @@ mod tests {
         drop(db);
         let db = Database::open(Path::new(&path)).unwrap();
         let trip = db.trip(trip_id).unwrap();
-        assert_eq!((trip.title.as_str(), trip.zone.as_str(), trip.first_day, trip.last_day), ("Taiwan", "Asia/Taipei", day("2026-03-01"), day("2026-03-07")));
+        assert_eq!((trip.title.as_str(), trip.zone.as_str(), trip.first_day, trip.last_day), ("Island", "Asia/Taipei", day("2026-03-01"), day("2026-03-07")));
         assert_eq!((trip.members, trip.available, trip.days, trip.stories, trip.cover), (3, 3, 1, 1, Some(refs[1])));
         let order: Vec<Option<i64>> = all(&db, trip_id).iter().map(|member| member.photo_id).collect();
         assert_eq!(order, [Some(more), Some(ids[1]), Some(ids[0])], "in the order they were added");
@@ -2120,7 +2120,7 @@ mod tests {
     #[test]
     fn suggestions_never_replace_the_users_days_and_moves_can_be_undone() {
         let (db, _, _, ids) = photos("trip-suggest", &["a.jpg", "b.jpg", "c.jpg"]);
-        let trip_id = trip(&db, "Alps");
+        let trip_id = trip(&db, "Peaks");
         let refs = db.add_to_trip(trip_id, &ids).unwrap();
         let (one, two) = (db.add_trip_day(trip_id, day("2026-07-01"), "").unwrap(), db.add_trip_day(trip_id, day("2026-07-02"), "").unwrap());
         db.move_to_day(trip_id, Some(one), &[refs[0]], DaySource::User).unwrap();
@@ -2385,7 +2385,7 @@ mod tests {
         let lake = db.add_trip_day(trip_id, day("2026-08-02"), "Lake").unwrap();
         db.move_to_day(trip_id, Some(first), &[refs[0]], DaySource::User).unwrap();
         db.move_to_day(trip_id, Some(lake), &[refs[1]], DaySource::User).unwrap();
-        // 17:00 UTC on the 2nd is past midnight in Taipei, the Trip's zone.
+        // 17:00 UTC on the 2nd is past midnight in Capital, the Trip's zone.
         let utc = NaiveDate::from_ymd_opt(2026, 8, 2).unwrap().and_hms_opt(17, 0, 0).unwrap().and_utc().timestamp();
         db.store_capture(refs[2], Capture::Utc(utc), 0);
         let on = |first: &str, last: &str| {
@@ -2417,7 +2417,7 @@ mod tests {
     #[test]
     fn a_trip_shows_its_cover_or_else_its_first_photo() {
         let (db, _, _, ids) = photos("trip-cover", &["a.jpg", "b.jpg"]);
-        let trip_id = trip(&db, "Alps");
+        let trip_id = trip(&db, "Peaks");
         assert_eq!(db.trip_cover_photo(trip_id), None);
         let refs = db.add_to_trip(trip_id, &ids).unwrap();
         assert_eq!(db.trip_cover_photo(trip_id), Some(ids[0]));
@@ -2459,23 +2459,23 @@ mod tests {
     #[test]
     fn trips_are_found_by_their_words() {
         let (db, _, _, _) = photos("trip-search", &[]);
-        let mut draft = TripDraft::new("Spring in Kyoto", "+09:00");
-        draft.destination = "Japan".into();
-        let kyoto = db.create_trip(&draft).unwrap();
-        let mut draft = TripDraft::new("100% Iceland_trip", "Atlantic/Reykjavik");
+        let mut draft = TripDraft::new("Spring in Temple", "+09:00");
+        draft.destination = "Islands".into();
+        let temple = db.create_trip(&draft).unwrap();
+        let mut draft = TripDraft::new("100% Highlands_trip", "Atlantic/Reykjavik");
         draft.description = "Ring road".into();
-        let iceland = db.create_trip(&draft).unwrap();
+        let highlands = db.create_trip(&draft).unwrap();
         let find = |search: &str| -> Vec<i64> {
             db.trips(&TripQuery { search: search.into(), ..TripQuery::default() }).iter().map(|trip| trip.id).collect()
         };
-        assert_eq!(find("kyoto japan"), [kyoto]);
-        assert_eq!(find("road"), [iceland], "the description counts");
-        assert_eq!(find("100%"), [iceland]);
+        assert_eq!(find("temple islands"), [temple]);
+        assert_eq!(find("road"), [highlands], "the description counts");
+        assert_eq!(find("100%"), [highlands]);
         assert!(find("0_I").is_empty(), "wildcards are plain text");
         assert_eq!(find("").len(), 2);
-        assert_eq!(db.trip(kyoto).unwrap().zone, "+09:00");
+        assert_eq!(db.trip(temple).unwrap().zone, "+09:00");
         assert!(db.create_trip(&TripDraft::new("No zone", "")).is_err());
-        assert!(db.update_trip(kyoto, &TripDraft::new("", "+09:00")).is_err());
+        assert!(db.update_trip(temple, &TripDraft::new("", "+09:00")).is_err());
         assert!(db.update_trip(9999, &TripDraft::new("Gone", "+09:00")).is_err());
     }
 
@@ -2689,7 +2689,7 @@ mod tests {
     #[test]
     fn reading_times_can_be_cancelled_and_resumed_without_reading_twice() {
         let (db, _, _, ids) = photos("trip-read-cancel", &["a.jpg", "b.jpg", "c.jpg"]);
-        let trip_id = trip(&db, "Lisbon");
+        let trip_id = trip(&db, "Seaport");
         db.add_to_trip(trip_id, &ids).unwrap();
         let stopped = crate::story_html::Progress::default();
         stopped.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
@@ -2708,18 +2708,18 @@ mod tests {
     #[test]
     fn days_are_suggested_from_capture_times_and_keep_the_users_choices() {
         let (db, _, _, ids) = photos("trip-suggest-days", &["a.jpg", "b.jpg", "c.jpg", "d.jpg", "e.jpg", "f.jpg"]);
-        let trip_id = trip(&db, "Taipei");
+        let trip_id = trip(&db, "Capital");
         let refs = db.add_to_trip(trip_id, &ids).unwrap();
         let unread = db.captures_to_read(trip_id);
         assert_eq!(unread.len(), 6, "nothing read yet");
-        let tokyo = |text| Capture::Clock { clock: at(text), offset: Some(9 * 3600) };
+        let metro = |text| Capture::Clock { clock: at(text), offset: Some(9 * 3600) };
         let captures = [
-            tokyo("2026-03-02 00:30:00"), // 1 March in Taipei
-            tokyo("2026-03-02 12:00:00"),
+            metro("2026-03-02 00:30:00"), // 1 March in Capital
+            metro("2026-03-02 12:00:00"),
             Capture::Clock { clock: at("2026-03-02 09:00:00"), offset: None },
             Capture::Missing,
-            tokyo("2026-03-03 12:00:00"),
-            tokyo("2026-03-01 12:00:00"),
+            metro("2026-03-03 12:00:00"),
+            metro("2026-03-01 12:00:00"),
         ];
         for ((media_id, _, modified_at), capture) in unread.into_iter().zip(captures) {
             db.store_capture(media_id, capture, modified_at);
@@ -2748,7 +2748,7 @@ mod tests {
         assert_eq!(db.review_counts(trip_id), first.review, "and Undo brings its review back");
 
         // Accepting that the camera was on Trip time settles the clock without an offset.
-        let mut draft = TripDraft::new("Taipei", "Asia/Taipei");
+        let mut draft = TripDraft::new("Capital", "Asia/Taipei");
         draft.trip_time = true;
         db.update_trip(trip_id, &draft).unwrap();
         let again = db.suggest_days(trip_id).unwrap();
@@ -2767,14 +2767,14 @@ mod tests {
     #[test]
     fn two_cameras_in_different_zones_meet_on_the_trips_days() {
         let (db, _, _, ids) = photos("trip-two-cameras", &["phone.jpg", "camera.jpg", "old.jpg", "no-gps.jpg"]);
-        let trip_id = db.create_trip(&TripDraft::new("Madrid", "Europe/Madrid")).unwrap();
+        let trip_id = db.create_trip(&TripDraft::new("Midtown", "Europe/Madrid")).unwrap();
         let refs = db.add_to_trip(trip_id, &ids).unwrap();
         let captures = [
             // The phone keeps local time and says so.
             Capture::Clock { clock: at("2025-07-01 23:30:00"), offset: Some(2 * 3600) },
-            // A camera left on Taipei time, which it records: the same evening in Madrid.
+            // A camera left on Capital time, which it records: the same evening in Midtown.
             Capture::Clock { clock: at("2025-07-02 05:45:00"), offset: Some(8 * 3600) },
-            // An older camera on Taipei time that records no offset.
+            // An older camera on Capital time that records no offset.
             Capture::Clock { clock: at("2025-07-02 05:50:00"), offset: None },
             // Taken the next morning, without GPS: Days don't need a location.
             Capture::Clock { clock: at("2025-07-02 09:00:00"), offset: Some(2 * 3600) },
@@ -2792,7 +2792,7 @@ mod tests {
 
         // Said to be on Trip time, the old camera lands six hours late, on the next Day;
         // Adjust date moves its photos back by the difference, and they join the evening.
-        let mut draft = TripDraft::new("Madrid", "Europe/Madrid");
+        let mut draft = TripDraft::new("Midtown", "Europe/Madrid");
         draft.trip_time = true;
         db.update_trip(trip_id, &draft).unwrap();
         db.suggest_days(trip_id).unwrap();
@@ -2811,7 +2811,7 @@ mod tests {
     #[test]
     fn a_suggestion_cut_short_makes_no_days_and_the_next_makes_them_all() {
         let (db, _, _, ids) = photos("trip-suggest-cut", &["a.jpg", "b.jpg", "c.jpg"]);
-        let trip_id = trip(&db, "Taipei");
+        let trip_id = trip(&db, "Capital");
         let refs = db.add_to_trip(trip_id, &ids).unwrap();
         let captures = [
             Capture::Clock { clock: at("2026-03-01 12:00:00"), offset: Some(8 * 3600) },
@@ -2855,7 +2855,7 @@ mod tests {
     fn a_story_save_cut_short_changes_nothing_and_is_tried_again_as_it_was() {
         let dir = temp_dir("story-save-cut");
         let db = Database::open(&dir.join("picasso.db")).unwrap();
-        let trip_id = trip(&db, "Kyoto");
+        let trip_id = trip(&db, "Temple");
         let id = db.create_story(trip_id, "Before").unwrap();
         let paragraph = |text: &str| StoryBlock::new(Block::Paragraph(text.into()));
         let revision = db.save_story_blocks(id, 1, &[paragraph("Kept")]).unwrap();

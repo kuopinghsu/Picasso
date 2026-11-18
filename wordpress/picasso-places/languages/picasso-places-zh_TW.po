@@ -147,8 +147,8 @@ msgid "Location"
 msgstr "位置"
 
 #: inc/editor.php
-msgid "Paste coordinates or a map link, such as 39.8628, -4.0273 or 39°51′46″N 4°01′38″W. Links from Google Maps, Apple Maps and OpenStreetMap and geo: addresses work too. Leave it empty for no location."
-msgstr "貼上座標或地圖連結，例如 39.8628, -4.0273 或 39°51′46″N 4°01′38″W。也可以使用 Google 地圖、Apple 地圖、OpenStreetMap 的連結和 geo: 位址。留空表示不設定位置。"
+msgid "Paste coordinates or a map link, such as 12.5822, -65.7225 or 12°34′56″N 65°43′21″W. Links from Google Maps, Apple Maps and OpenStreetMap and geo: addresses work too. Leave it empty for no location."
+msgstr "貼上座標或地圖連結，例如 12.5822, -65.7225 或 12°34′56″N 65°43′21″W。也可以使用 Google 地圖、Apple 地圖、OpenStreetMap 的連結和 geo: 位址。留空表示不設定位置。"
 
 #. translators: 1: the location as typed, 2: why it couldn't be read.
 #: inc/editor.php
@@ -156,7 +156,7 @@ msgstr "貼上座標或地圖連結，例如 39.8628, -4.0273 或 39°51′46″
 msgid "The location “%1$s” couldn’t be read: %2$s The saved location was kept."
 msgstr "無法讀取位置「%1$s」：%2$s 已保留原本儲存的位置。"
 
-#. translators: %s: latitude and longitude, such as 39.86280, -4.02730.
+#. translators: %s: latitude and longitude, such as 12.58220, -65.72250.
 #: inc/editor.php
 #, php-format
 msgid "Reads as %s"

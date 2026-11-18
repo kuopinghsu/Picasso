@@ -630,7 +630,7 @@ The *Show* row narrows the Trip's photos to the starred ones, those without a lo
 The search box searches the whole library in every view.
 These words find Trip photos anywhere:
 
-* `trip:` with part of a Trip's title or destination, such as `trip:spain`
+* `trip:` with part of a Trip's title or destination, such as `trip:coast`
 * `day:`, `place:` or `story:` with part of a Day's title, a Place's name or a Story's title
 * `is:intrip` or `is:notrip` for photos in a Trip or in none, and `is:review` for photos whose time needs review
 

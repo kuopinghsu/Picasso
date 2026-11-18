@@ -20,7 +20,7 @@ $stories_url = $args['stories_url'];
 		<?php if ( $editorial_photo ) : ?>
 			<img src="<?php echo esc_url( $editorial_photo ); ?>" alt="" loading="lazy">
 		<?php else : ?>
-			<img src="<?php echo esc_url( vl_image( 'japan' ) ); ?>" alt="" loading="lazy">
+			<img src="<?php echo esc_url( vl_image( 'blossom' ) ); ?>" alt="" loading="lazy">
 		<?php endif; ?>
 	</div>
 </section>

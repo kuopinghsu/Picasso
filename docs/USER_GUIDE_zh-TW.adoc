@@ -480,7 +480,7 @@ image::travelmap.png[旅行地圖]
 
 搜尋框在每個畫面都會搜尋整個圖庫。下列字詞可在任何地方找到旅程中的相片：
 
-* `trip:` 加上旅程標題或目的地的一部分，例如 `trip:spain`
+* `trip:` 加上旅程標題或目的地的一部分，例如 `trip:coast`
 * `day:`、`place:` 或 `story:` 加上日程標題、地點名稱或故事標題的一部分
 * `is:intrip` 或 `is:notrip` 找出在旅程中或不在任何旅程中的相片，`is:review` 找出時間需要檢查的相片
 

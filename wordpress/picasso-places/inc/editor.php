@@ -69,6 +69,9 @@ function geo_picker( $kind ) {
 	echo '</div></div>';
 }
 
+/** How many other published stories, newest first, the itinerary's story lists offer. */
+const OTHER_STORIES = 500;
+
 function editor_boxes() {
 	add_meta_box( 'picasso-places-geo', __( 'Geotag & Travel Map', 'picasso-places' ), __NAMESPACE__ . '\\geo_fields', 'post', 'normal', 'high' );
 	add_meta_box( 'picasso-places-trip-days', __( 'Journey itinerary & GeoTags', 'picasso-places' ), __NAMESPACE__ . '\\trip_days_box', 'vl_trip', 'normal', 'high' );
@@ -84,7 +87,7 @@ function geo_fields( $post ) {
 	$unread  = get_transient( 'picasso_places_location_' . $post->ID . '_' . get_current_user_id() );
 	$reasons = geo_reasons();
 	$value   = null !== $lat && null !== $lon ? vl_geo_format( $lat, $lon ) : '';
-	echo '<p><label for="vl_location"><strong>' . esc_html__( 'Location', 'picasso-places' ) . '</strong></label> · ' . esc_html__( 'Paste coordinates or a map link, such as 39.8628, -4.0273 or 39°51′46″N 4°01′38″W. Links from Google Maps, Apple Maps and OpenStreetMap and geo: addresses work too. Leave it empty for no location.', 'picasso-places' ) . '</p>';
+	echo '<p><label for="vl_location"><strong>' . esc_html__( 'Location', 'picasso-places' ) . '</strong></label> · ' . esc_html__( 'Paste coordinates or a map link, such as 12.5822, -65.7225 or 12°34′56″N 65°43′21″W. Links from Google Maps, Apple Maps and OpenStreetMap and geo: addresses work too. Leave it empty for no location.', 'picasso-places' ) . '</p>';
 	if ( is_array( $unread ) && isset( $unread['text'], $reasons[ $unread['why'] ] ) ) {
 		$value = $unread['text'];
 		/* translators: 1: the location as typed, 2: why it couldn't be read. */
@@ -92,7 +95,7 @@ function geo_fields( $post ) {
 	}
 	$point = vl_geo_read( $value );
 	if ( is_array( $point ) ) {
-		/* translators: %s: latitude and longitude, such as 39.86280, -4.02730. */
+		/* translators: %s: latitude and longitude, such as 12.58220, -65.72250. */
 		$reading = sprintf( __( 'Reads as %s', 'picasso-places' ), sprintf( '%.5F, %.5F', $point[0], $point[1] ) );
 	} else {
 		$reading = 'empty' === $point ? __( 'No location set.', 'picasso-places' ) : $reasons[ $point ];
@@ -101,7 +104,7 @@ function geo_fields( $post ) {
 	echo '<p id="vl-location-reading" class="vl-geo-reading' . ( is_string( $point ) && 'empty' !== $point ? ' is-error' : '' ) . '" aria-live="polite">' . esc_html( $reading ) . '</p>';
 	echo '<p id="vl-location-help" class="description">' . esc_html__( 'Short links such as maps.app.goo.gl can’t be read here: open the link, then copy the full address from the browser’s address bar.', 'picasso-places' ) . '</p>';
 	echo '<p><label for="vl_stops"><strong>' . esc_html__( 'Route stops', 'picasso-places' ) . '</strong> · ' . esc_html__( 'One stop per line: Place name | location | short note. The location takes the same forms as above.', 'picasso-places' ) . '</label></p>';
-	echo '<textarea id="vl_stops" name="picasso_places_stops" rows="7" class="vl-geo-lines" data-kind="stop" data-max-lines="' . esc_attr( STOP_LINES ) . '" data-max-chars="' . esc_attr( STOP_CHARS ) . '" data-problems="vl-stops-problems" style="width:100%;max-width:100%" placeholder="Ilulissat | 69.2194, -51.0986 | ' . esc_attr__( 'Starting point', 'picasso-places' ) . '">' . esc_textarea( $stops ) . '</textarea>';
+	echo '<textarea id="vl_stops" name="picasso_places_stops" rows="7" class="vl-geo-lines" data-kind="stop" data-max-lines="' . esc_attr( STOP_LINES ) . '" data-max-chars="' . esc_attr( STOP_CHARS ) . '" data-problems="vl-stops-problems" style="width:100%;max-width:100%" placeholder="Harbour | 12.5822, -65.7225 | ' . esc_attr__( 'Starting point', 'picasso-places' ) . '">' . esc_textarea( $stops ) . '</textarea>';
 	echo '<div id="vl-stops-problems" class="vl-geo-problems" aria-live="polite">' . geo_problem_list( $stops, 'stop', STOP_LINES ) . '</div>'; // phpcs:ignore WordPress.Security.EscapeOutput -- escaped inside.
 	echo '<p>' . esc_html__( 'The map shows the stops in this order, joined by a straight line that is not a road or walking route. Publish only coordinates you are comfortable sharing. Empty coordinates mean no location.', 'picasso-places' ) . '</p>';
 	geo_picker( 'post' );
@@ -146,7 +149,7 @@ function trip_days_box( $post ) {
 	$value = get_post_meta( $post->ID, '_vl_trip_days', true );
 	echo '<p>' . esc_html__( 'One place per line:', 'picasso-places' ) . ' <strong>' . esc_html__( 'Day | Place | location | short note | optional post ID', 'picasso-places' ) . '</strong>. ' . esc_html__( 'The location can be coordinates or a map link, as in a story’s Location field.', 'picasso-places' ) . ' ' . esc_html__( 'The map uses these coordinates, not the photos’ EXIF.', 'picasso-places' ) . '</p>';
 	echo '<div class="vl-trip-rows hide-if-no-js"></div>';
-	echo '<textarea id="vl_trip_days" name="picasso_places_trip_days" rows="11" class="vl-geo-lines" data-kind="day" data-max-lines="' . esc_attr( DAY_LINES ) . '" data-max-chars="' . esc_attr( DAY_CHARS ) . '" data-problems="vl-trip-days-problems" style="width:100%;font-family:monospace" placeholder="1 | Ilulissat | 69.2194, -51.0986 | ' . esc_attr__( 'Arrive and explore', 'picasso-places' ) . '">' . esc_textarea( $value ) . '</textarea>';
+	echo '<textarea id="vl_trip_days" name="picasso_places_trip_days" rows="11" class="vl-geo-lines" data-kind="day" data-max-lines="' . esc_attr( DAY_LINES ) . '" data-max-chars="' . esc_attr( DAY_CHARS ) . '" data-problems="vl-trip-days-problems" style="width:100%;font-family:monospace" placeholder="1 | Harbour | 12.5822, -65.7225 | ' . esc_attr__( 'Arrive and explore', 'picasso-places' ) . '">' . esc_textarea( $value ) . '</textarea>';
 	echo '<div id="vl-trip-days-problems" class="vl-geo-problems" aria-live="polite">' . geo_problem_list( $value, 'day', DAY_LINES ) . '</div>'; // phpcs:ignore WordPress.Security.EscapeOutput -- escaped inside.
 	echo '<p>' . esc_html__( 'Day numbers set the order of the itinerary. Locations are shown to everyone. Dashed lines show the order of stops, not a route to follow. A post ID links a stop to a published story.', 'picasso-places' ) . '</p>';
 	geo_picker( 'trip' );
@@ -203,27 +206,43 @@ function collect_posts( $query ) {
 function trip_link_box( $post ) {
 	wp_nonce_field( 'picasso_places_trip_link_save', 'picasso_places_trip_link_nonce' );
 	$selected = absint( get_post_meta( $post->ID, '_vl_trip_id', true ) );
-	$trips    = collect_posts(
-		array(
-			'post_type'   => 'vl_trip',
-			'post_status' => array( 'publish', 'draft', 'private' ),
-			'orderby'     => array(
-				'title' => 'ASC',
-				'ID'    => 'ASC',
+	// Only Journeys this user may read: get_posts() doesn't check, and
+	// another author's draft or private Journey would show its title here.
+	$trips = array_values(
+		array_filter(
+			collect_posts(
+				array(
+					'post_type'   => 'vl_trip',
+					'post_status' => array( 'publish', 'draft', 'private' ),
+					'orderby'     => array(
+						'title' => 'ASC',
+						'ID'    => 'ASC',
+					),
+				)
 			),
+			function ( $trip ) {
+				return current_user_can( 'read_post', $trip->ID );
+			}
 		)
 	);
 	$ids = array_map( 'absint', wp_list_pluck( $trips, 'ID' ) );
-	if ( $selected && ! in_array( $selected, $ids, true ) ) {
-		$current = get_post( $selected );
-		if ( $current && 'vl_trip' === $current->post_type ) {
-			$trips[] = $current;
+	// The linked Journey in another state, as scheduled, is shown by its
+	// title when this user may read it, and kept under no title otherwise.
+	$hidden = false;
+	if ( $selected && ! in_array( $selected, $ids, true ) && 'vl_trip' === get_post_type( $selected ) ) {
+		if ( current_user_can( 'read_post', $selected ) ) {
+			$trips[] = get_post( $selected );
+		} else {
+			$hidden = true;
 		}
 	}
 	echo '<label for="picasso-places-trip-id">' . esc_html__( 'This story belongs to:', 'picasso-places' ) . '</label>';
 	echo '<select id="picasso-places-trip-id" name="picasso_places_trip_id" style="width:100%"><option value="0">' . esc_html__( '— No journey —', 'picasso-places' ) . '</option>';
 	foreach ( $trips as $trip ) {
 		echo '<option value="' . esc_attr( $trip->ID ) . '" ' . selected( $selected, $trip->ID, false ) . '>' . esc_html( $trip->post_title ) . '</option>';
+	}
+	if ( $hidden ) {
+		echo '<option value="' . esc_attr( $selected ) . '" selected>#' . esc_html( $selected ) . '</option>';
 	}
 	echo '</select><p>' . esc_html__( 'Published stories appear on their journey’s page.', 'picasso-places' ) . '</p>';
 }
@@ -233,7 +252,9 @@ function trip_link_save( $id ) {
 		return;
 	}
 	$trip = isset( $_POST['picasso_places_trip_id'] ) ? absint( $_POST['picasso_places_trip_id'] ) : 0;
-	if ( $trip && 'vl_trip' === get_post_type( $trip ) ) {
+	// A Journey this user can't read can stay linked, but can't be newly picked.
+	$kept = absint( get_post_meta( $id, '_vl_trip_id', true ) ) === $trip;
+	if ( $trip && 'vl_trip' === get_post_type( $trip ) && ( $kept || current_user_can( 'read_post', $trip ) ) ) {
 		update_post_meta( $id, '_vl_trip_id', $trip );
 	} else {
 		delete_post_meta( $id, '_vl_trip_id' );
@@ -276,8 +297,22 @@ function trip_editor_data( $trip_id ) {
 		);
 	}
 	// Only each story's id and title: whole posts, with their content, fields and terms, would load every story on the site.
+	// The newest OTHER_STORIES, and any the itinerary already names, so a large site doesn't put every title in the page.
 	global $wpdb;
-	$others = $wpdb->get_results( $wpdb->prepare( "SELECT ID, post_title FROM {$wpdb->posts} WHERE post_type = %s AND post_status = %s ORDER BY post_date DESC, ID DESC", 'post', 'publish' ) ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery -- a read of two columns, fresh each time the editor opens.
+	$others = $wpdb->get_results( $wpdb->prepare( "SELECT ID, post_title FROM {$wpdb->posts} WHERE post_type = %s AND post_status = %s ORDER BY post_date DESC, ID DESC LIMIT %d", 'post', 'publish', OTHER_STORIES ) ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery -- a read of two columns, fresh each time the editor opens.
+	$named  = array();
+	foreach ( vl_geo_lines( $trip_id ? get_post_meta( $trip_id, '_vl_trip_days', true ) : '', DAY_LINES ) as $line ) {
+		$row = vl_geo_day_line( $line );
+		if ( is_array( $row ) && $row['post_id'] ) {
+			$named[ $row['post_id'] ] = true;
+		}
+	}
+	$have = array_flip( array_map( 'intval', array_merge( $ids, wp_list_pluck( $others, 'ID' ) ) ) );
+	$more = array_diff_key( $named, $have );
+	if ( $more ) {
+		$list   = implode( ',', array_map( 'intval', array_keys( $more ) ) );
+		$others = array_merge( $others, $wpdb->get_results( $wpdb->prepare( "SELECT ID, post_title FROM {$wpdb->posts} WHERE post_type = %s AND post_status = %s AND ID IN ($list)", 'post', 'publish' ) ) ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- integers only.
+	}
 	$skip   = array_flip( array_map( 'intval', $ids ) );
 	foreach ( $others as $story ) {
 		$id = (int) $story->ID;
@@ -297,7 +332,7 @@ function geo_admin_text() {
 		'mapFailed'     => __( 'Unable to load the map. Check your connection or content blockers.', 'picasso-places' ),
 		'storyLocation' => __( 'Story location', 'picasso-places' ),
 		'noLocation'    => __( 'No location set.', 'picasso-places' ),
-		/* translators: %s: latitude and longitude, such as 39.86280, -4.02730. */
+		/* translators: %s: latitude and longitude, such as 12.58220, -65.72250. */
 		'readsAs'       => __( 'Reads as %s', 'picasso-places' ),
 		'reasons'       => geo_reasons(),
 		'problems'      => __( 'These lines couldn’t be read and are not on the map:', 'picasso-places' ),

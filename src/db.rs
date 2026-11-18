@@ -2529,13 +2529,13 @@ mod tests {
     #[test]
     fn search_matches_every_word_against_names_albums_and_dates() {
         let (db, folder_id, folder) = library("search");
-        let mut kyoto = record(folder_id, &folder.join("Kyoto trip"), "IMG_1.jpg", 1);
-        let mut later = record(folder_id, &folder.join("Kyoto trip"), "IMG_2.jpg", 1);
+        let mut garden = record(folder_id, &folder.join("Garden trip"), "IMG_1.jpg", 1);
+        let mut later = record(folder_id, &folder.join("Garden trip"), "IMG_2.jpg", 1);
         let home = record(folder_id, &folder, "home.jpg", 1);
         let (start, _) = date_range("2019-05-17").unwrap();
-        kyoto.photo.taken_at = start + 3600;
+        garden.photo.taken_at = start + 3600;
         later.photo.taken_at = date_range("2020").unwrap().0 + 3600;
-        let ids = db.write_batch(&[kyoto, later, home]).unwrap().ids;
+        let ids = db.write_batch(&[garden, later, home]).unwrap().ids;
         let album = db.create_album("Temples").unwrap();
         db.add_to_album(album, &[ids[2]]);
         db.set_caption(ids[1], "Snow day");
@@ -2545,8 +2545,8 @@ mod tests {
             ids.sort();
             ids
         };
-        assert_eq!(found("kyoto"), [ids[0], ids[1]]);
-        assert_eq!(found("kyoto 2019"), [ids[0]]);
+        assert_eq!(found("garden"), [ids[0], ids[1]]);
+        assert_eq!(found("garden 2019"), [ids[0]]);
         assert_eq!(found("2019-05"), [ids[0]]);
         assert_eq!(found("2019/5/17"), [ids[0]]);
         assert!(found("2019-05-18").is_empty());
@@ -2643,7 +2643,7 @@ mod tests {
         assert_eq!(span("2019-13"), None);
         assert_eq!(span("19-05"), None);
         assert_eq!(span("IMG_2019"), None);
-        assert_eq!(search_terms("kyoto  2019"), [Term::Text("kyoto".into()), Term::Dates(date_range("2019").unwrap().0, date_range("2019").unwrap().1)]);
+        assert_eq!(search_terms("temple  2019"), [Term::Text("temple".into()), Term::Dates(date_range("2019").unwrap().0, date_range("2019").unwrap().1)]);
     }
 
     pub(super) fn folder_path(folder: &Path, name: &str) -> String {

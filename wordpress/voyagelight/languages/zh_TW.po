@@ -227,6 +227,35 @@ msgid_plural "%d stories"
 msgstr[0] "%d 篇遊記"
 
 #: inc/content.php
+msgid "Northern Lights"
+msgstr "極光"
+
+#: inc/content.php
+#: template-parts/home-stories.php
+msgid "Glaciers"
+msgstr "冰河"
+
+#: inc/content.php
+#: template-parts/home-stories.php
+msgid "Old Towns"
+msgstr "古城"
+
+#: inc/content.php
+#: template-parts/home-stories.php
+msgid "Countryside"
+msgstr "鄉間"
+
+#: inc/content.php
+#: template-parts/home-stories.php
+msgid "Gardens"
+msgstr "花園"
+
+#: inc/content.php
+#: template-parts/home-stories.php
+msgid "Sample"
+msgstr "示範"
+
+#: inc/content.php
 #: single-vl_trip.php
 #: template-parts/home-stories.php
 msgid "Travel journal"
@@ -237,7 +266,7 @@ msgstr "旅行手記"
 msgid "Story"
 msgstr "遊記"
 
-#. translators: %s: name of a menu item, such as Europe.
+#. translators: %s: name of a menu item, such as Mountains.
 #: inc/content.php
 #, php-format
 msgid "Show the %s menu"
@@ -545,7 +574,7 @@ msgstr "遊記位置"
 msgid "No location set."
 msgstr "尚未設定位置。"
 
-#. translators: %s: latitude and longitude, such as 39.86280, -4.02730.
+#. translators: %s: latitude and longitude, such as 12.58220, -65.72250.
 #: inc/journeys.php
 #: inc/locations.php
 #, php-format
@@ -768,8 +797,8 @@ msgid "VoyageLight · Geotag & Travel Map"
 msgstr "VoyageLight · 地理標記與旅遊地圖"
 
 #: inc/locations.php
-msgid "Paste coordinates or a map link, such as 39.8628, -4.0273 or 39°51′46″N 4°01′38″W. Links from Google Maps, Apple Maps and OpenStreetMap and geo: addresses work too. Leave it empty for no location."
-msgstr "貼上座標或地圖連結，例如 39.8628, -4.0273 或 39°51′46″N 4°01′38″W。也可以使用 Google 地圖、Apple 地圖、OpenStreetMap 的連結和 geo: 位址。留空表示不設定位置。"
+msgid "Paste coordinates or a map link, such as 12.5822, -65.7225 or 12°34′56″N 65°43′21″W. Links from Google Maps, Apple Maps and OpenStreetMap and geo: addresses work too. Leave it empty for no location."
+msgstr "貼上座標或地圖連結，例如 12.5822, -65.7225 或 12°34′56″N 65°43′21″W。也可以使用 Google 地圖、Apple 地圖、OpenStreetMap 的連結和 geo: 位址。留空表示不設定位置。"
 
 #: inc/locations.php
 msgid "Short links such as maps.app.goo.gl can’t be read here: open the link, then copy the full address from the browser’s address bar."
@@ -1026,12 +1055,8 @@ msgid "All stories ↗"
 msgstr "所有文章 ↗"
 
 #: template-parts/home-stories.php
-msgid "Eqi Glacier: A Close Encounter with the Icefjord"
-msgstr "Eqi 冰河與冰峽灣"
-
-#: template-parts/home-stories.php
-msgid "Greenland"
-msgstr "格陵蘭"
+msgid "A Close Encounter with the Icefjord"
+msgstr "與冰峽灣的近距離相遇"
 
 #: template-parts/home-stories.php
 msgid "Travel stories"
@@ -1042,52 +1067,36 @@ msgid "Under the Northern Lights"
 msgstr "追尋北極光"
 
 #: template-parts/home-stories.php
-msgid "Nordic"
-msgstr "北歐"
+msgid "Night Sky"
+msgstr "夜空"
 
 #: template-parts/home-stories.php
 msgid "Nature & Scenery"
 msgstr "自然景觀"
 
 #: template-parts/home-stories.php
-msgid "Toledo: A City of History and Light"
-msgstr "托雷多的歷史與光影"
-
-#: template-parts/home-stories.php
-msgid "Spain"
-msgstr "西班牙"
+msgid "An Old City of History and Light"
+msgstr "古城的歷史與光影"
 
 #: template-parts/home-stories.php
 msgid "Culture"
 msgstr "文化"
 
 #: template-parts/home-stories.php
-msgid "Tokyo: A Walk Through Spring"
-msgstr "東京春日散步"
-
-#: template-parts/home-stories.php
-msgid "Japan"
-msgstr "日本"
+msgid "A City Walk Through Spring"
+msgstr "春日城市散步"
 
 #: template-parts/home-stories.php
 msgid "City Walks"
 msgstr "城市漫遊"
 
 #: template-parts/home-stories.php
-msgid "A Morning in the Baltic Old Town"
-msgstr "波羅的海古城的清晨"
-
-#: template-parts/home-stories.php
-msgid "Baltic"
-msgstr "波羅的海"
+msgid "A Morning in the Old Town"
+msgstr "古城的早晨"
 
 #: template-parts/home-stories.php
 msgid "History & Culture"
 msgstr "歷史與文化"
-
-#: template-parts/home-stories.php
-msgid "Sample"
-msgstr "示範"
 
 #: template-parts/home-stories.php
 msgid "Demo illustration. Publish your own story to replace this sample."

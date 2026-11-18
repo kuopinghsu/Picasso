@@ -312,7 +312,7 @@ fn store(path: &Path, bytes: &[u8]) {
 /// with the height of each pixel coded in its color.
 const TERRAIN_URL: &str = "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png";
 /// Zoom of the terrain tiles heights are read from, about 30 m a pixel in
-/// Europe.
+/// mid-latitudes.
 const TERRAIN_ZOOM: u8 = 12;
 /// Zoom a long track's heights may be read from, about 500 m a pixel.
 const TERRAIN_MIN_ZOOM: u8 = 8;
@@ -503,7 +503,7 @@ mod tests {
         // A walk round a city stays at the finest tiles.
         let city: Vec<(f64, f64)> = (0..1000).map(|step| (41.38 + step as f64 * 1e-5, 2.17)).collect();
         assert_eq!(terrain_zoom(&city).0, TERRAIN_ZOOM);
-        // A drive from Lisbon to Moscow needs too many of them.
+        // A drive from Seaport to Moscow needs too many of them.
         let drive: Vec<(f64, f64)> =
             (0..=4000).map(|step| (38.7 + (55.75 - 38.7) * step as f64 / 4000.0, -9.14 + (37.62 + 9.14) * step as f64 / 4000.0)).collect();
         let (zoom, tiles) = terrain_zoom(&drive);

@@ -1322,6 +1322,58 @@ fn raw_rgba(image: &RgbaImage) -> (usize, usize, Vec<u8>) {
 mod tests {
     use super::*;
 
+    // TEMP-DIAG: remove after investigation.
+    #[test]
+    #[ignore]
+    fn diag_demo_thumbs_match_their_files() {
+        let demo = PathBuf::from(std::env::var("PICASSO_DIAG_DIR").unwrap());
+        let mut lib = Library::new("diag-thumbs");
+        let folder = lib.indexer.db.add_folder(&demo).unwrap();
+        let (tx, rx) = crossbeam_channel::unbounded();
+        lib.indexer.thumbs = tx;
+        lib.scan(folder);
+        for job in lib.indexer.deferred.drain(..) {
+            let _ = lib.indexer.thumbs.send(job);
+        }
+        let gate: DisplayGate = Default::default();
+        let store = ThumbStore::open(&lib.indexer.cache);
+        let mut jobs = 0;
+        while let Ok(job) = rx.try_recv() {
+            if let ThumbJob::Cache { id, path } | ThumbJob::Thumb { id, path, .. } = &job {
+                let row = lib.indexer.db.photo(*id).unwrap();
+                if row.path != *path {
+                    println!("JOB MISMATCH id={id} job={path} db={}", row.path);
+                }
+            }
+            run_thumb(&store, &gate, job);
+            jobs += 1;
+        }
+        let mut bad = 0;
+        let photos = lib.indexer.db.photo_paths();
+        for (id, path) in &photos {
+            let row = lib.indexer.db.photo(*id).unwrap();
+            if !path.ends_with(&row.filename) {
+                println!("ROW MISMATCH id={id} path={path} filename={}", row.filename);
+            }
+            let stored = store.get(*id).and_then(|jpeg| decode_jpeg(&jpeg));
+            let fresh = make_thumb(Path::new(path)).ok();
+            match (stored, fresh) {
+                (Some(a), Some(b)) if a.dimensions() == b.dimensions() => {
+                    let diff: u64 = a.as_raw().iter().zip(b.as_raw()).map(|(x, y)| x.abs_diff(*y) as u64).sum::<u64>() / a.as_raw().len() as u64;
+                    if diff > 6 {
+                        bad += 1;
+                        println!("PIXEL MISMATCH id={id} {path} mean diff {diff}");
+                    }
+                }
+                (a, b) => {
+                    bad += 1;
+                    println!("SHAPE id={id} {path} stored={:?} fresh={:?}", a.map(|i| i.dimensions()), b.map(|i| i.dimensions()));
+                }
+            }
+        }
+        println!("photos={} jobs={jobs} bad={bad}", photos.len());
+    }
+
     #[test]
     fn walk_skips_hidden_unchanged_and_other_files() {
         let root = std::env::temp_dir().join(format!("picasso-walk-{}", std::process::id()));

@@ -171,13 +171,65 @@ impl eframe::egui::epaint::text::FontProvider for SystemFonts {
     }
 
     fn font_for(&self, request: &eframe::egui::epaint::text::FallbackRequest<'_>) -> Option<eframe::egui::epaint::text::FontInsert> {
-        self.guarded(None, || self.inner.font_for(request))
+        self.guarded(None, || self.inner.font_for(request)).or_else(|| symbol_font(request))
     }
+}
+
+/// Fonts with symbols such as ★ and ☆ that the system lookup misses: it
+/// tries only the generic families for a character of no script, and on
+/// Windows none of those has the star, so the star drew as an empty box
+/// unless a Chinese font happened to be loaded for other text.
+fn symbol_font_files() -> Vec<std::path::PathBuf> {
+    let mut files = Vec::new();
+    if cfg!(windows) {
+        let windir = std::env::var_os("WINDIR").unwrap_or_else(|| "C:\\Windows".into());
+        files.push(std::path::Path::new(&windir).join("Fonts").join("seguisym.ttf"));
+    } else if cfg!(target_os = "macos") {
+        files.push("/System/Library/Fonts/Apple Symbols.ttf".into());
+    } else {
+        for dir in ["/usr/share/fonts/truetype/dejavu", "/usr/share/fonts/TTF", "/usr/share/fonts/dejavu"] {
+            files.push(std::path::Path::new(dir).join("DejaVuSans.ttf"));
+        }
+        for dir in ["/usr/share/fonts/truetype/noto", "/usr/share/fonts/noto", "/usr/share/fonts/google-noto"] {
+            files.push(std::path::Path::new(dir).join("NotoSansSymbols2-Regular.ttf"));
+        }
+    }
+    files
+}
+
+/// The first of [`symbol_font_files`] with a glyph for the request's first
+/// character. egui asks once per character and family, so a file is read
+/// only for the few characters no other font has.
+fn symbol_font(request: &eframe::egui::epaint::text::FallbackRequest<'_>) -> Option<eframe::egui::epaint::text::FontInsert> {
+    use ab_glyph::Font as _;
+    use eframe::egui::epaint::text::{FontInsert, FontPriority, InsertFontFamily};
+    let c = request.cluster.chars().next()?;
+    symbol_font_files().into_iter().find_map(|path| {
+        let bytes = std::fs::read(&path).ok()?;
+        let has = ab_glyph::FontRef::try_from_slice(&bytes).is_ok_and(|font| font.glyph_id(c).0 != 0);
+        has.then(|| FontInsert {
+            name: format!("symbols:{}", path.display()),
+            data: eframe::egui::FontData::from_owned(bytes),
+            families: vec![InsertFontFamily { family: request.family.clone(), priority: FontPriority::Lowest }],
+        })
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_star_has_a_font_where_the_system_has_a_symbol_font() {
+        if !symbol_font_files().iter().any(|path| path.exists()) {
+            return;
+        }
+        let family = eframe::egui::FontFamily::Proportional;
+        for star in ["★", "☆"] {
+            let request = eframe::egui::epaint::text::FallbackRequest { cluster: star, family: &family };
+            assert!(symbol_font(&request).is_some(), "no font for {star}");
+        }
+    }
 
     #[test]
     fn fonts_that_cannot_be_listed_leave_the_built_in_ones() {

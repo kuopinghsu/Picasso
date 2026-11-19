@@ -20,7 +20,15 @@ exclude-dev = true
 # when Picasso uses them directly.
 unmaintained = "workspace"
 yanked = "deny"
-ignore = []
+ignore = [
+    # chrono and chrono-tz are no longer maintained, and no fixed release
+    # exists: neither advisory names a flaw, only that no one keeps them up.
+    # rawler, the RAW decoder, depends on chrono too, so Picasso can't drop it
+    # alone. Moving Picasso's own dates and time zones to jiff, which the
+    # advisory recommends, is a change of its own; until then these stay.
+    { id = "RUSTSEC-2026-0543", reason = "chrono unmaintained; no fix exists, and rawler needs it" },
+    { id = "RUSTSEC-2026-0555", reason = "chrono-tz unmaintained; no fix exists until Picasso moves to jiff" },
+]
 
 [licenses]
 # Permissive licenses whose terms the notices in each package

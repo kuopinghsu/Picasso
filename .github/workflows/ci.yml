@@ -632,12 +632,13 @@ jobs:
         with:
           ref: ${{ env.SOURCE_COMMIT }}
 
+      # make guide-pdf fetches Noto Sans TC itself and cuts it with fontTools.
       - name: Install Asciidoctor PDF and fonts
         run: |
           set -euo pipefail
           sudo gem install --no-document asciidoctor-pdf -v 2.3.15
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends fonts-droid-fallback fonts-dejavu-core
+          sudo apt-get install -y --no-install-recommends python3-fonttools fonts-dejavu-core
 
       - name: Build
         id: guide

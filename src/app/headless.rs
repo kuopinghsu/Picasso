@@ -541,6 +541,12 @@ mod tests {
         window.size = WINDOW;
         window.app.set_nav(Nav::Library);
         window.draw_until("the library", Duration::from_secs(10), |app| app.nav == Nav::Library && app.layout.is_some());
+        // From the top of the grid, wherever the screens above left it, so
+        // Tab meets the first photo whatever the runner's timing.
+        window.app.jump_to = Some(0.0);
+        window.app.selection.clear();
+        window.draw(Vec::new());
+        window.draw(Vec::new());
         let (reached, unnamed) = tab_through(&mut window, 30);
         assert!(unnamed.is_empty(), "Tab reached controls with no name: {unnamed:?}");
         for name in ["Search photos", "Settings", "Thumbnail size", "Library", "pics, 12", "Sort by Date", "IMG_000.jpg"] {

@@ -1,4 +1,6 @@
-= Picasso 使用者指南
+ifdef::backend-pdf[= Picasso 使用者指南: 整理、編輯與分享你的相片]
+ifndef::backend-pdf[= Picasso 使用者指南]
+:version-label: 版本
 :toc: left
 :toc-title: 目錄
 :toclevels: 2

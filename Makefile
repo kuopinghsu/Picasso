@@ -47,22 +47,13 @@ endif
 .DEFAULT_GOAL := release
 
 .PHONY: help release debug run run-stats version check lint test corpus bench bench-check check-docs deny ci translations \
-	sign-identity notices release-notes guide guide-pdf theme appimage install uninstall world-map clean
+	sign-identity notices release-notes guide guide-pdf user-guide-pdf theme appimage install uninstall world-map clean
 
 # Each target's `##` text is what `make help` prints; `##@` starts a section.
+# Printed by Python, as on Windows make runs recipes with cmd.exe, which has
+# no awk and keeps echo's quotes.
 help: ## List the targets and the variables they take
-	@echo "Picasso $(VERSION). Usage: make [target] [VARIABLE=value]"
-	@awk 'BEGIN { FS = ":.*## " } \
-		/^##@ / { printf "\n%s\n", substr($$0, 5) } \
-		/^[a-z][a-z0-9-]*:.*## / { printf "  %-14s %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
-	@echo
-	@echo "Variables"
-	@echo "  ARGS=...       photo folders for run and run-stats: make run ARGS=\"~/Pictures\""
-	@echo "  T=...          only the tests whose name contains it: make test T=backup"
-	@echo "  CORPUS=dir     folder of your own photos for make corpus"
-	@echo "  PREFIX=dir     where install puts Picasso (default ~/.local)"
-	@echo "  SIGN_IDENTITY  macOS code-signing identity for builds (default Picasso Development)"
-	@echo "  PICASSO_BENCH_PHOTOS, _TRIP, _FILES   sizes for make bench (docs/PERFORMANCE.md)"
+	@$(PYTHON) scripts/make-help.py Makefile $(VERSION)
 
 ##@ Build and run
 
@@ -155,20 +146,37 @@ guide: ## Build the User Guide as HTML in target/guide (needs asciidoctor)
 		docs/USER_GUIDE.adoc docs/USER_GUIDE_zh-TW.adoc
 	@echo "Open target/guide/USER_GUIDE.html or target/guide/USER_GUIDE_zh-TW.html"
 
-# The same as PDF, as CI publishes it. The themes in docs/ take the Chinese and
-# symbols from Droid Sans Fallback and DejaVu Sans, looked for in GUIDE_FONTS:
-# on Debian and Ubuntu, gem install asciidoctor-pdf, then
-# sudo apt install fonts-droid-fallback fonts-dejavu-core. Elsewhere, set
-# GUIDE_FONTS to the folders holding DroidSansFallbackFull.ttf and
-# DejaVuSans.ttf, separated by ";". A character no font has fails the build.
-GUIDE_FONTS ?= /usr/share/fonts/truetype/droid;/usr/share/fonts/truetype/dejavu
-# --verbose, because asciidoctor-pdf reports a missing character only then.
-GUIDE_PDF = asciidoctor-pdf --verbose --failure-level=WARN -a pdf-themesdir=docs \
-	-a 'pdf-fontsdir=$(GUIDE_FONTS);GEM_FONTS_DIR' -D target/guide
-
+# The same as PDF, as CI publishes it, with the themes in docs/ (a title page
+# with the banner, the version and the month). scripts/docs-pdf.sh fetches
+# Noto Sans TC once into target/guide-fonts. Needs asciidoctor-pdf, curl,
+# Python 3 with fontTools and DejaVu Sans: on Debian and Ubuntu,
+# gem install asciidoctor-pdf, then sudo apt install python3-fonttools
+# fonts-dejavu-core. A character no font has fails the build.
 guide-pdf: ## Build the User Guide as PDF in target/guide (needs asciidoctor-pdf)
-	$(GUIDE_PDF) -a pdf-theme=guide docs/USER_GUIDE.adoc
-	$(GUIDE_PDF) -a pdf-theme=guide-zh-TW docs/USER_GUIDE_zh-TW.adoc
+	bash scripts/docs-pdf.sh --out target/guide docs/USER_GUIDE.adoc docs/USER_GUIDE_zh-TW.adoc
+
+# The same PDFs with nothing installed but Docker: each docs/*.adoc becomes
+# docs/*.pdf beside it, made in the image in docker/guide-pdf, which has what
+# guide-pdf needs. The image is built the first time and reused after; the
+# fonts are fetched once into target/guide-fonts. DOCS picks the files; files
+# ending in _zh-TW take the Chinese theme.
+DOCKER ?= docker
+DOCS ?= $(wildcard docs/*.adoc)
+GUIDE_IMAGE = picasso-guide-pdf:asciidoctor-pdf-2.3.15-noto
+# On Windows make runs recipes with cmd.exe, or with Git Bash's sh when it is
+# on PATH; Docker Desktop gives the files to the person, and
+# MSYS_NO_PATHCONV, in the recipes' environment for either, keeps Git Bash
+# from rewriting the container's paths. Elsewhere the PDFs are made as the
+# person rather than root.
+ifeq ($(PLATFORM),windows)
+GUIDE_RUN = $(DOCKER) run --rm
+export MSYS_NO_PATHCONV := 1
+else
+GUIDE_RUN = $(DOCKER) run --rm --user "$$(id -u):$$(id -g)"
+endif
+user-guide-pdf: ## Convert docs/*.adoc to docs/*.pdf in Docker (needs only Docker)
+	$(DOCKER) build --quiet -t $(GUIDE_IMAGE) docker/guide-pdf
+	$(GUIDE_RUN) -v "$(CURDIR):/work" -w /work $(GUIDE_IMAGE) bash scripts/docs-pdf.sh $(DOCS)
 
 # The optional WordPress theme in wordpress/voyagelight and the Picasso Places
 # plugin in wordpress/picasso-places, as the ZIPs that Upload Theme and Upload

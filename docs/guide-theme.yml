@@ -1,25 +1,192 @@
-# The PDF look of docs/USER_GUIDE.adoc for asciidoctor-pdf (make guide-pdf).
-# The default fonts have no Chinese or symbols such as ⌘ and ⇄, so characters
-# they lack come from Droid Sans Fallback and DejaVu Sans, which Prawn can
-# embed because they are TrueType. make guide-pdf finds them in GUIDE_FONTS.
-extends: default
+# The PDF look of the User Guide (docs/USER_GUIDE.adoc) for asciidoctor-pdf,
+# made by make user-guide-pdf or make guide-pdf (scripts/docs-pdf.sh). The
+# fonts named here are not in the repository: scripts/guide-fonts.sh puts
+# them in the folder passed as pdf-fontsdir. Noto Sans TC holds the Chinese
+# text, DejaVu Sans symbols such as ⌘ and ⇄.
+# The colours are those of the logo on the cover (blue, orange and gold) and
+# of the banner's title (navy).
+extends: default-sans-with-font-fallbacks
 font:
   catalog:
     merge: true
-    Droid Sans Fallback:
-      normal: DroidSansFallbackFull.ttf
-      bold: DroidSansFallbackFull.ttf
-      italic: DroidSansFallbackFull.ttf
-      bold_italic: DroidSansFallbackFull.ttf
-    # fonts-dejavu-core has no oblique faces.
     DejaVu Sans:
       normal: DejaVuSans.ttf
       bold: DejaVuSans-Bold.ttf
       italic: DejaVuSans.ttf
       bold_italic: DejaVuSans-Bold.ttf
-  fallbacks:
-    - Droid Sans Fallback
-    - DejaVu Sans
-# The default puts narrow no-break spaces around the +, which these fonts lack.
+    Noto Sans TC:
+      normal: NotoSansTC-Regular.ttf
+      bold: NotoSansTC-Bold.ttf
+      italic: NotoSansTC-Regular.ttf
+      bold_italic: NotoSansTC-Bold.ttf
+  # Chinese before the Japanese M+ 1p, which would draw 繁體中文 the Japanese way.
+  fallbacks: [DejaVu Sans, Noto Sans TC, M+ 1p Fallback, Noto Emoji]
+brand:
+  navy: 1C2541
+  night: 151B2C
+  blue: 2E5AA6
+  blue_dark: 234A8C
+  orange: E8692F
+  orange_dark: B5481B
+  gold: E9A320
+  ink: 1C2124
+  muted: 63686C
+  rule: D9DDE3
+  tint: F5F6F8
+page:
+  size: A4
+  margin: [0.8in, 0.75in, 0.8in, 0.75in]
+base:
+  text_align: left
+  font_color: $brand_ink
+  border_color: $brand_rule
+role:
+  lead:
+    font_color: $brand_navy
+  subtitle:
+    font_color: $brand_muted
+link:
+  font_color: $brand_blue_dark
+codespan:
+  font_color: $brand_orange_dark
 kbd:
+  background_color: $brand_tint
+  border_color: B9C2CE
+  # The default puts narrow no-break spaces around the +, which some fonts lack.
   separator: "+"
+menu:
+  caret_content: " <font color=\"#E8692F\">›</font> "
+heading:
+  font_color: $brand_navy
+  h2_font_size: 24
+  h2_font_color: $brand_navy
+  h2_border_width: [0, 0, 2, 0]
+  h2_border_color: $brand_orange
+  h2_padding: [0, 0, 8, 0]
+  h2_margin_bottom: 16
+  h3_font_size: 16
+  h3_font_color: $brand_blue_dark
+  h4_font_size: 12.5
+  h4_font_color: $brand_navy
+  margin_top: 14
+title_page:
+  background_color: $brand_night
+  text_align: left
+  logo:
+    image: image:../images/banner.jpg[pdfwidth=100%]
+    top: 0
+    align: center
+  title:
+    top: 58%
+    font_size: 32
+    font_color: FFFFFF
+    font_style: bold
+    line_height: 1.1
+  subtitle:
+    font_size: 15
+    font_color: $brand_gold
+    font_style: normal
+    margin_top: 10
+  authors:
+    display: none
+  revision:
+    delimiter: " · "
+    font_size: 11
+    font_color: AEB8C4
+    margin_top: 22
+toc:
+  font_color: $brand_ink
+  h2_font_style: bold
+  h2_font_color: $brand_navy
+  line_height: 1.5
+  dot_leader:
+    font_color: B9C2CE
+  title:
+    font_color: $brand_navy
+caption:
+  font_color: $brand_muted
+  font_style: italic
+image:
+  border_color: $brand_rule
+  border_width: 0.5
+  border_fit: auto
+admonition:
+  column_rule_color: $brand_rule
+  column_rule_width: 1
+  background_color: $brand_tint
+  border_radius: 3
+  padding: [8, 12, 8, 12]
+  icon:
+    note:
+      stroke_color: $brand_blue
+    tip:
+      stroke_color: $brand_gold
+    important:
+      stroke_color: $brand_orange
+    warning:
+      stroke_color: D9822B
+    caution:
+      stroke_color: C0392B
+code:
+  background_color: F6F8FA
+  border_color: $brand_rule
+  border_width: 0.5
+  border_radius: 3
+  font_size: 9
+  line_height: 1.3
+sidebar:
+  background_color: $brand_tint
+  border_color: $brand_rule
+  title:
+    font_color: $brand_navy
+table:
+  border_color: $brand_rule
+  grid_color: $brand_rule
+  cell_padding: [4, 6, 4, 6]
+  head:
+    background_color: $brand_navy
+    font_color: FFFFFF
+    font_style: bold
+    border_bottom_width: 0
+  body:
+    stripe_background_color: $brand_tint
+description_list:
+  term_font_color: $brand_navy
+thematic_break:
+  border_color: $brand_rule
+header:
+  height: 0.55in
+  font_size: 8.5
+  font_color: $brand_muted
+  border_color: $brand_rule
+  border_width: 0.25
+  vertical_align: middle
+  padding: [0, 1, 0, 1]
+  recto:
+    left:
+      content: '*Picasso*'
+    right:
+      content: '{chapter-title}'
+  verso:
+    left:
+      content: $header_recto_left_content
+    right:
+      content: $header_recto_right_content
+footer:
+  height: 0.55in
+  font_size: 8.5
+  font_color: $brand_muted
+  border_color: $brand_rule
+  border_width: 0.25
+  vertical_align: middle
+  padding: [0, 1, 0, 1]
+  recto:
+    left:
+      content: '{document-title} | {version-label} {revnumber}'
+    right:
+      content: '*{page-number}*'
+  verso:
+    left:
+      content: $footer_recto_left_content
+    right:
+      content: $footer_recto_right_content

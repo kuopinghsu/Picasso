@@ -1,4 +1,5 @@
-= Picasso User Guide
+ifdef::backend-pdf[= Picasso User Guide: Organize, edit and share your photos]
+ifndef::backend-pdf[= Picasso User Guide]
 :toc: left
 :toclevels: 2
 :sectanchors:

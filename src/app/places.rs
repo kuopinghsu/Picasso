@@ -400,6 +400,16 @@ impl PicassoApp {
     /// Paints the map tiles of `view` into `rect`, with their names, and
     /// queues any that are not loaded yet.
     pub(super) fn paint_tiles(&mut self, painter: &egui::Painter, rect: Rect, view: MapView) {
+        self.paint_map_tiles(painter, rect, view, 1.0, 8);
+    }
+
+    pub(super) fn paint_preview_tiles(&mut self, painter: &egui::Painter, rect: Rect, view: MapView, scale: f64) {
+        // Keep scrolling through a folder from filling the map workers' queue.
+        let requests = 16usize.saturating_sub(self.tile_wait.len()).min(8);
+        self.paint_map_tiles(painter, rect, view, scale, requests);
+    }
+
+    fn paint_map_tiles(&mut self, painter: &egui::Painter, rect: Rect, view: MapView, scale: f64, requests: usize) {
         let source = self.map_source;
         if self.map_key_missing() {
             return;
@@ -407,19 +417,20 @@ impl PicassoApp {
         let z = view.zoom;
         let n = 1u32 << z;
         let (cx, cy) = geo::latlon_to_world(view.lat, view.lon, z);
-        let origin_x = rect.center().x - cx as f32 + view.pan.x;
-        let origin_y = rect.center().y - cy as f32 + view.pan.y;
-        let left = ((rect.left() - origin_x) / TILE_PX as f32).floor().max(0.0) as u32;
-        let top = ((rect.top() - origin_y) / TILE_PX as f32).floor().max(0.0) as u32;
-        let right = ((rect.right() - origin_x) / TILE_PX as f32).ceil().min(n as f32) as u32;
-        let bottom = ((rect.bottom() - origin_y) / TILE_PX as f32).ceil().min(n as f32) as u32;
+        let origin_x = f64::from(rect.center().x + view.pan.x) - cx * scale;
+        let origin_y = f64::from(rect.center().y + view.pan.y) - cy * scale;
+        let side = TILE_PX * scale;
+        let left = ((f64::from(rect.left()) - origin_x) / side).floor().max(0.0) as u32;
+        let top = ((f64::from(rect.top()) - origin_y) / side).floor().max(0.0) as u32;
+        let right = ((f64::from(rect.right()) - origin_x) / side).ceil().min(f64::from(n)) as u32;
+        let bottom = ((f64::from(rect.bottom()) - origin_y) / side).ceil().min(f64::from(n)) as u32;
         let mut wanted = Vec::new();
         let mut labels = Vec::new();
         for x in left..right.min(n) {
             for y in top..bottom.min(n) {
                 let tile = Rect::from_min_size(
-                    Pos2::new(origin_x + x as f32 * TILE_PX as f32, origin_y + y as f32 * TILE_PX as f32),
-                    Vec2::splat(TILE_PX as f32),
+                    Pos2::new((origin_x + f64::from(x) * side) as f32, (origin_y + f64::from(y) * side) as f32),
+                    Vec2::splat(side as f32),
                 );
                 // A tile the source doesn't have, such as imagery closer
                 // than a place was photographed from the air, is drawn as
@@ -430,7 +441,7 @@ impl PicassoApp {
                 };
                 let key = covering(z, x, y, depth);
                 let Some(loaded) = self.tiles.get(&key) else {
-                    if !wanted.contains(&key) {
+                    if !self.tile_wait.contains(&key) && !wanted.contains(&key) {
                         wanted.push(key);
                     }
                     continue;
@@ -441,16 +452,13 @@ impl PicassoApp {
                 painter.image(loaded.texture.id(), tile, Rect::from_min_size(min, Vec2::splat(1.0 / cells)), Color32::WHITE);
                 if depth == 0 {
                     labels.extend(
-                        loaded.labels.iter().map(|label| (tile.min + Vec2::from(label.pos) * TILE_PX as f32, label)),
+                        loaded.labels.iter().map(|label| (tile.min + Vec2::from(label.pos) * side as f32, label)),
                     );
                 }
             }
         }
         paint_labels(painter, rect, labels);
-        for key in wanted.into_iter().take(8) {
-            if self.tile_wait.contains(&key) {
-                continue;
-            }
+        for key in wanted.into_iter().take(requests) {
             self.tile_wait.insert(key);
             let (z, x, y) = key;
             let _ = self.tile_tx.send(TileJob { source, key: self.carto_key.clone(), z, x, y });
@@ -477,9 +485,15 @@ impl PicassoApp {
             painter.rect_filled(Rect::from_min_size(at, galley.size()).expand(10.0), 6, Color32::from_white_alpha(235));
             painter.galley(at, galley, ink);
         }
+        let credit = self.paint_map_credit(painter, rect, 10.0);
+        self.paint_scale_bar(painter, rect, view, credit);
+    }
+
+    pub(super) fn paint_map_credit(&self, painter: &egui::Painter, rect: Rect, size: f32) -> Rect {
+        let ink = Color32::from_gray(60);
         let galley = painter.layout(
             self.map_source.attribution().to_string(),
-            FontId::proportional(10.0),
+            FontId::proportional(size),
             ink,
             (rect.width() - 16.0).max(60.0),
         );
@@ -487,7 +501,7 @@ impl PicassoApp {
         let credit = Rect::from_min_size(at, galley.size()).expand(2.0);
         painter.rect_filled(credit, 2, Color32::from_white_alpha(190));
         painter.galley(at, galley, ink);
-        self.paint_scale_bar(painter, rect, view, credit);
+        credit
     }
 
     /// A round distance about a hundred points long at the latitude in the

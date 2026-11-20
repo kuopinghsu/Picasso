@@ -614,6 +614,7 @@ impl PicassoApp {
 
     fn track_cell(&mut self, ui: &mut egui::Ui, index: usize, rect: Rect, labeled: bool) {
         let Some(track) = self.tracks.get(index) else { return };
+        let bounds = track.bounds;
         let thumb = rect.width();
         let image_rect = Rect::from_min_size(rect.min, Vec2::splat(thumb));
         let response = ui
@@ -624,8 +625,26 @@ impl PicassoApp {
             painter.add(theme::card_shadow().as_shape(image_rect, THUMB_RADIUS));
         }
         painter.rect_filled(image_rect, THUMB_RADIUS, super::places::map_backdrop());
-        super::track_editor::paint_track_shape(painter, image_rect, &track.segments, track.bounds);
+        let map_painter = painter.with_clip_rect(image_rect.intersect(painter.clip_rect()));
+        let mut badge_bottom = image_rect.bottom();
+        if !bounds.is_empty() {
+            let [width, height] = bounds.size();
+            let room = f64::from(thumb) * 0.72;
+            let fit = room / width.max(height).max(1e-12);
+            let zoom = fit.log2().floor().clamp(0.0, 16.0) as u8;
+            let scale = f64::from(1u32 << zoom);
+            let tile_scale = (fit / scale).min(1.0);
+            let [x, y] = bounds.center();
+            let (lat, lon) = crate::geo::world_to_latlon(x, y, 0);
+            let view = super::places::MapView { lat, lon, zoom, pan: Vec2::ZERO };
+            self.paint_preview_tiles(&map_painter, image_rect, view, tile_scale);
+            super::track_editor::paint_track_shape(
+                &map_painter, image_rect.center(), &self.tracks[index].segments, [x, y], scale * tile_scale,
+            );
+            badge_bottom = self.paint_map_credit(&map_painter, image_rect, 9.0).top();
+        }
         painter.rect_stroke(image_rect, THUMB_RADIUS, egui::Stroke::new(1.0, Color32::from_black_alpha(18)), egui::StrokeKind::Inside);
+        let track = &self.tracks[index];
         let pill = |text: String, left_top: Pos2| {
             let galley = painter.layout_no_wrap(text, FontId::proportional(10.5), WHITE);
             let back = Rect::from_min_size(left_top, galley.size() + Vec2::new(10.0, 4.0));
@@ -633,7 +652,7 @@ impl PicassoApp {
             painter.galley(back.min + Vec2::new(5.0, 2.0), galley, WHITE);
         };
         pill(super::track_editor::format_badge(&track.path), image_rect.left_top() + Vec2::new(6.0, 6.0));
-        pill(crate::track::format_distance(track.meters), image_rect.left_bottom() + Vec2::new(6.0, -22.0));
+        pill(crate::track::format_distance(track.meters), Pos2::new(image_rect.left() + 6.0, badge_bottom - 22.0));
         let file = folder_label(&track.path);
         if labeled {
             painter.text(
@@ -644,7 +663,7 @@ impl PicassoApp {
                 theme::muted(),
             );
         }
-        let (path, bounds) = (track.path.clone(), track.bounds);
+        let path = track.path.clone();
         let response = response.on_hover_ui(|ui| super::places::track_tooltip(ui, &self.tracks[index]));
         if response.clicked() {
             self.open_track(&path, ui.ctx());

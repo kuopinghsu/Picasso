@@ -5,5 +5,3 @@
 /THIRD-PARTY-NOTICES.txt
 .DS_Store
 __pycache__
-# Made by make user-guide-pdf; CI publishes the guide as release files.
-/docs/*.pdf

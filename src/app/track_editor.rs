@@ -189,6 +189,7 @@ pub(super) struct TrackEditor {
     /// When the message appeared, or NaN until it is first drawn.
     note_at: f64,
     asking_close: bool,
+    asking_overwrite: bool,
     /// The window was asked to close, and closes once the edits are
     /// discarded.
     quit_after_discard: bool,
@@ -252,6 +253,7 @@ impl TrackEditor {
             note: String::new(),
             note_at: f64::NAN,
             asking_close: false,
+            asking_overwrite: false,
             quit_after_discard: false,
             restored: None,
             menu_point: None,
@@ -637,9 +639,7 @@ impl TrackEditor {
         }
     }
 
-    /// Writes the points as `format`, picked in a save dialog that starts
-    /// beside the track. The track itself is never written over, so the
-    /// points as read stay for the next cleanup.
+    /// Saves a copy beside the track in the chosen format.
     fn save(&mut self, format: Format) -> Option<PathBuf> {
         let (label, extension) = if format == Format::Kml { ("KML", "kml") } else { ("GPX", "gpx") };
         let mut dialog = rfd::FileDialog::new()
@@ -654,6 +654,30 @@ impl TrackEditor {
             self.tell(tr("Save under another name; the original stays as it is."));
             return None;
         }
+        self.write_track(target, format)
+    }
+
+    fn can_overwrite(&self) -> bool {
+        self.path.extension().and_then(|ext| ext.to_str()).is_some_and(|ext| {
+            ext.eq_ignore_ascii_case("gpx") || ext.eq_ignore_ascii_case("kml")
+        })
+    }
+
+    fn overwrite(&mut self) -> bool {
+        if !self.can_overwrite() || self.busy() || self.error.is_some() {
+            return false;
+        }
+        // Replace the file the editor opened, including when the library path is a symlink.
+        match self.path.canonicalize() {
+            Ok(target) => self.write_track(target, self.format).is_some(),
+            Err(err) => {
+                self.tell(trf("Couldn't save the track: {}", &[&err]));
+                false
+            }
+        }
+    }
+
+    fn write_track(&mut self, target: PathBuf, format: Format) -> Option<PathBuf> {
         let text = if format == Format::Kml {
             track_edit::to_kml(&self.points, &self.name, &self.points_settings)
         } else {
@@ -924,6 +948,18 @@ impl PicassoApp {
             } else {
                 self.forget_track_edits(&mut editor);
                 return;
+            }
+        }
+        if editor.asking_close {
+            editor.asking_overwrite = false;
+        }
+        if editor.asking_overwrite && ask_overwrite(ui.ctx(), &mut editor) && editor.overwrite() {
+            self.forget_track_edits(&mut editor);
+            let path = editor.path.to_string_lossy();
+            if let Some(track) = self.tracks.iter().find(|track| track.path == path) {
+                let _ = self.cmd_tx.send(crate::worker::Command::RefreshTrack {
+                    folder_id: track.folder_id, path: path.into_owned(),
+                });
             }
         }
         if editor.asking_close && ask_discard(ui.ctx(), &mut editor) {
@@ -1313,6 +1349,10 @@ fn save_buttons(ui: &mut egui::Ui, editor: &mut TrackEditor) {
                     editor.save(format);
                 }
             }
+            if editor.can_overwrite() && ui.button(tr("Save over original…")).clicked() {
+                editor.asking_overwrite = true;
+                ui.close();
+            }
         });
         ui.spacing_mut().button_padding.x = 12.0;
         let own = editor.own_format();
@@ -1340,7 +1380,7 @@ fn track_message(ui: &mut egui::Ui, rect: Rect, text: &str, loading: bool) -> bo
 /// Undo, Redo, Select, Remove, the views, the points, Save, and Esc.
 fn track_keys(ctx: &egui::Context, editor: &mut TrackEditor, size: Vec2, close: &mut bool) {
     let modal = ctx.memory(|memory| memory.top_modal_layer().is_some());
-    if ctx.egui_wants_keyboard_input() || egui::Popup::is_any_open(ctx) || modal || editor.asking_close {
+    if ctx.egui_wants_keyboard_input() || egui::Popup::is_any_open(ctx) || modal || editor.asking_close || editor.asking_overwrite {
         return;
     }
     let command = |key| ctx.input_mut(|input| input.consume_key(Modifiers::COMMAND, key));
@@ -1391,6 +1431,27 @@ fn track_keys(ctx: &egui::Context, editor: &mut TrackEditor, size: Vec2, close: 
             }
         }
     }
+}
+
+fn ask_overwrite(ctx: &egui::Context, editor: &mut TrackEditor) -> bool {
+    let mut overwrite = false;
+    let mut cancel = false;
+    let response = egui::Modal::new(egui::Id::unique("track-overwrite")).show(ctx, |ui| {
+        ui.set_width(360.0);
+        ui.label(RichText::new(tr("Overwrite the original track?")).size(16.0).strong());
+        ui.add_space(6.0);
+        ui.label(tr("The original file will be overwritten with the edited track."));
+        ui.label(RichText::new(editor.path.to_string_lossy()).color(theme::muted()));
+        ui.add_space(12.0);
+        ui.horizontal(|ui| {
+            cancel = ui.button(tr("Cancel")).clicked();
+            overwrite = ui.add(theme::danger_button(tr("Overwrite original"))).clicked();
+        });
+    });
+    if overwrite || cancel || response.should_close() {
+        editor.asking_overwrite = false;
+    }
+    overwrite
 }
 
 /// Asks before closing a track with edits that weren't saved. Returns true
@@ -1912,17 +1973,12 @@ fn distance_to_segment(pos: Pos2, a: Pos2, b: Pos2) -> f32 {
     pos.distance(closest_on_segment(pos, a, b))
 }
 
-/// A track's line fitted in `rect`, from a green start to a red end, for
-/// its tile in the folder grid.
-pub(super) fn paint_track_shape(painter: &egui::Painter, rect: Rect, segments: &[crate::track::MapSegment], bounds: crate::track::Bounds) {
-    if bounds.is_empty() {
-        return;
-    }
-    let [w, h] = bounds.size();
-    let room = rect.shrink(rect.width() * 0.14);
-    let scale = (f64::from(room.width()) / w.max(1e-12)).min(f64::from(room.height()) / h.max(1e-12));
-    let [cx, cy] = bounds.center();
-    let at = |[x, y]: [f64; 2]| room.center() + Vec2::new(((x - cx) * scale) as f32, ((y - cy) * scale) as f32);
+/// The Library preview's route, from a green start to a red end, at the
+/// same center and scale as its basemap.
+pub(super) fn paint_track_shape(
+    painter: &egui::Painter, center: Pos2, segments: &[crate::track::MapSegment], [cx, cy]: [f64; 2], scale: f64,
+) {
+    let at = |[x, y]: [f64; 2]| center + Vec2::new(((x - cx) * scale) as f32, ((y - cy) * scale) as f32);
     for segment in segments {
         let mut line: Vec<Pos2> = Vec::with_capacity(segment.points.len().min(2000));
         for point in &segment.points {
@@ -2074,6 +2130,40 @@ mod tests {
         assert_eq!((editor.points.len(), editor.settings, editor.points_settings), (3, old, old));
         editor.redo();
         assert_eq!((editor.points.len(), editor.settings, editor.points_settings), (2, new, new));
+    }
+
+    #[test]
+    fn overwriting_a_track_keeps_its_format_and_saves_the_edited_points() {
+        let ctx = egui::Context::default();
+        let dir = std::env::temp_dir().join(format!("picasso-overwrite-track-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        for (extension, format) in [("gpx", Format::Gpx), ("kml", Format::Kml)] {
+            let path = dir.join(format!("ride.{extension}"));
+            let settings = Settings::default();
+            let mut points = vec![at(None), at(None)];
+            points[1].lat = 1.0;
+            let original = match format {
+                Format::Gpx => track_edit::to_gpx(&points, "Ride", &settings),
+                _ => track_edit::to_kml(&points, "Ride", &settings),
+            };
+            std::fs::write(&path, original).unwrap();
+            let mut editor = TrackEditor::new(path.clone(), settings, &ctx);
+            opened(&mut editor);
+            editor.points[1].lat = 2.0;
+            editor.dirty = true;
+            assert!(editor.overwrite());
+            assert!(!editor.dirty);
+            let saved = track_edit::load(&path, settings).unwrap();
+            assert_eq!(saved.format, format);
+            assert_eq!(saved.points[1].lat, 2.0);
+
+            std::fs::remove_file(&path).unwrap();
+            editor.dirty = true;
+            assert!(!editor.overwrite());
+            assert!(editor.dirty);
+            assert!(!path.exists());
+        }
+        std::fs::remove_dir(dir).unwrap();
     }
 
     #[test]

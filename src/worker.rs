@@ -54,6 +54,7 @@ const BATCH_INTERVAL: Duration = Duration::from_millis(250);
 
 pub enum Command {
     Scan(i64),
+    RefreshTrack { folder_id: i64, path: String },
     /// Ask the index thread to finish. Sent when the window closes.
     Stop,
 }
@@ -346,6 +347,7 @@ impl Indexer {
             }
             match self.commands.recv() {
                 Ok(Command::Scan(id)) => self.queue(id),
+                Ok(Command::RefreshTrack { folder_id, path }) => self.refresh_track(folder_id, path),
                 Ok(Command::Stop) | Err(_) => return,
             }
         }
@@ -394,6 +396,14 @@ impl Indexer {
             .map(|(id, folder_id, path, track)| MapTrack::new(id, folder_id, path, &track))
             .collect();
         self.notify(UiEvent::Tracks(tracks));
+    }
+
+    fn refresh_track(&self, folder_id: i64, path: String) {
+        let Ok(meta) = std::fs::metadata(&path) else { return };
+        let file = TrackFile { path, bytes: meta.len(), modified_at: image_io::file_mtime(&meta) };
+        if self.read_tracks(folder_id, &[file], &mut Vec::new()) {
+            self.send_tracks();
+        }
     }
 
     /// Reads the new and changed track files a walk found. Returns true if
@@ -517,6 +527,7 @@ impl Indexer {
                 match self.commands.try_recv() {
                     Ok(Command::Scan(id)) if id == folder_id => again = true,
                     Ok(Command::Scan(id)) => self.queue(id),
+                    Ok(Command::RefreshTrack { folder_id, path }) => self.refresh_track(folder_id, path),
                     Ok(Command::Stop) | Err(TryRecvError::Disconnected) => {
                         stopped = true;
                         break;

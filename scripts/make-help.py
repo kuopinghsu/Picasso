@@ -19,6 +19,7 @@ VARIABLES = [
     ("APPIMAGE_PLATFORM=...", "processor for make appimage-docker: linux/amd64 (default) or linux/arm64"),
     ("VERSION=...", "version in the file name for make appimage-docker (default Cargo.toml's)"),
     ("RUST_VERSION=...", "Rust toolchain in the appimage-docker image (default 1.100.0)"),
+    ("APPIMAGE_PULL=1", "make appimage-docker fetches AlmaLinux 8 and its packages anew"),
 ]
 TARGET = re.compile(r"^([a-z][a-z0-9-]*):.*?## (.*)$")
 

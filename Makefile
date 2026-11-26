@@ -213,9 +213,15 @@ endif
 # Rust build several times slower, they stay in a Docker volume of that name
 # instead. The AppImage lands in dist/. VERSION=... on the command line
 # renames it. RUST_VERSION is the toolchain in the image, part of its tag so
-# a new one builds a new image; keep it at least Cargo.toml's rust-version.
+# a new one builds a new image; keep it at least Cargo.toml's rust-version
+# (docs/RELEASING.md). The image's packages are cached with it, so
+# APPIMAGE_PULL=1 fetches AlmaLinux 8 anew and reinstalls them, for the
+# latest security fixes in the bundled libraries, as CI has every run. A
+# build waits for another one on the same build folder to finish, since both
+# would rebuild the same AppDir.
 APPIMAGE_PLATFORM ?= linux/amd64
 RUST_VERSION ?= 1.100.0
+APPIMAGE_PULL ?=
 APPIMAGE_ARCH = $(word 2,$(subst /, ,$(APPIMAGE_PLATFORM)))
 APPIMAGE_IMAGE = picasso-appimage:almalinux8-rust$(RUST_VERSION)-$(APPIMAGE_ARCH)
 APPIMAGE_TARGET = target/docker-linux-$(APPIMAGE_ARCH)
@@ -225,20 +231,26 @@ else
 APPIMAGE_RUN = $(DOCKER) run --rm -v picasso-docker-linux-$(APPIMAGE_ARCH):/work/$(APPIMAGE_TARGET)
 endif
 appimage-docker: ## Build the Linux AppImage for RHEL 8 and newer in Docker (needs only Docker)
-	$(DOCKER) build --platform $(APPIMAGE_PLATFORM) --build-arg RUST_VERSION=$(RUST_VERSION) \
-		-t $(APPIMAGE_IMAGE) -f docker/appimage/Dockerfile .
+	$(DOCKER) build --platform $(APPIMAGE_PLATFORM) $(if $(APPIMAGE_PULL),--pull --no-cache) \
+		--build-arg RUST_VERSION=$(RUST_VERSION) -t $(APPIMAGE_IMAGE) -f docker/appimage/Dockerfile .
 	$(APPIMAGE_RUN) --platform $(APPIMAGE_PLATFORM) -v "$(CURDIR):/work" -w /work \
 		-e CARGO_TARGET_DIR=$(APPIMAGE_TARGET) -e CARGO_HOME=/work/$(APPIMAGE_TARGET)/cargo \
 		$(if $(filter command line,$(origin VERSION)),-e "VERSION=$(VERSION)") \
-		$(APPIMAGE_IMAGE) bash -c "cargo build --release --locked && bash scripts/package-appimage.sh"
+		$(APPIMAGE_IMAGE) bash -c "mkdir -p $(APPIMAGE_TARGET) && flock $(APPIMAGE_TARGET)/.build.lock \
+		bash -c 'cargo build --release --locked && bash scripts/package-appimage.sh'"
 
-# The newest AppImage in dist/ for APPIMAGE_PLATFORM, unpacked in a bare
-# AlmaLinux 8.4 container: Picasso and each bundled library must find every
-# library and glibc symbol they need there (scripts/check-appimage.sh).
+# The newest AppImage in dist/ for APPIMAGE_PLATFORM, unpacked in AlmaLinux
+# 8.4 twice (scripts/check-appimage.sh): bare, where AppRun uses every
+# bundled library, and with 8.4's own display, sound, and font libraries,
+# which AppRun prefers, as on a desktop. Each time Picasso and the libraries
+# it would use must find every library and symbol they need. The second
+# fetches packages from vault.almalinux.org, as root in its container.
 APPIMAGE_CHECK_IMAGE ?= almalinux:8.4
-appimage-docker-check: ## Check the AppImage in dist/ against bare RHEL 8.4 in Docker
-	$(DOCKER_RUN) --platform $(APPIMAGE_PLATFORM) -v "$(CURDIR):/work" -w /work \
-		$(APPIMAGE_CHECK_IMAGE) bash scripts/check-appimage.sh $(APPIMAGE_ARCH)
+APPIMAGE_CHECK = $(DOCKER) run --rm --platform $(APPIMAGE_PLATFORM) -v "$(CURDIR):/work:ro" -w /work \
+	$(APPIMAGE_CHECK_IMAGE) bash scripts/check-appimage.sh
+appimage-docker-check: ## Check the AppImage in dist/ on RHEL 8.4, bare and with its libraries, in Docker
+	$(APPIMAGE_CHECK) $(APPIMAGE_ARCH)
+	$(APPIMAGE_CHECK) --system-libs $(APPIMAGE_ARCH)
 
 # The program, menu entry, and icon under PREFIX, as the .tar.gz describes;
 # PREFIX/bin must be on PATH for the menu entry to start it. Desktops that

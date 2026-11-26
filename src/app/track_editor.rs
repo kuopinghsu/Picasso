@@ -466,6 +466,20 @@ impl TrackEditor {
         self.revision += 1;
     }
 
+    /// Ctrl+S: asks to save over the original (or saves a copy when that
+    /// can't be done), and does nothing while there is no edit to save.
+    /// An edit later undone still counts, as Undo leaves the track dirty.
+    fn save_shortcut(&mut self) {
+        if !self.dirty {
+            return;
+        }
+        if self.can_overwrite() {
+            self.asking_overwrite = true;
+        } else {
+            self.save(self.own_format());
+        }
+    }
+
     fn undo(&mut self) {
         if let Some(earlier) = self.undo.pop() {
             let now = self.swap_points(earlier);
@@ -1395,11 +1409,7 @@ fn track_keys(ctx: &egui::Context, editor: &mut TrackEditor, size: Vec2, close: 
         }
     } else if command(Key::S) {
         if !busy {
-            if editor.can_overwrite() {
-                editor.asking_overwrite = true;
-            } else {
-                editor.save(editor.own_format());
-            }
+            editor.save_shortcut();
         }
     } else if plain(Key::Delete) || plain(Key::Backspace) {
         if !busy && !editor.selection.is_empty() {
@@ -2166,6 +2176,34 @@ mod tests {
             assert!(!path.exists());
         }
         std::fs::remove_dir(dir).unwrap();
+    }
+
+    #[test]
+    fn ctrl_s_waits_for_an_edit() {
+        let ctx = egui::Context::default();
+        let dir = std::env::temp_dir().join(format!("picasso-ctrl-s-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("ride.gpx");
+        let settings = Settings::default();
+        let mut points = vec![at(None), at(None)];
+        points[1].lat = 1.0;
+        std::fs::write(&path, track_edit::to_gpx(&points, "Ride", &settings)).unwrap();
+        let mut editor = TrackEditor::new(path.clone(), settings, &ctx);
+        opened(&mut editor);
+        assert!(!editor.dirty);
+        editor.save_shortcut();
+        assert!(!editor.asking_overwrite);
+        // After an edit, Ctrl+S asks to save over the original as before.
+        editor.push_undo();
+        editor.points[1].lat = 2.0;
+        editor.save_shortcut();
+        assert!(editor.asking_overwrite);
+        // Once saved, it waits for the next edit again.
+        editor.asking_overwrite = false;
+        assert!(editor.overwrite());
+        editor.save_shortcut();
+        assert!(!editor.asking_overwrite);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

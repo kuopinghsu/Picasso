@@ -19,6 +19,9 @@ not replace the manual application checks in [TESTING.md](TESTING.md).
   preparing a release.
 - Install the Rust version required by Cargo.toml and the platform build tools
   listed in the [README](../README.md#development).
+- When Cargo.toml's `rust-version` rises above `RUST_VERSION` in the Makefile, raise
+  that too: it is the Rust `make appimage-docker` builds with. CI builds the AppImage
+  with the newest stable Rust instead.
 - Install cargo-deny with `cargo install cargo-deny --locked` for local dependency checks.
 - Confirm that you can push the release commit and tag to the repository.
 - If the macOS release must be notarized, configure the signing secrets described

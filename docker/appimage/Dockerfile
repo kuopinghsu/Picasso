@@ -16,16 +16,17 @@ RUN bash /tmp/dnf-install.sh \
     && dnf clean all \
     && rm -rf /var/cache/dnf /tmp/dnf-install.sh
 
-# Rust RUST_VERSION (the Makefile passes it and tags the image with it, so the
-# cached image never keeps an older toolchain), readable by any user, since
-# the build runs as the person who started it. CARGO_HOME is set again at run
-# time to a folder the build can write (the registry cache); the tools stay
-# here on PATH.
-ARG RUST_VERSION=1.100.0
+# Rust RUST_VERSION, readable by any user, since the build runs as the person
+# who started it. It has no default here, so the version lives only in the
+# Makefile, which passes it and tags the image with it; a cached image never
+# keeps an older toolchain. CARGO_HOME is set again at run time to a folder
+# the build can write (the registry cache); the tools stay here on PATH.
+ARG RUST_VERSION
 ENV RUSTUP_HOME=/usr/local/rustup \
     CARGO_HOME=/usr/local/cargo \
     PATH=/usr/local/cargo/bin:$PATH
-RUN curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain "$RUST_VERSION" --no-modify-path \
+RUN test -n "$RUST_VERSION" || { echo "Pass --build-arg RUST_VERSION=..., as make appimage-docker does" >&2; exit 1; } \
+    && curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain "$RUST_VERSION" --no-modify-path \
     && chmod -R a+rX /usr/local/rustup /usr/local/cargo \
     && rustc --version
 

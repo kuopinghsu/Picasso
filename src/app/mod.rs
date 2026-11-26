@@ -497,7 +497,9 @@ pub struct PicassoApp {
     tiles: HashMap<(u8, u32, u32), places::MapTile>,
     tile_tx: Sender<crate::geo::TileJob>,
     tile_rx: Receiver<crate::geo::TileDone>,
-    tile_wait: HashSet<(u8, u32, u32)>,
+    tile_generation: u64,
+    tile_frame: u64,
+    tile_wait: HashMap<(u8, u32, u32), bool>,
     tile_fail: HashSet<(u8, u32, u32)>,
     /// Set by `PICASSO_FRAME_STATS=1`.
     frame_stats: Option<frame_stats::FrameStats>,
@@ -784,7 +786,9 @@ impl PicassoApp {
             tiles: HashMap::new(),
             tile_tx,
             tile_rx,
-            tile_wait: HashSet::new(),
+            tile_generation: 0,
+            tile_frame: 0,
+            tile_wait: HashMap::new(),
             tile_fail: HashSet::new(),
         };
 

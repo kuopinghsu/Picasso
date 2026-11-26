@@ -47,7 +47,7 @@ endif
 .DEFAULT_GOAL := release
 
 .PHONY: help release debug run run-stats version check lint test corpus bench bench-check check-docs deny ci translations \
-	sign-identity notices release-notes guide guide-pdf user-guide-pdf theme appimage install uninstall world-map clean
+	sign-identity notices release-notes guide guide-pdf user-guide-pdf theme appimage appimage-docker appimage-docker-check install uninstall world-map clean
 
 # Each target's `##` text is what `make help` prints; `##@` starts a section.
 # Printed by Python, as on Windows make runs recipes with cmd.exe, which has
@@ -166,17 +166,17 @@ GUIDE_IMAGE = picasso-guide-pdf:asciidoctor-pdf-2.3.15-noto
 # On Windows make runs recipes with cmd.exe, or with Git Bash's sh when it is
 # on PATH; Docker Desktop gives the files to the person, and
 # MSYS_NO_PATHCONV, in the recipes' environment for either, keeps Git Bash
-# from rewriting the container's paths. Elsewhere the PDFs are made as the
-# person rather than root.
+# from rewriting the container's paths. Elsewhere the files are made as the
+# person rather than root. appimage-docker runs its container the same way.
 ifeq ($(PLATFORM),windows)
-GUIDE_RUN = $(DOCKER) run --rm
+DOCKER_RUN = $(DOCKER) run --rm
 export MSYS_NO_PATHCONV := 1
 else
-GUIDE_RUN = $(DOCKER) run --rm --user "$$(id -u):$$(id -g)"
+DOCKER_RUN = $(DOCKER) run --rm --user "$$(id -u):$$(id -g)"
 endif
 user-guide-pdf: ## Convert docs/*.adoc to docs/*.pdf in Docker (needs only Docker)
 	$(DOCKER) build --quiet -t $(GUIDE_IMAGE) docker/guide-pdf
-	$(GUIDE_RUN) -v "$(CURDIR):/work" -w /work $(GUIDE_IMAGE) bash scripts/docs-pdf.sh $(DOCS)
+	$(DOCKER_RUN) -v "$(CURDIR):/work" -w /work $(GUIDE_IMAGE) bash scripts/docs-pdf.sh $(DOCS)
 
 # The optional WordPress theme in wordpress/voyagelight and the Picasso Places
 # plugin in wordpress/picasso-places, as the ZIPs that Upload Theme and Upload
@@ -201,6 +201,44 @@ else
 	@echo AppImage packages are built on Linux >&2
 	@exit 1
 endif
+
+# The same AppImage with nothing installed but Docker, on any system, built in
+# the AlmaLinux 8 image in docker/appimage as CI builds it. AlmaLinux 8 has
+# glibc 2.28, so the AppImage runs on RHEL 8.4 and every RHEL 8 or newer
+# system, which one built by `make appimage` on a newer Linux does not.
+# APPIMAGE_PLATFORM picks the processor: linux/amd64 (the default) or
+# linux/arm64, emulated when it is not the machine's own. The build, Rust's
+# package cache, and appimagetool stay in target/docker-linux-<arch> between
+# runs; on Windows and macOS, where Docker Desktop's shared folders make a
+# Rust build several times slower, they stay in a Docker volume of that name
+# instead. The AppImage lands in dist/. VERSION=... on the command line
+# renames it. RUST_VERSION is the toolchain in the image, part of its tag so
+# a new one builds a new image; keep it at least Cargo.toml's rust-version.
+APPIMAGE_PLATFORM ?= linux/amd64
+RUST_VERSION ?= 1.100.0
+APPIMAGE_ARCH = $(word 2,$(subst /, ,$(APPIMAGE_PLATFORM)))
+APPIMAGE_IMAGE = picasso-appimage:almalinux8-rust$(RUST_VERSION)-$(APPIMAGE_ARCH)
+APPIMAGE_TARGET = target/docker-linux-$(APPIMAGE_ARCH)
+ifeq ($(PLATFORM),linux)
+APPIMAGE_RUN = $(DOCKER_RUN)
+else
+APPIMAGE_RUN = $(DOCKER) run --rm -v picasso-docker-linux-$(APPIMAGE_ARCH):/work/$(APPIMAGE_TARGET)
+endif
+appimage-docker: ## Build the Linux AppImage for RHEL 8 and newer in Docker (needs only Docker)
+	$(DOCKER) build --platform $(APPIMAGE_PLATFORM) --build-arg RUST_VERSION=$(RUST_VERSION) \
+		-t $(APPIMAGE_IMAGE) -f docker/appimage/Dockerfile .
+	$(APPIMAGE_RUN) --platform $(APPIMAGE_PLATFORM) -v "$(CURDIR):/work" -w /work \
+		-e CARGO_TARGET_DIR=$(APPIMAGE_TARGET) -e CARGO_HOME=/work/$(APPIMAGE_TARGET)/cargo \
+		$(if $(filter command line,$(origin VERSION)),-e "VERSION=$(VERSION)") \
+		$(APPIMAGE_IMAGE) bash -c "cargo build --release --locked && bash scripts/package-appimage.sh"
+
+# The newest AppImage in dist/ for APPIMAGE_PLATFORM, unpacked in a bare
+# AlmaLinux 8.4 container: Picasso and each bundled library must find every
+# library and glibc symbol they need there (scripts/check-appimage.sh).
+APPIMAGE_CHECK_IMAGE ?= almalinux:8.4
+appimage-docker-check: ## Check the AppImage in dist/ against bare RHEL 8.4 in Docker
+	$(DOCKER_RUN) --platform $(APPIMAGE_PLATFORM) -v "$(CURDIR):/work" -w /work \
+		$(APPIMAGE_CHECK_IMAGE) bash scripts/check-appimage.sh $(APPIMAGE_ARCH)
 
 # The program, menu entry, and icon under PREFIX, as the .tar.gz describes;
 # PREFIX/bin must be on PATH for the menu entry to start it. Desktops that

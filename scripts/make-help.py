@@ -15,7 +15,10 @@ VARIABLES = [
     ("SIGN_IDENTITY", "macOS code-signing identity for builds (default Picasso Development)"),
     ("PICASSO_BENCH_PHOTOS, _TRIP, _FILES", "sizes for make bench (docs/PERFORMANCE.md)"),
     ("DOCS=...", "the .adoc files for make user-guide-pdf (default docs/*.adoc)"),
-    ("DOCKER=...", "the container tool for make user-guide-pdf (default docker; podman works)"),
+    ("DOCKER=...", "the container tool for user-guide-pdf and appimage-docker (default docker; podman works)"),
+    ("APPIMAGE_PLATFORM=...", "processor for make appimage-docker: linux/amd64 (default) or linux/arm64"),
+    ("VERSION=...", "version in the file name for make appimage-docker (default Cargo.toml's)"),
+    ("RUST_VERSION=...", "Rust toolchain in the appimage-docker image (default 1.100.0)"),
 ]
 TARGET = re.compile(r"^([a-z][a-z0-9-]*):.*?## (.*)$")
 

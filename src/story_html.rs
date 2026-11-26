@@ -1199,7 +1199,7 @@ fn map_picture(view: &crate::trip::RouteView, tiles: &MapTiles) -> Option<tiny_s
     let range = |from: f64, size: u32| (from / tile).floor().max(0.0) as u32..=(((from + f64::from(size)) / tile).floor().max(0.0) as u32).min(last);
     let jobs: Vec<crate::geo::TileJob> = range(top, h)
         .flat_map(|y| range(left, w).map(move |x| (x, y)))
-        .map(|(x, y)| crate::geo::TileJob { source: tiles.source, key: tiles.key.clone(), z: zoom, x, y })
+        .map(|(x, y)| crate::geo::TileJob { source: tiles.source, generation: 0, key: tiles.key.clone(), z: zoom, x, y })
         .collect();
     let loaded = crate::geo::load_tiles(&jobs, &tiles.cache);
     let mut picture = image::RgbaImage::from_pixel(w, h, image::Rgba([0xe8, 0xe4, 0xdc, 0xff]));

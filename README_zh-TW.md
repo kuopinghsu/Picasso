@@ -244,6 +244,8 @@ macOS 與 Linux 的執行檔為 `target/release/picasso`，Windows 則為 `targe
 
 在 macOS 上，以臨時（ad hoc）方式簽署的建置對鑰匙圈而言都是新的 App，因此每個已儲存的 WordPress 密碼都會詢問兩次，下次建置時也會忘記**永遠允許**。若要讓每次建置都以相同方式簽署，請執行一次 `make sign-identity`：它會在登入鑰匙圈中建立名為 `Picasso Development` 的自簽程式碼簽署憑證。之後 `make` 與 `make run` 會用它簽署 `target/release/picasso`（可用 `SIGN_IDENTITY=...` 指定其他名稱）；第一次簽署時會詢問是否使用鑰匙圈，選擇**永遠允許**後，之後的建置就不會再詢問。直接用 `cargo` 建置的版本不會以此方式簽署。
 
+只要安裝 Docker，就能在任何系統上執行 `make appimage-docker` 建置 Linux AppImage。它與 CI 一樣在 AlmaLinux 8 容器（glibc 2.28）中建置，因此 `dist/` 中的 AppImage 可在 RHEL 8.4 及更新版本上執行。設定 `APPIMAGE_PLATFORM=linux/arm64` 則改為建置 Arm64 版本。接著執行 `make appimage-docker-check`，會在精簡的 AlmaLinux 8.4 容器中檢查它所需的每個函式庫與 glibc 符號是否都存在。以 `make appimage` 建置的 AppImage 只能在與建置系統同樣新或更新的系統上執行。
+
 CI 建置的發行版本仍以臨時（ad hoc）方式簽署，除非已設定 Developer ID 的密鑰。
 
 預設使用 OpenGL 繪圖。設定 `PICASSO_RENDERER=wgpu` 可改用 wgpu 繪圖後端。

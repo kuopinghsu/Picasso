@@ -503,8 +503,8 @@ Settings you change become the defaults for the next track.
 
 === Saving and recovering track edits
 
-*Save as GPX…* and *Save as KML…* save a copy beside the track, named `-optimized` by default, and kbd:[Ctrl+S] saves it in the track's own format.
-For GPX and KML files, choose *Save over original…* in the save menu to replace the original file. The editor shows the file path and asks you to confirm before overwriting it.
+*Save as GPX…* and *Save as KML…* save a copy beside the track, named `-optimized` by default.
+For GPX and KML files, press kbd:[Ctrl+S] or choose *Save over original…* in the save menu. The editor shows the file path and asks you to confirm before overwriting it. For other track formats, kbd:[Ctrl+S] opens the Save As dialog for a GPX copy.
 The copy keeps the cleanup settings and how long each stay lasted, so it opens as saved, without a new cleanup; tracks saved by GPXViewer open as saved too.
 Undoing a cleanup also restores the previous cleanup settings.
 kbd:[Esc] or *Back* closes the editor, and asks first when there are edits you haven't saved.

@@ -132,6 +132,7 @@ impl MapSource {
 #[derive(Clone, Debug)]
 pub struct TileJob {
     pub source: MapSource,
+    pub generation: u64,
     /// API key for sources that need one.
     pub key: String,
     pub z: u8,
@@ -151,6 +152,7 @@ pub struct TileImage {
 #[derive(Debug)]
 pub struct TileDone {
     pub source: MapSource,
+    pub generation: u64,
     pub z: u8,
     pub x: u32,
     pub y: u32,
@@ -193,7 +195,7 @@ pub fn tile_loop(jobs: Receiver<TileJob>, done: Sender<TileDone>, cache: PathBuf
     let tiles = cache.join("tiles");
     while let Ok(job) = jobs.recv() {
         let image = load_tile(&agent, &tiles, &job);
-        let reply = TileDone { source: job.source, z: job.z, x: job.x, y: job.y, image };
+        let reply = TileDone { source: job.source, generation: job.generation, z: job.z, x: job.x, y: job.y, image };
         if done.send(reply).is_err() {
             break;
         }

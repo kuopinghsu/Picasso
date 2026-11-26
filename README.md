@@ -244,6 +244,8 @@ The executable is `target/release/picasso` on macOS and Linux, or `target/releas
 
 On macOS, a build signed ad hoc is a new app to the Keychain, which then asks twice for every saved WordPress password and forgets **Always Allow** at the next build. To sign every build the same way, run `make sign-identity` once: it makes a self-signed code-signing certificate named `Picasso Development` in your login keychain. From then on, `make` and `make run` sign `target/release/picasso` with it (another name can be given with `SIGN_IDENTITY=...`); the first signing asks to use the keychain, and after the first **Always Allow** later builds are not asked again. Builds made with `cargo` directly are not signed this way.
 
+To build the Linux AppImage on any system with only Docker installed, run `make appimage-docker`. It builds in an AlmaLinux 8 container (glibc 2.28), as CI does, so the AppImage in `dist/` runs on RHEL 8.4 and newer. `APPIMAGE_PLATFORM=linux/arm64` builds the Arm64 one instead. `make appimage-docker-check` then checks it in a bare AlmaLinux 8.4 container: every library and glibc symbol it needs must be there. An AppImage from `make appimage` runs only on systems as new as the one that built it.
+
 Release builds from CI are signed ad hoc, as before, unless the Developer ID secrets are set.
 
 OpenGL is the default renderer. Set `PICASSO_RENDERER=wgpu` to select the alternative wgpu renderer.

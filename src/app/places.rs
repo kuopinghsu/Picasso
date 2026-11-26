@@ -2,6 +2,7 @@
 //! With Geotag on, a click stores a pin for the current selection.
 //! GPS tracks from GPX and KML files are drawn under the pins.
 
+use std::cell::Cell;
 use std::collections::HashMap;
 
 use eframe::egui::{self, epaint::TextShape, Align2, Color32, FontId, Pos2, Rect, Sense, TextureHandle, Vec2};
@@ -28,6 +29,8 @@ pub(super) fn map_backdrop() -> Color32 {
 pub(super) struct MapTile {
     texture: TextureHandle,
     labels: Vec<MapLabel>,
+    preview: Cell<bool>,
+    used_at: Cell<u64>,
 }
 
 /// Center, zoom level, and unbaked drag offset of a map.
@@ -387,7 +390,6 @@ impl PicassoApp {
         self.map_lon = lon;
         self.map_zoom = next;
         self.map_pan = Vec2::ZERO;
-        self.tiles.clear();
     }
 
     fn screen_to_latlon(&self, pointer: Pos2, rect: Rect) -> (f64, f64) {
@@ -400,16 +402,16 @@ impl PicassoApp {
     /// Paints the map tiles of `view` into `rect`, with their names, and
     /// queues any that are not loaded yet.
     pub(super) fn paint_tiles(&mut self, painter: &egui::Painter, rect: Rect, view: MapView) {
-        self.paint_map_tiles(painter, rect, view, 1.0, 8);
+        self.paint_map_tiles(painter, rect, view, 1.0, 8, false);
     }
 
     pub(super) fn paint_preview_tiles(&mut self, painter: &egui::Painter, rect: Rect, view: MapView, scale: f64) {
         // Keep scrolling through a folder from filling the map workers' queue.
         let requests = 16usize.saturating_sub(self.tile_wait.len()).min(8);
-        self.paint_map_tiles(painter, rect, view, scale, requests);
+        self.paint_map_tiles(painter, rect, view, scale, requests, true);
     }
 
-    fn paint_map_tiles(&mut self, painter: &egui::Painter, rect: Rect, view: MapView, scale: f64, requests: usize) {
+    fn paint_map_tiles(&mut self, painter: &egui::Painter, rect: Rect, view: MapView, scale: f64, requests: usize, preview: bool) {
         let source = self.map_source;
         if self.map_key_missing() {
             return;
@@ -441,11 +443,15 @@ impl PicassoApp {
                 };
                 let key = covering(z, x, y, depth);
                 let Some(loaded) = self.tiles.get(&key) else {
-                    if !self.tile_wait.contains(&key) && !wanted.contains(&key) {
+                    if let Some(queued_preview) = self.tile_wait.get_mut(&key) {
+                        *queued_preview |= preview;
+                    } else if !wanted.contains(&key) {
                         wanted.push(key);
                     }
                     continue;
                 };
+                loaded.used_at.set(self.tile_frame);
+                loaded.preview.set(loaded.preview.get() || preview);
                 let cells = (1u32 << depth) as f32;
                 let mask = (1u32 << depth) - 1;
                 let min = egui::pos2((x & mask) as f32 / cells, (y & mask) as f32 / cells);
@@ -459,9 +465,11 @@ impl PicassoApp {
         }
         paint_labels(painter, rect, labels);
         for key in wanted.into_iter().take(requests) {
-            self.tile_wait.insert(key);
+            self.tile_wait.insert(key, preview);
             let (z, x, y) = key;
-            let _ = self.tile_tx.send(TileJob { source, key: self.carto_key.clone(), z, x, y });
+            let _ = self.tile_tx.send(TileJob {
+                source, generation: self.tile_generation, key: self.carto_key.clone(), z, x, y,
+            });
         }
     }
 
@@ -527,6 +535,7 @@ impl PicassoApp {
 
     /// Forgets loaded and failed tiles, after the map source or its key changes.
     pub(super) fn reset_tiles(&mut self) {
+        self.tile_generation += 1;
         self.tiles.clear();
         self.tile_wait.clear();
         self.tile_fail.clear();
@@ -1087,18 +1096,17 @@ impl PicassoApp {
     pub(super) fn pump_tiles(&mut self, ctx: &egui::Context) {
         for _ in 0..4 {
             match self.tile_rx.try_recv() {
-                // Left over from the map source used before.
-                Ok(done) if done.source != self.map_source => {}
+                // A settings reset may requeue the same coordinate on the same source.
+                Ok(done) if done.generation != self.tile_generation || done.source != self.map_source => {}
                 Ok(done) => {
                     let key = (done.z, done.x, done.y);
-                    self.tile_wait.remove(&key);
+                    let Some(preview) = self.tile_wait.remove(&key) else { continue };
                     if let Some(image) = done.image {
-                        if self.tiles.len() > 160 {
-                            self.tiles.clear();
-                        }
                         let name = format!("tile-{}-{}-{}-{}", done.source.code(), done.z, done.x, done.y);
                         if let Some(texture) = super::upload(ctx, &name, image.w, image.h, &image.rgba) {
-                            self.tiles.insert(key, MapTile { texture, labels: image.labels });
+                            self.tiles.insert(key, MapTile {
+                                texture, labels: image.labels, preview: Cell::new(preview), used_at: Cell::new(self.tile_frame),
+                            });
                         }
                     } else {
                         self.tile_fail.insert(key);
@@ -1107,9 +1115,30 @@ impl PicassoApp {
                 Err(_) => break,
             }
         }
+        // Keep tiles drawn in the preceding frame and those just uploaded.
+        // Each view may exceed its budget while those tiles are in use.
+        trim_tiles(&mut self.tiles, false, 96, self.tile_frame);
+        trim_tiles(&mut self.tiles, true, 160, self.tile_frame);
+        self.tile_frame += 1;
         if !self.tile_wait.is_empty() {
             ctx.request_repaint_after(std::time::Duration::from_millis(80));
         }
+    }
+}
+
+fn trim_tiles(tiles: &mut HashMap<(u8, u32, u32), MapTile>, preview: bool, limit: usize, frame: u64) {
+    let count = tiles.values().filter(|tile| tile.preview.get() == preview).count();
+    if count <= limit {
+        return;
+    }
+    let mut used: Vec<_> = tiles.iter()
+        .filter(|(_, tile)| tile.preview.get() == preview && tile.used_at.get() < frame)
+        .map(|(&key, tile)| (tile.used_at.get(), key))
+        .collect();
+    let excess = count - limit;
+    used.sort_unstable();
+    for (_, key) in used.into_iter().take(excess) {
+        tiles.remove(&key);
     }
 }
 
@@ -1616,6 +1645,32 @@ pub(super) fn open_osm(lat: f64, lon: f64, zoom: u8) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn evicting_editor_tiles_preserves_library_previews() {
+        let ctx = egui::Context::default();
+        let texture = ctx.load_texture("test-tile", egui::ColorImage::filled([1, 1], Color32::WHITE), Default::default());
+        let mut tiles = HashMap::new();
+        for (x, preview, used_at) in [(0, true, 1), (1, true, 2), (2, false, 3), (3, false, 4), (4, false, 4)] {
+            tiles.insert((2, x, 0), MapTile {
+                texture: texture.clone(),
+                labels: Vec::new(),
+                preview: Cell::new(preview),
+                used_at: Cell::new(used_at),
+            });
+        }
+        trim_tiles(&mut tiles, false, 1, 4);
+        assert!(!tiles.contains_key(&(2, 2, 0)));
+        assert!(tiles.contains_key(&(2, 3, 0)));
+        assert!(tiles.contains_key(&(2, 4, 0)));
+        assert!(tiles.contains_key(&(2, 0, 0)));
+        assert!(tiles.contains_key(&(2, 1, 0)));
+        trim_tiles(&mut tiles, false, 1, 5);
+        assert_eq!(tiles.keys().filter(|key| key.1 >= 2).count(), 1);
+        trim_tiles(&mut tiles, true, 1, 5);
+        assert!(!tiles.contains_key(&(2, 0, 0)));
+        assert!(tiles.contains_key(&(2, 1, 0)));
+    }
 
     #[test]
     fn scale_bar_rounds_down_to_one_two_or_five() {

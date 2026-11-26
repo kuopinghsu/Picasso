@@ -577,18 +577,16 @@ impl TrackEditor {
     }
 
     /// Zooms by `steps` levels, keeping the place under `pointer` there.
-    /// Returns whether the zoom changed.
-    fn zoom_at(&mut self, steps: i32, pointer: Pos2, rect: Rect) -> bool {
+    fn zoom_at(&mut self, steps: i32, pointer: Pos2, rect: Rect) {
         let next = (i32::from(self.view.zoom) + steps).clamp(i32::from(MIN_ZOOM), i32::from(MAX_ZOOM)) as u8;
         if next == self.view.zoom {
-            return false;
+            return;
         }
         let (lat, lon) = self.to_latlon(rect, pointer);
         let (x, y) = geo::latlon_to_world(lat, lon, next);
         let offset = pointer - rect.center();
         let (lat, lon) = geo::world_to_latlon(x - f64::from(offset.x), y - f64::from(offset.y), next);
         self.view = MapView { lat, lon, zoom: next, pan: Vec2::ZERO };
-        true
     }
 
     /// Centers the map on `points` at the closest zoom that shows them all
@@ -980,9 +978,7 @@ impl PicassoApp {
             let (scroll, pinch) = ui.input(|input| (input.smooth_scroll_delta.y, input.zoom_delta()));
             let steps = wheel_steps(&mut editor.wheel, scroll) + pinch_steps(&mut editor.pinch, pinch);
             if let Some(pointer) = pointer.filter(|_| steps != 0) {
-                if editor.zoom_at(steps, pointer, rect) {
-                    self.tiles.clear();
-                }
+                editor.zoom_at(steps, pointer, rect);
             }
         }
 
@@ -1218,9 +1214,7 @@ impl PicassoApp {
         let step = zoom_step((rect.height() - 2.0 * INSET).min(240.0));
         let corner = Pos2::new(rect.right() - INSET - ZOOM_BUTTON, rect.top() + INSET);
         if let Some(next) = zoom_control(ui, corner, editor.view.zoom, step, "track-zoom") {
-            if editor.zoom_at(i32::from(next) - i32::from(editor.view.zoom), rect.center(), rect) {
-                self.tiles.clear();
-            }
+            editor.zoom_at(i32::from(next) - i32::from(editor.view.zoom), rect.center(), rect);
         }
 
         let bottom = Pos2::new(rect.center().x, rect.bottom() - 30.0);
@@ -1349,14 +1343,18 @@ fn save_buttons(ui: &mut egui::Ui, editor: &mut TrackEditor) {
                     editor.save(format);
                 }
             }
-            if editor.can_overwrite() && ui.button(tr("Save over original…")).clicked() {
-                editor.asking_overwrite = true;
-                ui.close();
+            if editor.can_overwrite() {
+                let shortcut = egui::KeyboardShortcut::new(Modifiers::COMMAND, Key::S);
+                let button = egui::Button::new(tr("Save over original…")).shortcut_text(ui.ctx().format_shortcut(&shortcut));
+                if ui.add(button).clicked() {
+                    editor.asking_overwrite = true;
+                    ui.close();
+                }
             }
         });
         ui.spacing_mut().button_padding.x = 12.0;
         let own = editor.own_format();
-        if ui.add(theme::primary_button(label(own))).on_hover_text(tr("Save a copy beside the track (Ctrl+S)")).clicked() {
+        if ui.add(theme::primary_button(label(own))).on_hover_text(tr("Save a copy")).clicked() {
             editor.save(own);
         }
     });
@@ -1397,7 +1395,11 @@ fn track_keys(ctx: &egui::Context, editor: &mut TrackEditor, size: Vec2, close: 
         }
     } else if command(Key::S) {
         if !busy {
-            editor.save(editor.own_format());
+            if editor.can_overwrite() {
+                editor.asking_overwrite = true;
+            } else {
+                editor.save(editor.own_format());
+            }
         }
     } else if plain(Key::Delete) || plain(Key::Backspace) {
         if !busy && !editor.selection.is_empty() {

@@ -194,6 +194,34 @@ pub(crate) fn named_pipe(path: &Path) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn stale_tile_failure_cannot_consume_a_requeued_tile() {
+        use crate::geo::{TileDone, TileImage};
+
+        let dir = std::env::temp_dir().join(format!("picasso-headless-tile-reset-{}", std::process::id()));
+        let (scratch, _db) = super::Scratch::new(dir);
+        let mut window = scratch.open();
+        let app = &mut window.app;
+        let (tx, rx) = crossbeam_channel::unbounded();
+        app.tile_rx = rx;
+        let old_generation = app.tile_generation;
+        app.reset_tiles();
+        let key = (2, 1, 1);
+        app.tile_wait.insert(key, true);
+        tx.send(TileDone { source: app.map_source, generation: old_generation, z: 2, x: 1, y: 1, image: None }).unwrap();
+        app.pump_tiles(&window.ctx);
+        assert_eq!(app.tile_wait.get(&key), Some(&true));
+        assert!(!app.tile_fail.contains(&key));
+
+        tx.send(TileDone {
+            source: app.map_source, generation: app.tile_generation, z: 2, x: 1, y: 1,
+            image: Some(TileImage { w: 1, h: 1, rgba: vec![255; 4], labels: Vec::new() }),
+        }).unwrap();
+        app.pump_tiles(&window.ctx);
+        assert!(app.tiles.contains_key(&key));
+        assert!(!app.tile_wait.contains_key(&key));
+    }
+
     use super::super::{Modal, Mode};
     use super::*;
     use crate::i18n::tr;

@@ -163,6 +163,8 @@ section of this file as the release notes.
   Traditional Chinese when the site's language is 繁體中文. Its fonts are part of it, and
   maps load only when a reader asks. Photos sent with Keep camera details show them under
   the photo. Picasso still publishes to any theme.
+- `make appimage-docker` builds the Linux AppImage with only Docker installed, in an
+  AlmaLinux 8 container as CI does, so it runs on RHEL 8.4 and newer from any build machine.
 
 ### Changed
 

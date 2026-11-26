@@ -51,7 +51,10 @@ impl SiteUrl {
         let (authority, path) = rest.split_at(split);
         let path = path.split('#').next().unwrap_or_default();
         // A user name in the address could send it somewhere else than it reads.
-        if authority.is_empty() || authority.contains('@') || authority.contains(char::is_whitespace) {
+        if authority.is_empty()
+            || authority.contains('@')
+            || authority.contains(char::is_whitespace)
+        {
             return Err(Failure::InvalidUrl);
         }
         // An IPv6 address has colons of its own, inside brackets.
@@ -65,7 +68,9 @@ impl SiteUrl {
             }
         };
         let port = match port {
-            Some(port) if !port.is_empty() => Some(port.parse::<u16>().map_err(|_| Failure::InvalidUrl)?),
+            Some(port) if !port.is_empty() => {
+                Some(port.parse::<u16>().map_err(|_| Failure::InvalidUrl)?)
+            }
             _ => None,
         };
         if host.is_empty() || host == "[]" || host.contains(['[', ']']) && !host.starts_with('[') {
@@ -78,7 +83,12 @@ impl SiteUrl {
         } else {
             path.to_string()
         };
-        Ok(SiteUrl { scheme, host: host.to_ascii_lowercase(), port, path })
+        Ok(SiteUrl {
+            scheme,
+            host: host.to_ascii_lowercase(),
+            port,
+            path,
+        })
     }
 
     /// Scheme, host and port: two addresses with the same origin may share credentials.
@@ -113,18 +123,26 @@ impl SiteUrl {
     /// allowed for development.
     pub fn is_development_host(&self) -> bool {
         let host = self.host.trim_start_matches('[').trim_end_matches(']');
-        matches!(host, "localhost" | "127.0.0.1" | "::1") || host.ends_with(".localhost") || host.ends_with(".test")
+        matches!(host, "localhost" | "127.0.0.1" | "::1")
+            || host.ends_with(".localhost")
+            || host.ends_with(".test")
     }
 
     /// An address on a private network, typed as numbers.
     fn is_private_address(&self) -> bool {
         let host = self.host.trim_start_matches('[').trim_end_matches(']');
         if let Ok(ip) = host.parse::<std::net::Ipv4Addr>() {
-            return ip.is_private() || ip.is_loopback() || ip.is_link_local() || ip.is_unspecified();
+            return ip.is_private()
+                || ip.is_loopback()
+                || ip.is_link_local()
+                || ip.is_unspecified();
         }
         if let Ok(ip) = host.parse::<std::net::Ipv6Addr>() {
             let first = ip.segments()[0];
-            return ip.is_loopback() || ip.is_unspecified() || first & 0xfe00 == 0xfc00 || first & 0xffc0 == 0xfe80;
+            return ip.is_loopback()
+                || ip.is_unspecified()
+                || first & 0xfe00 == 0xfc00
+                || first & 0xffc0 == 0xfe80;
         }
         false
     }
@@ -163,14 +181,19 @@ pub struct Credentials {
 impl std::fmt::Debug for Credentials {
     // The password stays out of logs and panics.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Credentials").field("user", &self.user).finish_non_exhaustive()
+        f.debug_struct("Credentials")
+            .field("user", &self.user)
+            .finish_non_exhaustive()
     }
 }
 
 impl Credentials {
     fn header(&self) -> String {
         // WordPress shows Application Passwords in groups with spaces; either works.
-        format!("Basic {}", STANDARD.encode(format!("{}:{}", self.user, self.password)))
+        format!(
+            "Basic {}",
+            STANDARD.encode(format!("{}:{}", self.user, self.password))
+        )
     }
 }
 
@@ -185,7 +208,10 @@ pub struct Reply {
 
 impl Reply {
     fn header<'a>(&'a self, name: &'a str) -> impl Iterator<Item = &'a str> {
-        self.headers.iter().filter(move |(key, _)| key == name).map(|(_, value)| value.as_str())
+        self.headers
+            .iter()
+            .filter(move |(key, _)| key == name)
+            .map(|(_, value)| value.as_str())
     }
 
     fn json(&self) -> Option<Value> {
@@ -244,7 +270,10 @@ impl Failure {
     /// Whether a write that failed this way may still have been done: the
     /// request may have reached the site before the answer was lost.
     pub fn outcome_unknown(&self) -> bool {
-        matches!(self, Failure::Timeout | Failure::Unreachable | Failure::BadReply) || matches!(self, Failure::Status(status) if *status >= 500)
+        matches!(
+            self,
+            Failure::Timeout | Failure::Unreachable | Failure::BadReply
+        ) || matches!(self, Failure::Status(status) if *status >= 500)
     }
 }
 
@@ -268,9 +297,17 @@ pub trait Http {
     /// Sends `request` with the file at `file` as its body, read as it is
     /// sent rather than held whole, for as long as sending it takes, or
     /// until `cancel` is set.
-    fn send_file(&self, request: &Request, file: &std::path::Path, _cancel: Option<&std::sync::atomic::AtomicBool>) -> Result<Reply, Failure> {
+    fn send_file(
+        &self,
+        request: &Request,
+        file: &std::path::Path,
+        _cancel: Option<&std::sync::atomic::AtomicBool>,
+    ) -> Result<Reply, Failure> {
         let body = std::fs::read(file).map_err(|_| Failure::Unreachable)?;
-        self.send(&Request { body: Some(&body), ..request.clone() })
+        self.send(&Request {
+            body: Some(&body),
+            ..request.clone()
+        })
     }
 }
 
@@ -300,7 +337,10 @@ impl Api {
     pub fn route(&self, route: &str, query: &str) -> SiteUrl {
         let route = route.trim_start_matches('/');
         let mut url = self.root.clone();
-        let (path, root_query) = url.path.split_once('?').map_or((url.path.as_str(), None), |(p, q)| (p, Some(q)));
+        let (path, root_query) = url
+            .path
+            .split_once('?')
+            .map_or((url.path.as_str(), None), |(p, q)| (p, Some(q)));
         let mut path = path.to_string();
         let mut params: Vec<String> = Vec::new();
         match root_query {
@@ -314,11 +354,26 @@ impl Api {
                     path.push('/');
                 }
                 path.push_str(route);
-                params.extend(other.into_iter().flat_map(|q| q.split('&')).filter(|p| !p.is_empty()).map(str::to_string));
+                params.extend(
+                    other
+                        .into_iter()
+                        .flat_map(|q| q.split('&'))
+                        .filter(|p| !p.is_empty())
+                        .map(str::to_string),
+                );
             }
         }
-        params.extend(query.split('&').filter(|p| !p.is_empty()).map(str::to_string));
-        url.path = if params.is_empty() { path } else { format!("{path}?{}", params.join("&")) };
+        params.extend(
+            query
+                .split('&')
+                .filter(|p| !p.is_empty())
+                .map(str::to_string),
+        );
+        url.path = if params.is_empty() {
+            path
+        } else {
+            format!("{path}?{}", params.join("&"))
+        };
         url
     }
 }
@@ -352,16 +407,25 @@ const MAX_WAIT: Duration = Duration::from_secs(30);
 
 impl<'a> Client<'a> {
     pub fn new(http: &'a dyn Http, policy: Policy) -> Self {
-        Client { http, policy, waited: std::cell::Cell::new(Duration::ZERO), cancel: None }
+        Client {
+            http,
+            policy,
+            waited: std::cell::Cell::new(Duration::ZERO),
+            cancel: None,
+        }
     }
 
     /// Lets `cancel` end a wait before a request is tried again.
     pub fn cancelled_by(self, cancel: &'a std::sync::atomic::AtomicBool) -> Self {
-        Client { cancel: Some(cancel), ..self }
+        Client {
+            cancel: Some(cancel),
+            ..self
+        }
     }
 
     fn is_cancelled(&self) -> bool {
-        self.cancel.is_some_and(|cancel| cancel.load(std::sync::atomic::Ordering::Relaxed))
+        self.cancel
+            .is_some_and(|cancel| cancel.load(std::sync::atomic::Ordering::Relaxed))
     }
 
     /// Sends `request`, trying again after a pause when that is safe: a
@@ -374,10 +438,20 @@ impl<'a> Client<'a> {
         let mut tries = 1;
         loop {
             let result = self.http.send(request);
-            let asked = |reply: &Reply| reply.header("retry-after").next().and_then(|value| value.trim().parse().ok()).map(Duration::from_secs);
+            let asked = |reply: &Reply| {
+                reply
+                    .header("retry-after")
+                    .next()
+                    .and_then(|value| value.trim().parse().ok())
+                    .map(Duration::from_secs)
+            };
             let wait = match &result {
-                Ok(reply) if reply.status == 429 => Some(asked(reply).unwrap_or_else(|| backoff(tries))),
-                Ok(reply) if read && matches!(reply.status, 500 | 502 | 503 | 504) => Some(asked(reply).unwrap_or_else(|| backoff(tries))),
+                Ok(reply) if reply.status == 429 => {
+                    Some(asked(reply).unwrap_or_else(|| backoff(tries)))
+                }
+                Ok(reply) if read && matches!(reply.status, 500 | 502 | 503 | 504) => {
+                    Some(asked(reply).unwrap_or_else(|| backoff(tries)))
+                }
                 Err(Failure::Timeout | Failure::Unreachable) if read => Some(backoff(tries)),
                 _ => None,
             };
@@ -387,7 +461,9 @@ impl<'a> Client<'a> {
                     // In short steps, so a cancel isn't kept waiting.
                     let until = std::time::Instant::now() + wait;
                     while !cfg!(test) && !self.is_cancelled() && std::time::Instant::now() < until {
-                        std::thread::sleep(Duration::from_millis(100).min(until - std::time::Instant::now()));
+                        std::thread::sleep(
+                            Duration::from_millis(100).min(until - std::time::Instant::now()),
+                        );
                     }
                     if self.is_cancelled() {
                         return result;
@@ -407,13 +483,24 @@ impl<'a> Client<'a> {
 
     /// [`Client::get`] with another method that changes nothing, such as
     /// "OPTIONS".
-    fn read(&self, method: &'static str, url: &SiteUrl, auth: Option<&Credentials>) -> Result<(SiteUrl, Reply), Failure> {
+    fn read(
+        &self,
+        method: &'static str,
+        url: &SiteUrl,
+        auth: Option<&Credentials>,
+    ) -> Result<(SiteUrl, Reply), Failure> {
         self.policy.check(url)?;
         let origin = url.origin();
         let header = auth.map(Credentials::header);
         let mut url = url.clone();
         for _ in 0..=MAX_REDIRECTS {
-            let request = Request { method, url: url.clone(), auth: header.clone(), headers: Vec::new(), body: None };
+            let request = Request {
+                method,
+                url: url.clone(),
+                auth: header.clone(),
+                headers: Vec::new(),
+                body: None,
+            };
             let reply = self.send(&request)?;
             if !matches!(reply.status, 301 | 302 | 303 | 307 | 308) {
                 return Ok((url, reply));
@@ -440,12 +527,23 @@ impl<'a> Client<'a> {
         let (site, page) = self.get(&site, None)?;
         let mut candidates = Vec::new();
         for link in page.header("link") {
-            candidates.extend(api_links(link).into_iter().filter_map(|href| site.join(&href).ok()));
+            candidates.extend(
+                api_links(link)
+                    .into_iter()
+                    .filter_map(|href| site.join(&href).ok()),
+            );
         }
         let base = {
             let path = site.path.split('?').next().unwrap_or("/");
-            let dir = if path.ends_with('/') { path.to_string() } else { format!("{path}/") };
-            SiteUrl { path: dir, ..site.clone() }
+            let dir = if path.ends_with('/') {
+                path.to_string()
+            } else {
+                format!("{path}/")
+            };
+            SiteUrl {
+                path: dir,
+                ..site.clone()
+            }
         };
         candidates.push(base.join("wp-json/")?);
         candidates.push(base.join("?rest_route=/")?);
@@ -462,9 +560,16 @@ impl<'a> Client<'a> {
             if let Some(api) = api_index(&site, &root, &reply) {
                 return Ok(api);
             }
-            blocked |= matches!(reply.status, 401 | 403) || reply.error_code().is_some_and(|code| code.contains("rest_") && code.contains("disabled"));
+            blocked |= matches!(reply.status, 401 | 403)
+                || reply
+                    .error_code()
+                    .is_some_and(|code| code.contains("rest_") && code.contains("disabled"));
         }
-        Err(if blocked { Failure::ApiBlocked } else { Failure::NotWordPress })
+        Err(if blocked {
+            Failure::ApiBlocked
+        } else {
+            Failure::NotWordPress
+        })
     }
 
     /// The account `credentials` sign in as, and what it may do. Reads
@@ -478,14 +583,32 @@ impl<'a> Client<'a> {
         checked(&reply)?;
         let me = reply.json().ok_or(Failure::BadReply)?;
         let capabilities = me.get("capabilities").cloned().unwrap_or(Value::Null);
-        let can = |name: &str| capabilities.get(name).and_then(Value::as_bool).unwrap_or(false);
+        let can = |name: &str| {
+            capabilities
+                .get(name)
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+        };
         Ok(Account {
-            id: me.get("id").and_then(Value::as_i64).ok_or(Failure::BadReply)?,
-            name: me.get("name").and_then(Value::as_str).unwrap_or_default().to_string(),
+            id: me
+                .get("id")
+                .and_then(Value::as_i64)
+                .ok_or(Failure::BadReply)?,
+            name: me
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
             roles: me
                 .get("roles")
                 .and_then(Value::as_array)
-                .map(|roles| roles.iter().filter_map(Value::as_str).map(str::to_string).collect())
+                .map(|roles| {
+                    roles
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .map(str::to_string)
+                        .collect()
+                })
                 .unwrap_or_default(),
             upload_files: can("upload_files"),
             edit_posts: can("edit_posts"),
@@ -497,9 +620,21 @@ impl<'a> Client<'a> {
 impl Client<'_> {
     /// POST `body` to `url` with `credentials`. A change is never sent on
     /// through a redirect: one is refused, so nothing is sent twice or elsewhere.
-    fn post(&self, url: &SiteUrl, credentials: &Credentials, headers: Vec<(&'static str, String)>, body: &[u8]) -> Result<Reply, Failure> {
+    fn post(
+        &self,
+        url: &SiteUrl,
+        credentials: &Credentials,
+        headers: Vec<(&'static str, String)>,
+        body: &[u8],
+    ) -> Result<Reply, Failure> {
         self.policy.check(url)?;
-        let request = Request { method: "POST", url: url.clone(), auth: Some(credentials.header()), headers, body: Some(body) };
+        let request = Request {
+            method: "POST",
+            url: url.clone(),
+            auth: Some(credentials.header()),
+            headers,
+            body: Some(body),
+        };
         let reply = self.send(&request)?;
         if (300..400).contains(&reply.status) {
             return Err(Failure::Status(reply.status));
@@ -508,10 +643,22 @@ impl Client<'_> {
     }
 
     /// Uploads one JPEG to the site's media library as `name`.
-    pub fn upload_media(&self, api: &Api, credentials: &Credentials, bytes: &[u8], name: &str) -> Result<Media, Failure> {
+    pub fn upload_media(
+        &self,
+        api: &Api,
+        credentials: &Credentials,
+        bytes: &[u8],
+        name: &str,
+    ) -> Result<Media, Failure> {
         let url = api.route("/wp/v2/media", "");
         // The name is ours, made of letters, digits, and dashes, so it needs no quoting rules.
-        let headers = vec![("Content-Type", "image/jpeg".to_string()), ("Content-Disposition", format!("attachment; filename=\"{name}\""))];
+        let headers = vec![
+            ("Content-Type", "image/jpeg".to_string()),
+            (
+                "Content-Disposition",
+                format!("attachment; filename=\"{name}\""),
+            ),
+        ];
         let reply = self.post(&url, credentials, headers, bytes)?;
         checked(&reply)?;
         media_of(&reply.json().ok_or(Failure::BadReply)?)
@@ -520,16 +667,34 @@ impl Client<'_> {
     /// Uploads the file at `file`, of type `mime`, to the site's media
     /// library as `name`, sent as it is read. It is never sent twice, nor
     /// on through a redirect.
-    pub fn upload_file(&self, api: &Api, credentials: &Credentials, file: &std::path::Path, mime: &str, name: &str) -> Result<Media, Failure> {
+    pub fn upload_file(
+        &self,
+        api: &Api,
+        credentials: &Credentials,
+        file: &std::path::Path,
+        mime: &str,
+        name: &str,
+    ) -> Result<Media, Failure> {
         let url = api.route("/wp/v2/media", "");
         self.policy.check(&url)?;
-        let length = std::fs::metadata(file).map_err(|_| Failure::Unreachable)?.len();
+        let length = std::fs::metadata(file)
+            .map_err(|_| Failure::Unreachable)?
+            .len();
         let headers = vec![
             ("Content-Type", mime.to_string()),
-            ("Content-Disposition", format!("attachment; filename=\"{name}\"")),
+            (
+                "Content-Disposition",
+                format!("attachment; filename=\"{name}\""),
+            ),
             ("Content-Length", length.to_string()),
         ];
-        let request = Request { method: "POST", url, auth: Some(credentials.header()), headers, body: None };
+        let request = Request {
+            method: "POST",
+            url,
+            auth: Some(credentials.header()),
+            headers,
+            body: None,
+        };
         let reply = self.http.send_file(&request, file, self.cancel)?;
         if (300..400).contains(&reply.status) {
             return Err(Failure::Status(reply.status));
@@ -540,44 +705,112 @@ impl Client<'_> {
 
     /// Sets the upload `id`'s description in the site's media library, which
     /// WordPress offers again when the photo is put in another post.
-    pub fn set_media_alt(&self, api: &Api, credentials: &Credentials, id: i64, alt: &str) -> Result<(), Failure> {
+    pub fn set_media_alt(
+        &self,
+        api: &Api,
+        credentials: &Credentials,
+        id: i64,
+        alt: &str,
+    ) -> Result<(), Failure> {
         let url = api.route(&format!("/wp/v2/media/{id}"), "");
-        let bytes = serde_json::to_vec(&serde_json::json!({ "alt_text": alt })).map_err(|_| Failure::BadReply)?;
-        checked(&self.post(&url, credentials, vec![("Content-Type", "application/json".to_string())], &bytes)?)?;
+        let bytes = serde_json::to_vec(&serde_json::json!({ "alt_text": alt }))
+            .map_err(|_| Failure::BadReply)?;
+        checked(&self.post(
+            &url,
+            credentials,
+            vec![("Content-Type", "application/json".to_string())],
+            &bytes,
+        )?)?;
         Ok(())
     }
 
     /// The uploads in the site's media library named `name` (without its
     /// extension, as WordPress titles an upload), oldest first: how an upload
     /// whose answer was lost is found.
-    pub fn find_media(&self, api: &Api, credentials: &Credentials, name: &str) -> Result<Vec<Media>, Failure> {
+    pub fn find_media(
+        &self,
+        api: &Api,
+        credentials: &Credentials,
+        name: &str,
+    ) -> Result<Vec<Media>, Failure> {
         let query = format!("search={}&per_page=20&orderby=id&order=asc&context=edit&_fields=id,source_url,title,mime_type,media_details", query_value(name));
         let (_, reply) = self.get(&api.route("/wp/v2/media", &query), Some(credentials))?;
         checked(&reply)?;
-        let list = reply.json().and_then(|json| json.as_array().cloned()).ok_or(Failure::BadReply)?;
-        list.iter().filter(|item| raw_title(item) == name).map(media_of).collect()
+        let list = reply
+            .json()
+            .and_then(|json| json.as_array().cloned())
+            .ok_or(Failure::BadReply)?;
+        list.iter()
+            .filter(|item| raw_title(item) == name)
+            .map(media_of)
+            .collect()
     }
 
     /// The ids of the drafts and published posts titled exactly `title`
     /// changed on the site since `since` (Unix seconds), oldest first: how a
     /// post whose answer was lost is found.
-    pub fn find_drafts(&self, api: &Api, credentials: &Credentials, title: &str, since: i64) -> Result<Vec<i64>, Failure> {
-        self.find_titled(api, credentials, "/wp/v2/posts", title, since, Titled::default())
+    pub fn find_drafts(
+        &self,
+        api: &Api,
+        credentials: &Credentials,
+        title: &str,
+        since: i64,
+    ) -> Result<Vec<i64>, Failure> {
+        self.find_titled(
+            api,
+            credentials,
+            "/wp/v2/posts",
+            title,
+            since,
+            Titled::default(),
+        )
     }
 
     /// The oldest draft or published post titled exactly `title`, if any:
     /// [`Client::find_drafts`], stopping at the first page that has one.
-    pub fn find_titled_post(&self, api: &Api, credentials: &Credentials, title: &str) -> Result<Option<i64>, Failure> {
-        Ok(self.find_titled(api, credentials, "/wp/v2/posts", title, 0, Titled { first: true, ..Titled::default() })?.first().copied())
+    pub fn find_titled_post(
+        &self,
+        api: &Api,
+        credentials: &Credentials,
+        title: &str,
+    ) -> Result<Option<i64>, Failure> {
+        Ok(self
+            .find_titled(
+                api,
+                credentials,
+                "/wp/v2/posts",
+                title,
+                0,
+                Titled {
+                    first: true,
+                    ..Titled::default()
+                },
+            )?
+            .first()
+            .copied())
     }
 
     /// [`Client::find_drafts`] for items of the type at `route`, such as
     /// `/wp/v2/vl_trip`, as `how` says. The site's search also matches words
     /// in the text, so the pages of its answer are read, up to
     /// [`MAX_SEARCH_PAGES`], as the one titled exactly `title` may be on any.
-    pub fn find_titled(&self, api: &Api, credentials: &Credentials, route: &str, title: &str, since: i64, how: Titled) -> Result<Vec<i64>, Failure> {
-        let after = chrono::DateTime::from_timestamp(since, 0).ok_or(Failure::BadReply)?.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-        let (status, since_key) = if how.made_drafts { ("draft", "after") } else { ("draft,publish", "modified_after") };
+    pub fn find_titled(
+        &self,
+        api: &Api,
+        credentials: &Credentials,
+        route: &str,
+        title: &str,
+        since: i64,
+        how: Titled,
+    ) -> Result<Vec<i64>, Failure> {
+        let after = chrono::DateTime::from_timestamp(since, 0)
+            .ok_or(Failure::BadReply)?
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let (status, since_key) = if how.made_drafts {
+            ("draft", "after")
+        } else {
+            ("draft,publish", "modified_after")
+        };
         let mut found = Vec::new();
         for page in 1..=MAX_SEARCH_PAGES {
             if how.first && !found.is_empty() {
@@ -594,9 +827,19 @@ impl Client<'_> {
                 break;
             }
             checked(&reply)?;
-            let list = reply.json().and_then(|json| json.as_array().cloned()).ok_or(Failure::BadReply)?;
-            found.extend(list.iter().filter(|post| raw_title(post) == title).filter_map(|post| post.get("id").and_then(Value::as_i64)));
-            let pages = reply.header("x-wp-totalpages").next().and_then(|n| n.trim().parse::<u32>().ok());
+            let list = reply
+                .json()
+                .and_then(|json| json.as_array().cloned())
+                .ok_or(Failure::BadReply)?;
+            found.extend(
+                list.iter()
+                    .filter(|post| raw_title(post) == title)
+                    .filter_map(|post| post.get("id").and_then(Value::as_i64)),
+            );
+            let pages = reply
+                .header("x-wp-totalpages")
+                .next()
+                .and_then(|n| n.trim().parse::<u32>().ok());
             if list.len() < SEARCH_PER_PAGE || pages.is_some_and(|pages| page >= pages) {
                 break;
             }
@@ -605,15 +848,28 @@ impl Client<'_> {
     }
 
     /// Whether the upload `id` is still in the site's media library.
-    pub fn media_exists(&self, api: &Api, credentials: &Credentials, id: i64) -> Result<bool, Failure> {
+    pub fn media_exists(
+        &self,
+        api: &Api,
+        credentials: &Credentials,
+        id: i64,
+    ) -> Result<bool, Failure> {
         Ok(self.media_now(api, credentials, id)?.is_some())
     }
 
     /// Upload `id` as the site has it now: `None` when it was removed, and
     /// its address as the site gives it today, or `None` when the answer
     /// doesn't say, as after the site moved or its media folder changed.
-    pub fn media_now(&self, api: &Api, credentials: &Credentials, id: i64) -> Result<Option<Option<Media>>, Failure> {
-        let url = api.route(&format!("/wp/v2/media/{id}"), "context=edit&_fields=id,source_url,mime_type,media_details");
+    pub fn media_now(
+        &self,
+        api: &Api,
+        credentials: &Credentials,
+        id: i64,
+    ) -> Result<Option<Option<Media>>, Failure> {
+        let url = api.route(
+            &format!("/wp/v2/media/{id}"),
+            "context=edit&_fields=id,source_url,mime_type,media_details",
+        );
         let (_, reply) = self.get(&url, Some(credentials))?;
         if reply.status == 404 || reply.status == 410 {
             return Ok(None);
@@ -626,10 +882,18 @@ impl Client<'_> {
     /// WordPress keeps no trash for uploads. Sent as a POST, as WordPress
     /// takes changes, with `_method` making it a deletion. False when the
     /// site no longer had it.
-    pub fn delete_media(&self, api: &Api, credentials: &Credentials, id: i64) -> Result<bool, Failure> {
+    pub fn delete_media(
+        &self,
+        api: &Api,
+        credentials: &Credentials,
+        id: i64,
+    ) -> Result<bool, Failure> {
         let url = api.route(&format!("/wp/v2/media/{id}"), "force=true&_method=DELETE");
         let reply = self.post(&url, credentials, Vec::new(), &[])?;
-        if reply.status == 410 || (reply.status == 404 && reply.error_code().as_deref() == Some("rest_post_invalid_id")) {
+        if reply.status == 410
+            || (reply.status == 404
+                && reply.error_code().as_deref() == Some("rest_post_invalid_id"))
+        {
             return Ok(false);
         }
         checked(&reply)?;
@@ -637,7 +901,11 @@ impl Client<'_> {
     }
 
     /// Attachments referenced by ID in post or page content or featured media.
-    pub fn referenced_media(&self, api: &Api, credentials: &Credentials) -> Result<HashSet<i64>, Failure> {
+    pub fn referenced_media(
+        &self,
+        api: &Api,
+        credentials: &Credentials,
+    ) -> Result<HashSet<i64>, Failure> {
         const PER_PAGE: usize = 20;
         let mut referenced = HashSet::new();
         for route in ["/wp/v2/posts", "/wp/v2/pages"] {
@@ -647,24 +915,41 @@ impl Client<'_> {
                 let query = format!("context=edit&status=publish,future,draft,pending,private&per_page={PER_PAGE}&page={page}&orderby=id&order=asc&_fields=featured_media,content.raw");
                 let (_, reply) = self.get(&api.route(route, &query), Some(credentials))?;
                 if reply.status == 403
-                    || (reply.status == 400 && reply.json().is_some_and(|body| body["code"] == "rest_forbidden_status" || body["data"]["details"]["status"]["code"] == "rest_forbidden_status"))
+                    || (reply.status == 400
+                        && reply.json().is_some_and(|body| {
+                            body["code"] == "rest_forbidden_status"
+                                || body["data"]["details"]["status"]["code"]
+                                    == "rest_forbidden_status"
+                        }))
                 {
                     return Err(Failure::CleanupAccess);
                 }
                 checked(&reply)?;
-                let total = reply.header("x-wp-total").next().and_then(|value| value.trim().parse::<usize>().ok()).ok_or(Failure::BadReply)?;
-                let items = reply.json().and_then(|json| json.as_array().cloned()).ok_or(Failure::BadReply)?;
+                let total = reply
+                    .header("x-wp-total")
+                    .next()
+                    .and_then(|value| value.trim().parse::<usize>().ok())
+                    .ok_or(Failure::BadReply)?;
+                let items = reply
+                    .json()
+                    .and_then(|json| json.as_array().cloned())
+                    .ok_or(Failure::BadReply)?;
                 // WordPress may count posts the account cannot read without
                 // returning their fields. An incomplete scan cannot clear an upload.
                 let remaining = total.saturating_sub((page - 1) * PER_PAGE);
-                if total != *expected_total.get_or_insert(total) || items.len() > remaining.min(PER_PAGE) {
+                if total != *expected_total.get_or_insert(total)
+                    || items.len() > remaining.min(PER_PAGE)
+                {
                     return Err(Failure::BadReply);
                 }
                 if items.len() < remaining.min(PER_PAGE) {
                     return Err(Failure::CleanupAccess);
                 }
                 for item in items {
-                    let id = item.get("featured_media").and_then(Value::as_i64).ok_or(Failure::BadReply)?;
+                    let id = item
+                        .get("featured_media")
+                        .and_then(Value::as_i64)
+                        .ok_or(Failure::BadReply)?;
                     if id > 0 {
                         referenced.insert(id);
                     }
@@ -686,16 +971,33 @@ impl Client<'_> {
     /// through as published only. WordPress leaves the posts the account may
     /// not read, such as another author's drafts, out of the list but not out
     /// of its count, so the count decides.
-    pub fn media_in_use(&self, api: &Api, credentials: &Credentials, name: &str) -> Result<bool, Failure> {
+    pub fn media_in_use(
+        &self,
+        api: &Api,
+        credentials: &Credentials,
+        name: &str,
+    ) -> Result<bool, Failure> {
         let search = format!("search={}&per_page=1&_fields=id", query_value(name));
         for route in ["/wp/v2/posts", "/wp/v2/pages"] {
-            let (_, mut reply) = self.get(&api.route(route, &format!("{search}&status=publish,future,draft,pending,private")), Some(credentials))?;
+            let (_, mut reply) = self.get(
+                &api.route(
+                    route,
+                    &format!("{search}&status=publish,future,draft,pending,private"),
+                ),
+                Some(credentials),
+            )?;
             if matches!(reply.status, 400 | 401 | 403) {
                 reply = self.get(&api.route(route, &search), Some(credentials))?.1;
             }
             checked(&reply)?;
-            let list = reply.json().and_then(|json| json.as_array().cloned()).ok_or(Failure::BadReply)?;
-            let total = reply.header("x-wp-total").next().and_then(|n| n.trim().parse::<u64>().ok());
+            let list = reply
+                .json()
+                .and_then(|json| json.as_array().cloned())
+                .ok_or(Failure::BadReply)?;
+            let total = reply
+                .header("x-wp-total")
+                .next()
+                .and_then(|n| n.trim().parse::<u64>().ok());
             if !list.is_empty() || total.is_some_and(|total| total > 0) {
                 return Ok(true);
             }
@@ -706,21 +1008,42 @@ impl Client<'_> {
     /// The uploads among `ids` still in the site's media library, as the site
     /// has them now, read up to a hundred at a time. An id missing from the
     /// answer isn't proof it was removed, so it is asked about on its own.
-    pub fn media_many(&self, api: &Api, credentials: &Credentials, ids: &[i64]) -> Result<HashMap<i64, Media>, Failure> {
+    pub fn media_many(
+        &self,
+        api: &Api,
+        credentials: &Credentials,
+        ids: &[i64],
+    ) -> Result<HashMap<i64, Media>, Failure> {
         let mut found = HashMap::new();
         for chunk in ids.chunks(100) {
-            let include = chunk.iter().map(i64::to_string).collect::<Vec<_>>().join(",");
+            let include = chunk
+                .iter()
+                .map(i64::to_string)
+                .collect::<Vec<_>>()
+                .join(",");
             let query = format!("include={include}&per_page=100&context=edit&_fields=id,source_url,mime_type,media_details");
             let (_, reply) = self.get(&api.route("/wp/v2/media", &query), Some(credentials))?;
             checked(&reply)?;
-            let list = reply.json().and_then(|json| json.as_array().cloned()).ok_or(Failure::BadReply)?;
-            found.extend(list.iter().filter_map(|item| media_of(item).ok()).map(|media| (media.id, media)));
+            let list = reply
+                .json()
+                .and_then(|json| json.as_array().cloned())
+                .ok_or(Failure::BadReply)?;
+            found.extend(
+                list.iter()
+                    .filter_map(|item| media_of(item).ok())
+                    .map(|media| (media.id, media)),
+            );
         }
         Ok(found)
     }
 
     /// Post `id` as the site has it now, or `None` when the site has no such post.
-    pub fn post_state(&self, api: &Api, credentials: &Credentials, id: i64) -> Result<Option<PostState>, Failure> {
+    pub fn post_state(
+        &self,
+        api: &Api,
+        credentials: &Credentials,
+        id: i64,
+    ) -> Result<Option<PostState>, Failure> {
         let url = api.route(&format!("/wp/v2/posts/{id}"), "context=edit");
         let (_, reply) = self.get(&url, Some(credentials))?;
         if reply.status == 404 || reply.status == 410 {
@@ -728,13 +1051,25 @@ impl Client<'_> {
         }
         checked(&reply)?;
         let post = reply.json().ok_or(Failure::BadReply)?;
-        let status = post.get("status").and_then(Value::as_str).unwrap_or_default().to_string();
-        Ok(Some(PostState { status, fingerprint: fingerprint(&post) }))
+        let status = post
+            .get("status")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        Ok(Some(PostState {
+            status,
+            fingerprint: fingerprint(&post),
+        }))
     }
 
     /// Every term of `taxonomy` on the site, by name. Reads only; terms are
     /// never made here. Read a page at a time up to [`MAX_TERM_PAGES`].
-    pub fn terms(&self, api: &Api, credentials: &Credentials, taxonomy: Taxonomy) -> Result<Vec<Term>, Failure> {
+    pub fn terms(
+        &self,
+        api: &Api,
+        credentials: &Credentials,
+        taxonomy: Taxonomy,
+    ) -> Result<Vec<Term>, Failure> {
         let mut terms = Vec::new();
         for page in 1..=MAX_TERM_PAGES {
             let query = format!("per_page={TERMS_PER_PAGE}&page={page}&orderby=name&order=asc&_fields=id,name,parent");
@@ -744,14 +1079,27 @@ impl Client<'_> {
                 break;
             }
             checked(&reply)?;
-            let list = reply.json().and_then(|json| json.as_array().cloned()).ok_or(Failure::BadReply)?;
+            let list = reply
+                .json()
+                .and_then(|json| json.as_array().cloned())
+                .ok_or(Failure::BadReply)?;
             let count = list.len();
             for term in list {
-                let id = term.get("id").and_then(Value::as_i64).ok_or(Failure::BadReply)?;
+                let id = term
+                    .get("id")
+                    .and_then(Value::as_i64)
+                    .ok_or(Failure::BadReply)?;
                 let name = term.get("name").and_then(Value::as_str).unwrap_or_default();
-                terms.push(Term { id, name: decode_entities(name), parent: term.get("parent").and_then(Value::as_i64).unwrap_or(0) });
+                terms.push(Term {
+                    id,
+                    name: decode_entities(name),
+                    parent: term.get("parent").and_then(Value::as_i64).unwrap_or(0),
+                });
             }
-            let pages = reply.header("x-wp-totalpages").next().and_then(|n| n.trim().parse::<u32>().ok());
+            let pages = reply
+                .header("x-wp-totalpages")
+                .next()
+                .and_then(|n| n.trim().parse::<u32>().ok());
             if count < TERMS_PER_PAGE as usize || pages.is_some_and(|pages| page >= pages) {
                 break;
             }
@@ -763,19 +1111,48 @@ impl Client<'_> {
     /// returns the one already there by that name, so a retry after a lost
     /// answer never makes a second. Needs the account to be allowed to make
     /// terms; a refusal comes back as [`Failure::Forbidden`].
-    pub fn create_term(&self, api: &Api, credentials: &Credentials, taxonomy: Taxonomy, name: &str) -> Result<Term, Failure> {
+    pub fn create_term(
+        &self,
+        api: &Api,
+        credentials: &Credentials,
+        taxonomy: Taxonomy,
+        name: &str,
+    ) -> Result<Term, Failure> {
         let url = api.route(taxonomy.route(), "");
-        let bytes = serde_json::to_vec(&serde_json::json!({ "name": name })).map_err(|_| Failure::BadReply)?;
-        let reply = self.post(&url, credentials, vec![("Content-Type", "application/json".to_string())], &bytes)?;
+        let bytes = serde_json::to_vec(&serde_json::json!({ "name": name }))
+            .map_err(|_| Failure::BadReply)?;
+        let reply = self.post(
+            &url,
+            credentials,
+            vec![("Content-Type", "application/json".to_string())],
+            &bytes,
+        )?;
         if reply.error_code().as_deref() == Some("term_exists") {
-            let id = reply.json().and_then(|json| json.get("data")?.get("term_id")?.as_i64()).ok_or(Failure::BadReply)?;
-            return Ok(Term { id, name: name.to_string(), parent: 0 });
+            let id = reply
+                .json()
+                .and_then(|json| json.get("data")?.get("term_id")?.as_i64())
+                .ok_or(Failure::BadReply)?;
+            return Ok(Term {
+                id,
+                name: name.to_string(),
+                parent: 0,
+            });
         }
         checked(&reply)?;
         let term = reply.json().ok_or(Failure::BadReply)?;
-        let id = term.get("id").and_then(Value::as_i64).ok_or(Failure::BadReply)?;
-        let made = term.get("name").and_then(Value::as_str).map_or_else(|| name.to_string(), decode_entities);
-        Ok(Term { id, name: made, parent: term.get("parent").and_then(Value::as_i64).unwrap_or(0) })
+        let id = term
+            .get("id")
+            .and_then(Value::as_i64)
+            .ok_or(Failure::BadReply)?;
+        let made = term
+            .get("name")
+            .and_then(Value::as_str)
+            .map_or_else(|| name.to_string(), decode_entities);
+        Ok(Term {
+            id,
+            name: made,
+            parent: term.get("parent").and_then(Value::as_i64).unwrap_or(0),
+        })
     }
 
     /// Creates a draft with `title`, `content`, and `featured` media, or,
@@ -783,8 +1160,25 @@ impl Client<'_> {
     /// `terms` sets its categories and tags, each only when given, so the
     /// post keeps the ones it has on the site otherwise. Returns the post as
     /// the site keeps it.
-    pub fn save_draft(&self, api: &Api, credentials: &Credentials, id: Option<i64>, post: &DraftPost) -> Result<PostSaved, Failure> {
-        let DraftPost { title, excerpt, content, featured, categories, tags, publish, schedule, date, meta } = post;
+    pub fn save_draft(
+        &self,
+        api: &Api,
+        credentials: &Credentials,
+        id: Option<i64>,
+        post: &DraftPost,
+    ) -> Result<PostSaved, Failure> {
+        let DraftPost {
+            title,
+            excerpt,
+            content,
+            featured,
+            categories,
+            tags,
+            publish,
+            schedule,
+            date,
+            meta,
+        } = post;
         let mut body = serde_json::json!({ "title": title, "excerpt": excerpt, "content": content, "featured_media": featured.unwrap_or(0) });
         if let Some(meta) = meta {
             body["meta"] = meta.clone();
@@ -820,22 +1214,45 @@ impl Client<'_> {
         }
         let url = api.route(&route, "");
         let bytes = serde_json::to_vec(&body).map_err(|_| Failure::BadReply)?;
-        let reply = self.post(&url, credentials, vec![("Content-Type", "application/json".to_string())], &bytes)?;
+        let reply = self.post(
+            &url,
+            credentials,
+            vec![("Content-Type", "application/json".to_string())],
+            &bytes,
+        )?;
         checked(&reply)?;
         let post = reply.json().ok_or(Failure::BadReply)?;
-        let id = post.get("id").and_then(Value::as_i64).ok_or(Failure::BadReply)?;
-        let status = post.get("status").and_then(Value::as_str).unwrap_or_default().to_string();
+        let id = post
+            .get("id")
+            .and_then(Value::as_i64)
+            .ok_or(Failure::BadReply)?;
+        let status = post
+            .get("status")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
         // A site keeps only the fields its theme or plugins registered, and leaves the rest out of its answer.
         let meta_kept = meta.as_ref().and_then(Value::as_object).is_none_or(|sent| {
             let kept = post.get("meta").and_then(Value::as_object);
-            sent.keys().all(|key| kept.is_some_and(|kept| kept.contains_key(key)))
+            sent.keys()
+                .all(|key| kept.is_some_and(|kept| kept.contains_key(key)))
         });
-        Ok(PostSaved { id, fingerprint: fingerprint(&post), status, meta_kept })
+        Ok(PostSaved {
+            id,
+            fingerprint: fingerprint(&post),
+            status,
+            meta_kept,
+        })
     }
 
     /// An item of another type, such as `/wp/v2/vl_trip/12`, as it is to
     /// edit; `None` when the site has no such item.
-    pub fn read_item(&self, api: &Api, credentials: &Credentials, route: &str) -> Result<Option<Value>, Failure> {
+    pub fn read_item(
+        &self,
+        api: &Api,
+        credentials: &Credentials,
+        route: &str,
+    ) -> Result<Option<Value>, Failure> {
         let (_, reply) = self.get(&api.route(route, "context=edit"), Some(credentials))?;
         if reply.status == 404 || reply.status == 410 {
             return Ok(None);
@@ -846,9 +1263,20 @@ impl Client<'_> {
 
     /// Makes or changes an item of another type, such as a Journey at
     /// `/wp/v2/vl_trip`, and returns it as the site has it now.
-    pub fn write_item(&self, api: &Api, credentials: &Credentials, route: &str, body: &Value) -> Result<Value, Failure> {
+    pub fn write_item(
+        &self,
+        api: &Api,
+        credentials: &Credentials,
+        route: &str,
+        body: &Value,
+    ) -> Result<Value, Failure> {
         let bytes = serde_json::to_vec(body).map_err(|_| Failure::BadReply)?;
-        let reply = self.post(&api.route(route, ""), credentials, vec![("Content-Type", "application/json".to_string())], &bytes)?;
+        let reply = self.post(
+            &api.route(route, ""),
+            credentials,
+            vec![("Content-Type", "application/json".to_string())],
+            &bytes,
+        )?;
         checked(&reply)?;
         reply.json().ok_or(Failure::BadReply)
     }
@@ -873,7 +1301,11 @@ impl Client<'_> {
             _ => None,
         }
         .ok_or(Failure::BadReply)?;
-        let sent = reply.header("date").next().and_then(|date| chrono::DateTime::parse_from_rfc2822(date).ok()).map_or_else(chrono::Utc::now, |date| date.with_timezone(&chrono::Utc));
+        let sent = reply
+            .header("date")
+            .next()
+            .and_then(|date| chrono::DateTime::parse_from_rfc2822(date).ok())
+            .map_or_else(chrono::Utc::now, |date| date.with_timezone(&chrono::Utc));
         Ok(sent.naive_utc() + chrono::Duration::minutes((hours * 60.0).round() as i64))
     }
 
@@ -884,9 +1316,14 @@ impl Client<'_> {
         let (_, reply) = self.read("OPTIONS", &api.route("/wp/v2/posts", ""), None)?;
         checked(&reply)?;
         let schema = reply.json().ok_or(Failure::BadReply)?;
-        let meta = schema.pointer("/schema/properties/meta/properties").and_then(Value::as_object);
+        let meta = schema
+            .pointer("/schema/properties/meta/properties")
+            .and_then(Value::as_object);
         let has = |key: &str| meta.is_some_and(|meta| meta.contains_key(key));
-        Ok(TravelSupport { places: has("_vl_lat") && has("_vl_lon"), journeys: has("_vl_trip_id") })
+        Ok(TravelSupport {
+            places: has("_vl_lat") && has("_vl_lon"),
+            journeys: has("_vl_trip_id"),
+        })
     }
 }
 
@@ -1013,8 +1450,15 @@ fn media_of(json: &Value) -> Result<Media, Failure> {
     });
     Ok(Media {
         details: details.unwrap_or_default(),
-        id: json.get("id").and_then(Value::as_i64).ok_or(Failure::BadReply)?,
-        url: json.get("source_url").and_then(Value::as_str).ok_or(Failure::BadReply)?.to_string(),
+        id: json
+            .get("id")
+            .and_then(Value::as_i64)
+            .ok_or(Failure::BadReply)?,
+        url: json
+            .get("source_url")
+            .and_then(Value::as_str)
+            .ok_or(Failure::BadReply)?
+            .to_string(),
     })
 }
 
@@ -1025,17 +1469,31 @@ fn media_of(json: &Value) -> Result<Media, Failure> {
 /// the next, it tells whether the post was edited on the site in between;
 /// its status, terms and the rest are left out, as Picasso leaves them alone.
 fn fingerprint(post: &Value) -> String {
-    let raw = |field: &str| post.get(field).and_then(|value| value.get("raw").or(Some(value))).and_then(Value::as_str).unwrap_or_default().to_string();
-    let featured = post.get("featured_media").and_then(Value::as_i64).unwrap_or(0);
+    let raw = |field: &str| {
+        post.get(field)
+            .and_then(|value| value.get("raw").or(Some(value)))
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string()
+    };
+    let featured = post
+        .get("featured_media")
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
     let managed = serde_json::json!([raw("title"), raw("excerpt"), raw("content"), featured]);
-    format!("{FINGERPRINT}{}", crate::upload::hash(managed.to_string().as_bytes()))
+    format!(
+        "{FINGERPRINT}{}",
+        crate::upload::hash(managed.to_string().as_bytes())
+    )
 }
 
 /// The pause before try `tries + 1`: a second, then two, each with up to a
 /// quarter more so many waiting clients don't all come back at once.
 fn backoff(tries: u32) -> Duration {
     let base = Duration::from_secs(1 << (tries - 1).min(4));
-    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |now| now.subsec_nanos());
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |now| now.subsec_nanos());
     base + base.mul_f64(f64::from(nanos % 1000) / 4000.0)
 }
 
@@ -1045,7 +1503,10 @@ pub const FINGERPRINT: &str = "2:";
 
 /// A post's or upload's title as typed, in the edit context.
 fn raw_title(item: &Value) -> &str {
-    item.get("title").and_then(|title| title.get("raw")).and_then(Value::as_str).unwrap_or_default()
+    item.get("title")
+        .and_then(|title| title.get("raw"))
+        .and_then(Value::as_str)
+        .unwrap_or_default()
 }
 
 /// `text` as one value of a query string.
@@ -1053,9 +1514,15 @@ fn raw_title(item: &Value) -> &str {
 /// storing their URLs. Accept the quoted and unquoted attribute forms.
 fn shortcode_media(content: &str, referenced: &mut HashSet<i64>) {
     let tags = ["[gallery", "[playlist"];
-    let shortcodes = tags.into_iter().flat_map(|tag| content.match_indices(tag).map(move |(at, _)| &content[at + tag.len()..]));
+    let shortcodes = tags.into_iter().flat_map(|tag| {
+        content
+            .match_indices(tag)
+            .map(move |(at, _)| &content[at + tag.len()..])
+    });
     for rest in shortcodes {
-        let Some((mut attributes, _)) = rest.split_once(']') else { continue };
+        let Some((mut attributes, _)) = rest.split_once(']') else {
+            continue;
+        };
         if !attributes.starts_with(|ch: char| ch.is_ascii_whitespace()) {
             continue;
         }
@@ -1063,13 +1530,28 @@ fn shortcode_media(content: &str, referenced: &mut HashSet<i64>) {
             let rest = rest.trim_start();
             let (value, remaining) = match rest.as_bytes().first() {
                 Some(&quote @ (b'\'' | b'"')) => {
-                    let Some(pair) = rest[1..].split_once(char::from(quote)) else { break };
+                    let Some(pair) = rest[1..].split_once(char::from(quote)) else {
+                        break;
+                    };
                     pair
                 }
-                _ => rest.split_once(|ch: char| ch.is_ascii_whitespace() || ch == '/').unwrap_or((rest, "")),
+                _ => rest
+                    .split_once(|ch: char| ch.is_ascii_whitespace() || ch == '/')
+                    .unwrap_or((rest, "")),
             };
-            if matches!(name.split_ascii_whitespace().last().map(str::to_ascii_lowercase).as_deref(), Some("ids" | "include")) {
-                referenced.extend(value.split(|ch: char| ch == ',' || ch.is_ascii_whitespace()).filter_map(|id| id.parse::<i64>().ok()).filter(|id| *id > 0));
+            if matches!(
+                name.split_ascii_whitespace()
+                    .last()
+                    .map(str::to_ascii_lowercase)
+                    .as_deref(),
+                Some("ids" | "include")
+            ) {
+                referenced.extend(
+                    value
+                        .split(|ch: char| ch == ',' || ch.is_ascii_whitespace())
+                        .filter_map(|id| id.parse::<i64>().ok())
+                        .filter(|id| *id > 0),
+                );
             }
             attributes = remaining;
         }
@@ -1091,20 +1573,35 @@ fn query_value(text: &str) -> String {
 /// Where post `id` is read on the site, by its id.
 pub fn post_link(api: &Api, id: i64) -> String {
     let site = api.home.as_ref().unwrap_or(&api.site);
-    let base = site.path.split('?').next().unwrap_or("/").trim_end_matches('/');
+    let base = site
+        .path
+        .split('?')
+        .next()
+        .unwrap_or("/")
+        .trim_end_matches('/');
     format!("{}{base}/?p={id}", site.origin())
 }
 
 pub fn edit_link(api: &Api, id: i64) -> String {
     let site = api.wordpress.as_ref().unwrap_or(&api.site);
     let base = site.path.split('?').next().unwrap_or("/");
-    let dir = if base.ends_with('/') { base.to_string() } else { format!("{base}/") };
-    format!("{}{dir}wp-admin/post.php?post={id}&action=edit", site.origin())
+    let dir = if base.ends_with('/') {
+        base.to_string()
+    } else {
+        format!("{base}/")
+    };
+    format!(
+        "{}{dir}wp-admin/post.php?post={id}&action=edit",
+        site.origin()
+    )
 }
 
 /// The web address the API's index gives as `key`.
 fn address(index: &Value, key: &str) -> Option<SiteUrl> {
-    index.get(key).and_then(Value::as_str).and_then(|url| SiteUrl::parse(url).ok())
+    index
+        .get(key)
+        .and_then(Value::as_str)
+        .and_then(|url| SiteUrl::parse(url).ok())
 }
 
 /// The API root a reply describes, when it is one.
@@ -1113,13 +1610,24 @@ fn api_index(site: &SiteUrl, root: &SiteUrl, reply: &Reply) -> Option<Api> {
         return None;
     }
     let index = reply.json()?;
-    let namespaces: Vec<String> = index.get("namespaces")?.as_array()?.iter().filter_map(Value::as_str).map(str::to_string).collect();
+    let namespaces: Vec<String> = index
+        .get("namespaces")?
+        .as_array()?
+        .iter()
+        .filter_map(Value::as_str)
+        .map(str::to_string)
+        .collect();
     Some(Api {
         site: site.clone(),
         root: root.clone(),
         wordpress: address(&index, "url"),
         home: address(&index, "home"),
-        name: decode_entities(index.get("name").and_then(Value::as_str).unwrap_or_default()),
+        name: decode_entities(
+            index
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or_default(),
+        ),
         namespaces,
     })
 }
@@ -1173,7 +1681,9 @@ fn api_links(header: &str) -> Vec<String> {
             let target = target.trim().strip_prefix('<')?;
             let api = params.split(';').any(|param| {
                 let param = param.trim();
-                param.strip_prefix("rel=").is_some_and(|rel| rel.trim_matches('"') == API_REL)
+                param
+                    .strip_prefix("rel=")
+                    .is_some_and(|rel| rel.trim_matches('"') == API_REL)
             });
             api.then(|| target.to_string())
         })
@@ -1187,23 +1697,49 @@ fn checked(reply: &Reply) -> Result<(), Failure> {
         // WordPress and PHP refuse a large upload with their own words, often as 400 or 500.
         400..=599 if too_large(reply) => Err(Failure::TooLarge),
         // Signed out despite the credentials: WordPress never read them.
-        401 if reply.error_code().as_deref() == Some("rest_not_logged_in") => Err(Failure::CredentialsIgnored),
+        401 if reply.error_code().as_deref() == Some("rest_not_logged_in") => {
+            Err(Failure::CredentialsIgnored)
+        }
         401 => Err(Failure::Unauthorized),
-        403 => Err(if reply.error_code().is_some_and(|code| code.contains("disabled")) { Failure::ApiBlocked } else { Failure::Forbidden }),
+        403 => Err(
+            if reply
+                .error_code()
+                .is_some_and(|code| code.contains("disabled"))
+            {
+                Failure::ApiBlocked
+            } else {
+                Failure::Forbidden
+            },
+        ),
         404 => Err(Failure::NotWordPress),
         413 => Err(Failure::TooLarge),
-        429 => Err(Failure::RateLimited(reply.header("retry-after").next().and_then(|value| value.trim().parse().ok()))),
+        429 => Err(Failure::RateLimited(
+            reply
+                .header("retry-after")
+                .next()
+                .and_then(|value| value.trim().parse().ok()),
+        )),
         status => Err(Failure::Status(status)),
     }
 }
 
 /// Whether the site's error says an upload was over its size limit.
 fn too_large(reply: &Reply) -> bool {
-    let Some(json) = reply.json() else { return false };
+    let Some(json) = reply.json() else {
+        return false;
+    };
     let code = json.get("code").and_then(Value::as_str).unwrap_or_default();
-    let message = json.get("message").and_then(Value::as_str).unwrap_or_default().to_ascii_lowercase();
+    let message = json
+        .get("message")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_ascii_lowercase();
     // PHP drops a body over its post_max_size, and WordPress then finds no data.
-    matches!(code, "rest_upload_file_too_big" | "rest_upload_limited_space" | "rest_upload_no_data") || message.contains("upload_max_filesize") || message.contains("post_max_size")
+    matches!(
+        code,
+        "rest_upload_file_too_big" | "rest_upload_limited_space" | "rest_upload_no_data"
+    ) || message.contains("upload_max_filesize")
+        || message.contains("post_max_size")
 }
 
 /// [`Http`] over the network.
@@ -1217,9 +1753,15 @@ impl Network {
             .timeout_global(Some(Duration::from_secs(30)))
             .max_redirects(0)
             .http_status_as_error(false)
-            .user_agent(concat!("Picasso/", env!("CARGO_PKG_VERSION"), " (local photo library; WordPress publishing)"))
+            .user_agent(concat!(
+                "Picasso/",
+                env!("CARGO_PKG_VERSION"),
+                " (local photo library; WordPress publishing)"
+            ))
             .build();
-        Network { agent: ureq::Agent::new_with_config(config) }
+        Network {
+            agent: ureq::Agent::new_with_config(config),
+        }
     }
 }
 
@@ -1238,7 +1780,11 @@ impl Http for Network {
                 call.send(body.unwrap_or_default())
             }
             (method, _) => {
-                let call = if method == "OPTIONS" { self.agent.options(&url) } else { self.agent.get(&url) };
+                let call = if method == "OPTIONS" {
+                    self.agent.options(&url)
+                } else {
+                    self.agent.get(&url)
+                };
                 let mut call = call.header("Accept", "application/json");
                 if let Some(auth) = &request.auth {
                     call = call.header("Authorization", auth);
@@ -1253,7 +1799,12 @@ impl Http for Network {
         reply_of(response)
     }
 
-    fn send_file(&self, request: &Request, file: &std::path::Path, cancel: Option<&std::sync::atomic::AtomicBool>) -> Result<Reply, Failure> {
+    fn send_file(
+        &self,
+        request: &Request,
+        file: &std::path::Path,
+        cancel: Option<&std::sync::atomic::AtomicBool>,
+    ) -> Result<Reply, Failure> {
         let opened = std::fs::File::open(file).map_err(|_| Failure::Unreachable)?;
         let cancel = cancel.unwrap_or(&NEVER);
         // A large file takes as long as the connection needs; only the
@@ -1273,8 +1824,13 @@ impl Http for Network {
         for (name, value) in &request.headers {
             call = call.header(*name, value);
         }
-        let mut body = Cancellable { inner: std::io::BufReader::new(opened), cancel };
-        let response = call.send(ureq::SendBody::from_reader(&mut body)).map_err(|err| network_failure(&err))?;
+        let mut body = Cancellable {
+            inner: std::io::BufReader::new(opened),
+            cancel,
+        };
+        let response = call
+            .send(ureq::SendBody::from_reader(&mut body))
+            .map_err(|err| network_failure(&err))?;
         reply_of(response)
     }
 }
@@ -1301,17 +1857,33 @@ fn reply_of(mut response: ureq::http::Response<ureq::Body>) -> Result<Reply, Fai
     let headers = response
         .headers()
         .iter()
-        .filter_map(|(name, value)| Some((name.as_str().to_ascii_lowercase(), value.to_str().ok()?.to_string())))
+        .filter_map(|(name, value)| {
+            Some((
+                name.as_str().to_ascii_lowercase(),
+                value.to_str().ok()?.to_string(),
+            ))
+        })
         .collect();
     let status = response.status().as_u16();
-    let body = response.body_mut().with_config().limit(MAX_REPLY).read_to_vec().map_err(|err| network_failure(&err))?;
-    Ok(Reply { status, headers, body })
+    let body = response
+        .body_mut()
+        .with_config()
+        .limit(MAX_REPLY)
+        .read_to_vec()
+        .map_err(|err| network_failure(&err))?;
+    Ok(Reply {
+        status,
+        headers,
+        body,
+    })
 }
 
 fn network_failure(err: &ureq::Error) -> Failure {
     match err {
         ureq::Error::Timeout(_) => Failure::Timeout,
-        ureq::Error::HostNotFound | ureq::Error::ConnectionFailed | ureq::Error::Io(_) => Failure::Unreachable,
+        ureq::Error::HostNotFound | ureq::Error::ConnectionFailed | ureq::Error::Io(_) => {
+            Failure::Unreachable
+        }
         ureq::Error::BodyExceedsLimit(_) => Failure::BadReply,
         ureq::Error::Tls(_) | ureq::Error::TlsRequired => Failure::Tls,
         other => {
@@ -1341,13 +1913,36 @@ pub(crate) mod tests {
     }
 
     impl Fake {
-        pub(crate) fn answer(self, url: &str, status: u16, headers: &[(&str, &str)], body: &str) -> Self {
+        pub(crate) fn answer(
+            self,
+            url: &str,
+            status: u16,
+            headers: &[(&str, &str)],
+            body: &str,
+        ) -> Self {
             self.answer_to("GET", url, status, headers, body)
         }
 
-        pub(crate) fn answer_to(mut self, method: &str, url: &str, status: u16, headers: &[(&str, &str)], body: &str) -> Self {
-            let headers = headers.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
-            self.replies.insert(format!("{method} {url}"), Reply { status, headers, body: body.as_bytes().to_vec() });
+        pub(crate) fn answer_to(
+            mut self,
+            method: &str,
+            url: &str,
+            status: u16,
+            headers: &[(&str, &str)],
+            body: &str,
+        ) -> Self {
+            let headers = headers
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect();
+            self.replies.insert(
+                format!("{method} {url}"),
+                Reply {
+                    status,
+                    headers,
+                    body: body.as_bytes().to_vec(),
+                },
+            );
             self
         }
     }
@@ -1355,18 +1950,37 @@ pub(crate) mod tests {
     impl Http for Fake {
         fn send(&self, request: &Request) -> Result<Reply, Failure> {
             let key = format!("{} {}", request.method, request.url.to_url());
-            self.asked.borrow_mut().push((request.url.to_url(), request.auth.clone()));
+            self.asked
+                .borrow_mut()
+                .push((request.url.to_url(), request.auth.clone()));
             if let Some(body) = request.body {
                 self.bodies.borrow_mut().push((key.clone(), body.to_vec()));
             }
             // A reply kept under an address ending in "*" answers any address starting so.
-            let found = self.replies.get(&key).or_else(|| self.replies.iter().find(|(known, _)| known.strip_suffix('*').is_some_and(|start| key.starts_with(start))).map(|(_, reply)| reply));
-            Ok(found.cloned().unwrap_or(Reply { status: 404, ..Reply::default() }))
+            let found = self.replies.get(&key).or_else(|| {
+                self.replies
+                    .iter()
+                    .find(|(known, _)| {
+                        known
+                            .strip_suffix('*')
+                            .is_some_and(|start| key.starts_with(start))
+                    })
+                    .map(|(_, reply)| reply)
+            });
+            Ok(found.cloned().unwrap_or(Reply {
+                status: 404,
+                ..Reply::default()
+            }))
         }
     }
 
     fn draft(title: &str, content: &str, featured: Option<i64>) -> DraftPost {
-        DraftPost { title: title.into(), content: content.into(), featured, ..DraftPost::default() }
+        DraftPost {
+            title: title.into(),
+            content: content.into(),
+            featured,
+            ..DraftPost::default()
+        }
     }
 
     const INDEX: &str = r#"{"name":"Travels","namespaces":["oembed/1.0","wp/v2"]}"#;
@@ -1375,10 +1989,25 @@ pub(crate) mod tests {
     fn an_address_as_typed_is_https_with_a_path() {
         let url = SiteUrl::parse(" Example.COM/blog ").unwrap();
         assert_eq!(url.to_url(), "https://example.com/blog");
-        assert_eq!(SiteUrl::parse("http://example.com:8080").unwrap().origin(), "http://example.com:8080");
-        assert_eq!(SiteUrl::parse("https://example.com:443/").unwrap().origin(), "https://example.com");
-        assert_eq!(SiteUrl::parse("https://[::1]:8443/x").unwrap().host, "[::1]");
-        for bad in ["", "ftp://example.com", "https://user@evil.com", "https://example.com:99999", "https://"] {
+        assert_eq!(
+            SiteUrl::parse("http://example.com:8080").unwrap().origin(),
+            "http://example.com:8080"
+        );
+        assert_eq!(
+            SiteUrl::parse("https://example.com:443/").unwrap().origin(),
+            "https://example.com"
+        );
+        assert_eq!(
+            SiteUrl::parse("https://[::1]:8443/x").unwrap().host,
+            "[::1]"
+        );
+        for bad in [
+            "",
+            "ftp://example.com",
+            "https://user@evil.com",
+            "https://example.com:99999",
+            "https://",
+        ] {
             assert_eq!(SiteUrl::parse(bad), Err(Failure::InvalidUrl), "{bad}");
         }
     }
@@ -1389,10 +2018,22 @@ pub(crate) mod tests {
         let dev = Policy { development: true };
         let url = |text: &str| SiteUrl::parse(text).unwrap();
         assert_eq!(strict.check(&url("https://example.com")), Ok(()));
-        assert_eq!(strict.check(&url("http://example.com")), Err(Failure::NotHttps));
-        assert_eq!(dev.check(&url("http://example.com")), Err(Failure::NotHttps));
-        assert_eq!(strict.check(&url("https://192.168.1.4")), Err(Failure::PrivateAddress));
-        assert_eq!(strict.check(&url("https://localhost")), Err(Failure::PrivateAddress));
+        assert_eq!(
+            strict.check(&url("http://example.com")),
+            Err(Failure::NotHttps)
+        );
+        assert_eq!(
+            dev.check(&url("http://example.com")),
+            Err(Failure::NotHttps)
+        );
+        assert_eq!(
+            strict.check(&url("https://192.168.1.4")),
+            Err(Failure::PrivateAddress)
+        );
+        assert_eq!(
+            strict.check(&url("https://localhost")),
+            Err(Failure::PrivateAddress)
+        );
         assert_eq!(dev.check(&url("http://localhost:8080")), Ok(()));
         assert_eq!(dev.check(&url("http://blog.test")), Ok(()));
     }
@@ -1400,12 +2041,25 @@ pub(crate) mod tests {
     #[test]
     fn the_api_is_found_from_the_link_header_of_a_site_in_a_subdirectory() {
         let fake = Fake::default()
-            .answer("https://example.com/blog", 200, &[("link", r#"<https://example.com/blog/wp-json/>; rel="https://api.w.org/""#)], "<html>")
+            .answer(
+                "https://example.com/blog",
+                200,
+                &[(
+                    "link",
+                    r#"<https://example.com/blog/wp-json/>; rel="https://api.w.org/""#,
+                )],
+                "<html>",
+            )
             .answer("https://example.com/blog/wp-json/", 200, &[], INDEX);
-        let api = Client::new(&fake, Policy::default()).discover("example.com/blog").unwrap();
+        let api = Client::new(&fake, Policy::default())
+            .discover("example.com/blog")
+            .unwrap();
         assert_eq!(api.root.to_url(), "https://example.com/blog/wp-json/");
         assert_eq!(api.name, "Travels");
-        assert_eq!(api.route("/wp/v2/users/me", "context=edit").to_url(), "https://example.com/blog/wp-json/wp/v2/users/me?context=edit");
+        assert_eq!(
+            api.route("/wp/v2/users/me", "context=edit").to_url(),
+            "https://example.com/blog/wp-json/wp/v2/users/me?context=edit"
+        );
     }
 
     #[test]
@@ -1413,36 +2067,91 @@ pub(crate) mod tests {
         let fake = Fake::default()
             .answer("https://example.com/", 200, &[], "<html>")
             .answer("https://example.com/?rest_route=/", 200, &[], INDEX);
-        let api = Client::new(&fake, Policy::default()).discover("https://example.com").unwrap();
-        assert_eq!(api.route("/wp/v2/users/me", "context=edit").to_url(), "https://example.com/?rest_route=/wp/v2/users/me&context=edit");
+        let api = Client::new(&fake, Policy::default())
+            .discover("https://example.com")
+            .unwrap();
+        assert_eq!(
+            api.route("/wp/v2/users/me", "context=edit").to_url(),
+            "https://example.com/?rest_route=/wp/v2/users/me&context=edit"
+        );
     }
 
     #[test]
     fn posts_open_and_are_read_where_wordpress_says_it_is_where_the_browser_is_signed_in() {
-        let index = |url: &str, home: &str| format!(r#"{{"name":"Travels","url":"{url}","home":"{home}","namespaces":["wp/v2"]}}"#);
+        let index = |url: &str, home: &str| {
+            format!(r#"{{"name":"Travels","url":"{url}","home":"{home}","namespaces":["wp/v2"]}}"#)
+        };
         let local = Fake::default()
             .answer("http://127.0.0.1:10005/", 200, &[], "<html>")
-            .answer("http://127.0.0.1:10005/wp-json/", 200, &[], &index("http://localhost:10005", "http://localhost:10005"));
-        let api = Client::new(&local, Policy { development: true }).discover("http://127.0.0.1:10005").unwrap();
-        assert_eq!(api.site.to_url(), "http://127.0.0.1:10005/", "requests still go where the person said");
-        assert_eq!(edit_link(&api, 7), "http://localhost:10005/wp-admin/post.php?post=7&action=edit");
+            .answer(
+                "http://127.0.0.1:10005/wp-json/",
+                200,
+                &[],
+                &index("http://localhost:10005", "http://localhost:10005"),
+            );
+        let api = Client::new(&local, Policy { development: true })
+            .discover("http://127.0.0.1:10005")
+            .unwrap();
+        assert_eq!(
+            api.site.to_url(),
+            "http://127.0.0.1:10005/",
+            "requests still go where the person said"
+        );
+        assert_eq!(
+            edit_link(&api, 7),
+            "http://localhost:10005/wp-admin/post.php?post=7&action=edit"
+        );
         assert_eq!(post_link(&api, 7), "http://localhost:10005/?p=7");
-        let saved_before = Api { wordpress: None, home: None, ..api.clone() };
-        assert_eq!((edit_link(&saved_before, 7), post_link(&saved_before, 7)), ("http://127.0.0.1:10005/wp-admin/post.php?post=7&action=edit".into(), "http://127.0.0.1:10005/?p=7".into()));
-        assert_eq!(Client::new(&local, Policy { development: true }).reread(&saved_before), Ok(Some(api)), "a site connected earlier reads them when publishing");
-        let in_english = Api { home: Some(SiteUrl::parse("https://example.com/?lang=en").unwrap()), ..saved_before };
+        let saved_before = Api {
+            wordpress: None,
+            home: None,
+            ..api.clone()
+        };
+        assert_eq!(
+            (edit_link(&saved_before, 7), post_link(&saved_before, 7)),
+            (
+                "http://127.0.0.1:10005/wp-admin/post.php?post=7&action=edit".into(),
+                "http://127.0.0.1:10005/?p=7".into()
+            )
+        );
+        assert_eq!(
+            Client::new(&local, Policy { development: true }).reread(&saved_before),
+            Ok(Some(api)),
+            "a site connected earlier reads them when publishing"
+        );
+        let in_english = Api {
+            home: Some(SiteUrl::parse("https://example.com/?lang=en").unwrap()),
+            ..saved_before
+        };
         assert_eq!(post_link(&in_english, 7), "https://example.com/?p=7");
 
         let own_folder = Fake::default()
             .answer("https://example.com/", 200, &[], "<html>")
-            .answer("https://example.com/wp-json/", 200, &[], &index(r"https:\/\/example.com\/wp", r"https:\/\/example.com"));
-        let api = Client::new(&own_folder, Policy::default()).discover("example.com").unwrap();
-        assert_eq!(edit_link(&api, 7), "https://example.com/wp/wp-admin/post.php?post=7&action=edit");
+            .answer(
+                "https://example.com/wp-json/",
+                200,
+                &[],
+                &index(r"https:\/\/example.com\/wp", r"https:\/\/example.com"),
+            );
+        let api = Client::new(&own_folder, Policy::default())
+            .discover("example.com")
+            .unwrap();
+        assert_eq!(
+            edit_link(&api, 7),
+            "https://example.com/wp/wp-admin/post.php?post=7&action=edit"
+        );
         assert_eq!(post_link(&api, 7), "https://example.com/?p=7");
 
-        let unsaid = Fake::default().answer("https://example.com/blog", 200, &[], "<html>").answer("https://example.com/blog/wp-json/", 200, &[], INDEX);
-        let api = Client::new(&unsaid, Policy::default()).discover("example.com/blog").unwrap();
-        assert_eq!(edit_link(&api, 7), "https://example.com/blog/wp-admin/post.php?post=7&action=edit");
+        let unsaid = Fake::default()
+            .answer("https://example.com/blog", 200, &[], "<html>")
+            .answer("https://example.com/blog/wp-json/", 200, &[], INDEX);
+        let api = Client::new(&unsaid, Policy::default())
+            .discover("example.com/blog")
+            .unwrap();
+        assert_eq!(
+            edit_link(&api, 7),
+            "https://example.com/blog/wp-admin/post.php?post=7&action=edit"
+        );
         assert_eq!(post_link(&api, 7), "https://example.com/blog/?p=7");
     }
 
@@ -1450,16 +2159,32 @@ pub(crate) mod tests {
     fn a_blocked_api_and_a_site_without_wordpress_are_told_apart() {
         let blocked = Fake::default()
             .answer("https://example.com/", 200, &[], "<html>")
-            .answer("https://example.com/wp-json/", 401, &[], r#"{"code":"rest_login_required"}"#);
-        assert_eq!(Client::new(&blocked, Policy::default()).discover("example.com"), Err(Failure::ApiBlocked));
+            .answer(
+                "https://example.com/wp-json/",
+                401,
+                &[],
+                r#"{"code":"rest_login_required"}"#,
+            );
+        assert_eq!(
+            Client::new(&blocked, Policy::default()).discover("example.com"),
+            Err(Failure::ApiBlocked)
+        );
         let plain = Fake::default().answer("https://example.com/", 200, &[], "<html>");
-        assert_eq!(Client::new(&plain, Policy::default()).discover("example.com"), Err(Failure::NotWordPress));
+        assert_eq!(
+            Client::new(&plain, Policy::default()).discover("example.com"),
+            Err(Failure::NotWordPress)
+        );
     }
 
     #[test]
     fn credentials_never_follow_a_redirect_to_another_origin() {
         let fake = Fake::default()
-            .answer("https://example.com/wp-json/wp/v2/users/me?context=edit", 302, &[("location", "https://evil.example/steal")], "")
+            .answer(
+                "https://example.com/wp-json/wp/v2/users/me?context=edit",
+                302,
+                &[("location", "https://evil.example/steal")],
+                "",
+            )
             .answer("https://evil.example/steal", 200, &[], "{}");
         let api = Api {
             site: SiteUrl::parse("https://example.com").unwrap(),
@@ -1469,10 +2194,20 @@ pub(crate) mod tests {
             name: String::new(),
             namespaces: vec!["wp/v2".into()],
         };
-        let credentials = Credentials { user: "ana".into(), password: "abcd efgh".into() };
+        let credentials = Credentials {
+            user: "ana".into(),
+            password: "abcd efgh".into(),
+        };
         let result = Client::new(&fake, Policy::default()).account(&api, &credentials);
-        assert_eq!(result, Err(Failure::CrossOriginRedirect("https://evil.example".into())));
-        assert!(fake.asked.borrow().iter().all(|(url, _)| url.starts_with("https://example.com/")));
+        assert_eq!(
+            result,
+            Err(Failure::CrossOriginRedirect("https://evil.example".into()))
+        );
+        assert!(fake
+            .asked
+            .borrow()
+            .iter()
+            .all(|(url, _)| url.starts_with("https://example.com/")));
     }
 
     #[test]
@@ -1487,66 +2222,147 @@ pub(crate) mod tests {
             name: String::new(),
             namespaces: vec!["wp/v2".into()],
         };
-        let credentials = Credentials { user: "ana".into(), password: "abcd efgh".into() };
+        let credentials = Credentials {
+            user: "ana".into(),
+            password: "abcd efgh".into(),
+        };
         let fake = Fake::default().answer(url, 200, &[], me);
-        let account = Client::new(&fake, Policy::default()).account(&api, &credentials).unwrap();
-        assert_eq!((account.id, account.upload_files, account.edit_posts, account.publish_posts), (3, true, true, false));
+        let account = Client::new(&fake, Policy::default())
+            .account(&api, &credentials)
+            .unwrap();
+        assert_eq!(
+            (
+                account.id,
+                account.upload_files,
+                account.edit_posts,
+                account.publish_posts
+            ),
+            (3, true, true, false)
+        );
         assert_eq!(account.roles, ["author"]);
         let sent = fake.asked.borrow()[0].1.clone().unwrap();
         assert_eq!(sent, format!("Basic {}", STANDARD.encode("ana:abcd efgh")));
 
         for (status, headers, failure) in [
             (401, vec![], Failure::Unauthorized),
-            (401, vec![("content-type", "application/json")], Failure::Unauthorized),
+            (
+                401,
+                vec![("content-type", "application/json")],
+                Failure::Unauthorized,
+            ),
             (403, vec![], Failure::Forbidden),
-            (429, vec![("retry-after", "30")], Failure::RateLimited(Some(30))),
+            (
+                429,
+                vec![("retry-after", "30")],
+                Failure::RateLimited(Some(30)),
+            ),
             (500, vec![], Failure::Status(500)),
         ] {
             let fake = Fake::default().answer(url, status, &headers, "{}");
-            assert_eq!(Client::new(&fake, Policy::default()).account(&api, &credentials), Err(failure));
+            assert_eq!(
+                Client::new(&fake, Policy::default()).account(&api, &credentials),
+                Err(failure)
+            );
         }
     }
 
     #[test]
     fn an_upload_over_the_sites_limit_is_named_so_and_not_sent_again() {
         let api = local_api();
-        let credentials = Credentials { user: "ana".into(), password: "abcd efgh".into() };
+        let credentials = Credentials {
+            user: "ana".into(),
+            password: "abcd efgh".into(),
+        };
         let media = "https://example.com/blog/wp-json/wp/v2/media";
         for (status, body) in [
-            (500, r#"{"code":"rest_upload_unknown_error","message":"The uploaded file exceeds the upload_max_filesize directive in php.ini."}"#),
-            (400, r#"{"code":"rest_upload_file_too_big","message":"This file is too big."}"#),
-            (400, r#"{"code":"rest_upload_no_data","message":"No data supplied."}"#),
+            (
+                500,
+                r#"{"code":"rest_upload_unknown_error","message":"The uploaded file exceeds the upload_max_filesize directive in php.ini."}"#,
+            ),
+            (
+                400,
+                r#"{"code":"rest_upload_file_too_big","message":"This file is too big."}"#,
+            ),
+            (
+                400,
+                r#"{"code":"rest_upload_no_data","message":"No data supplied."}"#,
+            ),
             (413, ""),
         ] {
             let fake = Fake::default().answer_to("POST", media, status, &[], body);
-            assert_eq!(Client::new(&fake, Policy::default()).upload_media(&api, &credentials, b"jpeg", "a.jpg"), Err(Failure::TooLarge), "{status}");
+            assert_eq!(
+                Client::new(&fake, Policy::default()).upload_media(
+                    &api,
+                    &credentials,
+                    b"jpeg",
+                    "a.jpg"
+                ),
+                Err(Failure::TooLarge),
+                "{status}"
+            );
             assert_eq!(fake.bodies.borrow().len(), 1);
         }
-        assert!(!Failure::TooLarge.outcome_unknown(), "refused, so known not to be done");
+        assert!(
+            !Failure::TooLarge.outcome_unknown(),
+            "refused, so known not to be done"
+        );
     }
 
     #[test]
     fn a_file_is_uploaded_as_it_is_and_named() {
         let api = local_api();
-        let credentials = Credentials { user: "ana".into(), password: "abcd efgh".into() };
+        let credentials = Credentials {
+            user: "ana".into(),
+            password: "abcd efgh".into(),
+        };
         let media = "https://example.com/blog/wp-json/wp/v2/media";
-        let file = std::env::temp_dir().join(format!("picasso-upload-file-{}.mp4", std::process::id()));
+        let file =
+            std::env::temp_dir().join(format!("picasso-upload-file-{}.mp4", std::process::id()));
         std::fs::write(&file, b"\0\0\0\x18ftypmp42").unwrap();
-        let fake = Fake::default().answer_to("POST", media, 201, &[], r#"{"id":5,"source_url":"https://example.com/blog/v.mp4","mime_type":"video/mp4"}"#);
-        let sent = Client::new(&fake, Policy::default()).upload_file(&api, &credentials, &file, "video/mp4", "v.mp4").unwrap();
-        assert_eq!((sent.id, sent.url.as_str()), (5, "https://example.com/blog/v.mp4"));
-        assert_eq!(fake.bodies.borrow()[0], (format!("POST {media}"), b"\0\0\0\x18ftypmp42".to_vec()));
+        let fake = Fake::default().answer_to(
+            "POST",
+            media,
+            201,
+            &[],
+            r#"{"id":5,"source_url":"https://example.com/blog/v.mp4","mime_type":"video/mp4"}"#,
+        );
+        let sent = Client::new(&fake, Policy::default())
+            .upload_file(&api, &credentials, &file, "video/mp4", "v.mp4")
+            .unwrap();
+        assert_eq!(
+            (sent.id, sent.url.as_str()),
+            (5, "https://example.com/blog/v.mp4")
+        );
+        assert_eq!(
+            fake.bodies.borrow()[0],
+            (format!("POST {media}"), b"\0\0\0\x18ftypmp42".to_vec())
+        );
         let refused = Fake::default().answer_to("POST", media, 413, &[], "");
-        assert_eq!(Client::new(&refused, Policy::default()).upload_file(&api, &credentials, &file, "video/mp4", "v.mp4"), Err(Failure::TooLarge));
+        assert_eq!(
+            Client::new(&refused, Policy::default()).upload_file(
+                &api,
+                &credentials,
+                &file,
+                "video/mp4",
+                "v.mp4"
+            ),
+            Err(Failure::TooLarge)
+        );
         let _ = std::fs::remove_file(file);
     }
 
     #[test]
     fn network_errors_become_failures_a_person_can_act_on() {
         let _ = Network::new();
-        assert_eq!(network_failure(&ureq::Error::HostNotFound), Failure::Unreachable);
+        assert_eq!(
+            network_failure(&ureq::Error::HostNotFound),
+            Failure::Unreachable
+        );
         assert_eq!(network_failure(&ureq::Error::TlsRequired), Failure::Tls);
-        assert_eq!(network_failure(&ureq::Error::BodyExceedsLimit(MAX_REPLY)), Failure::BadReply);
+        assert_eq!(
+            network_failure(&ureq::Error::BodyExceedsLimit(MAX_REPLY)),
+            Failure::BadReply
+        );
     }
 
     #[test]
@@ -1560,68 +2376,170 @@ pub(crate) mod tests {
             name: String::new(),
             namespaces: vec!["wp/v2".into()],
         };
-        let credentials = Credentials { user: "ana".into(), password: "abcd efgh".into() };
+        let credentials = Credentials {
+            user: "ana".into(),
+            password: "abcd efgh".into(),
+        };
         let dev = Policy { development: true };
         let ignored = Fake::default().answer(url, 401, &[], r#"{"code":"rest_not_logged_in"}"#);
-        assert_eq!(Client::new(&ignored, dev).account(&api, &credentials), Err(Failure::CredentialsIgnored));
+        assert_eq!(
+            Client::new(&ignored, dev).account(&api, &credentials),
+            Err(Failure::CredentialsIgnored)
+        );
         let wrong = Fake::default().answer(url, 401, &[], r#"{"code":"incorrect_password"}"#);
-        assert_eq!(Client::new(&wrong, dev).account(&api, &credentials), Err(Failure::Unauthorized));
+        assert_eq!(
+            Client::new(&wrong, dev).account(&api, &credentials),
+            Err(Failure::Unauthorized)
+        );
     }
 
     #[test]
     fn reads_and_turned_away_requests_are_tried_again_and_lost_writes_never() {
         let api = local_api();
-        let credentials = Credentials { user: "ana".into(), password: "abcd efgh".into() };
-        let busy = Fake::default().answer("https://example.com/blog/wp-json/wp/v2/posts/7?context=edit", 503, &[], "");
+        let credentials = Credentials {
+            user: "ana".into(),
+            password: "abcd efgh".into(),
+        };
+        let busy = Fake::default().answer(
+            "https://example.com/blog/wp-json/wp/v2/posts/7?context=edit",
+            503,
+            &[],
+            "",
+        );
         let client = Client::new(&busy, Policy::default());
-        assert_eq!(client.post_state(&api, &credentials, 7), Err(Failure::Status(503)));
+        assert_eq!(
+            client.post_state(&api, &credentials, 7),
+            Err(Failure::Status(503))
+        );
         assert_eq!(busy.asked.borrow().len(), MAX_TRIES as usize);
         let waited = client.waited.get();
-        assert!(waited >= Duration::from_secs(3) && waited <= Duration::from_millis(3750), "a second, then two, each a little more: {waited:?}");
+        assert!(
+            waited >= Duration::from_secs(3) && waited <= Duration::from_millis(3750),
+            "a second, then two, each a little more: {waited:?}"
+        );
 
         let posts = "https://example.com/blog/wp-json/wp/v2/posts";
         let lost = Fake::default().answer_to("POST", posts, 504, &[], "");
-        assert!(Client::new(&lost, Policy::default()).save_draft(&api, &credentials, None, &draft("t", "c", None)).is_err());
-        assert_eq!(lost.bodies.borrow().len(), 1, "a write that may have been done is sent once");
+        assert!(Client::new(&lost, Policy::default())
+            .save_draft(&api, &credentials, None, &draft("t", "c", None))
+            .is_err());
+        assert_eq!(
+            lost.bodies.borrow().len(),
+            1,
+            "a write that may have been done is sent once"
+        );
 
         let limited = Fake::default().answer_to("POST", posts, 429, &[("retry-after", "5")], "");
         let client = Client::new(&limited, Policy::default());
-        assert_eq!(client.save_draft(&api, &credentials, None, &draft("t", "c", None)), Err(Failure::RateLimited(Some(5))));
-        assert_eq!((limited.bodies.borrow().len(), client.waited.get()), (3, Duration::from_secs(10)), "turned away, so not done: sent again when asked");
+        assert_eq!(
+            client.save_draft(&api, &credentials, None, &draft("t", "c", None)),
+            Err(Failure::RateLimited(Some(5)))
+        );
+        assert_eq!(
+            (limited.bodies.borrow().len(), client.waited.get()),
+            (3, Duration::from_secs(10)),
+            "turned away, so not done: sent again when asked"
+        );
 
         let cancel = std::sync::atomic::AtomicBool::new(true);
-        let cancelled = Fake::default().answer("https://example.com/blog/wp-json/wp/v2/posts/7?context=edit", 503, &[], "");
-        assert!(Client::new(&cancelled, Policy::default()).cancelled_by(&cancel).post_state(&api, &credentials, 7).is_err());
-        assert_eq!(cancelled.asked.borrow().len(), 1, "cancelled: not tried again");
+        let cancelled = Fake::default().answer(
+            "https://example.com/blog/wp-json/wp/v2/posts/7?context=edit",
+            503,
+            &[],
+            "",
+        );
+        assert!(Client::new(&cancelled, Policy::default())
+            .cancelled_by(&cancel)
+            .post_state(&api, &credentials, 7)
+            .is_err());
+        assert_eq!(
+            cancelled.asked.borrow().len(),
+            1,
+            "cancelled: not tried again"
+        );
 
         let later = Fake::default().answer_to("POST", posts, 429, &[("retry-after", "600")], "");
         let client = Client::new(&later, Policy::default());
-        assert!(client.save_draft(&api, &credentials, None, &draft("t", "c", None)).is_err());
-        assert_eq!((later.bodies.borrow().len(), client.waited.get()), (1, Duration::ZERO), "too long a wait is left to the person");
+        assert!(client
+            .save_draft(&api, &credentials, None, &draft("t", "c", None))
+            .is_err());
+        assert_eq!(
+            (later.bodies.borrow().len(), client.waited.get()),
+            (1, Duration::ZERO),
+            "too long a wait is left to the person"
+        );
     }
 
     #[test]
     fn a_term_is_made_once_and_one_already_there_is_used() {
         let api = local_api();
-        let credentials = Credentials { user: "ana".into(), password: "abcd efgh".into() };
+        let credentials = Credentials {
+            user: "ana".into(),
+            password: "abcd efgh".into(),
+        };
         let tags = "https://example.com/blog/wp-json/wp/v2/tags";
-        let made = Fake::default().answer_to("POST", tags, 201, &[], r#"{"id":12,"name":"Tea &amp; Tapas","parent":0}"#);
-        assert_eq!(Client::new(&made, Policy::default()).create_term(&api, &credentials, Taxonomy::Tags, "Tea & Tapas").unwrap(), Term { id: 12, name: "Tea & Tapas".into(), parent: 0 });
+        let made = Fake::default().answer_to(
+            "POST",
+            tags,
+            201,
+            &[],
+            r#"{"id":12,"name":"Tea &amp; Tapas","parent":0}"#,
+        );
+        assert_eq!(
+            Client::new(&made, Policy::default())
+                .create_term(&api, &credentials, Taxonomy::Tags, "Tea & Tapas")
+                .unwrap(),
+            Term {
+                id: 12,
+                name: "Tea & Tapas".into(),
+                parent: 0
+            }
+        );
         let sent: Value = serde_json::from_slice(&made.bodies.borrow()[0].1).unwrap();
         assert_eq!(sent, serde_json::json!({ "name": "Tea & Tapas" }));
 
-        let there = Fake::default().answer_to("POST", tags, 400, &[], r#"{"code":"term_exists","data":{"status":400,"term_id":8}}"#);
-        assert_eq!(Client::new(&there, Policy::default()).create_term(&api, &credentials, Taxonomy::Tags, "Hilltop").unwrap().id, 8, "already there: used, not made again");
+        let there = Fake::default().answer_to(
+            "POST",
+            tags,
+            400,
+            &[],
+            r#"{"code":"term_exists","data":{"status":400,"term_id":8}}"#,
+        );
+        assert_eq!(
+            Client::new(&there, Policy::default())
+                .create_term(&api, &credentials, Taxonomy::Tags, "Hilltop")
+                .unwrap()
+                .id,
+            8,
+            "already there: used, not made again"
+        );
 
         let categories = "https://example.com/blog/wp-json/wp/v2/categories";
-        let refused = Fake::default().answer_to("POST", categories, 403, &[], r#"{"code":"rest_cannot_create"}"#);
-        assert_eq!(Client::new(&refused, Policy::default()).create_term(&api, &credentials, Taxonomy::Categories, "Coast"), Err(Failure::Forbidden));
+        let refused = Fake::default().answer_to(
+            "POST",
+            categories,
+            403,
+            &[],
+            r#"{"code":"rest_cannot_create"}"#,
+        );
+        assert_eq!(
+            Client::new(&refused, Policy::default()).create_term(
+                &api,
+                &credentials,
+                Taxonomy::Categories,
+                "Coast"
+            ),
+            Err(Failure::Forbidden)
+        );
     }
 
     #[test]
     fn a_lost_upload_or_draft_is_found_by_its_exact_name() {
         let api = local_api();
-        let credentials = Credentials { user: "ana".into(), password: "abcd efgh".into() };
+        let credentials = Credentials {
+            user: "ana".into(),
+            password: "abcd efgh".into(),
+        };
         let fake = Fake::default()
             .answer(
                 "https://example.com/blog/wp-json/wp/v2/media?search=picasso-ab12&per_page=20&orderby=id&order=asc&context=edit&_fields=id,source_url,title,mime_type,media_details",
@@ -1636,23 +2554,63 @@ pub(crate) mod tests {
                 r#"[{"id":7,"title":{"raw":"Café Valley"}},{"id":8,"title":{"raw":"Café Valley 2"}}]"#,
             );
         let client = Client::new(&fake, Policy::default());
-        assert_eq!(client.find_media(&api, &credentials, "picasso-ab12").unwrap(), vec![Media { id: 41, url: "https://example.com/a.jpg".into(), details: String::new() }]);
-        assert_eq!(client.find_drafts(&api, &credentials, "Café Valley", 1_793_268_000).unwrap(), vec![7]);
+        assert_eq!(
+            client
+                .find_media(&api, &credentials, "picasso-ab12")
+                .unwrap(),
+            vec![Media {
+                id: 41,
+                url: "https://example.com/a.jpg".into(),
+                details: String::new()
+            }]
+        );
+        assert_eq!(
+            client
+                .find_drafts(&api, &credentials, "Café Valley", 1_793_268_000)
+                .unwrap(),
+            vec![7]
+        );
         assert!(Failure::Timeout.outcome_unknown() && Failure::Status(502).outcome_unknown());
-        assert!(!Failure::Forbidden.outcome_unknown() && !Failure::Status(400).outcome_unknown(), "a refusal is known not to be done");
+        assert!(
+            !Failure::Forbidden.outcome_unknown() && !Failure::Status(400).outcome_unknown(),
+            "a refusal is known not to be done"
+        );
     }
 
     #[test]
     fn a_post_titled_exactly_so_is_found_on_any_page_of_the_search() {
-        let (api, credentials) = (local_api(), Credentials { user: "ana".into(), password: "abcd efgh".into() });
-        let page = |n: u32| format!("https://example.com/blog/wp-json/wp/v2/posts?search=Day%201&status=draft,publish&modified_after=1970-01-01T00%3A00%3A00Z&per_page=100&page={n}&orderby=id&order=asc&context=edit&_fields=id,title");
+        let (api, credentials) = (
+            local_api(),
+            Credentials {
+                user: "ana".into(),
+                password: "abcd efgh".into(),
+            },
+        );
+        let page = |n: u32| {
+            format!("https://example.com/blog/wp-json/wp/v2/posts?search=Day%201&status=draft,publish&modified_after=1970-01-01T00%3A00%3A00Z&per_page=100&page={n}&orderby=id&order=asc&context=edit&_fields=id,title")
+        };
         // A hundred posts that only mention the words, then the one titled so.
-        let first: Vec<Value> = (1..=100).map(|id| serde_json::json!({ "id": id, "title": { "raw": format!("Notes {id}") } })).collect();
+        let first: Vec<Value> = (1..=100)
+            .map(|id| serde_json::json!({ "id": id, "title": { "raw": format!("Notes {id}") } }))
+            .collect();
         let fake = Fake::default()
-            .answer(&page(1), 200, &[("x-wp-totalpages", "2")], &Value::from(first).to_string())
-            .answer(&page(2), 200, &[("x-wp-totalpages", "2")], r#"[{"id":140,"title":{"raw":"Day 1"}}]"#);
+            .answer(
+                &page(1),
+                200,
+                &[("x-wp-totalpages", "2")],
+                &Value::from(first).to_string(),
+            )
+            .answer(
+                &page(2),
+                200,
+                &[("x-wp-totalpages", "2")],
+                r#"[{"id":140,"title":{"raw":"Day 1"}}]"#,
+            );
         let client = Client::new(&fake, Policy::default());
-        assert_eq!(client.find_drafts(&api, &credentials, "Day 1", 0).unwrap(), vec![140]);
+        assert_eq!(
+            client.find_drafts(&api, &credentials, "Day 1", 0).unwrap(),
+            vec![140]
+        );
         assert_eq!(fake.asked.borrow().len(), 2, "stops at the last page");
     }
 
@@ -1670,7 +2628,10 @@ pub(crate) mod tests {
     #[test]
     fn a_photo_is_uploaded_and_a_draft_made_and_changed_in_place() {
         let api = local_api();
-        let credentials = Credentials { user: "ana".into(), password: "abcd efgh".into() };
+        let credentials = Credentials {
+            user: "ana".into(),
+            password: "abcd efgh".into(),
+        };
         let fake = Fake::default()
             .answer_to("POST", "https://example.com/blog/wp-json/wp/v2/media", 201, &[], r#"{"id":41,"source_url":"https://example.com/blog/wp-content/uploads/a.jpg","mime_type":"image/jpeg","media_details":{"width":2048,"height":1365,"sizes":{"medium":{"source_url":"https://example.com/blog/wp-content/uploads/a-300x200.jpg","width":300}}}}"#)
             .answer_to("POST", "https://example.com/blog/wp-json/wp/v2/posts", 201, &[], r#"{"id":7,"status":"draft"}"#)
@@ -1678,54 +2639,145 @@ pub(crate) mod tests {
             .answer("https://example.com/blog/wp-json/wp/v2/posts/7?context=edit", 200, &[], r#"{"id":7,"status":"draft","title":{"raw":"Coast","rendered":"Coast"},"content":{"raw":"<p>y</p>"},"featured_media":0}"#)
             .answer("https://example.com/blog/wp-json/wp/v2/media/41?context=edit&_fields=id,source_url,mime_type,media_details", 200, &[], r#"{"id":41}"#);
         let client = Client::new(&fake, Policy::default());
-        let media = client.upload_media(&api, &credentials, b"jpeg", "picasso-ab12.jpg").unwrap();
-        assert_eq!((media.id, media.url.as_str()), (41, "https://example.com/blog/wp-content/uploads/a.jpg"));
+        let media = client
+            .upload_media(&api, &credentials, b"jpeg", "picasso-ab12.jpg")
+            .unwrap();
+        assert_eq!(
+            (media.id, media.url.as_str()),
+            (41, "https://example.com/blog/wp-content/uploads/a.jpg")
+        );
         let details: Value = serde_json::from_str(&media.details).unwrap();
-        assert_eq!((details["width"].as_i64(), details["mime"].as_str()), (Some(2048), Some("image/jpeg")));
-        assert_eq!(details["sizes"]["medium"], "https://example.com/blog/wp-content/uploads/a-300x200.jpg", "the sizes the site made are kept");
+        assert_eq!(
+            (details["width"].as_i64(), details["mime"].as_str()),
+            (Some(2048), Some("image/jpeg"))
+        );
+        assert_eq!(
+            details["sizes"]["medium"], "https://example.com/blog/wp-content/uploads/a-300x200.jpg",
+            "the sizes the site made are kept"
+        );
         assert!(client.media_exists(&api, &credentials, 41).unwrap());
-        assert!(!client.media_exists(&api, &credentials, 42).unwrap(), "a 404 is a removed upload");
+        assert!(
+            !client.media_exists(&api, &credentials, 42).unwrap(),
+            "a 404 is a removed upload"
+        );
 
-        assert_eq!(client.save_draft(&api, &credentials, None, &draft("Coast", "<p>x</p>", Some(41))).unwrap().id, 7);
+        assert_eq!(
+            client
+                .save_draft(
+                    &api,
+                    &credentials,
+                    None,
+                    &draft("Coast", "<p>x</p>", Some(41))
+                )
+                .unwrap()
+                .id,
+            7
+        );
         assert_eq!(client.post_state(&api, &credentials, 8).unwrap(), None);
-        let saved = client.save_draft(&api, &credentials, Some(7), &draft("Coast", "<p>y</p>", None)).unwrap();
+        let saved = client
+            .save_draft(
+                &api,
+                &credentials,
+                Some(7),
+                &draft("Coast", "<p>y</p>", None),
+            )
+            .unwrap();
         let found = client.post_state(&api, &credentials, 7).unwrap().unwrap();
-        assert_eq!(found, PostState { status: "draft".into(), fingerprint: saved.fingerprint.clone() }, "unchanged since the save");
-        let edited = Fake::default().answer("https://example.com/blog/wp-json/wp/v2/posts/7?context=edit", 200, &[], r#"{"status":"draft","title":{"raw":"Coast"},"content":{"raw":"<p>edited</p>"}}"#);
-        assert_ne!(Client::new(&edited, Policy::default()).post_state(&api, &credentials, 7).unwrap().unwrap().fingerprint, saved.fingerprint, "edited on the site");
+        assert_eq!(
+            found,
+            PostState {
+                status: "draft".into(),
+                fingerprint: saved.fingerprint.clone()
+            },
+            "unchanged since the save"
+        );
+        let edited = Fake::default().answer(
+            "https://example.com/blog/wp-json/wp/v2/posts/7?context=edit",
+            200,
+            &[],
+            r#"{"status":"draft","title":{"raw":"Coast"},"content":{"raw":"<p>edited</p>"}}"#,
+        );
+        assert_ne!(
+            Client::new(&edited, Policy::default())
+                .post_state(&api, &credentials, 7)
+                .unwrap()
+                .unwrap()
+                .fingerprint,
+            saved.fingerprint,
+            "edited on the site"
+        );
 
         let bodies = fake.bodies.borrow();
         let json = |index: usize| serde_json::from_slice::<Value>(&bodies[index].1).unwrap();
         assert_eq!(bodies[0].1, b"jpeg");
         assert_eq!(json(1)["status"], "draft", "a new post is a draft");
         assert_eq!(json(1)["featured_media"], 41);
-        assert!(json(2).get("status").is_none(), "an update leaves the status alone");
+        assert!(
+            json(2).get("status").is_none(),
+            "an update leaves the status alone"
+        );
         assert_eq!(json(2)["featured_media"], 0);
-        assert!(json(2).get("categories").is_none() && json(2).get("tags").is_none(), "terms not chosen are left as they are");
-        assert_eq!(edit_link(&api, 7), "https://example.com/blog/wp-admin/post.php?post=7&action=edit");
+        assert!(
+            json(2).get("categories").is_none() && json(2).get("tags").is_none(),
+            "terms not chosen are left as they are"
+        );
+        assert_eq!(
+            edit_link(&api, 7),
+            "https://example.com/blog/wp-admin/post.php?post=7&action=edit"
+        );
     }
 
     #[test]
     fn a_post_is_scheduled_in_the_sites_own_time_read_from_its_clock() {
         let api = local_api();
-        let credentials = Credentials { user: "ana".into(), password: "abcd efgh".into() };
-        let at = chrono::NaiveDate::from_ymd_opt(2026, 11, 1).unwrap().and_hms_opt(9, 0, 0).unwrap();
+        let credentials = Credentials {
+            user: "ana".into(),
+            password: "abcd efgh".into(),
+        };
+        let at = chrono::NaiveDate::from_ymd_opt(2026, 11, 1)
+            .unwrap()
+            .and_hms_opt(9, 0, 0)
+            .unwrap();
         let posts = "https://example.com/blog/wp-json/wp/v2/posts";
-        let fake = Fake::default().answer_to("POST", posts, 201, &[], r#"{"id":7,"status":"future"}"#);
-        let post = DraftPost { publish: true, schedule: Some(at), ..draft("Coast", "c", None) };
-        let saved = Client::new(&fake, Policy::default()).save_draft(&api, &credentials, None, &post).unwrap();
+        let fake =
+            Fake::default().answer_to("POST", posts, 201, &[], r#"{"id":7,"status":"future"}"#);
+        let post = DraftPost {
+            publish: true,
+            schedule: Some(at),
+            ..draft("Coast", "c", None)
+        };
+        let saved = Client::new(&fake, Policy::default())
+            .save_draft(&api, &credentials, None, &post)
+            .unwrap();
         assert_eq!(saved.status, "future");
         let sent: Value = serde_json::from_slice(&fake.bodies.borrow()[0].1).unwrap();
-        assert_eq!((&sent["status"], &sent["date"]), (&Value::from("future"), &Value::from("2026-11-01T09:00:00")));
-        assert!(sent.get("date_gmt").is_none(), "WordPress turns the site's time into UTC itself");
+        assert_eq!(
+            (&sent["status"], &sent["date"]),
+            (&Value::from("future"), &Value::from("2026-11-01T09:00:00"))
+        );
+        assert!(
+            sent.get("date_gmt").is_none(),
+            "WordPress turns the site's time into UTC itself"
+        );
 
         // The site's clock: when its answer was sent, in its time zone.
         let root = "https://example.com/blog/wp-json/";
         for offset in ["5.5", r#""-3""#] {
             let index = format!(r#"{{"namespaces":["wp/v2"],"gmt_offset":{offset}}}"#);
-            let fake = Fake::default().answer(root, 200, &[("date", "Sun, 01 Nov 2026 08:00:00 GMT")], &index);
-            let now = Client::new(&fake, Policy::default()).site_now(&api).unwrap();
-            let expected = if offset == "5.5" { "2026-11-01 13:30" } else { "2026-11-01 05:00" };
+            let fake = Fake::default().answer(
+                root,
+                200,
+                &[("date", "Sun, 01 Nov 2026 08:00:00 GMT")],
+                &index,
+            );
+            let now = Client::new(&fake, Policy::default())
+                .site_now(&api)
+                .unwrap();
+            let expected = if offset == "5.5" {
+                "2026-11-01 13:30"
+            } else {
+                "2026-11-01 05:00"
+            };
             assert_eq!(now.format("%Y-%m-%d %H:%M").to_string(), expected);
         }
     }
@@ -1734,15 +2786,31 @@ pub(crate) mod tests {
     fn what_a_site_keeps_of_a_trip_is_read_from_the_fields_its_posts_take() {
         let api = local_api();
         let posts = "https://example.com/blog/wp-json/wp/v2/posts";
-        let schema = |keys: &str| format!(r#"{{"schema":{{"properties":{{"meta":{{"properties":{{{keys}}}}}}}}}}}"#);
+        let schema = |keys: &str| {
+            format!(r#"{{"schema":{{"properties":{{"meta":{{"properties":{{{keys}}}}}}}}}}}"#)
+        };
         let support = |fake: &Fake| Client::new(fake, Policy::default()).travel_support(&api);
-        let travel = schema(r#""_vl_lat":{},"_vl_lon":{},"_vl_stops":{},"_vl_trip_id":{},"footnotes":{}"#);
+        let travel =
+            schema(r#""_vl_lat":{},"_vl_lon":{},"_vl_stops":{},"_vl_trip_id":{},"footnotes":{}"#);
         let fake = Fake::default().answer_to("OPTIONS", posts, 200, &[], &travel);
-        assert_eq!(support(&fake), Ok(TravelSupport { places: true, journeys: true }));
+        assert_eq!(
+            support(&fake),
+            Ok(TravelSupport {
+                places: true,
+                journeys: true
+            })
+        );
         assert_eq!(fake.asked.borrow()[0].1, None, "read without the password");
-        let fake = Fake::default().answer_to("OPTIONS", posts, 200, &[], &schema(r#""footnotes":{}"#));
+        let fake =
+            Fake::default().answer_to("OPTIONS", posts, 200, &[], &schema(r#""footnotes":{}"#));
         assert_eq!(support(&fake), Ok(TravelSupport::default()));
-        let fake = Fake::default().answer_to("OPTIONS", posts, 200, &[], r#"{"schema":{"properties":{}}}"#);
+        let fake = Fake::default().answer_to(
+            "OPTIONS",
+            posts,
+            200,
+            &[],
+            r#"{"schema":{"properties":{}}}"#,
+        );
         assert_eq!(support(&fake), Ok(TravelSupport::default()));
         // A read: tried again when the site falters.
         let fake = Fake::default().answer_to("OPTIONS", posts, 503, &[], "");
@@ -1753,9 +2821,16 @@ pub(crate) mod tests {
     #[test]
     fn categories_and_tags_are_read_page_by_page_and_sent_only_when_chosen() {
         let api = local_api();
-        let credentials = Credentials { user: "ana".into(), password: "abcd efgh".into() };
-        let page = |taxonomy: &str, n: u32| format!("https://example.com/blog/wp-json/wp/v2/{taxonomy}?per_page=100&page={n}&orderby=name&order=asc&_fields=id,name,parent");
-        let many: Vec<String> = (1..=100).map(|id| format!(r#"{{"id":{id},"name":"Tag {id}","parent":0}}"#)).collect();
+        let credentials = Credentials {
+            user: "ana".into(),
+            password: "abcd efgh".into(),
+        };
+        let page = |taxonomy: &str, n: u32| {
+            format!("https://example.com/blog/wp-json/wp/v2/{taxonomy}?per_page=100&page={n}&orderby=name&order=asc&_fields=id,name,parent")
+        };
+        let many: Vec<String> = (1..=100)
+            .map(|id| format!(r#"{{"id":{id},"name":"Tag {id}","parent":0}}"#))
+            .collect();
         let first = format!("[{}]", many.join(","));
         let fake = Fake::default()
             .answer(&page("categories", 1), 200, &[("x-wp-totalpages", "1")], r#"[{"id":2,"name":"Region","parent":0},{"id":5,"name":"Food &amp; Wine","parent":2}]"#)
@@ -1763,14 +2838,27 @@ pub(crate) mod tests {
             .answer(&page("tags", 2), 200, &[("x-wp-totalpages", "2")], r#"[{"id":101,"name":"Castle"}]"#)
             .answer_to("POST", "https://example.com/blog/wp-json/wp/v2/posts", 201, &[], r#"{"id":7}"#);
         let client = Client::new(&fake, Policy::default());
-        let categories = client.terms(&api, &credentials, Taxonomy::Categories).unwrap();
-        assert_eq!(categories[1], Term { id: 5, name: "Food & Wine".into(), parent: 2 });
+        let categories = client
+            .terms(&api, &credentials, Taxonomy::Categories)
+            .unwrap();
+        assert_eq!(
+            categories[1],
+            Term {
+                id: 5,
+                name: "Food & Wine".into(),
+                parent: 2
+            }
+        );
         let tags = client.terms(&api, &credentials, Taxonomy::Tags).unwrap();
         assert_eq!(tags.len(), 101, "every page is read");
         assert_eq!(tags[100].name, "Castle");
         assert!(fake.asked.borrow().iter().all(|(_, auth)| auth.is_some()));
 
-        let post = DraftPost { categories: Some(vec![5]), tags: Some(vec![101, 3]), ..draft("Coast", "c", None) };
+        let post = DraftPost {
+            categories: Some(vec![5]),
+            tags: Some(vec![101, 3]),
+            ..draft("Coast", "c", None)
+        };
         client.save_draft(&api, &credentials, None, &post).unwrap();
         let bodies = fake.bodies.borrow();
         let sent: Value = serde_json::from_slice(&bodies[0].1).unwrap();
@@ -1780,15 +2868,31 @@ pub(crate) mod tests {
         assert_eq!(bodies.len(), 1);
 
         let missing = Fake::default();
-        assert!(Client::new(&missing, Policy::default()).terms(&api, &credentials, Taxonomy::Tags).is_err());
+        assert!(Client::new(&missing, Policy::default())
+            .terms(&api, &credentials, Taxonomy::Tags)
+            .is_err());
     }
 
     #[test]
     fn a_change_is_never_sent_on_through_a_redirect() {
         let api = local_api();
-        let credentials = Credentials { user: "ana".into(), password: "abcd efgh".into() };
-        let fake = Fake::default().answer_to("POST", "https://example.com/blog/wp-json/wp/v2/posts", 301, &[("location", "https://example.com/new/")], "");
-        let result = Client::new(&fake, Policy::default()).save_draft(&api, &credentials, None, &draft("t", "c", None));
+        let credentials = Credentials {
+            user: "ana".into(),
+            password: "abcd efgh".into(),
+        };
+        let fake = Fake::default().answer_to(
+            "POST",
+            "https://example.com/blog/wp-json/wp/v2/posts",
+            301,
+            &[("location", "https://example.com/new/")],
+            "",
+        );
+        let result = Client::new(&fake, Policy::default()).save_draft(
+            &api,
+            &credentials,
+            None,
+            &draft("t", "c", None),
+        );
         assert_eq!(result, Err(Failure::Status(301)));
         assert_eq!(fake.asked.borrow().len(), 1);
     }
@@ -1797,13 +2901,18 @@ pub(crate) mod tests {
     fn a_site_title_loses_its_html_entities() {
         assert_eq!(decode_entities("Kuoping&#039;s Travel"), "Kuoping's Travel");
         assert_eq!(decode_entities("A &amp; B &#x41; &lt;3"), "A & B A <3");
-        assert_eq!(decode_entities("Fish & chips &unknown; &"), "Fish & chips &unknown; &");
+        assert_eq!(
+            decode_entities("Fish & chips &unknown; &"),
+            "Fish & chips &unknown; &"
+        );
     }
 
     #[test]
     fn the_password_stays_out_of_debug_output() {
-        let credentials = Credentials { user: "ana".into(), password: "secret pass".into() };
+        let credentials = Credentials {
+            user: "ana".into(),
+            password: "secret pass".into(),
+        };
         assert!(!format!("{credentials:?}").contains("secret"));
     }
 }
-

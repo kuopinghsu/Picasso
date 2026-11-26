@@ -35,7 +35,14 @@ pub enum Color {
 }
 
 impl Color {
-    pub const ALL: [Color; 6] = [Color::Red, Color::Orange, Color::Green, Color::Blue, Color::Purple, Color::Gray];
+    pub const ALL: [Color; 6] = [
+        Color::Red,
+        Color::Orange,
+        Color::Green,
+        Color::Blue,
+        Color::Purple,
+        Color::Gray,
+    ];
 
     /// Its name in the marks, and in the classes of the page and the post.
     pub fn name(self) -> &'static str {
@@ -146,9 +153,20 @@ pub fn spans(line: &str) -> Vec<Span<'_>> {
     let mut link: Option<(usize, usize)> = None;
     let mut start = 0;
     let mut i = 0;
-    fn push<'a>(out: &mut Vec<Span<'a>>, line: &'a str, from: usize, to: usize, style: &Style, mark: bool) {
+    fn push<'a>(
+        out: &mut Vec<Span<'a>>,
+        line: &'a str,
+        from: usize,
+        to: usize,
+        style: &Style,
+        mark: bool,
+    ) {
         if to > from {
-            out.push(Span { text: &line[from..to], style: style.clone(), mark });
+            out.push(Span {
+                text: &line[from..to],
+                style: style.clone(),
+                mark,
+            });
         }
     }
     while i < bytes.len() {
@@ -162,7 +180,9 @@ pub fn spans(line: &str) -> Vec<Span<'_>> {
             continue;
         }
         let rest = &line[i..];
-        let closes = |mark: &str| line[i + mark.len()..link.map_or(bytes.len(), |(close, _)| close)].contains(mark);
+        let closes = |mark: &str| {
+            line[i + mark.len()..link.map_or(bytes.len(), |(close, _)| close)].contains(mark)
+        };
         let toggle = match bytes[i] {
             b'\\' if bytes.get(i + 1).is_some_and(|c| SPECIAL.contains(c)) => {
                 push(&mut out, line, start, i, &style, false);
@@ -196,7 +216,11 @@ pub fn spans(line: &str) -> Vec<Span<'_>> {
                     start = i;
                     continue;
                 }
-                Some((color, len, false)) if style.color.is_none() && line[i + len..link.map_or(bytes.len(), |(close, _)| close)].contains(color.close()) => {
+                Some((color, len, false))
+                    if style.color.is_none()
+                        && line[i + len..link.map_or(bytes.len(), |(close, _)| close)]
+                            .contains(color.close()) =>
+                {
                     push(&mut out, line, start, i, &style, false);
                     style.color = Some(color);
                     push(&mut out, line, i, i + len, &style, true);
@@ -259,7 +283,8 @@ fn link_at(line: &str, at: usize) -> Option<(usize, usize, String)> {
     let open = close + 2;
     let end = open + line[open..].find(')')?;
     let address = &line[open..end];
-    (!address.is_empty() && !address.contains(char::is_whitespace)).then(|| (close, end + 1, address.to_string()))
+    (!address.is_empty() && !address.contains(char::is_whitespace))
+        .then(|| (close, end + 1, address.to_string()))
 }
 
 /// Only these addresses become links; any other stays text.
@@ -270,14 +295,23 @@ pub fn safe_link(address: &str) -> bool {
 
 /// The line without its marks.
 pub fn plain(line: &str) -> String {
-    spans(line).into_iter().filter(|span| !span.mark).map(|span| span.text).collect()
+    spans(line)
+        .into_iter()
+        .filter(|span| !span.mark)
+        .map(|span| span.text)
+        .collect()
 }
 
 /// The line as HTML for the page, escaped, with its styles as `strong`,
 /// `em`, `s`, `code`, and `a`, and a colour as a class the page's style
 /// gives its shade for light and dark pages.
 pub fn to_html(line: &str) -> String {
-    html(line, &|color| (format!("<span class=\"color-{}\">", color.name()), "</span>"))
+    html(line, &|color| {
+        (
+            format!("<span class=\"color-{}\">", color.name()),
+            "</span>",
+        )
+    })
 }
 
 /// The line as HTML for a WordPress post: a colour as Gutenberg's own
@@ -295,10 +329,15 @@ fn html(line: &str, colored: &dyn Fn(Color) -> (String, &'static str)) -> String
     for span in spans(line).into_iter().filter(|span| !span.mark) {
         let style = &span.style;
         let link = style.link.as_deref().filter(|address| safe_link(address));
-        let tags: Vec<&str> = [(style.bold, "strong"), (style.italic, "em"), (style.strike, "s"), (style.code, "code")]
-            .into_iter()
-            .filter_map(|(on, tag)| on.then_some(tag))
-            .collect();
+        let tags: Vec<&str> = [
+            (style.bold, "strong"),
+            (style.italic, "em"),
+            (style.strike, "s"),
+            (style.code, "code"),
+        ]
+        .into_iter()
+        .filter_map(|(on, tag)| on.then_some(tag))
+        .collect();
         if let Some(address) = link {
             out.push_str(&format!("<a href=\"{}\">", crate::story_html::esc(address)));
         }
@@ -434,7 +473,17 @@ fn recolor(text: &mut String, start: usize, end: usize, color: Option<Color>) ->
         }
     }
     let colored = match color {
-        Some(color) => middle.split('\n').map(|line| if line.is_empty() && middle.contains('\n') { String::new() } else { format!("{}{line}{}", color.open(), color.close()) }).collect::<Vec<_>>().join("\n"),
+        Some(color) => middle
+            .split('\n')
+            .map(|line| {
+                if line.is_empty() && middle.contains('\n') {
+                    String::new()
+                } else {
+                    format!("{}{line}{}", color.open(), color.close())
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
         None => middle.clone(),
     };
     let at = before.chars().count();
@@ -460,11 +509,19 @@ fn color_state(text: &str, at: usize) -> (Option<Color>, Option<std::ops::Range<
         offset = range.end;
         let color_mark = span.mark && span.text.starts_with('{');
         if range.end <= at {
-            color = if color_mark && span.text.starts_with("{/") { None } else { span.style.color };
+            color = if color_mark && span.text.starts_with("{/") {
+                None
+            } else {
+                span.style.color
+            };
             continue;
         }
         if range.start < at {
-            return if color_mark { (color, Some(range)) } else { (span.style.color, None) };
+            return if color_mark {
+                (color, Some(range))
+            } else {
+                (span.style.color, None)
+            };
         }
         break;
     }
@@ -481,9 +538,16 @@ mod tests {
             to_html("a **b** *c* ~~d~~ `*e*` [f](https://x.test/?a=1&b) 5 * 3"),
             "a <strong>b</strong> <em>c</em> <s>d</s> <code>*e*</code> <a href=\"https://x.test/?a=1&amp;b\">f</a> 5 * 3"
         );
-        assert_eq!(to_html("**bold *both***"), "<strong>bold </strong><strong><em>both</em></strong>");
+        assert_eq!(
+            to_html("**bold *both***"),
+            "<strong>bold </strong><strong><em>both</em></strong>"
+        );
         assert_eq!(to_html(r"\*not\* <b>"), "*not* &lt;b&gt;");
-        assert_eq!(to_html("[bad](javascript:alert(1))"), "bad)", "only web and mail addresses link");
+        assert_eq!(
+            to_html("[bad](javascript:alert(1))"),
+            "bad)",
+            "only web and mail addresses link"
+        );
         assert_eq!(plain("**Day** [one](https://x.test)"), "Day one");
     }
 
@@ -494,14 +558,25 @@ mod tests {
             "a <span class=\"color-red\">b </span><span class=\"color-red\"><strong>c</strong></span> {blue}d",
             "a colour without its closing mark stays text"
         );
-        assert_eq!(to_html("{red}a {blue}b{/blue}{/red}"), "<span class=\"color-red\">a {blue}b{/blue}</span>", "one colour at a time");
+        assert_eq!(
+            to_html("{red}a {blue}b{/blue}{/red}"),
+            "<span class=\"color-red\">a {blue}b{/blue}</span>",
+            "one colour at a time"
+        );
         assert_eq!(to_html(r"\{red}a{/red}"), "{red}a{/red}");
-        assert_eq!(to_html("{pink}a{/pink}"), "{pink}a{/pink}", "only the colours there are");
+        assert_eq!(
+            to_html("{pink}a{/pink}"),
+            "{pink}a{/pink}",
+            "only the colours there are"
+        );
         assert_eq!(
             to_post_html("{green}x{/green}"),
             "<mark style=\"background-color:transparent;color:#27702b\" class=\"has-inline-color picasso-color-green\">x</mark>"
         );
-        assert_eq!(to_markdown("{red}**a_b**{/red}"), "<span style=\"color:#c62828\">**a\\_b**</span>");
+        assert_eq!(
+            to_markdown("{red}**a_b**{/red}"),
+            "<span style=\"color:#c62828\">**a\\_b**</span>"
+        );
         assert_eq!(plain("{gray}quiet{/gray}"), "quiet");
     }
 
@@ -510,19 +585,28 @@ mod tests {
         fn luminance(hex: &str) -> f64 {
             let channel = |at: usize| {
                 let c = f64::from(u8::from_str_radix(&hex[at..at + 2], 16).unwrap()) / 255.0;
-                if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
+                if c <= 0.04045 {
+                    c / 12.92
+                } else {
+                    ((c + 0.055) / 1.055).powf(2.4)
+                }
             };
             0.2126 * channel(1) + 0.7152 * channel(3) + 0.0722 * channel(5)
         }
         // The pages of the templates and of the VoyageLight theme, light and dark.
         let light = ["#fbfaf7", "#f6efe1", "#ffffff", "#f6f5f2"];
-        let dark = ["#161616", "#221d17", "#12161c", "#0e0e0e", "#0b141b", "#121f29"];
+        let dark = [
+            "#161616", "#221d17", "#12161c", "#0e0e0e", "#0b141b", "#121f29",
+        ];
         for color in Color::ALL {
             for (shade, pages) in [(color.hex(false), &light[..]), (color.hex(true), &dark[..])] {
                 for page in pages {
                     let (a, b) = (luminance(shade), luminance(page));
                     let contrast = (a.max(b) + 0.05) / (a.min(b) + 0.05);
-                    assert!(contrast >= 4.5, "{color:?} {shade} on {page}: {contrast:.2}:1");
+                    assert!(
+                        contrast >= 4.5,
+                        "{color:?} {shade} on {page}: {contrast:.2}:1"
+                    );
                 }
             }
         }
@@ -532,7 +616,11 @@ mod tests {
     fn the_voyagelight_theme_gives_each_colour_its_dark_shade() {
         let css = include_str!("../wordpress/voyagelight/assets/css/theme.css");
         for color in Color::ALL {
-            let rule = format!("html[data-theme=\"dark\"] .picasso-color-{}{{color:{}!important}}", color.name(), color.hex(true));
+            let rule = format!(
+                "html[data-theme=\"dark\"] .picasso-color-{}{{color:{}!important}}",
+                color.name(),
+                color.hex(true)
+            );
             assert!(css.contains(&rule), "the theme lacks {rule}");
         }
     }
@@ -542,19 +630,66 @@ mod tests {
         let recolored = |text: &str, start: usize, end: usize, color: Option<Color>| {
             let mut text = text.to_string();
             let (from, to) = wrap(&mut text, start, end, Mark::Color(color));
-            (text.clone(), text.chars().skip(from).take(to - from).collect::<String>())
+            (
+                text.clone(),
+                text.chars().skip(from).take(to - from).collect::<String>(),
+            )
         };
-        assert_eq!(recolored("one two", 4, 7, Some(Color::Red)), ("one {red}two{/red}".into(), "two".into()));
-        assert_eq!(recolored("one {red}two{/red}", 9, 12, Some(Color::Blue)), ("one {blue}two{/blue}".into(), "two".into()));
-        assert_eq!(recolored("one {red}two{/red}", 9, 12, None), ("one two".into(), "two".into()));
-        assert_eq!(recolored("{red}abc{/red}", 6, 7, Some(Color::Blue)), ("{red}a{/red}{blue}b{/blue}{red}c{/red}".into(), "b".into()), "a word in the middle");
-        assert_eq!(recolored("{red}abc{/red}", 5, 5, None), ("{red}abc{/red}".into(), String::new()), "a caret alone changes nothing");
-        assert_eq!(recolored("{red}abc{/red}", 0, 14, Some(Color::Green)).0, "{green}abc{/green}", "the marks selected too");
-        assert_eq!(recolored("{red}abc{/red}", 2, 8, Some(Color::Green)).0, "{green}abc{/green}", "an end inside a mark takes all of it");
-        assert_eq!(recolored("x {red}ab{/red}", 0, 8, None).0, "x a{red}b{/red}");
-        assert_eq!(recolored("a\n\nb", 0, 4, Some(Color::Green)).0, "{green}a{/green}\n\n{green}b{/green}", "each line on its own");
-        for original in ["The {red} label", "The {/blue} label", r"The \{red} label", "The `{red}` label", "{red}{blue}label{/blue}{/red}"] {
-            let visible = |text: &str| spans(text).into_iter().filter(|span| !span.mark).map(|span| span.text).collect::<String>();
+        assert_eq!(
+            recolored("one two", 4, 7, Some(Color::Red)),
+            ("one {red}two{/red}".into(), "two".into())
+        );
+        assert_eq!(
+            recolored("one {red}two{/red}", 9, 12, Some(Color::Blue)),
+            ("one {blue}two{/blue}".into(), "two".into())
+        );
+        assert_eq!(
+            recolored("one {red}two{/red}", 9, 12, None),
+            ("one two".into(), "two".into())
+        );
+        assert_eq!(
+            recolored("{red}abc{/red}", 6, 7, Some(Color::Blue)),
+            ("{red}a{/red}{blue}b{/blue}{red}c{/red}".into(), "b".into()),
+            "a word in the middle"
+        );
+        assert_eq!(
+            recolored("{red}abc{/red}", 5, 5, None),
+            ("{red}abc{/red}".into(), String::new()),
+            "a caret alone changes nothing"
+        );
+        assert_eq!(
+            recolored("{red}abc{/red}", 0, 14, Some(Color::Green)).0,
+            "{green}abc{/green}",
+            "the marks selected too"
+        );
+        assert_eq!(
+            recolored("{red}abc{/red}", 2, 8, Some(Color::Green)).0,
+            "{green}abc{/green}",
+            "an end inside a mark takes all of it"
+        );
+        assert_eq!(
+            recolored("x {red}ab{/red}", 0, 8, None).0,
+            "x a{red}b{/red}"
+        );
+        assert_eq!(
+            recolored("a\n\nb", 0, 4, Some(Color::Green)).0,
+            "{green}a{/green}\n\n{green}b{/green}",
+            "each line on its own"
+        );
+        for original in [
+            "The {red} label",
+            "The {/blue} label",
+            r"The \{red} label",
+            "The `{red}` label",
+            "{red}{blue}label{/blue}{/red}",
+        ] {
+            let visible = |text: &str| {
+                spans(text)
+                    .into_iter()
+                    .filter(|span| !span.mark)
+                    .map(|span| span.text)
+                    .collect::<String>()
+            };
             for color in [None, Some(Color::Blue)] {
                 let (out, _) = recolored(original, 0, original.len(), color);
                 assert_eq!(visible(&out), visible(original), "{original} became {out}");
@@ -565,8 +700,15 @@ mod tests {
                 for end in start..=text.len() {
                     for color in [None, Some(Color::Blue)] {
                         let (out, _) = recolored(text, start, end, color);
-                        let left = spans(&out).iter().filter(|span| !span.mark).map(|span| span.text).collect::<String>();
-                        assert!(!left.contains('{'), "{text:?} {start}..{end} {color:?} left a mark as text: {out:?}");
+                        let left = spans(&out)
+                            .iter()
+                            .filter(|span| !span.mark)
+                            .map(|span| span.text)
+                            .collect::<String>();
+                        assert!(
+                            !left.contains('{'),
+                            "{text:?} {start}..{end} {color:?} left a mark as text: {out:?}"
+                        );
                     }
                 }
             }
@@ -575,8 +717,19 @@ mod tests {
 
     #[test]
     fn the_spans_are_the_whole_line_so_the_editor_keeps_every_character() {
-        for line in ["a **b** *c", "x [y](https://z) `q` \\* ~~", "古都 **語**", "**", "[a](b c)", "{red}x{/red} {blue}", "{/red}{red}"] {
-            assert_eq!(spans(line).iter().map(|span| span.text).collect::<String>(), line);
+        for line in [
+            "a **b** *c",
+            "x [y](https://z) `q` \\* ~~",
+            "古都 **語**",
+            "**",
+            "[a](b c)",
+            "{red}x{/red} {blue}",
+            "{/red}{red}",
+        ] {
+            assert_eq!(
+                spans(line).iter().map(|span| span.text).collect::<String>(),
+                line
+            );
         }
     }
 
@@ -595,6 +748,9 @@ mod tests {
         assert_eq!(text, "one two");
         let (from, to) = wrap(&mut text, 0, 3, Mark::Link);
         assert_eq!(text, "[one](https://) two");
-        assert_eq!(text.chars().skip(from).take(to - from).collect::<String>(), "https://");
+        assert_eq!(
+            text.chars().skip(from).take(to - from).collect::<String>(),
+            "https://"
+        );
     }
 }

@@ -21,7 +21,10 @@ impl FrameStats {
     pub(super) fn from_env() -> Option<Self> {
         std::env::var("PICASSO_FRAME_STATS")
             .is_ok_and(|value| value == "1")
-            .then(|| FrameStats { started: Instant::now(), cpu_ms: Vec::new() })
+            .then(|| FrameStats {
+                started: Instant::now(),
+                cpu_ms: Vec::new(),
+            })
     }
 
     /// Takes the time the last frame spent drawing, in seconds.

@@ -48,7 +48,8 @@ impl Config {
             }
         }
         if let Some(value) = db.setting("confirm_trash") {
-            self.values.insert("confirm_trash".into(), Value::from(value != "0"));
+            self.values
+                .insert("confirm_trash".into(), Value::from(value != "0"));
         }
     }
 
@@ -77,7 +78,10 @@ impl Config {
     /// Types the scanner indexes; every type when the setting is missing.
     pub fn file_types(&self) -> Vec<FileType> {
         match self.values.get("file_types").and_then(Value::as_array) {
-            Some(codes) => codes.iter().filter_map(|code| FileType::from_code(code.as_str()?)).collect(),
+            Some(codes) => codes
+                .iter()
+                .filter_map(|code| FileType::from_code(code.as_str()?))
+                .collect(),
             None => FileType::ALL.to_vec(),
         }
     }
@@ -89,8 +93,14 @@ impl Config {
 
     /// Recent searches, newest first.
     pub fn searches(&self) -> Vec<String> {
-        let Some(searches) = self.values.get("recent_searches").and_then(Value::as_array) else { return Vec::new() };
-        searches.iter().filter_map(Value::as_str).map(str::to_string).collect()
+        let Some(searches) = self.values.get("recent_searches").and_then(Value::as_array) else {
+            return Vec::new();
+        };
+        searches
+            .iter()
+            .filter_map(Value::as_str)
+            .map(str::to_string)
+            .collect()
     }
 
     /// Puts `search` first in the recent searches, once, dropping the oldest
@@ -108,7 +118,10 @@ impl Config {
         searches.retain(|earlier| earlier.to_lowercase() != lower);
         searches.insert(0, search.to_string());
         searches.truncate(RECENT_SEARCHES);
-        self.set("recent_searches", Value::Array(searches.into_iter().map(Value::from).collect()));
+        self.set(
+            "recent_searches",
+            Value::Array(searches.into_iter().map(Value::from).collect()),
+        );
     }
 
     pub fn forget_searches(&mut self) {
@@ -131,7 +144,9 @@ impl Config {
 
     /// Writes to a temporary file first, so a crash never leaves half a file.
     fn save(&self) {
-        let Ok(text) = serde_json::to_string_pretty(&self.values) else { return };
+        let Ok(text) = serde_json::to_string_pretty(&self.values) else {
+            return;
+        };
         let temporary = self.path.with_extension("json.tmp");
         let written = self
             .path
@@ -147,7 +162,10 @@ impl Config {
 
 /// A text setting from `settings.json` in `dir`, read without the library.
 pub fn stored_text(dir: &Path, key: &str) -> Option<String> {
-    read(&dir.join("settings.json"))?.get(key)?.as_str().map(str::to_string)
+    read(&dir.join("settings.json"))?
+        .get(key)?
+        .as_str()
+        .map(str::to_string)
 }
 
 fn read(path: &Path) -> Option<Map<String, Value>> {
@@ -209,7 +227,8 @@ mod tests {
 
     #[test]
     fn recent_searches_are_kept_newest_first_once_each() {
-        let dir = std::env::temp_dir().join(format!("picasso-config-searches-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("picasso-config-searches-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let db = Database::open(&dir.join("library.db")).unwrap();

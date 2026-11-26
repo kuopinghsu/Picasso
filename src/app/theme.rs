@@ -7,7 +7,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::i18n::tr;
 
-use eframe::egui::{self, Color32, CornerRadius, FontId, Pos2, Rect, Shadow, Stroke, TextStyle, Vec2};
+use eframe::egui::{
+    self, Color32, CornerRadius, FontId, Pos2, Rect, Shadow, Stroke, TextStyle, Vec2,
+};
 
 /// Lagoon teal, dark enough for white text on it: filled buttons and marks
 /// over photos or map tiles, which look the same in either theme. For text
@@ -205,10 +207,18 @@ pub fn overlay(alpha: u8) -> Color32 {
 /// Fonts and spacing, set once at startup.
 pub fn apply(ctx: &egui::Context, dark: bool) {
     ctx.all_styles_mut(|style| {
-        style.text_styles.insert(TextStyle::Body, FontId::proportional(13.5));
-        style.text_styles.insert(TextStyle::Button, FontId::proportional(13.5));
-        style.text_styles.insert(TextStyle::Small, FontId::proportional(11.0));
-        style.text_styles.insert(TextStyle::Heading, FontId::proportional(20.0));
+        style
+            .text_styles
+            .insert(TextStyle::Body, FontId::proportional(13.5));
+        style
+            .text_styles
+            .insert(TextStyle::Button, FontId::proportional(13.5));
+        style
+            .text_styles
+            .insert(TextStyle::Small, FontId::proportional(11.0));
+        style
+            .text_styles
+            .insert(TextStyle::Heading, FontId::proportional(20.0));
         style.spacing.item_spacing = egui::vec2(8.0, 6.0);
         style.spacing.button_padding = egui::vec2(12.0, 5.0);
         style.spacing.interact_size.y = 28.0;
@@ -221,13 +231,21 @@ pub fn apply(ctx: &egui::Context, dark: bool) {
 /// Switches every page to the light or dark palette.
 pub fn set_dark(ctx: &egui::Context, dark: bool) {
     DARK_ACTIVE.store(dark, Ordering::Relaxed);
-    ctx.set_theme(if dark { egui::ThemePreference::Dark } else { egui::ThemePreference::Light });
+    ctx.set_theme(if dark {
+        egui::ThemePreference::Dark
+    } else {
+        egui::ThemePreference::Light
+    });
     ctx.all_styles_mut(|style| style.visuals = visuals(dark));
 }
 
 fn visuals(dark: bool) -> egui::Visuals {
     let p = if dark { &DARK } else { &LIGHT };
-    let mut visuals = if dark { egui::Visuals::dark() } else { egui::Visuals::light() };
+    let mut visuals = if dark {
+        egui::Visuals::dark()
+    } else {
+        egui::Visuals::light()
+    };
     visuals.panel_fill = p.bg;
     visuals.window_fill = if dark { p.sidebar } else { WHITE };
     visuals.window_stroke = Stroke::new(1.0, p.hairline);
@@ -245,18 +263,46 @@ fn visuals(dark: bool) -> egui::Visuals {
         color: Color32::from_black_alpha(if dark { 90 } else { 28 }),
     };
     visuals.menu_corner_radius = CornerRadius::same(8);
-    visuals.extreme_bg_color = if dark { Color32::from_rgb(0x20, 0x27, 0x2A) } else { WHITE };
-    visuals.faint_bg_color = if dark { Color32::from_rgb(0x20, 0x27, 0x2A) } else { p.sidebar };
-    visuals.selection.bg_fill = if dark { Color32::from_rgb(0x17, 0x55, 0x5B) } else { p.select };
+    visuals.extreme_bg_color = if dark {
+        Color32::from_rgb(0x20, 0x27, 0x2A)
+    } else {
+        WHITE
+    };
+    visuals.faint_bg_color = if dark {
+        Color32::from_rgb(0x20, 0x27, 0x2A)
+    } else {
+        p.sidebar
+    };
+    visuals.selection.bg_fill = if dark {
+        Color32::from_rgb(0x17, 0x55, 0x5B)
+    } else {
+        p.select
+    };
     visuals.selection.stroke = Stroke::new(1.0, if dark { ACCENT_DARK } else { ACCENT });
     visuals.hyperlink_color = if dark { ACCENT_DARK } else { ACCENT };
     visuals.slider_trailing_fill = true;
 
     // Fill and outline of buttons and fields: resting, hovered, pressed.
     let [rest, rest_fill, rest_line, over, over_line, press, press_line] = if dark {
-        [(0x24, 0x2B, 0x2E), (0x2E, 0x36, 0x39), (0x2E, 0x36, 0x39), (0x31, 0x39, 0x3C), (0x41, 0x4B, 0x4F), (0x3A, 0x44, 0x47), (0x4A, 0x55, 0x59)]
+        [
+            (0x24, 0x2B, 0x2E),
+            (0x2E, 0x36, 0x39),
+            (0x2E, 0x36, 0x39),
+            (0x31, 0x39, 0x3C),
+            (0x41, 0x4B, 0x4F),
+            (0x3A, 0x44, 0x47),
+            (0x4A, 0x55, 0x59),
+        ]
     } else {
-        [(0xF1, 0xF0, 0xEC), (0xE3, 0xE1, 0xDB), (0xD8, 0xD6, 0xCF), (0xEB, 0xEA, 0xE5), (0xC8, 0xC6, 0xBE), (0xDE, 0xDC, 0xD5), (0xB8, 0xB5, 0xAC)]
+        [
+            (0xF1, 0xF0, 0xEC),
+            (0xE3, 0xE1, 0xDB),
+            (0xD8, 0xD6, 0xCF),
+            (0xEB, 0xEA, 0xE5),
+            (0xC8, 0xC6, 0xBE),
+            (0xDE, 0xDC, 0xD5),
+            (0xB8, 0xB5, 0xAC),
+        ]
     }
     .map(|(r, g, b)| Color32::from_rgb(r, g, b));
     let widgets = &mut visuals.widgets;
@@ -331,7 +377,13 @@ pub fn paint_logo(painter: &egui::Painter, logo: &egui::TextureHandle, rect: Rec
 }
 
 /// Map-pin mark: a round head of `radius` over a point, with a `hole` dot.
-pub fn paint_pin(painter: &egui::Painter, center: Pos2, radius: f32, color: Color32, hole: Color32) {
+pub fn paint_pin(
+    painter: &egui::Painter,
+    center: Pos2,
+    radius: f32,
+    color: Color32,
+    hole: Color32,
+) {
     let head = center + Vec2::new(0.0, -0.45 * radius);
     painter.add(egui::Shape::convex_polygon(
         vec![
@@ -354,7 +406,10 @@ pub fn paint_theme_icon(painter: &egui::Painter, center: Pos2, moon: bool, color
         for step in 0..8 {
             let angle = step as f32 * std::f32::consts::FRAC_PI_4;
             let dir = Vec2::angled(angle);
-            painter.line_segment([center + dir * 5.3, center + dir * 7.0], Stroke::new(1.5, color));
+            painter.line_segment(
+                [center + dir * 5.3, center + dir * 7.0],
+                Stroke::new(1.5, color),
+            );
         }
         return;
     }
@@ -362,7 +417,8 @@ pub fn paint_theme_icon(painter: &egui::Painter, center: Pos2, moon: bool, color
     // top to bottom as a triangle strip and tilted toward the upper right.
     let (radius, cut, rows) = (6.5_f32, 4.6_f32, 24);
     let tilt = Vec2::angled(-std::f32::consts::FRAC_PI_4);
-    let place = |x: f32, y: f32| center + Vec2::new(x * tilt.x - y * tilt.y, x * tilt.y + y * tilt.x);
+    let place =
+        |x: f32, y: f32| center + Vec2::new(x * tilt.x - y * tilt.y, x * tilt.y + y * tilt.x);
     let mut mesh = egui::Mesh::default();
     for row in 0..=rows {
         let y = -radius + 2.0 * radius * row as f32 / rows as f32;
@@ -391,7 +447,11 @@ pub fn paint_bottom_fade(painter: &egui::Painter, rect: Rect, radius: f32, depth
         let t = row as f32 / rows as f32;
         let y = top + depth * t;
         let below = y - (rect.bottom() - radius);
-        let inset = if below > 0.0 { radius - (radius * radius - below * below).max(0.0).sqrt() } else { 0.0 };
+        let inset = if below > 0.0 {
+            radius - (radius * radius - below * below).max(0.0).sqrt()
+        } else {
+            0.0
+        };
         let color = Color32::from_black_alpha((f32::from(alpha) * t.powf(1.5)).round() as u8);
         mesh.colored_vertex(Pos2::new(rect.left() + inset, y), color);
         mesh.colored_vertex(Pos2::new(rect.right() - inset, y), color);
@@ -420,8 +480,19 @@ pub enum Icon {
 /// A button the size of a short text button with `icon` drawn in it.
 pub fn icon_button(ui: &mut egui::Ui, icon: Icon, enabled: bool, selected: bool) -> egui::Response {
     let response = ui.add_enabled(enabled, egui::Button::new("     ").selected(selected));
-    response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, ui.is_enabled() && enabled, selected, icon_label(icon)));
-    let color = if enabled { text() } else { muted().gamma_multiply(0.6) };
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(
+            egui::Role::Button,
+            ui.is_enabled() && enabled,
+            selected,
+            icon_label(icon),
+        )
+    });
+    let color = if enabled {
+        text()
+    } else {
+        muted().gamma_multiply(0.6)
+    };
     paint_icon(ui.painter(), icon, response.rect.center(), color);
     response
 }
@@ -443,15 +514,21 @@ pub fn end_actions<R>(ui: &mut egui::Ui, id: &str, add: impl FnOnce(&mut egui::U
     if needed > ui.max_rect().width() {
         let row = ui.spacing().interact_size.y;
         return ui
-            .scope_builder(egui::UiBuilder::new().layout(egui::Layout::left_to_right(egui::Align::Center).with_main_wrap(true)), |ui| {
-                let inner = add(ui);
-                // On one line again, they are as wide as they need.
-                if ui.min_rect().height() <= row + 1.0 {
-                    ui.ctx().data_mut(|data| data.insert_temp(key, ui.min_rect().width()));
-                    ui.ctx().request_discard("the header's actions fit on one line again");
-                }
-                inner
-            })
+            .scope_builder(
+                egui::UiBuilder::new()
+                    .layout(egui::Layout::left_to_right(egui::Align::Center).with_main_wrap(true)),
+                |ui| {
+                    let inner = add(ui);
+                    // On one line again, they are as wide as they need.
+                    if ui.min_rect().height() <= row + 1.0 {
+                        ui.ctx()
+                            .data_mut(|data| data.insert_temp(key, ui.min_rect().width()));
+                        ui.ctx()
+                            .request_discard("the header's actions fit on one line again");
+                    }
+                    inner
+                },
+            )
             .inner;
     }
     trailing(ui, id, add)
@@ -467,17 +544,26 @@ pub fn trailing<R>(ui: &mut egui::Ui, id: &str, add: impl FnOnce(&mut egui::Ui) 
     let top = ui.cursor().min;
     let right = ui.max_rect().right();
     let left = (right - needed).max(top.x);
-    let rect = egui::Rect::from_min_max(egui::pos2(left, top.y), egui::pos2(right, top.y + ui.spacing().interact_size.y));
-    ui.scope_builder(egui::UiBuilder::new().max_rect(rect).layout(egui::Layout::left_to_right(egui::Align::Center)), |ui| {
-        let inner = add(ui);
-        let width = ui.min_rect().width();
-        if (width - needed).abs() > 0.5 {
-            ui.ctx().data_mut(|data| data.insert_temp(key, width));
-            // Lay the frame out again with the width now known, before it shows.
-            ui.ctx().request_discard("the actions at the end of a row changed width");
-        }
-        inner
-    })
+    let rect = egui::Rect::from_min_max(
+        egui::pos2(left, top.y),
+        egui::pos2(right, top.y + ui.spacing().interact_size.y),
+    );
+    ui.scope_builder(
+        egui::UiBuilder::new()
+            .max_rect(rect)
+            .layout(egui::Layout::left_to_right(egui::Align::Center)),
+        |ui| {
+            let inner = add(ui);
+            let width = ui.min_rect().width();
+            if (width - needed).abs() > 0.5 {
+                ui.ctx().data_mut(|data| data.insert_temp(key, width));
+                // Lay the frame out again with the width now known, before it shows.
+                ui.ctx()
+                    .request_discard("the actions at the end of a row changed width");
+            }
+            inner
+        },
+    )
     .inner
 }
 
@@ -485,7 +571,12 @@ pub fn trailing<R>(ui: &mut egui::Ui, id: &str, add: impl FnOnce(&mut egui::Ui) 
 /// for areas that draw themselves instead of being a widget.
 pub fn focus_ring(ui: &egui::Ui, response: &egui::Response, rect: egui::Rect) {
     if response.has_focus() {
-        ui.painter().rect_stroke(rect.expand(2.0), 6, egui::Stroke::new(2.0, ACCENT), egui::StrokeKind::Outside);
+        ui.painter().rect_stroke(
+            rect.expand(2.0),
+            6,
+            egui::Stroke::new(2.0, ACCENT),
+            egui::StrokeKind::Outside,
+        );
     }
 }
 
@@ -494,16 +585,31 @@ pub fn focus_ring(ui: &egui::Ui, response: &egui::Response, rect: egui::Rect) {
 /// which is hard to tell from its other states.
 pub fn keyboard_focus_ring(ctx: &egui::Context) {
     let id = egui::Id::unique("keyboard-focus");
-    let (tab, pointer) = ctx.input(|input| (input.key_pressed(egui::Key::Tab), input.pointer.any_pressed()));
+    let (tab, pointer) = ctx.input(|input| {
+        (
+            input.key_pressed(egui::Key::Tab),
+            input.pointer.any_pressed(),
+        )
+    });
     if tab || pointer {
         ctx.data_mut(|data| data.insert_temp(id, tab));
     }
     if !ctx.data(|data| data.get_temp::<bool>(id)).unwrap_or(false) {
         return;
     }
-    let Some(response) = ctx.memory(|memory| memory.focused()).and_then(|focused| ctx.read_response(focused)) else { return };
+    let Some(response) = ctx
+        .memory(|memory| memory.focused())
+        .and_then(|focused| ctx.read_response(focused))
+    else {
+        return;
+    };
     let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, id));
-    painter.rect_stroke(response.rect, 6, egui::Stroke::new(2.0, ACCENT), egui::StrokeKind::Inside);
+    painter.rect_stroke(
+        response.rect,
+        6,
+        egui::Stroke::new(2.0, ACCENT),
+        egui::StrokeKind::Inside,
+    );
 }
 
 /// Names a button that shows only a symbol or a painted icon, for screen
@@ -528,7 +634,8 @@ pub fn name_picker(response: &egui::Response, name: &str, shown: String) {
 /// How wide the actions [`trailing`] or [`end_actions`] put under `id` were
 /// last frame.
 pub fn trailing_width(ctx: &egui::Context, id: &str) -> f32 {
-    ctx.data(|data| data.get_temp::<f32>(actions_key(id))).unwrap_or(0.0)
+    ctx.data(|data| data.get_temp::<f32>(actions_key(id)))
+        .unwrap_or(0.0)
 }
 
 /// Where the width of the actions under `id` is remembered.
@@ -554,7 +661,11 @@ pub fn paint_icon(painter: &egui::Painter, icon: Icon, center: Pos2, color: Colo
     let arrowhead = |tip: Pos2, dir: Vec2| {
         let side = Vec2::new(-dir.y, dir.x) * 2.8;
         let back = tip - dir * 3.4;
-        painter.add(egui::Shape::convex_polygon(vec![tip, back + side, back - side], color, Stroke::NONE));
+        painter.add(egui::Shape::convex_polygon(
+            vec![tip, back + side, back - side],
+            color,
+            Stroke::NONE,
+        ));
     };
     match icon {
         Icon::RotateLeft | Icon::RotateRight => {
@@ -564,7 +675,9 @@ pub fn paint_icon(painter: &egui::Painter, icon: Icon, center: Pos2, color: Colo
             let radius = 5.2;
             let (start, end) = (-40_f32.to_radians(), 255_f32.to_radians());
             let at = |angle: f32| center + Vec2::new(flip * angle.cos(), angle.sin()) * radius;
-            let points: Vec<Pos2> = (0..=20).map(|step| at(start + (end - start) * step as f32 / 20.0)).collect();
+            let points: Vec<Pos2> = (0..=20)
+                .map(|step| at(start + (end - start) * step as f32 / 20.0))
+                .collect();
             painter.add(egui::Shape::line(points, stroke));
             let dir = Vec2::new(-flip * end.sin(), end.cos());
             arrowhead(at(end) + dir * 2.4, dir);
@@ -576,7 +689,8 @@ pub fn paint_icon(painter: &egui::Painter, icon: Icon, center: Pos2, color: Colo
             let point = |x: f32, y: f32| center + Vec2::new(flip * x, y);
             let mut points = vec![point(-3.0, -2.5), point(2.0, -2.5)];
             for step in 1..=12 {
-                let angle = -std::f32::consts::FRAC_PI_2 + std::f32::consts::PI * step as f32 / 12.0;
+                let angle =
+                    -std::f32::consts::FRAC_PI_2 + std::f32::consts::PI * step as f32 / 12.0;
                 points.push(point(2.0 + 3.25 * angle.cos(), 0.75 + 3.25 * angle.sin()));
             }
             points.push(point(-1.5, 4.0));
@@ -586,19 +700,44 @@ pub fn paint_icon(painter: &egui::Painter, icon: Icon, center: Pos2, color: Colo
         Icon::AddToAlbum | Icon::RemoveFromAlbum => {
             let front = Rect::from_center_size(center + Vec2::new(-1.0, 1.0), Vec2::new(11.0, 9.0));
             painter.rect_stroke(front, 2.0, stroke, egui::StrokeKind::Middle);
-            painter.line_segment([front.left_top() + Vec2::new(2.5, -2.5), front.right_top() + Vec2::new(2.5, -2.5)], stroke);
-            painter.line_segment([front.right_top() + Vec2::new(2.5, -2.5), front.right_bottom() + Vec2::new(2.5, -2.5)], stroke);
+            painter.line_segment(
+                [
+                    front.left_top() + Vec2::new(2.5, -2.5),
+                    front.right_top() + Vec2::new(2.5, -2.5),
+                ],
+                stroke,
+            );
+            painter.line_segment(
+                [
+                    front.right_top() + Vec2::new(2.5, -2.5),
+                    front.right_bottom() + Vec2::new(2.5, -2.5),
+                ],
+                stroke,
+            );
             let mid = front.center();
-            painter.line_segment([mid - Vec2::new(2.5, 0.0), mid + Vec2::new(2.5, 0.0)], stroke);
+            painter.line_segment(
+                [mid - Vec2::new(2.5, 0.0), mid + Vec2::new(2.5, 0.0)],
+                stroke,
+            );
             if icon == Icon::AddToAlbum {
-                painter.line_segment([mid - Vec2::new(0.0, 2.5), mid + Vec2::new(0.0, 2.5)], stroke);
+                painter.line_segment(
+                    [mid - Vec2::new(0.0, 2.5), mid + Vec2::new(0.0, 2.5)],
+                    stroke,
+                );
             }
         }
         Icon::Clipping => {
             let top = center + Vec2::new(0.0, -6.0);
-            let corners = vec![top, center + Vec2::new(6.5, 5.0), center + Vec2::new(-6.5, 5.0)];
+            let corners = vec![
+                top,
+                center + Vec2::new(6.5, 5.0),
+                center + Vec2::new(-6.5, 5.0),
+            ];
             painter.add(egui::Shape::closed_line(corners, stroke));
-            painter.line_segment([center + Vec2::new(0.0, -2.0), center + Vec2::new(0.0, 1.5)], stroke);
+            painter.line_segment(
+                [center + Vec2::new(0.0, -2.0), center + Vec2::new(0.0, 1.5)],
+                stroke,
+            );
             painter.circle_filled(center + Vec2::new(0.0, 3.4), 0.9, color);
         }
         Icon::More => {
@@ -612,7 +751,13 @@ pub fn paint_icon(painter: &egui::Painter, icon: Icon, center: Pos2, color: Colo
 /// Help glyph about 15 points wide: a question mark in a ring.
 pub fn paint_help_icon(painter: &egui::Painter, center: Pos2, color: Color32) {
     painter.circle_stroke(center, 7.2, Stroke::new(1.4, color));
-    painter.text(center + Vec2::new(0.0, 0.5), egui::Align2::CENTER_CENTER, "?", FontId::proportional(11.0), color);
+    painter.text(
+        center + Vec2::new(0.0, 0.5),
+        egui::Align2::CENTER_CENTER,
+        "?",
+        FontId::proportional(11.0),
+        color,
+    );
 }
 
 /// Gear outline with eight teeth, the same size as the help icon.
@@ -637,7 +782,10 @@ pub fn paint_edit_mark(painter: &egui::Painter, center: Pos2, radius: f32) {
     let track = Stroke::new((radius * 0.12).max(1.0), WHITE);
     for (row, knob) in [(-1.0, -0.4), (0.0, 0.45), (1.0, -0.1)] {
         let y = center.y + row * radius * 0.36;
-        painter.line_segment([Pos2::new(center.x - half, y), Pos2::new(center.x + half, y)], track);
+        painter.line_segment(
+            [Pos2::new(center.x - half, y), Pos2::new(center.x + half, y)],
+            track,
+        );
         painter.circle_filled(Pos2::new(center.x + knob * half, y), radius * 0.17, WHITE);
     }
 }
@@ -647,7 +795,13 @@ pub fn paint_edit_mark(painter: &egui::Painter, center: Pos2, radius: f32) {
 /// Rotation is applied to the texture coordinates while drawing, so decoded
 /// pixels, cached thumbnails, and the photo file all stay as they are. `rect`
 /// is the on-screen box, already in the rotated aspect ratio.
-pub fn paint_image(painter: &egui::Painter, texture: &egui::TextureHandle, rect: Rect, uv: Rect, rotation: i32) {
+pub fn paint_image(
+    painter: &egui::Painter,
+    texture: &egui::TextureHandle,
+    rect: Rect,
+    uv: Rect,
+    rotation: i32,
+) {
     paint_image_rounded(painter, texture, rect, uv, rotation, 0.0);
 }
 
@@ -666,7 +820,12 @@ pub fn paint_image_rounded(
         return;
     }
     // Texture corners for the screen corners, clockwise from top-left.
-    let tex = [uv.left_top(), uv.right_top(), uv.right_bottom(), uv.left_bottom()];
+    let tex = [
+        uv.left_top(),
+        uv.right_top(),
+        uv.right_bottom(),
+        uv.left_bottom(),
+    ];
     let [a, b, c, d] = [0, 1, 2, 3].map(|corner| tex[(corner + 4 - turns) % 4]);
     let uv_at = |pos: Pos2| {
         let s = ((pos.x - rect.left()) / rect.width().max(1.0)).clamp(0.0, 1.0);
@@ -700,14 +859,22 @@ pub fn paint_image_rounded(
 fn rounded_outline(rect: Rect, radius: f32) -> Vec<Pos2> {
     let radius = radius.min(rect.width() * 0.5).min(rect.height() * 0.5);
     if radius <= 0.5 {
-        return vec![rect.left_top(), rect.right_top(), rect.right_bottom(), rect.left_bottom()];
+        return vec![
+            rect.left_top(),
+            rect.right_top(),
+            rect.right_bottom(),
+            rect.left_bottom(),
+        ];
     }
     const STEPS: usize = 6;
     let quarter = std::f32::consts::FRAC_PI_2;
     let corners = [
         (Pos2::new(rect.left() + radius, rect.top() + radius), 2.0),
         (Pos2::new(rect.right() - radius, rect.top() + radius), 3.0),
-        (Pos2::new(rect.right() - radius, rect.bottom() - radius), 0.0),
+        (
+            Pos2::new(rect.right() - radius, rect.bottom() - radius),
+            0.0,
+        ),
         (Pos2::new(rect.left() + radius, rect.bottom() - radius), 1.0),
     ];
     let mut points = Vec::with_capacity(4 * (STEPS + 1));
@@ -736,7 +903,9 @@ pub fn cover_uv(width: usize, height: usize) -> Rect {
 }
 
 pub fn frame(fill: Color32) -> egui::Frame {
-    egui::Frame::new().fill(fill).inner_margin(egui::Margin::symmetric(18, 12))
+    egui::Frame::new()
+        .fill(fill)
+        .inner_margin(egui::Margin::symmetric(18, 12))
 }
 
 pub fn toolbar_frame(fill: Color32) -> egui::Frame {
@@ -753,24 +922,46 @@ mod tests {
     fn icon_buttons_expose_names_and_states_to_accessibility() {
         let ctx = egui::Context::default();
         ctx.enable_accesskit();
-        let icons = [Icon::RotateLeft, Icon::RotateRight, Icon::Undo, Icon::Redo, Icon::AddToAlbum, Icon::RemoveFromAlbum, Icon::Clipping, Icon::More];
+        let icons = [
+            Icon::RotateLeft,
+            Icon::RotateRight,
+            Icon::Undo,
+            Icon::Redo,
+            Icon::AddToAlbum,
+            Icon::RemoveFromAlbum,
+            Icon::Clipping,
+            Icon::More,
+        ];
         let mut buttons = Vec::new();
         let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
             egui::CentralPanel::default().show(ui, |ui| {
                 for icon in icons {
-                    let response = icon_button(ui, icon, icon != Icon::Undo, icon == Icon::Clipping);
+                    let response =
+                        icon_button(ui, icon, icon != Icon::Undo, icon == Icon::Clipping);
                     buttons.push((response.id.accesskit_id(), icon));
                 }
             });
         });
         output.textures_delta.clear();
-        let update = output.platform_output.accesskit_update.take().expect("accessibility update");
+        let update = output
+            .platform_output
+            .accesskit_update
+            .take()
+            .expect("accessibility update");
         for (id, icon) in buttons {
-            let node = &update.nodes.iter().find(|(node_id, _)| *node_id == id).expect("button node").1;
+            let node = &update
+                .nodes
+                .iter()
+                .find(|(node_id, _)| *node_id == id)
+                .expect("button node")
+                .1;
             assert_eq!(node.role(), egui::Role::Button);
             assert_eq!(node.label(), Some(icon_label(icon)));
             assert_eq!(node.is_disabled(), icon == Icon::Undo);
-            assert_eq!(node.toggled(), Some(egui::accesskit::Toggled::from(icon == Icon::Clipping)));
+            assert_eq!(
+                node.toggled(),
+                Some(egui::accesskit::Toggled::from(icon == Icon::Clipping))
+            );
         }
     }
 
@@ -779,7 +970,11 @@ mod tests {
         let luminance = |color: Color32| {
             let linear = |channel: u8| {
                 let c = f32::from(channel) / 255.0;
-                if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
+                if c <= 0.04045 {
+                    c / 12.92
+                } else {
+                    ((c + 0.055) / 1.055).powf(2.4)
+                }
             };
             0.2126 * linear(color.r()) + 0.7152 * linear(color.g()) + 0.0722 * linear(color.b())
         };
@@ -790,11 +985,25 @@ mod tests {
     #[test]
     fn both_themes_keep_text_readable() {
         for (name, p, accent) in [("light", &LIGHT, ACCENT), ("dark", &DARK, ACCENT_DARK)] {
-            for (place, fill) in [("bg", p.bg), ("sidebar", p.sidebar), ("toolbar", p.toolbar), ("select", p.select)] {
+            for (place, fill) in [
+                ("bg", p.bg),
+                ("sidebar", p.sidebar),
+                ("toolbar", p.toolbar),
+                ("select", p.select),
+            ] {
                 assert!(contrast(p.text, fill) >= 7.0, "{name} text on {place}");
-                assert!(contrast(accent, fill) >= 4.5, "{name} accent text on {place}");
+                assert!(
+                    contrast(accent, fill) >= 4.5,
+                    "{name} accent text on {place}"
+                );
             }
-            for (place, fill) in [("bg", p.bg), ("sidebar", p.sidebar), ("toolbar", p.toolbar), ("select", p.select), ("hover", p.hover)] {
+            for (place, fill) in [
+                ("bg", p.bg),
+                ("sidebar", p.sidebar),
+                ("toolbar", p.toolbar),
+                ("select", p.select),
+                ("hover", p.hover),
+            ] {
                 assert!(contrast(p.muted, fill) >= 4.5, "{name} muted on {place}");
             }
         }

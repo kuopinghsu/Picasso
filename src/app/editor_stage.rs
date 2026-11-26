@@ -14,12 +14,26 @@ use super::PicassoApp;
 #[derive(Clone, Copy, Debug)]
 pub(super) enum StageDrag {
     /// A crop handle, by the crop edges it moves along x and y.
-    Edge { x: Option<usize>, y: Option<usize> },
-    MoveCrop { start: [f32; 4], from: [f32; 2] },
-    Mask { handle: MaskHandle, start: Shape, from: [f32; 2] },
+    Edge {
+        x: Option<usize>,
+        y: Option<usize>,
+    },
+    MoveCrop {
+        start: [f32; 4],
+        from: [f32; 2],
+    },
+    Mask {
+        handle: MaskHandle,
+        start: Shape,
+        from: [f32; 2],
+    },
     /// The Transform tool's corners, as they were when the drag started,
     /// in canvas fractions.
-    Quad { handle: QuadHandle, start: [[f32; 2]; 4], from: [f32; 2] },
+    Quad {
+        handle: QuadHandle,
+        start: [[f32; 2]; 4],
+        from: [f32; 2],
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -96,9 +110,19 @@ fn turns(photo: &Photo) -> usize {
 impl PicassoApp {
     /// Paints the editor's rendering of `photo`. Returns false while no
     /// preview is ready, so the stage shows the regular view instead.
-    pub(super) fn paint_edit_stage(&self, ui: &mut egui::Ui, stage: Rect, image_rect: Rect, photo: &Photo) -> bool {
-        let Some(session) = self.edit.as_ref().filter(|session| session.id == photo.id) else { return false };
-        let Some(preview) = session.preview() else { return false };
+    pub(super) fn paint_edit_stage(
+        &self,
+        ui: &mut egui::Ui,
+        stage: Rect,
+        image_rect: Rect,
+        photo: &Photo,
+    ) -> bool {
+        let Some(session) = self.edit.as_ref().filter(|session| session.id == photo.id) else {
+            return false;
+        };
+        let Some(preview) = session.preview() else {
+            return false;
+        };
         let before = session.before().unwrap_or(preview);
         let painter = ui.painter_at(stage);
         let rotation = photo.rotation;
@@ -107,32 +131,64 @@ impl PicassoApp {
             Compare::Off => theme::paint_image(&painter, preview, image_rect, full, rotation),
             Compare::Before => {
                 theme::paint_image(&painter, before, image_rect, full, rotation);
-                pill(&painter, Pos2::new(stage.center().x, stage.top() + 22.0), tr("Before"));
+                pill(
+                    &painter,
+                    Pos2::new(stage.center().x, stage.top() + 22.0),
+                    tr("Before"),
+                );
             }
             Compare::SideBySide => {
                 let gap = 8.0;
                 let cell_size = Vec2::new((stage.width() - gap) * 0.5, stage.height());
                 let size = image_rect.size();
                 for (index, texture, label) in [(0, before, "Before"), (1, preview, "After")] {
-                    let cell = Rect::from_min_size(stage.min + Vec2::new(index as f32 * (cell_size.x + gap), 0.0), cell_size);
+                    let cell = Rect::from_min_size(
+                        stage.min + Vec2::new(index as f32 * (cell_size.x + gap), 0.0),
+                        cell_size,
+                    );
                     let scale = (cell.width() / size.x).min(cell.height() / size.y);
                     let rect = Rect::from_center_size(cell.center(), size * scale);
-                    theme::paint_image(&painter.with_clip_rect(cell), texture, rect, full, rotation);
-                    pill(&painter, Pos2::new(cell.center().x, cell.top() + 22.0), tr(label));
+                    theme::paint_image(
+                        &painter.with_clip_rect(cell),
+                        texture,
+                        rect,
+                        full,
+                        rotation,
+                    );
+                    pill(
+                        &painter,
+                        Pos2::new(cell.center().x, cell.top() + 22.0),
+                        tr(label),
+                    );
                 }
             }
             Compare::Split(fraction) => {
                 theme::paint_image(&painter, preview, image_rect, full, rotation);
                 let x = image_rect.left() + image_rect.width() * fraction;
                 let left = Rect::from_min_max(image_rect.min, Pos2::new(x, image_rect.bottom()));
-                theme::paint_image(&painter.with_clip_rect(left.intersect(stage)), before, image_rect, full, rotation);
+                theme::paint_image(
+                    &painter.with_clip_rect(left.intersect(stage)),
+                    before,
+                    image_rect,
+                    full,
+                    rotation,
+                );
                 let top = image_rect.top().max(stage.top());
                 let bottom = image_rect.bottom().min(stage.bottom());
-                painter.line_segment([Pos2::new(x, top), Pos2::new(x, bottom)], Stroke::new(2.0, WHITE));
+                painter.line_segment(
+                    [Pos2::new(x, top), Pos2::new(x, bottom)],
+                    Stroke::new(2.0, WHITE),
+                );
                 let knob = Pos2::new(x, (top + bottom) * 0.5);
                 painter.circle_filled(knob, 11.0, Color32::from_black_alpha(170));
                 painter.circle_stroke(knob, 11.0, Stroke::new(1.5, WHITE));
-                painter.text(knob, Align2::CENTER_CENTER, "⇔", FontId::proportional(13.0), WHITE);
+                painter.text(
+                    knob,
+                    Align2::CENTER_CENTER,
+                    "⇔",
+                    FontId::proportional(13.0),
+                    WHITE,
+                );
                 pill(&painter, Pos2::new(x - 44.0, top + 22.0), tr("Before"));
                 pill(&painter, Pos2::new(x + 44.0, top + 22.0), tr("After"));
             }
@@ -142,15 +198,26 @@ impl PicassoApp {
 
     /// Crop frame, mask handles, eyedropper, and split divider. Takes the
     /// pointer from the stage while a tool needs it.
-    pub(super) fn edit_overlay(&mut self, ui: &mut egui::Ui, stage: Rect, image_rect: Rect, photo: &Photo) {
+    pub(super) fn edit_overlay(
+        &mut self,
+        ui: &mut egui::Ui,
+        stage: Rect,
+        image_rect: Rect,
+        photo: &Photo,
+    ) {
         let turns = turns(photo);
-        let Some(session) = self.edit.as_mut().filter(|session| session.id == photo.id) else { return };
+        let Some(session) = self.edit.as_mut().filter(|session| session.id == photo.id) else {
+            return;
+        };
         if session.base.is_none() || session.preview().is_none() {
             return;
         }
         let canvas = session.canvas(photo);
         let settings = session.current();
-        if session.tool == Tool::Adjust && (session.grid || session.straightening) && session.compare() != Compare::SideBySide {
+        if session.tool == Tool::Adjust
+            && (session.grid || session.straightening)
+            && session.compare() != Compare::SideBySide
+        {
             paint_grid(&ui.painter_at(stage), image_rect);
         }
         if session.tool == Tool::Crop {
@@ -161,7 +228,11 @@ impl PicassoApp {
             mask_overlay(ui, session, stage, image_rect, turns, &settings);
         } else if session.picker {
             let response = ui
-                .interact(image_rect.intersect(stage), egui::Id::unique("edit-picker"), Sense::click())
+                .interact(
+                    image_rect.intersect(stage),
+                    egui::Id::unique("edit-picker"),
+                    Sense::click(),
+                )
                 .on_hover_cursor(CursorIcon::Crosshair)
                 .on_hover_text_at_pointer(tr("Click something that should be neutral gray"));
             if response.clicked() {
@@ -177,13 +248,17 @@ impl PicassoApp {
             }
         } else if let Compare::Split(fraction) = session.compare() {
             let x = image_rect.left() + image_rect.width() * fraction;
-            let grip = Rect::from_center_size(Pos2::new(x, stage.center().y), Vec2::new(18.0, stage.height()));
+            let grip = Rect::from_center_size(
+                Pos2::new(x, stage.center().y),
+                Vec2::new(18.0, stage.height()),
+            );
             let response = ui
                 .interact(grip, egui::Id::unique("edit-split"), Sense::drag())
                 .on_hover_cursor(CursorIcon::ResizeHorizontal);
             if response.dragged() {
                 if let Some(pos) = response.interact_pointer_pos() {
-                    let fraction = ((pos.x - image_rect.left()) / image_rect.width().max(1.0)).clamp(0.02, 0.98);
+                    let fraction = ((pos.x - image_rect.left()) / image_rect.width().max(1.0))
+                        .clamp(0.02, 0.98);
                     session.compare = Compare::Split(fraction);
                 }
             }
@@ -225,7 +300,14 @@ fn furthest_inside(from: [f32; 4], to: [f32; 4], turn: &Geometry, canvas: [f32; 
     lerp(low)
 }
 
-fn resize_crop(start: [f32; 4], x: Option<usize>, y: Option<usize>, at: [f32; 2], ratio: Option<f32>, canvas: [f32; 2]) -> [f32; 4] {
+fn resize_crop(
+    start: [f32; 4],
+    x: Option<usize>,
+    y: Option<usize>,
+    at: [f32; 2],
+    ratio: Option<f32>,
+    canvas: [f32; 2],
+) -> [f32; 4] {
     let min = 0.03;
     let mut crop = start;
     match x {
@@ -266,22 +348,39 @@ fn resize_crop(start: [f32; 4], x: Option<usize>, y: Option<usize>, at: [f32; 2]
     crop
 }
 
-fn crop_overlay(ui: &mut egui::Ui, session: &mut EditSession, stage: Rect, image_rect: Rect, turns: usize, canvas: [f32; 2], settings: &Settings) {
+fn crop_overlay(
+    ui: &mut egui::Ui,
+    session: &mut EditSession,
+    stage: Rect,
+    image_rect: Rect,
+    turns: usize,
+    canvas: [f32; 2],
+    settings: &Settings,
+) {
     let map = Mapping {
         rect: image_rect,
         turns,
         view: edit::FULL,
     };
     let crop = settings.crop();
-    let frame = Rect::from_two_pos(map.to_screen([crop[0], crop[1]]), map.to_screen([crop[2], crop[3]]));
+    let frame = Rect::from_two_pos(
+        map.to_screen([crop[0], crop[1]]),
+        map.to_screen([crop[2], crop[3]]),
+    );
     let painter = ui.painter_at(stage);
     let shade = Color32::from_black_alpha(150);
     let outer = image_rect;
     for rect in [
         Rect::from_min_max(outer.min, Pos2::new(outer.right(), frame.top())),
         Rect::from_min_max(Pos2::new(outer.left(), frame.bottom()), outer.max),
-        Rect::from_min_max(Pos2::new(outer.left(), frame.top()), Pos2::new(frame.left(), frame.bottom())),
-        Rect::from_min_max(Pos2::new(frame.right(), frame.top()), Pos2::new(outer.right(), frame.bottom())),
+        Rect::from_min_max(
+            Pos2::new(outer.left(), frame.top()),
+            Pos2::new(frame.left(), frame.bottom()),
+        ),
+        Rect::from_min_max(
+            Pos2::new(frame.right(), frame.top()),
+            Pos2::new(outer.right(), frame.bottom()),
+        ),
     ] {
         if rect.is_positive() {
             painter.rect_filled(rect, 0, shade);
@@ -300,13 +399,26 @@ fn crop_overlay(ui: &mut egui::Ui, session: &mut EditSession, stage: Rect, image
     };
     for handle in CROP_HANDLES {
         let pos = handle_at(handle);
-        let size = if handle.0.is_some() && handle.1.is_some() { 10.0 } else { 8.0 };
+        let size = if handle.0.is_some() && handle.1.is_some() {
+            10.0
+        } else {
+            8.0
+        };
         let rect = Rect::from_center_size(pos, Vec2::splat(size));
         painter.rect_filled(rect, 1, WHITE);
-        painter.rect_stroke(rect, 1, Stroke::new(1.0, Color32::BLACK), egui::StrokeKind::Outside);
+        painter.rect_stroke(
+            rect,
+            1,
+            Stroke::new(1.0, Color32::BLACK),
+            egui::StrokeKind::Outside,
+        );
     }
 
-    let response = ui.interact(stage, egui::Id::unique("edit-crop"), Sense::click_and_drag());
+    let response = ui.interact(
+        stage,
+        egui::Id::unique("edit-crop"),
+        Sense::click_and_drag(),
+    );
     let nearest = |pos: Pos2| {
         CROP_HANDLES
             .iter()
@@ -319,7 +431,11 @@ fn crop_overlay(ui: &mut egui::Ui, session: &mut EditSession, stage: Rect, image
         let icon = match nearest(pos) {
             Some(handle) => {
                 let offset = handle_at(handle) - frame.center();
-                match (handle.0.is_some() && handle.1.is_some(), offset.x.abs() > 1.0, offset.y.abs() > 1.0) {
+                match (
+                    handle.0.is_some() && handle.1.is_some(),
+                    offset.x.abs() > 1.0,
+                    offset.y.abs() > 1.0,
+                ) {
                     (true, _, _) if offset.x * offset.y > 0.0 => CursorIcon::ResizeNwSe,
                     (true, _, _) => CursorIcon::ResizeNeSw,
                     (false, true, _) => CursorIcon::ResizeHorizontal,
@@ -347,7 +463,14 @@ fn crop_overlay(ui: &mut egui::Ui, session: &mut EditSession, stage: Rect, image
         if let Some(pos) = response.interact_pointer_pos() {
             let at = map.to_canvas(pos);
             let wanted = match session.drag {
-                Some(StageDrag::Edge { x, y }) => Some(resize_crop(crop, x, y, at, session.aspect_ratio(canvas, turns), canvas)),
+                Some(StageDrag::Edge { x, y }) => Some(resize_crop(
+                    crop,
+                    x,
+                    y,
+                    at,
+                    session.aspect_ratio(canvas, turns),
+                    canvas,
+                )),
                 Some(StageDrag::MoveCrop { start, from }) => {
                     let (w, h) = (start[2] - start[0], start[3] - start[1]);
                     let left = (start[0] + at[0] - from[0]).clamp(0.0, 1.0 - w);
@@ -386,7 +509,13 @@ fn in_quad(quad: [[f32; 2]; 4], at: [f32; 2]) -> bool {
 
 /// `quad` after a drag of `handle` from `from` to `at`, all in fractions of
 /// a canvas of `canvas` pixels. Turning works in pixels so the shape holds.
-fn drag_quad(quad: [[f32; 2]; 4], handle: QuadHandle, from: [f32; 2], at: [f32; 2], canvas: [f32; 2]) -> [[f32; 2]; 4] {
+fn drag_quad(
+    quad: [[f32; 2]; 4],
+    handle: QuadHandle,
+    from: [f32; 2],
+    at: [f32; 2],
+    canvas: [f32; 2],
+) -> [[f32; 2]; 4] {
     let shift = |point: [f32; 2]| [point[0] + at[0] - from[0], point[1] + at[1] - from[1]];
     let mut next = quad;
     match handle {
@@ -424,7 +553,15 @@ fn drag_quad(quad: [[f32; 2]; 4], handle: QuadHandle, from: [f32; 2], at: [f32; 
 /// handles, the outline they make, and the crop that is kept. Dragging a
 /// corner or a side moves it, inside moves the whole photo, and outside
 /// turns it about its middle.
-fn transform_overlay(ui: &mut egui::Ui, session: &mut EditSession, stage: Rect, image_rect: Rect, turns: usize, canvas: [f32; 2], settings: &Settings) {
+fn transform_overlay(
+    ui: &mut egui::Ui,
+    session: &mut EditSession,
+    stage: Rect,
+    image_rect: Rect,
+    turns: usize,
+    canvas: [f32; 2],
+    settings: &Settings,
+) {
     let map = Mapping {
         rect: image_rect,
         turns,
@@ -434,8 +571,16 @@ fn transform_overlay(ui: &mut egui::Ui, session: &mut EditSession, stage: Rect, 
     let painter = ui.painter_at(stage);
     paint_grid(&painter, image_rect);
     let crop = settings.crop();
-    let frame = Rect::from_two_pos(map.to_screen([crop[0], crop[1]]), map.to_screen([crop[2], crop[3]]));
-    painter.rect_stroke(frame, 0, Stroke::new(1.0, Color32::from_white_alpha(170)), egui::StrokeKind::Middle);
+    let frame = Rect::from_two_pos(
+        map.to_screen([crop[0], crop[1]]),
+        map.to_screen([crop[2], crop[3]]),
+    );
+    painter.rect_stroke(
+        frame,
+        0,
+        Stroke::new(1.0, Color32::from_white_alpha(170)),
+        egui::StrokeKind::Middle,
+    );
     let corners = quad.map(|corner| map.to_screen(corner));
     let sides: [Pos2; 4] = std::array::from_fn(|i| corners[i].lerp(corners[(i + 1) % 4], 0.5));
     for i in 0..4 {
@@ -453,7 +598,11 @@ fn transform_overlay(ui: &mut egui::Ui, session: &mut EditSession, stage: Rect, 
         painter.circle_stroke(pos, 7.0, Stroke::new(2.0, ACCENT));
     }
 
-    let response = ui.interact(stage, egui::Id::unique("edit-transform"), Sense::click_and_drag());
+    let response = ui.interact(
+        stage,
+        egui::Id::unique("edit-transform"),
+        Sense::click_and_drag(),
+    );
     let handle_at = |pos: Pos2| {
         let nearest = |points: &[Pos2; 4]| {
             points
@@ -494,7 +643,15 @@ fn transform_overlay(ui: &mut egui::Ui, session: &mut EditSession, stage: Rect, 
         }
     }
     if response.dragged() {
-        if let (Some(pos), Some(StageDrag::Quad { handle, start, from })) = (response.interact_pointer_pos(), session.drag) {
+        if let (
+            Some(pos),
+            Some(StageDrag::Quad {
+                handle,
+                start,
+                from,
+            }),
+        ) = (response.interact_pointer_pos(), session.drag)
+        {
             let next_quad = drag_quad(start, handle, from, map.to_canvas(pos), canvas);
             if edit::is_convex(next_quad) {
                 let mut next = settings.clone();
@@ -585,7 +742,10 @@ fn paint_grid(painter: &egui::Painter, rect: Rect) {
 fn shape_handles(shape: &Shape) -> Vec<(MaskHandle, [f32; 2])> {
     match *shape {
         Shape::Linear { from, to } => vec![
-            (MaskHandle::Center, [(from[0] + to[0]) * 0.5, (from[1] + to[1]) * 0.5]),
+            (
+                MaskHandle::Center,
+                [(from[0] + to[0]) * 0.5, (from[1] + to[1]) * 0.5],
+            ),
             (MaskHandle::From, from),
             (MaskHandle::To, to),
         ],
@@ -609,7 +769,11 @@ fn move_handle(start: Shape, handle: MaskHandle, from: [f32; 2], at: [f32; 2]) -
                 to: shifted(b),
             },
         },
-        Shape::Radial { center, radius, feather } => match handle {
+        Shape::Radial {
+            center,
+            radius,
+            feather,
+        } => match handle {
             MaskHandle::RadiusX => Shape::Radial {
                 center,
                 radius: [(at[0] - center[0]).abs().max(0.01), radius[1]],
@@ -629,7 +793,14 @@ fn move_handle(start: Shape, handle: MaskHandle, from: [f32; 2], at: [f32; 2]) -
     }
 }
 
-fn mask_overlay(ui: &mut egui::Ui, session: &mut EditSession, stage: Rect, image_rect: Rect, turns: usize, settings: &Settings) {
+fn mask_overlay(
+    ui: &mut egui::Ui,
+    session: &mut EditSession,
+    stage: Rect,
+    image_rect: Rect,
+    turns: usize,
+    settings: &Settings,
+) {
     let map = Mapping {
         rect: image_rect,
         turns,
@@ -644,11 +815,26 @@ fn mask_overlay(ui: &mut egui::Ui, session: &mut EditSession, stage: Rect, image
                 let (a, b) = (map.to_screen(from), map.to_screen(to));
                 let across = (b - a).normalized().rot90() * diagonal;
                 painter.line_segment([a - across, a + across], line);
-                painter.add(egui::Shape::dashed_line(&[b - across, b + across], line, 6.0, 5.0));
+                painter.add(egui::Shape::dashed_line(
+                    &[b - across, b + across],
+                    line,
+                    6.0,
+                    5.0,
+                ));
                 painter.line_segment([a, b], Stroke::new(1.0, Color32::from_white_alpha(140)));
             }
-            Shape::Radial { center, radius, feather } => {
-                for (scale, stroke) in [(1.0, line), ((1.0 - feather).max(0.02), Stroke::new(1.0, Color32::from_white_alpha(140)))] {
+            Shape::Radial {
+                center,
+                radius,
+                feather,
+            } => {
+                for (scale, stroke) in [
+                    (1.0, line),
+                    (
+                        (1.0 - feather).max(0.02),
+                        Stroke::new(1.0, Color32::from_white_alpha(140)),
+                    ),
+                ] {
                     let points: Vec<Pos2> = (0..72)
                         .map(|step| {
                             let angle = step as f32 / 72.0 * std::f32::consts::TAU;
@@ -665,17 +851,34 @@ fn mask_overlay(ui: &mut egui::Ui, session: &mut EditSession, stage: Rect, image
         for (_, at) in shape_handles(&mask.shape).into_iter().skip(1) {
             let rect = Rect::from_center_size(map.to_screen(at), Vec2::splat(8.0));
             painter.rect_filled(rect, 1, WHITE);
-            painter.rect_stroke(rect, 1, Stroke::new(1.0, Color32::BLACK), egui::StrokeKind::Outside);
+            painter.rect_stroke(
+                rect,
+                1,
+                Stroke::new(1.0, Color32::BLACK),
+                egui::StrokeKind::Outside,
+            );
         }
     }
     for (index, mask) in settings.masks.iter().enumerate() {
         let pin = map.to_screen(shape_handles(&mask.shape)[0].1);
         let selected = session.mask == Some(index);
-        painter.circle_filled(pin, 7.0, if selected { ACCENT } else { Color32::from_gray(90) });
+        painter.circle_filled(
+            pin,
+            7.0,
+            if selected {
+                ACCENT
+            } else {
+                Color32::from_gray(90)
+            },
+        );
         painter.circle_stroke(pin, 7.0, Stroke::new(2.0, WHITE));
     }
 
-    let response = ui.interact(stage, egui::Id::unique("edit-mask"), Sense::click_and_drag());
+    let response = ui.interact(
+        stage,
+        egui::Id::unique("edit-mask"),
+        Sense::click_and_drag(),
+    );
     let selected = session.mask;
     let hit = |pos: Pos2| -> Option<(usize, MaskHandle)> {
         if let Some(index) = selected.filter(|index| *index < settings.masks.len()) {
@@ -717,8 +920,15 @@ fn mask_overlay(ui: &mut egui::Ui, session: &mut EditSession, stage: Rect, image
         });
     }
     if response.dragged() {
-        if let (Some(StageDrag::Mask { handle, start, from }), Some(pos), Some(index)) =
-            (session.drag, response.interact_pointer_pos(), session.mask)
+        if let (
+            Some(StageDrag::Mask {
+                handle,
+                start,
+                from,
+            }),
+            Some(pos),
+            Some(index),
+        ) = (session.drag, response.interact_pointer_pos(), session.mask)
         {
             if index < settings.masks.len() {
                 let mut next = settings.clone();

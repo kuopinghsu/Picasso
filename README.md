@@ -46,9 +46,9 @@ Inspired by Picasa, Picasso is written in Rust. It stores your library and edits
 
 - Rename photos and videos from a date or metadata pattern. Preview names before applying them and undo renames, including after restarting Picasso.
 
-- Scan folders in the background and watch for changes, following folders that are renamed, moved or deleted. Import stars, captions and rotation from Picasa metadata files.
+- Scan folders in the background and watch for changes, detecting folders that are renamed, moved or deleted. Import stars, captions and rotation from Picasa metadata files.
 
-- Find duplicate files with content checks and SHA-256 verification. Review the results before moving unwanted copies to the system trash.
+- Find identical files by comparing their contents and verifying their SHA-256 hashes. Review the results before moving unwanted copies to the system trash.
 
 - View library statistics by date, camera, lens, focal length and location coverage.
 
@@ -88,13 +88,13 @@ Copy an edited photo to the clipboard, copy file paths, or open a file in its de
 
 - Gather the photos of a journey from any folders into a **Trip**. **Suggest trips** finds journeys in the library by date. **Suggest days** sorts photos into Days by camera time in the Trip's time zone, and sends uncertain times to review instead of guessing. Trips never change your photos.
 
-- Group a Trip's photos into Places, link GPS tracks, keep tickets, bookings and links as private resources, and find bursts with **Similar photos**.
+- Group a Trip's photos into Places, link GPS tracks, keep tickets, bookings and links as private resources, and find burst sequences with **Similar photos**.
 
 - Write a **Story** from a Trip's photos with headings, text, photos, galleries, grids, route maps and practical information. Frame its cover, choose one of four templates, undo any change, and preview it in your web browser.
 
 - Export a Story as a web page or Markdown folder that works offline, or move a whole Trip to another computer as a `.picassotrip` package.
 
-- Publish a Story to your own self-hosted WordPress site. It is saved as a draft and made public only after you confirm what readers will see. Photos are sent at 2048 or 1280 pixels, never with their location.
+- Publish a Story to your own self-hosted WordPress site. It is saved as a draft and made public only after you confirm what readers will see. Photos are sent at 2048 or 1280 pixels, without location metadata.
 
 ### Languages and appearance
 
@@ -156,7 +156,7 @@ picasso geotag --from-photos ~/Pictures/Trip --dry-run
 picasso geotag --help
 ```
 
-The geotag examples preview matches without writing changes: the first from two tracks, the second from the photos that have GPS. Remove the dry-run option to save locations in the library and `.picasso-geotags.json` files beside the photos. Set the offset to the camera clock’s UTC offset; the preview names a better one when it would place more photos.
+The first geotag example uses two tracks; the second uses photos with GPS coordinates. Both preview matches without saving changes. Remove `--dry-run` to save locations in the library and `.picasso-geotags.json` files beside the photos. Set the offset to the camera clock’s UTC offset; the preview suggests another offset if it would match more photos.
 
 ## Configuration and data
 
@@ -188,7 +188,7 @@ Renaming history is stored in `.picasso-renames.json` beside your photos. Keep i
 
 - **Network access:** photo browsing and editing work locally. Online maps download tiles; elevation lookup downloads terrain tiles for the track area. These requests reveal the requested map or terrain areas to the provider. Looking up place names, when turned on in Settings, sends positions rounded to about 100 m to OpenStreetMap. Travel Map uses built-in boundaries and works offline.
 
-- **Publishing:** only when you choose, a Story's text and photos rendered from your edits are sent to the WordPress site you connect. On the site, photos can be opened by their address while the post is still a draft. Camera details are sent only when you keep them, and locations never. Only self-hosted WordPress sites with an Application Password are supported. Passwords are kept in macOS Keychain, Windows Credential Manager or a Secret Service keyring on Linux; without one, a password lasts until Picasso quits.
+- **Publishing:** only when you choose, a Story's text and photos rendered from your edits are sent to the WordPress site you connect. Uploaded photos can be accessed by their URL even while the post is a draft. Camera metadata is included only if you choose to keep it. Location metadata is always removed. You can separately choose to show selected Places on the post's map. Only self-hosted WordPress sites with an Application Password are supported. Passwords are kept in macOS Keychain, Windows Credential Manager or a Secret Service keyring on Linux; without one, a password lasts until Picasso quits.
 
 - **Updates:** automatic update checks are enabled by default and contact GitHub at most once a day. Disable them in **Settings → General**. Updates are downloaded manually from the release page.
 
@@ -242,11 +242,20 @@ cargo test --release --locked
 
 The executable is `target/release/picasso` on macOS and Linux, or `target/release/picasso.exe` on Windows. Release builds provide better scanning, thumbnail and editing performance than debug builds.
 
-On macOS, a build signed ad hoc is a new app to the Keychain, which then asks twice for every saved WordPress password and forgets **Always Allow** at the next build. To sign every build the same way, run `make sign-identity` once: it makes a self-signed code-signing certificate named `Picasso Development` in your login keychain. From then on, `make` and `make run` sign `target/release/picasso` with it (another name can be given with `SIGN_IDENTITY=...`); the first signing asks to use the keychain, and after the first **Always Allow** later builds are not asked again. Builds made with `cargo` directly are not signed this way.
+### macOS development signing
+
+macOS Keychain treats each ad hoc signed build as a new application. It can ask twice for each saved WordPress password, and the **Always Allow** choice does not carry over to the next build.
+
+Run `make sign-identity` once to create a self-signed code-signing certificate named `Picasso Development` in your login keychain. Then `make` and `make run` use that certificate to sign `target/release/picasso`. Use `SIGN_IDENTITY=...` to choose another identity. Approve the initial keychain prompts with **Always Allow** so later builds can reuse that permission. Direct `cargo` builds do not use this signing step.
+
+CI release builds use ad hoc signing unless Developer ID credentials are configured.
+
+### Linux AppImage packaging
 
 To build the Linux AppImage on any system with only Docker installed, run `make appimage-docker`. It builds in an AlmaLinux 8 container (glibc 2.28), as CI does, so the AppImage in `dist/` runs on RHEL 8.4 and newer. `APPIMAGE_PLATFORM=linux/arm64` builds the Arm64 one instead. `make appimage-docker-check` then checks it in a bare AlmaLinux 8.4 container: every library and glibc symbol it needs must be there. An AppImage from `make appimage` runs only on systems as new as the one that built it.
 
-Release builds from CI are signed ad hoc, as before, unless the Developer ID secrets are set.
+
+### Renderer
 
 OpenGL is the default renderer. Set `PICASSO_RENDERER=wgpu` to select the alternative wgpu renderer.
 
@@ -268,13 +277,15 @@ The [Makefile](Makefile) provides build, test, benchmark, documentation and pack
 
 - `make check`: type-check the application and tests.
 
+- `make fmt`: format the Rust code; `make fmt-check`: check formatting without changing files.
+
 - `make lint`: run Clippy; warnings are reported but are not treated as errors.
 
 - `make test`: run release-mode tests; use `make test T=backup` to select tests by name.
 
 - `make check-docs`: verify documentation links, commands and settings against the source.
 
-- `make ci`: check documentation and dependencies, run tests and check benchmark limits. Requires cargo-deny.
+- `make ci`: check Rust formatting, documentation and dependencies, run tests and check benchmark limits. Requires cargo-deny.
 
 - `make guide` and `make guide-pdf`: build both user guides as HTML or PDF. Require Asciidoctor or Asciidoctor PDF and the fonts described in the Makefile.
 

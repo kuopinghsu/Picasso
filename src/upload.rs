@@ -61,7 +61,12 @@ impl UploadSize {
     /// Everything that decides the bytes, for keys of rendered photos: a
     /// photo rendered for one size is never taken for another.
     pub fn key(self) -> String {
-        format!("jpeg-{}-q{}-flat-white-v{}", self.edge(), self.quality(), RENDER_VERSION)
+        format!(
+            "jpeg-{}-q{}-flat-white-v{}",
+            self.edge(),
+            self.quality(),
+            RENDER_VERSION
+        )
     }
 }
 
@@ -88,7 +93,14 @@ pub struct Rendered {
 /// `source` with its edit and catalog `rotation`, in `size`, with the
 /// [`KEPT`] EXIF fields when `exif`.
 /// `crop`, for a Story's cropped cover, is the part of the photo sent.
-pub fn render(source: &Path, settings: &Settings, rotation: i32, size: UploadSize, exif: bool, crop: Option<crate::trip::CoverCrop>) -> Result<Rendered, String> {
+pub fn render(
+    source: &Path,
+    settings: &Settings,
+    rotation: i32,
+    size: UploadSize,
+    exif: bool,
+    crop: Option<crate::trip::CoverCrop>,
+) -> Result<Rendered, String> {
     let mut rgba = crate::edit::render_edited(source, settings, rotation, Some(size.edge()))?;
     if let Some(crop) = crop {
         rgba = crate::story_html::crop_cover(&rgba, crop);
@@ -100,7 +112,13 @@ pub fn render(source: &Path, settings: &Settings, rotation: i32, size: UploadSiz
         None => bytes,
     };
     let hash = hash(&bytes);
-    Ok(Rendered { bytes, width: rgba.width(), height: rgba.height(), hash, size })
+    Ok(Rendered {
+        bytes,
+        width: rgba.width(),
+        height: rgba.height(),
+        hash,
+        size,
+    })
 }
 
 /// The size a photo of `width` × `height` comes out at, before rendering
@@ -111,7 +129,10 @@ pub fn fitted(width: u32, height: u32, size: UploadSize) -> (u32, u32) {
         return (width, height);
     }
     let scale = size.edge() as f32 / long as f32;
-    (((width as f32 * scale).round() as u32).max(1), ((height as f32 * scale).round() as u32).max(1))
+    (
+        ((width as f32 * scale).round() as u32).max(1),
+        ((height as f32 * scale).round() as u32).max(1),
+    )
 }
 
 /// About how many bytes photos of these dimensions take in `size`, before
@@ -156,7 +177,10 @@ const KEPT: [exif::Tag; 13] = [
 /// start marker. Without any of them, or if they can't be written, `jpeg`
 /// as it was.
 fn with_exif(jpeg: Vec<u8>, exif: &exif::Exif) -> Vec<u8> {
-    let fields: Vec<&exif::Field> = KEPT.iter().filter_map(|&tag| exif.get_field(tag, exif::In::PRIMARY)).collect();
+    let fields: Vec<&exif::Field> = KEPT
+        .iter()
+        .filter_map(|&tag| exif.get_field(tag, exif::In::PRIMARY))
+        .collect();
     if fields.is_empty() || !jpeg.starts_with(&[0xFF, 0xD8]) {
         return jpeg;
     }
@@ -186,7 +210,11 @@ fn with_exif(jpeg: Vec<u8>, exif: &exif::Exif) -> Vec<u8> {
 /// Whether the file at `path` can hold transparent pixels, read from its
 /// header alone: only formats that keep transparency are looked at.
 pub fn has_transparency(path: &Path) -> bool {
-    let kind = path.extension().and_then(|ext| ext.to_str()).map(str::to_ascii_lowercase).unwrap_or_default();
+    let kind = path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(str::to_ascii_lowercase)
+        .unwrap_or_default();
     if !matches!(kind.as_str(), "png" | "webp" | "gif" | "tif" | "tiff") {
         return false;
     }
@@ -205,7 +233,8 @@ fn flatten(rgba: &mut RgbaImage) {
             continue;
         }
         for (channel, background) in pixel.iter_mut().take(3).zip(BACKGROUND) {
-            *channel = ((u32::from(*channel) * alpha + u32::from(background) * (255 - alpha) + 127) / 255) as u8;
+            *channel = ((u32::from(*channel) * alpha + u32::from(background) * (255 - alpha) + 127)
+                / 255) as u8;
         }
         pixel[3] = 255;
     }
@@ -227,11 +256,17 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("picasso-alpha-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let clear = dir.join("clear.png");
-        image::RgbaImage::from_pixel(4, 4, image::Rgba([0, 0, 0, 0])).save(&clear).unwrap();
+        image::RgbaImage::from_pixel(4, 4, image::Rgba([0, 0, 0, 0]))
+            .save(&clear)
+            .unwrap();
         let solid = dir.join("solid.png");
-        image::RgbImage::from_pixel(4, 4, image::Rgb([9, 9, 9])).save(&solid).unwrap();
+        image::RgbImage::from_pixel(4, 4, image::Rgb([9, 9, 9]))
+            .save(&solid)
+            .unwrap();
         let jpeg = dir.join("photo.jpg");
-        image::RgbImage::from_pixel(4, 4, image::Rgb([9, 9, 9])).save(&jpeg).unwrap();
+        image::RgbImage::from_pixel(4, 4, image::Rgb([9, 9, 9]))
+            .save(&jpeg)
+            .unwrap();
         assert!(super::has_transparency(&clear));
         assert!(!super::has_transparency(&solid) && !super::has_transparency(&jpeg));
         let _ = std::fs::remove_dir_all(dir);
@@ -248,20 +283,32 @@ mod tests {
 
     fn photo(dir: &Path, name: &str, width: u32, height: u32) -> std::path::PathBuf {
         let path = dir.join(name);
-        let image = RgbaImage::from_fn(width, height, |x, y| Rgba([(x % 256) as u8, (y % 256) as u8, 120, 255]));
+        let image = RgbaImage::from_fn(width, height, |x, y| {
+            Rgba([(x % 256) as u8, (y % 256) as u8, 120, 255])
+        });
         image.save(&path).unwrap();
         path
     }
 
     #[test]
     fn the_two_sizes_are_what_they_promise() {
-        assert_eq!((UploadSize::Standard.edge(), UploadSize::Standard.quality()), (2048, 85));
-        assert_eq!((UploadSize::Low.edge(), UploadSize::Low.quality()), (1280, 80));
+        assert_eq!(
+            (UploadSize::Standard.edge(), UploadSize::Standard.quality()),
+            (2048, 85)
+        );
+        assert_eq!(
+            (UploadSize::Low.edge(), UploadSize::Low.quality()),
+            (1280, 80)
+        );
         assert_eq!(UploadSize::default(), UploadSize::Standard);
         for size in UploadSize::ALL {
             assert_eq!(UploadSize::from_code(size.code()), Some(size));
         }
-        assert_ne!(UploadSize::Standard.key(), UploadSize::Low.key(), "a large render is never reused for a small one");
+        assert_ne!(
+            UploadSize::Standard.key(),
+            UploadSize::Low.key(),
+            "a large render is never reused for a small one"
+        );
     }
 
     #[test]
@@ -291,14 +338,46 @@ mod tests {
     fn a_photo_without_exif_is_sent_without_it_and_is_named_by_its_bytes() {
         let dir = temp_dir("bytes");
         let source = photo(&dir, "a.png", 400, 300);
-        let rendered = render(&source, &Settings::default(), 0, UploadSize::Standard, true, None).unwrap();
+        let rendered = render(
+            &source,
+            &Settings::default(),
+            0,
+            UploadSize::Standard,
+            true,
+            None,
+        )
+        .unwrap();
         assert_eq!(&rendered.bytes[..2], &[0xFF, 0xD8]);
-        let has = |marker: &[u8]| rendered.bytes.windows(marker.len()).any(|window| window == marker);
-        assert!(!has(b"Exif") && !has(b"http://ns.adobe.com/xap"), "no EXIF or XMP");
+        let has = |marker: &[u8]| {
+            rendered
+                .bytes
+                .windows(marker.len())
+                .any(|window| window == marker)
+        };
+        assert!(
+            !has(b"Exif") && !has(b"http://ns.adobe.com/xap"),
+            "no EXIF or XMP"
+        );
         assert_eq!(rendered.hash.len(), 64);
-        let again = render(&source, &Settings::default(), 0, UploadSize::Standard, true, None).unwrap();
+        let again = render(
+            &source,
+            &Settings::default(),
+            0,
+            UploadSize::Standard,
+            true,
+            None,
+        )
+        .unwrap();
         assert_eq!(again.hash, rendered.hash);
-        let low = render(&source, &Settings::default(), 0, UploadSize::Low, true, None).unwrap();
+        let low = render(
+            &source,
+            &Settings::default(),
+            0,
+            UploadSize::Low,
+            true,
+            None,
+        )
+        .unwrap();
         assert_ne!(low.hash, rendered.hash, "the quality is part of the bytes");
         let _ = std::fs::remove_dir_all(dir);
     }
@@ -306,7 +385,11 @@ mod tests {
     #[test]
     fn only_how_the_photo_was_taken_is_kept() {
         use exif::{Field, In, Tag, Value};
-        let field = |tag, value| Field { tag, ifd_num: In::PRIMARY, value };
+        let field = |tag, value| Field {
+            tag,
+            ifd_num: In::PRIMARY,
+            value,
+        };
         let ascii = |text: &str| Value::Ascii(vec![text.as_bytes().to_vec()]);
         let source = [
             field(Tag::Make, ascii("FUJIFILM")),
@@ -318,7 +401,10 @@ mod tests {
             field(Tag::BodySerialNumber, ascii("SERIAL-123")),
             field(Tag::Artist, ascii("Someone")),
             field(Tag::GPSLatitudeRef, ascii("N")),
-            field(Tag::GPSLatitude, Value::Rational(vec![(37, 1).into(), (10, 1).into(), (0, 1).into()])),
+            field(
+                Tag::GPSLatitude,
+                Value::Rational(vec![(37, 1).into(), (10, 1).into(), (0, 1).into()]),
+            ),
         ];
         let mut writer = exif::experimental::Writer::new();
         source.iter().for_each(|field| writer.push_field(field));
@@ -326,16 +412,34 @@ mod tests {
         writer.write(&mut tiff, false).unwrap();
         let exif = exif::Reader::new().read_raw(tiff.into_inner()).unwrap();
 
-        let jpeg = crate::image_io::encode_jpeg(&RgbaImage::from_pixel(8, 8, Rgba([90, 120, 150, 255])), 85).unwrap();
+        let jpeg = crate::image_io::encode_jpeg(
+            &RgbaImage::from_pixel(8, 8, Rgba([90, 120, 150, 255])),
+            85,
+        )
+        .unwrap();
         let sent = with_exif(jpeg.clone(), &exif);
         assert_eq!(&sent[..4], &[0xFF, 0xD8, 0xFF, 0xE1]);
         assert!(image::load_from_memory(&sent).is_ok(), "still a JPEG");
-        let kept = exif::Reader::new().read_from_container(&mut std::io::Cursor::new(&sent)).unwrap();
-        let text = |tag| kept.get_field(tag, In::PRIMARY).map(|f| f.display_value().to_string());
+        let kept = exif::Reader::new()
+            .read_from_container(&mut std::io::Cursor::new(&sent))
+            .unwrap();
+        let text = |tag| {
+            kept.get_field(tag, In::PRIMARY)
+                .map(|f| f.display_value().to_string())
+        };
         assert_eq!(text(Tag::Model).as_deref(), Some("\"X-T5\""));
         assert_eq!(text(Tag::PhotographicSensitivity).as_deref(), Some("400"));
-        assert!(text(Tag::FNumber).is_some() && text(Tag::ExposureTime).is_some() && text(Tag::DateTimeOriginal).is_some());
-        for gone in [Tag::BodySerialNumber, Tag::Artist, Tag::GPSLatitude, Tag::GPSLatitudeRef] {
+        assert!(
+            text(Tag::FNumber).is_some()
+                && text(Tag::ExposureTime).is_some()
+                && text(Tag::DateTimeOriginal).is_some()
+        );
+        for gone in [
+            Tag::BodySerialNumber,
+            Tag::Artist,
+            Tag::GPSLatitude,
+            Tag::GPSLatitudeRef,
+        ] {
             assert!(text(gone).is_none(), "{gone} is not sent");
         }
         let has = |marker: &[u8]| sent.windows(marker.len()).any(|window| window == marker);
@@ -364,6 +468,9 @@ mod tests {
         let standard = estimated_bytes(&[(6000, 4000)], UploadSize::Standard);
         let low = estimated_bytes(&[(6000, 4000)], UploadSize::Low);
         assert!(low < standard / 2, "{low} {standard}");
-        assert_eq!(estimated_bytes(&[(800, 600)], UploadSize::Low) * 28, estimated_bytes(&[(800, 600)], UploadSize::Standard) * 24);
+        assert_eq!(
+            estimated_bytes(&[(800, 600)], UploadSize::Low) * 28,
+            estimated_bytes(&[(800, 600)], UploadSize::Standard) * 24
+        );
     }
 }

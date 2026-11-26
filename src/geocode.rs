@@ -40,24 +40,46 @@ pub fn reverse(dir: &Path, lat: f64, lon: f64, lang: &str) -> Result<PlaceNames,
     let agent = agent();
     let name = lookup(&agent, dir, lat, lon, lang)?;
     let local_name = lookup(&agent, dir, lat, lon, "")?;
-    let name = if name.is_empty() { local_name.clone() } else { name };
-    let local_name = if local_name == name { String::new() } else { local_name };
+    let name = if name.is_empty() {
+        local_name.clone()
+    } else {
+        name
+    };
+    let local_name = if local_name == name {
+        String::new()
+    } else {
+        local_name
+    };
     Ok(PlaceNames { name, local_name })
 }
 
 fn agent() -> ureq::Agent {
     let config = ureq::Agent::config_builder()
         .timeout_global(Some(Duration::from_secs(12)))
-        .user_agent(concat!("Picasso/", env!("CARGO_PKG_VERSION"), " (local photo library; place names)"))
+        .user_agent(concat!(
+            "Picasso/",
+            env!("CARGO_PKG_VERSION"),
+            " (local photo library; place names)"
+        ))
         .build();
     ureq::Agent::new_with_config(config)
 }
 
 /// One name, cached by position and language. An empty `lang` asks for
 /// the names used locally.
-fn lookup(agent: &ureq::Agent, dir: &Path, lat: f64, lon: f64, lang: &str) -> Result<String, String> {
+fn lookup(
+    agent: &ureq::Agent,
+    dir: &Path,
+    lat: f64,
+    lon: f64,
+    lang: &str,
+) -> Result<String, String> {
     let file = cache_file(dir, lat, lon, lang);
-    if let Some(name) = std::fs::read(&file).ok().and_then(|data| serde_json::from_slice::<Value>(&data).ok()).map(|value| best_name(&value)) {
+    if let Some(name) = std::fs::read(&file)
+        .ok()
+        .and_then(|data| serde_json::from_slice::<Value>(&data).ok())
+        .map(|value| best_name(&value))
+    {
         return Ok(name);
     }
     let mut request = agent
@@ -72,7 +94,12 @@ fn lookup(agent: &ureq::Agent, dir: &Path, lat: f64, lon: f64, lang: &str) -> Re
     // Nominatim asks for at most one request a second.
     std::thread::sleep(Duration::from_millis(1100));
     let mut response = request.call().map_err(|err| err.to_string())?;
-    let data = response.body_mut().with_config().limit(1 << 20).read_to_vec().map_err(|err| err.to_string())?;
+    let data = response
+        .body_mut()
+        .with_config()
+        .limit(1 << 20)
+        .read_to_vec()
+        .map_err(|err| err.to_string())?;
     let value: Value = serde_json::from_slice(&data).map_err(|err| err.to_string())?;
     if let Some(err) = value.get("error").and_then(Value::as_str) {
         return Err(err.to_string());
@@ -84,12 +111,30 @@ fn lookup(agent: &ureq::Agent, dir: &Path, lat: f64, lon: f64, lang: &str) -> Re
 
 /// The place's own name, else the nearest named area around it.
 fn best_name(value: &Value) -> String {
-    if let Some(name) = value.get("name").and_then(Value::as_str).filter(|name| !name.trim().is_empty()) {
+    if let Some(name) = value
+        .get("name")
+        .and_then(Value::as_str)
+        .filter(|name| !name.trim().is_empty())
+    {
         return name.trim().to_string();
     }
     let address = value.get("address");
-    for key in ["neighbourhood", "suburb", "village", "town", "city", "municipality", "county", "state", "country"] {
-        if let Some(name) = address.and_then(|address| address.get(key)).and_then(Value::as_str).filter(|name| !name.trim().is_empty()) {
+    for key in [
+        "neighbourhood",
+        "suburb",
+        "village",
+        "town",
+        "city",
+        "municipality",
+        "county",
+        "state",
+        "country",
+    ] {
+        if let Some(name) = address
+            .and_then(|address| address.get(key))
+            .and_then(Value::as_str)
+            .filter(|name| !name.trim().is_empty())
+        {
             return name.trim().to_string();
         }
     }
@@ -107,7 +152,8 @@ mod tests {
 
     #[test]
     fn a_place_without_its_own_name_takes_the_area_around_it() {
-        let named: Value = serde_json::json!({"name": "Main Square", "address": {"city": "Midtown"}});
+        let named: Value =
+            serde_json::json!({"name": "Main Square", "address": {"city": "Midtown"}});
         assert_eq!(best_name(&named), "Main Square");
         let street: Value = serde_json::json!({"name": "", "address": {"road": "Main Street", "suburb": "Centre", "city": "Midtown"}});
         assert_eq!(best_name(&street), "Centre");
@@ -118,10 +164,24 @@ mod tests {
     fn a_cached_answer_is_used_without_the_network() {
         let dir = std::env::temp_dir().join(format!("picasso-geocode-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(cache_file(&dir, 41.404, 2.175, "en"), r#"{"name":"Sagrada Família"}"#).unwrap();
-        std::fs::write(cache_file(&dir, 41.404, 2.175, ""), r#"{"name":"Sagrada Família"}"#).unwrap();
+        std::fs::write(
+            cache_file(&dir, 41.404, 2.175, "en"),
+            r#"{"name":"Sagrada Família"}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            cache_file(&dir, 41.404, 2.175, ""),
+            r#"{"name":"Sagrada Família"}"#,
+        )
+        .unwrap();
         let names = reverse(&dir, 41.40363, 2.17486, "en").unwrap();
-        assert_eq!(names, PlaceNames { name: "Sagrada Família".into(), local_name: String::new() });
+        assert_eq!(
+            names,
+            PlaceNames {
+                name: "Sagrada Família".into(),
+                local_name: String::new()
+            }
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

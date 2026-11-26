@@ -12,14 +12,14 @@ Locations, route stops, opt-in maps and day-by-day Journeys for travel stories, 
 
 == Description ==
 
-Picasso Places brings the travel features of the VoyageLight theme to any theme, including maps, Journeys and the camera details Picasso keeps in a photo, and gives the Picasso photo app the fields it publishes travel stories to.
+Picasso Places adds VoyageLight travel features to other themes: maps, Journeys and camera details from photos published by Picasso. It also provides the fields Picasso uses to publish places and journeys.
 
 * **Location and route stops.** A post's editor has a Location field and a list of stops. A location can be typed as coordinates, in degrees and minutes, or pasted as a Google Maps, Apple Maps, OpenStreetMap or geo: link. The editor shows how it reads each location, and lists any line it can't read instead of dropping it. Places can be picked on a map or found by name.
 * **Journeys.** A post type of its own, with day-by-day stops entered as rows or as `Day | Place | location | note | post ID` lines, and the stories that belong to it. A story chooses its Journey in the editor's Related journey box.
 * **On the site.** After a post's content: a map of its location or stops, and a link to its Journey. On a Journey: its map, its stops day by day and its stories. Maps load only when the reader presses Load map. The styles take the theme's fonts and colours, in light and dark themes. Tables published from Picasso keep the column widths chosen there, and YouTube videos start where their address says, such as t=90s.
-* **REST API.** `_vl_lat`, `_vl_lon`, `_vl_stops` and `_vl_trip_id` on posts and `_vl_trip_days` on Journeys (`/wp/v2/vl_trip`) are part of a published post, so anyone who can read the post can read them. Writing them needs a user who can edit the post. A missing coordinate reads as 0. Sending 0, 0 back with no stop line means no location. A stop line with those coordinates is a place at 0, 0.
+* **REST API.** `_vl_lat`, `_vl_lon`, `_vl_stops` and `_vl_trip_id` on posts and `_vl_trip_days` on Journeys (`/wp/v2/vl_trip`) are part of a published post, so anyone who can read the post can read them. Writing these fields requires permission to edit the post. A missing coordinate reads as 0. Sending 0, 0 back with no stop line means no location. A stop line with those coordinates is a place at 0, 0.
 
-The plugin comes in two builds, English (picasso-places-<version>-en.zip) and Traditional Chinese (picasso-places-<version>-zh-TW.zip), each in its language whatever the site's.
+The plugin comes in two builds, English (picasso-places-<version>-en.zip) and Traditional Chinese (picasso-places-<version>-zh-TW.zip), each using its selected language regardless of the site's language.
 
 == Installation ==
 
@@ -39,7 +39,7 @@ They stay in the database. Under a theme without these features, Journeys and ma
 
 = What do readers' browsers fetch from elsewhere? =
 
-Nothing, until a reader presses Load map. Then the browser loads map tiles from tile.openstreetmap.org, which see the reader's IP address and the page that asked. The plugin sets no cookies and keeps no data about readers.
+Nothing, until a reader presses Load map. Then the browser loads map tiles from tile.openstreetmap.org, whose provider receives the reader's IP address and the page that asked. The plugin sets no cookies and keeps no data about readers.
 
 = What does the editor fetch from elsewhere? =
 

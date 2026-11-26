@@ -85,7 +85,11 @@ impl Lang {
     /// or `fr-CA`. Chinese without a script or region reads as Simplified,
     /// and every Portuguese locale gets the Brazilian text.
     pub fn from_locale(locale: &str) -> Option<Lang> {
-        let tag = locale.split(['.', '@']).next()?.replace('_', "-").to_ascii_lowercase();
+        let tag = locale
+            .split(['.', '@'])
+            .next()?
+            .replace('_', "-")
+            .to_ascii_lowercase();
         let mut parts = tag.split('-');
         match parts.next()? {
             "en" => Some(Lang::English),
@@ -98,7 +102,11 @@ impl Lang {
             "pt" => Some(Lang::Portuguese),
             "zh" => {
                 let traditional = parts.any(|part| matches!(part, "hant" | "tw" | "hk" | "mo"));
-                Some(if traditional { Lang::TraditionalChinese } else { Lang::SimplifiedChinese })
+                Some(if traditional {
+                    Lang::TraditionalChinese
+                } else {
+                    Lang::SimplifiedChinese
+                })
             }
             _ => None,
         }
@@ -155,7 +163,9 @@ pub fn set(lang: Lang) {
 
 /// The first preferred system language Picasso has text for, else English.
 pub fn system() -> Lang {
-    sys_locale::get_locales().find_map(|locale| Lang::from_locale(&locale)).unwrap_or(Lang::English)
+    sys_locale::get_locales()
+        .find_map(|locale| Lang::from_locale(&locale))
+        .unwrap_or(Lang::English)
 }
 
 /// `text` in the current language. Text without a translation stays English.
@@ -197,9 +207,18 @@ mod tests {
     #[test]
     fn reads_system_locales() {
         assert_eq!(Lang::from_locale("zh-TW"), Some(Lang::TraditionalChinese));
-        assert_eq!(Lang::from_locale("zh-Hant-HK"), Some(Lang::TraditionalChinese));
-        assert_eq!(Lang::from_locale("zh_CN.UTF-8"), Some(Lang::SimplifiedChinese));
-        assert_eq!(Lang::from_locale("zh-Hans-SG"), Some(Lang::SimplifiedChinese));
+        assert_eq!(
+            Lang::from_locale("zh-Hant-HK"),
+            Some(Lang::TraditionalChinese)
+        );
+        assert_eq!(
+            Lang::from_locale("zh_CN.UTF-8"),
+            Some(Lang::SimplifiedChinese)
+        );
+        assert_eq!(
+            Lang::from_locale("zh-Hans-SG"),
+            Some(Lang::SimplifiedChinese)
+        );
         assert_eq!(Lang::from_locale("ja-JP"), Some(Lang::Japanese));
         assert_eq!(Lang::from_locale("ko-KR"), Some(Lang::Korean));
         assert_eq!(Lang::from_locale("de_AT.UTF-8"), Some(Lang::German));
@@ -234,7 +253,11 @@ mod tests {
     fn translations_keep_placeholders() {
         for lang in Lang::ALL {
             for (en, text) in lang.strings() {
-                assert_eq!(text.matches("{}").count(), en.matches("{}").count(), "{lang:?}: {text:?}");
+                assert_eq!(
+                    text.matches("{}").count(),
+                    en.matches("{}").count(),
+                    "{lang:?}: {text:?}"
+                );
                 assert!(!text.trim().is_empty(), "{lang:?} leaves {en:?} empty");
             }
         }
@@ -243,11 +266,21 @@ mod tests {
     #[test]
     fn asian_languages_leave_only_names_in_english() {
         let names = ["HDR", "Reinhard", "Drago", "Kodachrome", "Markdown"];
-        for lang in [Lang::TraditionalChinese, Lang::SimplifiedChinese, Lang::Japanese, Lang::Korean] {
+        for lang in [
+            Lang::TraditionalChinese,
+            Lang::SimplifiedChinese,
+            Lang::Japanese,
+            Lang::Korean,
+        ] {
             for (en, text) in lang.strings() {
-                let words = en.split(|c: char| !c.is_alphabetic()).filter(|word| word.len() > 1);
+                let words = en
+                    .split(|c: char| !c.is_alphabetic())
+                    .filter(|word| word.len() > 1);
                 if en == text && words.clone().count() > 0 {
-                    assert!(words.into_iter().all(|word| names.contains(&word)), "{lang:?} leaves {en:?} in English");
+                    assert!(
+                        words.into_iter().all(|word| names.contains(&word)),
+                        "{lang:?} leaves {en:?} in English"
+                    );
                 }
             }
         }
@@ -311,9 +344,15 @@ mod tests {
 
     #[test]
     fn traditional_chinese_uses_one_word_for_each_thing() {
-        let mut found: Vec<String> = zh_hant::TABLE.iter().flat_map(|(_, text)| zh_hant_wording("window", text)).collect();
+        let mut found: Vec<String> = zh_hant::TABLE
+            .iter()
+            .flat_map(|(_, text)| zh_hant_wording("window", text))
+            .collect();
         for name in ["README_zh-TW.md", "docs/USER_GUIDE_zh-TW.adoc"] {
-            let doc = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(name)).unwrap();
+            let doc = std::fs::read_to_string(
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(name),
+            )
+            .unwrap();
             for (line, text) in doc.lines().enumerate() {
                 found.extend(zh_hant_wording(&format!("{name}:{}", line + 1), text));
             }
@@ -324,7 +363,9 @@ mod tests {
     /// The headings, list items, table rows, and code blocks of a Markdown
     /// file in order, and every `code` span in it, sorted.
     fn markdown_outline(name: &str) -> (Vec<String>, Vec<String>) {
-        let text = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(name)).unwrap();
+        let text =
+            std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(name))
+                .unwrap();
         let mut outline = Vec::new();
         let mut spans = Vec::new();
         let mut in_code = false;
@@ -342,7 +383,10 @@ mod tests {
             } else if line.starts_with("- ") {
                 outline.push("list item".into());
             } else if line.starts_with('|') {
-                outline.push(format!("table row of {} cells", line.matches('|').count() - 1));
+                outline.push(format!(
+                    "table row of {} cells",
+                    line.matches('|').count() - 1
+                ));
             }
             spans.extend(line.split('`').skip(1).step_by(2).map(str::to_string));
         }
@@ -353,7 +397,9 @@ mod tests {
     /// The same for an AsciiDoc file, with its anchors, description list
     /// terms, images, and notes as well, and its keys among the spans.
     fn asciidoc_outline(name: &str) -> (Vec<String>, Vec<String>) {
-        let text = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(name)).unwrap();
+        let text =
+            std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(name))
+                .unwrap();
         let mut outline = Vec::new();
         let mut spans = Vec::new();
         let mut in_code = false;
@@ -384,7 +430,12 @@ mod tests {
                 outline.push("note".into());
             }
             spans.extend(line.split('`').skip(1).step_by(2).map(str::to_string));
-            spans.extend(line.split("kbd:[").skip(1).filter_map(|rest| rest.split(']').next()).map(|key| format!("kbd:[{key}]")));
+            spans.extend(
+                line.split("kbd:[")
+                    .skip(1)
+                    .filter_map(|rest| rest.split(']').next())
+                    .map(|key| format!("kbd:[{key}]")),
+            );
         }
         spans.sort();
         (outline, spans)
@@ -393,7 +444,10 @@ mod tests {
     fn assert_same_outline(en: &str, zh: &str, outline: fn(&str) -> (Vec<String>, Vec<String>)) {
         let (en_outline, en_spans) = outline(en);
         let (zh_outline, zh_spans) = outline(zh);
-        assert_eq!(en_outline, zh_outline, "{en} and {zh} have different sections, lists, or tables");
+        assert_eq!(
+            en_outline, zh_outline,
+            "{en} and {zh} have different sections, lists, or tables"
+        );
         let only = |a: &[String], b: &[String]| -> Vec<String> {
             let mut rest = b.to_vec();
             a.iter()
@@ -422,7 +476,11 @@ mod tests {
 
     #[test]
     fn the_two_user_guides_say_the_same_things() {
-        assert_same_outline("docs/USER_GUIDE.adoc", "docs/USER_GUIDE_zh-TW.adoc", asciidoc_outline);
+        assert_same_outline(
+            "docs/USER_GUIDE.adoc",
+            "docs/USER_GUIDE_zh-TW.adoc",
+            asciidoc_outline,
+        );
     }
 
     /// The string literals in the first argument of a call, given the code
@@ -448,7 +506,9 @@ mod tests {
                             '\\' => match chars.next() {
                                 Some('n') => text.push('\n'),
                                 // A line continuation: the break and the next line's indent go.
-                                Some('\n') => while chars.next_if(|c| c.is_whitespace()).is_some() {},
+                                Some('\n') => {
+                                    while chars.next_if(|c| c.is_whitespace()).is_some() {}
+                                }
                                 Some(other) => text.push(other),
                                 None => break,
                             },
@@ -474,13 +534,18 @@ mod tests {
                     if path.file_name().is_some_and(|name| name != "i18n") {
                         walk(&path, files);
                     }
-                } else if path.extension().is_some_and(|ext| ext == "rs") && !path.ends_with("src/i18n.rs") {
+                } else if path.extension().is_some_and(|ext| ext == "rs")
+                    && !path.ends_with("src/i18n.rs")
+                {
                     files.push(path);
                 }
             }
         }
         let mut files = Vec::new();
-        walk(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src"), &mut files);
+        walk(
+            &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
+            &mut files,
+        );
         let mut found = Vec::new();
         for file in files {
             let code = std::fs::read_to_string(&file).unwrap();
@@ -488,7 +553,9 @@ mod tests {
             for call in ["tr(", "trf("] {
                 for (at, _) in code.match_indices(call) {
                     let before = code[..at].chars().next_back();
-                    if before.is_some_and(|c| c.is_alphanumeric() || c == '_' || c == ':') && !code[..at].ends_with("i18n::") {
+                    if before.is_some_and(|c| c.is_alphanumeric() || c == '_' || c == ':')
+                        && !code[..at].ends_with("i18n::")
+                    {
                         continue;
                     }
                     for text in first_argument_literals(&code[at + call.len()..]) {
@@ -503,29 +570,56 @@ mod tests {
     #[test]
     fn the_source_scan_reads_every_literal_of_the_first_argument() {
         assert_eq!(first_argument_literals(r#""Star")"#), ["Star"]);
-        assert_eq!(first_argument_literals(r#"if on { "Unstar" } else { "Star" }).clicked()"#), ["Unstar", "Star"]);
-        assert_eq!(first_argument_literals(r#"match sort { Sort::Name => "Name", _ => "Date" })"#), ["Name", "Date"]);
-        assert_eq!(first_argument_literals("\"{} of {}\", &[&\"a\", &\"b\"])"), ["{} of {}"]);
-        assert_eq!(first_argument_literals("\n    // a \"quote\"\n    \"Said \\\"hi\\\"\",\n)"), ["Said \"hi\""]);
+        assert_eq!(
+            first_argument_literals(r#"if on { "Unstar" } else { "Star" }).clicked()"#),
+            ["Unstar", "Star"]
+        );
+        assert_eq!(
+            first_argument_literals(r#"match sort { Sort::Name => "Name", _ => "Date" })"#),
+            ["Name", "Date"]
+        );
+        assert_eq!(
+            first_argument_literals("\"{} of {}\", &[&\"a\", &\"b\"])"),
+            ["{} of {}"]
+        );
+        assert_eq!(
+            first_argument_literals("\n    // a \"quote\"\n    \"Said \\\"hi\\\"\",\n)"),
+            ["Said \"hi\""]
+        );
         assert!(first_argument_literals("label).to_string()").is_empty());
     }
 
     #[test]
     fn every_text_in_the_source_is_translated() {
-        let known: std::collections::HashSet<&str> = zh_hant::TABLE.iter().map(|(en, _)| *en).collect();
+        let known: std::collections::HashSet<&str> =
+            zh_hant::TABLE.iter().map(|(en, _)| *en).collect();
         let texts = source_texts();
-        assert!(texts.len() > 300, "the source scan found only {} texts", texts.len());
+        assert!(
+            texts.len() > 300,
+            "the source scan found only {} texts",
+            texts.len()
+        );
         let missing: Vec<String> = texts
             .into_iter()
-            .filter(|(_, text)| text.replace("{} px", "").chars().any(char::is_alphabetic) && !known.contains(text.as_str()))
+            .filter(|(_, text)| {
+                text.replace("{} px", "").chars().any(char::is_alphabetic)
+                    && !known.contains(text.as_str())
+            })
             .map(|(file, text)| format!("{file}: {text:?}"))
             .collect();
-        assert!(missing.is_empty(), "not in the translation tables:\n{}", missing.join("\n"));
+        assert!(
+            missing.is_empty(),
+            "not in the translation tables:\n{}",
+            missing.join("\n")
+        );
     }
 
     #[test]
     fn fills_placeholders_in_order() {
-        assert_eq!(trf("Can't watch {}: {}", &[&"D:\\Photos", &"denied"]), "Can't watch D:\\Photos: denied");
+        assert_eq!(
+            trf("Can't watch {}: {}", &[&"D:\\Photos", &"denied"]),
+            "Can't watch D:\\Photos: denied"
+        );
         assert_eq!(trf("{} photos", &[&3]), "3 photos");
     }
 }

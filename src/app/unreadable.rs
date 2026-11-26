@@ -25,10 +25,16 @@ impl PicassoApp {
     }
 
     pub(super) fn unreadable_modal(&mut self, ctx: &egui::Context) {
-        let Modal::Unreadable { confirm_all } = self.modal else { return };
+        let Modal::Unreadable { confirm_all } = self.modal else {
+            return;
+        };
         let mut items: Vec<&Unreadable> = self.unreadable.values().flatten().collect();
         items.sort_by(|a, b| a.path.cmp(&b.path));
-        let files: Vec<String> = items.iter().filter(|item| !item.folder).map(|item| item.path.clone()).collect();
+        let files: Vec<String> = items
+            .iter()
+            .filter(|item| !item.folder)
+            .map(|item| item.path.clone())
+            .collect();
         let mut confirm = confirm_all;
         let mut close = false;
         let mut action = None;
@@ -90,7 +96,9 @@ impl PicassoApp {
         self.modal = if close || response.should_close() || self.unreadable.is_empty() {
             Modal::None
         } else {
-            Modal::Unreadable { confirm_all: confirm }
+            Modal::Unreadable {
+                confirm_all: confirm,
+            }
         };
     }
 
@@ -111,7 +119,10 @@ impl PicassoApp {
                         false
                     }
                     Err(err) => {
-                        failed = Some(trf("Couldn't trash {}: {}", &[&file_name(&item.path), &err]));
+                        failed = Some(trf(
+                            "Couldn't trash {}: {}",
+                            &[&file_name(&item.path), &err],
+                        ));
                         true
                     }
                 }
@@ -137,7 +148,10 @@ impl PicassoApp {
 /// One file or folder with its reason and buttons. Returns the button clicked.
 fn row(ui: &mut egui::Ui, item: &Unreadable) -> Option<Action> {
     let plain = shell::plain_path(&item.path);
-    let parent = Path::new(&plain).parent().map(|path| path.display().to_string()).unwrap_or_default();
+    let parent = Path::new(&plain)
+        .parent()
+        .map(|path| path.display().to_string())
+        .unwrap_or_default();
     let detail = if item.folder {
         format!("{}  ·  {}  ·  {}", tr("Folder"), item.reason, parent)
     } else {
@@ -157,17 +171,28 @@ fn row(ui: &mut egui::Ui, item: &Unreadable) -> Option<Action> {
         ui.with_layout(Layout::top_down(Align::Min), |ui| {
             ui.spacing_mut().item_spacing.y = 2.0;
             ui.add_space(5.0);
-            let name = RichText::new(file_name(&item.path)).size(13.5).color(theme::text());
-            ui.add(egui::Label::new(name).truncate()).on_hover_text(&plain);
+            let name = RichText::new(file_name(&item.path))
+                .size(13.5)
+                .color(theme::text());
+            ui.add(egui::Label::new(name).truncate())
+                .on_hover_text(&plain);
             let reason = RichText::new(&detail).size(12.0).color(theme::muted());
-            ui.add(egui::Label::new(reason).truncate()).on_hover_text(&detail);
+            ui.add(egui::Label::new(reason).truncate())
+                .on_hover_text(&detail);
         });
     });
     let rect = response.response.rect;
-    ui.painter().hline(rect.x_range(), rect.bottom() - 0.5, Stroke::new(1.0, theme::hairline()));
+    ui.painter().hline(
+        rect.x_range(),
+        rect.bottom() - 0.5,
+        Stroke::new(1.0, theme::hairline()),
+    );
     action
 }
 
 fn file_name(path: &str) -> String {
-    Path::new(path).file_name().map_or_else(|| path.to_string(), |name| name.to_string_lossy().into_owned())
+    Path::new(path).file_name().map_or_else(
+        || path.to_string(),
+        |name| name.to_string_lossy().into_owned(),
+    )
 }

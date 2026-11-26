@@ -28,7 +28,10 @@ impl Profile {
 
 impl Default for Profile {
     fn default() -> Self {
-        Self { edge: 1600, quality: 85 }
+        Self {
+            edge: 1600,
+            quality: 85,
+        }
     }
 }
 
@@ -179,7 +182,11 @@ impl Preflight {
 /// Checks a Story before it is exported. Reads whether files exist and
 /// the head of each, not the whole photo.
 pub fn preflight(page: &Page) -> Preflight {
-    let mut check = Preflight { empty: page.blocks.is_empty(), no_cover: page.story.cover.is_none(), ..Preflight::default() };
+    let mut check = Preflight {
+        empty: page.blocks.is_empty(),
+        no_cover: page.story.cover.is_none(),
+        ..Preflight::default()
+    };
     // Some(true) readable, Some(false) there but unreadable, None missing;
     // with the long side of the readable ones.
     let mut long_side: HashMap<i64, u32> = HashMap::new();
@@ -252,7 +259,10 @@ pub fn preflight(page: &Page) -> Preflight {
                     check.no_alt += 1;
                     check.first[1].get_or_insert(index);
                 }
-                if long_side.get(&media.media_id).is_some_and(|&side| side > 0 && side < LOW_RES_EDGE) {
+                if long_side
+                    .get(&media.media_id)
+                    .is_some_and(|&side| side > 0 && side < LOW_RES_EDGE)
+                {
                     check.low_res += 1;
                     check.first[4].get_or_insert(index);
                 }
@@ -273,8 +283,23 @@ pub struct Outcome {
 /// Writes the Story in `folder` as `format`, with its photos in
 /// `folder/images`, counting them in `progress`. Returns the page's file,
 /// or `Err` with the reason, also when `progress` was cancelled.
-pub fn write_story(folder: &Path, format: Format, profile: Profile, input: &Page, progress: &Progress) -> Result<(PathBuf, Outcome), String> {
-    let Page { story, dates, blocks, sources, words, map, profiles, videos } = *input;
+pub fn write_story(
+    folder: &Path,
+    format: Format,
+    profile: Profile,
+    input: &Page,
+    progress: &Progress,
+) -> Result<(PathBuf, Outcome), String> {
+    let Page {
+        story,
+        dates,
+        blocks,
+        sources,
+        words,
+        map,
+        profiles,
+        videos,
+    } = *input;
     let images_dir = folder.join("images");
     std::fs::create_dir_all(&images_dir).map_err(|err| err.to_string())?;
     let mut images = HashMap::new();
@@ -293,22 +318,44 @@ pub fn write_story(folder: &Path, format: Format, profile: Profile, input: &Page
             }
         }
     }
-    progress.total.store(order.len() + parts.len(), Ordering::Relaxed);
+    progress
+        .total
+        .store(order.len() + parts.len(), Ordering::Relaxed);
     // Every file as it is before any is read, whichever is rendered first.
-    let before: HashMap<i64, Stamp> = order.iter().filter_map(|(media_id, source)| Some((*media_id, stamp(&source.as_ref()?.0)))).collect();
+    let before: HashMap<i64, Stamp> = order
+        .iter()
+        .filter_map(|(media_id, source)| Some((*media_id, stamp(&source.as_ref()?.0))))
+        .collect();
     let made = crate::image_io::render_all(&order, |&(media_id, source)| {
         if progress.cancel.load(Ordering::Relaxed) {
             return Err(CANCELLED.to_string());
         }
         progress.done.fetch_add(1, Ordering::Relaxed);
-        let Some((path, settings, rotation)) = source else { return Ok(None) };
+        let Some((path, settings, rotation)) = source else {
+            return Ok(None);
+        };
         // A photo that can't be read is shown as unavailable, never left out.
-        let Ok(rgba) = crate::edit::render_edited(path, settings, *rotation, Some(profile.edge)) else { return Ok(None) };
-        let rgba = if media_id < 0 { crop_cover(&rgba, story.cover_crop) } else { rgba };
+        let Ok(rgba) = crate::edit::render_edited(path, settings, *rotation, Some(profile.edge))
+        else {
+            return Ok(None);
+        };
+        let rgba = if media_id < 0 {
+            crop_cover(&rgba, story.cover_crop)
+        } else {
+            rgba
+        };
         let bytes = crate::image_io::encode_jpeg(&rgba, profile.quality.clamp(1, 100))?;
         let file = format!("images/{}.jpg", key(&bytes));
         crate::image_io::write_whole(&folder.join(&file), &bytes)?;
-        Ok(Some((media_id, path, WebImage { file, width: rgba.width(), height: rgba.height() })))
+        Ok(Some((
+            media_id,
+            path,
+            WebImage {
+                file,
+                width: rgba.width(),
+                height: rgba.height(),
+            },
+        )))
     })?;
     let mut read = Vec::new();
     for (media_id, path, image) in made.into_iter().flatten() {
@@ -320,16 +367,32 @@ pub fn write_story(folder: &Path, format: Format, profile: Profile, input: &Page
     // Each route on its map, as a picture like the photos.
     let mut maps = HashMap::new();
     for block in blocks {
-        let Block::Route { route, .. } = &block.block else { continue };
+        let Block::Route { route, .. } = &block.block else {
+            continue;
+        };
         if progress.cancel.load(Ordering::Relaxed) {
             return Err(CANCELLED.into());
         }
-        let Some(rgba) = map.and_then(|tiles| route_map(route, tiles, profiles.get(&block.uid).map(Vec::as_slice))) else { continue };
+        let Some(rgba) = map
+            .and_then(|tiles| route_map(route, tiles, profiles.get(&block.uid).map(Vec::as_slice)))
+        else {
+            continue;
+        };
         let bytes = crate::image_io::encode_jpeg(&rgba, profile.quality.clamp(1, 100))?;
         let file = format!("images/{}.jpg", key(&bytes));
         crate::image_io::write_whole(&folder.join(&file), &bytes)?;
         let credit = map.map_or("", |tiles| tiles.source.attribution());
-        maps.insert(block.uid.clone(), RouteImage { image: WebImage { file, width: rgba.width(), height: rgba.height() }, credit });
+        maps.insert(
+            block.uid.clone(),
+            RouteImage {
+                image: WebImage {
+                    file,
+                    width: rgba.width(),
+                    height: rgba.height(),
+                },
+                credit,
+            },
+        );
     }
     // Each video's part for the web, starting on its poster. One that
     // can't be made is shown as unavailable, like a photo.
@@ -342,8 +405,20 @@ pub fn write_story(folder: &Path, format: Format, profile: Profile, input: &Page
         if let Some(Some((path, duration))) = videos.sources.get(&media_id) {
             let before = stamp(path);
             progress.converting.store(1, Ordering::Relaxed);
-            let done = |part: f64| progress.converting.store(1 + (part * 100.0) as usize, Ordering::Relaxed);
-            let made = web_video_file(folder, videos.cache.as_deref(), path, (start, end, *duration), profile, &progress.cancel, &done);
+            let done = |part: f64| {
+                progress
+                    .converting
+                    .store(1 + (part * 100.0) as usize, Ordering::Relaxed)
+            };
+            let made = web_video_file(
+                folder,
+                videos.cache.as_deref(),
+                path,
+                (start, end, *duration),
+                profile,
+                &progress.cancel,
+                &done,
+            );
             progress.converting.store(0, Ordering::Relaxed);
             if progress.cancel.load(Ordering::Relaxed) {
                 return Err(CANCELLED.into());
@@ -359,7 +434,10 @@ pub fn write_story(folder: &Path, format: Format, profile: Profile, input: &Page
     let clips: HashMap<String, WebVideo> = blocks
         .iter()
         .filter_map(|block| match &block.block {
-            Block::Video { media, start, end } => Some((block.uid.clone(), made_parts.get(&(media.media_id, *start, *end))?.clone())),
+            Block::Video { media, start, end } => Some((
+                block.uid.clone(),
+                made_parts.get(&(media.media_id, *start, *end))?.clone(),
+            )),
             _ => None,
         })
         .collect();
@@ -398,13 +476,23 @@ fn stamp(path: &Path) -> Stamp {
 /// the file's size and modification time. Saving the Story unchanged keeps
 /// the key; any change that would show on the page changes it.
 pub fn content_key(page: &Page) -> String {
-    let story = Story { revision: 0, updated_at: 0, archived: false, finished: false, ..page.story.clone() };
+    let story = Story {
+        revision: 0,
+        updated_at: 0,
+        archived: false,
+        finished: false,
+        ..page.story.clone()
+    };
     let mut sources: Vec<_> = page.sources.iter().collect();
     sources.sort_by_key(|(media_id, _)| **media_id);
     let photos: Vec<String> = sources
         .into_iter()
         .map(|(media_id, source)| match source {
-            Some((path, settings, rotation)) => format!("{media_id}\n{}\n{:?}\n{settings:?}\n{rotation}", path.display(), stamp(path)),
+            Some((path, settings, rotation)) => format!(
+                "{media_id}\n{}\n{:?}\n{settings:?}\n{rotation}",
+                path.display(),
+                stamp(path)
+            ),
             None => format!("{media_id}\nunavailable"),
         })
         .collect();
@@ -413,7 +501,11 @@ pub fn content_key(page: &Page) -> String {
     let videos: Vec<String> = videos
         .into_iter()
         .map(|(media_id, source)| match source {
-            Some((path, duration)) => format!("{media_id}\n{}\n{:?}\n{duration}", path.display(), stamp(path)),
+            Some((path, duration)) => format!(
+                "{media_id}\n{}\n{:?}\n{duration}",
+                path.display(),
+                stamp(path)
+            ),
             None => format!("{media_id}\nunavailable"),
         })
         .collect();
@@ -436,12 +528,27 @@ pub fn content_key(page: &Page) -> String {
 /// What the page was made from: the Story revision, the profile, and for
 /// each photo its media reference, the file it became, and the size and
 /// modification time of its source. No paths, names, or camera details.
-fn manifest(story: &Story, format: Format, profile: Profile, read: &[(i64, &PathBuf, Stamp)], images: &HashMap<i64, WebImage>, videos: Vec<serde_json::Value>) -> String {
+fn manifest(
+    story: &Story,
+    format: Format,
+    profile: Profile,
+    read: &[(i64, &PathBuf, Stamp)],
+    images: &HashMap<i64, WebImage>,
+    videos: Vec<serde_json::Value>,
+) -> String {
     let photos: Vec<_> = read
         .iter()
         .filter_map(|(media_id, _, stamp)| {
             let image = images.get(media_id)?;
-            let (bytes, modified) = stamp.map(|(bytes, time)| (bytes, time.duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs()))).unzip();
+            let (bytes, modified) = stamp
+                .map(|(bytes, time)| {
+                    (
+                        bytes,
+                        time.duration_since(std::time::UNIX_EPOCH)
+                            .map_or(0, |d| d.as_secs()),
+                    )
+                })
+                .unzip();
             Some(serde_json::json!({
                 "media": media_id,
                 "file": image.file,
@@ -463,14 +570,23 @@ fn manifest(story: &Story, format: Format, profile: Profile, read: &[(i64, &Path
     });
     let mut manifest = manifest;
     if let Some(videos) = videos {
-        manifest["videos"] = serde_json::json!({ "version": crate::video::WEB_VIDEO_VERSION, "parts": videos });
+        manifest["videos"] =
+            serde_json::json!({ "version": crate::video::WEB_VIDEO_VERSION, "parts": videos });
     }
     serde_json::to_string_pretty(&manifest).unwrap_or_default()
 }
 
 /// A source file's size and modification time, as the manifest has them.
 fn stamp_json(stamp: Stamp) -> serde_json::Value {
-    let (bytes, modified) = stamp.map(|(bytes, time)| (bytes, time.duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs()))).unzip();
+    let (bytes, modified) = stamp
+        .map(|(bytes, time)| {
+            (
+                bytes,
+                time.duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |d| d.as_secs()),
+            )
+        })
+        .unzip();
     serde_json::json!({ "bytes": bytes, "modified": modified })
 }
 
@@ -483,23 +599,45 @@ const HALF_MADE_AGE: std::time::Duration = std::time::Duration::from_secs(60 * 6
 /// A name for the part from `start` to `end` milliseconds of the video at
 /// `path`, the same while the file, the part, and how it is made are.
 pub fn clip_name(path: &Path, start: u32, end: u32) -> String {
-    key(format!("{}\n{}\n{:?}\n{start}\n{end}", crate::video::WEB_VIDEO_VERSION, path.display(), stamp(path)).as_bytes())
+    key(format!(
+        "{}\n{}\n{:?}\n{start}\n{end}",
+        crate::video::WEB_VIDEO_VERSION,
+        path.display(),
+        stamp(path)
+    )
+    .as_bytes())
 }
 
 /// The part from `start` to `end` milliseconds of the video at `path`,
 /// `duration` seconds long, made for the web (see
 /// [`crate::video::web_video`]) in `cache`, or found there from before.
 /// The cache is then kept within [`CLIP_CACHE_BYTES`].
-pub fn clip_file(cache: &Path, path: &Path, (start, end, duration): (u32, u32, f64), cancel: &AtomicBool, done: &dyn Fn(f64)) -> Result<PathBuf, String> {
+pub fn clip_file(
+    cache: &Path,
+    path: &Path,
+    (start, end, duration): (u32, u32, f64),
+    cancel: &AtomicBool,
+    done: &dyn Fn(f64),
+) -> Result<PathBuf, String> {
     let file = cache.join(format!("{}.mp4", clip_name(path, start, end)));
     if file.is_file() {
         // Used now, so it is kept longest.
-        let _ = std::fs::File::options().write(true).open(&file).and_then(|opened| opened.set_modified(std::time::SystemTime::now()));
+        let _ = std::fs::File::options()
+            .write(true)
+            .open(&file)
+            .and_then(|opened| opened.set_modified(std::time::SystemTime::now()));
         return Ok(file);
     }
     std::fs::create_dir_all(cache).map_err(|err| err.to_string())?;
     let (from, to) = crate::trip::clip_range(start, end, duration);
-    crate::video::web_video(path, &file, from, if end == 0 { 0.0 } else { to }, cancel, done)?;
+    crate::video::web_video(
+        path,
+        &file,
+        from,
+        if end == 0 { 0.0 } else { to },
+        cancel,
+        done,
+    )?;
     trim_clips(cache, &file);
     Ok(file)
 }
@@ -507,15 +645,26 @@ pub fn clip_file(cache: &Path, path: &Path, (start, end, duration): (u32, u32, f
 /// Removes the parts in `cache` used longest ago, but not `keep`, until
 /// they take at most [`CLIP_CACHE_BYTES`], and parts left half made.
 fn trim_clips(cache: &Path, keep: &Path) {
-    let Ok(entries) = std::fs::read_dir(cache) else { return };
+    let Ok(entries) = std::fs::read_dir(cache) else {
+        return;
+    };
     let mut clips: Vec<(std::time::SystemTime, u64, PathBuf)> = Vec::new();
     for entry in entries.flatten() {
-        let (path, Ok(meta)) = (entry.path(), entry.metadata()) else { continue };
-        let Ok(modified) = meta.modified() else { continue };
-        let ext = path.extension().map(|ext| ext.to_string_lossy().into_owned()).unwrap_or_default();
+        let (path, Ok(meta)) = (entry.path(), entry.metadata()) else {
+            continue;
+        };
+        let Ok(modified) = meta.modified() else {
+            continue;
+        };
+        let ext = path
+            .extension()
+            .map(|ext| ext.to_string_lossy().into_owned())
+            .unwrap_or_default();
         if ext == "mp4" {
             clips.push((modified, meta.len(), path));
-        } else if ext.starts_with("partial-") && modified.elapsed().is_ok_and(|age| age > HALF_MADE_AGE) {
+        } else if ext.starts_with("partial-")
+            && modified.elapsed().is_ok_and(|age| age > HALF_MADE_AGE)
+        {
             // One still being made is written to all the time.
             let _ = std::fs::remove_file(&path);
         }
@@ -535,12 +684,24 @@ fn trim_clips(cache: &Path, keep: &Path) {
 /// Writes a Video block's part, `(start, end, duration)` as for
 /// [`clip_file`], in `folder/videos`, through `cache` when there is one,
 /// with the frame it starts on in `folder/images`.
-fn web_video_file(folder: &Path, cache: Option<&Path>, path: &Path, part: (u32, u32, f64), profile: Profile, cancel: &AtomicBool, done: &dyn Fn(f64)) -> Result<WebVideo, String> {
+fn web_video_file(
+    folder: &Path,
+    cache: Option<&Path>,
+    path: &Path,
+    part: (u32, u32, f64),
+    profile: Profile,
+    cancel: &AtomicBool,
+    done: &dyn Fn(f64),
+) -> Result<WebVideo, String> {
     let (start, end, duration) = part;
     let (from, to) = crate::trip::clip_range(start, end, duration);
     let rgba = crate::video::frame_at(path, from, profile.edge)?;
     let bytes = crate::image_io::encode_jpeg(&rgba, profile.quality.clamp(1, 100))?;
-    let poster = WebImage { file: format!("images/{}.jpg", key(&bytes)), width: rgba.width(), height: rgba.height() };
+    let poster = WebImage {
+        file: format!("images/{}.jpg", key(&bytes)),
+        width: rgba.width(),
+        height: rgba.height(),
+    };
     crate::image_io::write_whole(&folder.join(&poster.file), &bytes)?;
     let file = format!("videos/{}.mp4", clip_name(path, start, end));
     std::fs::create_dir_all(folder.join("videos")).map_err(|err| err.to_string())?;
@@ -549,7 +710,14 @@ fn web_video_file(folder: &Path, cache: Option<&Path>, path: &Path, part: (u32, 
             let made = clip_file(cache, path, part, cancel, done)?;
             std::fs::copy(made, folder.join(&file)).map_err(|err| err.to_string())?;
         }
-        None => crate::video::web_video(path, &folder.join(&file), from, if end == 0 { 0.0 } else { to }, cancel, done)?,
+        None => crate::video::web_video(
+            path,
+            &folder.join(&file),
+            from,
+            if end == 0 { 0.0 } else { to },
+            cancel,
+            done,
+        )?,
     }
     Ok(WebVideo { file, poster })
 }
@@ -604,10 +772,18 @@ pub const SOURCE_CHANGED: &str = "source changed";
 /// being written by another Picasso is left alone.
 fn remove_abandoned(parent: &Path, name: &str) {
     let prefix = format!(".{name}.partial-");
-    let Ok(entries) = std::fs::read_dir(parent) else { return };
+    let Ok(entries) = std::fs::read_dir(parent) else {
+        return;
+    };
     for entry in entries.flatten() {
         let file_name = entry.file_name();
-        let Some(pid) = file_name.to_str().and_then(|file| file.strip_prefix(&prefix)).and_then(|pid| pid.parse::<u32>().ok()) else { continue };
+        let Some(pid) = file_name
+            .to_str()
+            .and_then(|file| file.strip_prefix(&prefix))
+            .and_then(|pid| pid.parse::<u32>().ok())
+        else {
+            continue;
+        };
         if pid != std::process::id() && abandoned(pid, &entry.path()) {
             let _ = std::fs::remove_dir_all(entry.path());
         }
@@ -620,7 +796,9 @@ pub(crate) fn abandoned(pid: u32, path: &Path) -> bool {
     #[cfg(unix)]
     {
         let _ = path;
-        let Ok(pid) = libc::pid_t::try_from(pid) else { return false };
+        let Ok(pid) = libc::pid_t::try_from(pid) else {
+            return false;
+        };
         // SAFETY: signal 0 sends nothing; it only asks whether the process exists.
         let asked = unsafe { libc::kill(pid, 0) };
         asked != 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
@@ -628,7 +806,10 @@ pub(crate) fn abandoned(pid: u32, path: &Path) -> bool {
     #[cfg(not(unix))]
     {
         let _ = pid;
-        let age = std::fs::metadata(path).and_then(|meta| meta.modified()).ok().and_then(|modified| modified.elapsed().ok());
+        let age = std::fs::metadata(path)
+            .and_then(|meta| meta.modified())
+            .ok()
+            .and_then(|modified| modified.elapsed().ok());
         age.is_some_and(|age| age > std::time::Duration::from_secs(24 * 3600))
     }
 }
@@ -637,17 +818,34 @@ pub(crate) fn abandoned(pid: u32, path: &Path) -> bool {
 /// `name 2`, `name 3`, … when that is taken), so nothing there is ever
 /// replaced. It is written under a hidden name first and renamed once
 /// complete; a failed export leaves no folder behind. Returns the folder.
-pub fn export_story(parent: &Path, name: &str, format: Format, profile: Profile, page: &Page, progress: &Progress) -> Result<(PathBuf, Outcome), String> {
+pub fn export_story(
+    parent: &Path,
+    name: &str,
+    format: Format,
+    profile: Profile,
+    page: &Page,
+    progress: &Progress,
+) -> Result<(PathBuf, Outcome), String> {
     let name = folder_name(name);
     let target = (1..)
-        .map(|n| if n == 1 { parent.join(&name) } else { parent.join(format!("{name} {n}")) })
+        .map(|n| {
+            if n == 1 {
+                parent.join(&name)
+            } else {
+                parent.join(format!("{name} {n}"))
+            }
+        })
         .find(|path| !path.exists())
         .unwrap_or_else(|| parent.join(&name));
     let staging = parent.join(format!(".{name}.partial-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&staging);
     remove_abandoned(parent, &name);
-    let written = write_story(&staging, format, profile, page, progress)
-        .and_then(|(_, outcome)| std::fs::rename(&staging, &target).map(|()| outcome).map_err(|err| err.to_string()));
+    let written =
+        write_story(&staging, format, profile, page, progress).and_then(|(_, outcome)| {
+            std::fs::rename(&staging, &target)
+                .map(|()| outcome)
+                .map_err(|err| err.to_string())
+        });
     match written {
         Ok(outcome) => Ok((target, outcome)),
         Err(err) => {
@@ -672,8 +870,8 @@ pub fn folder_name(title: &str) -> String {
 /// Windows' device names, which no file or folder may have there, whatever
 /// its extension.
 const DEVICE_NAMES: [&str; 22] = [
-    "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9", "LPT1", "LPT2", "LPT3", "LPT4",
-    "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+    "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
+    "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
 ];
 
 /// `name` as a file or folder name every system takes as it is: characters
@@ -683,12 +881,24 @@ const DEVICE_NAMES: [&str; 22] = [
 pub fn portable_name(name: &str) -> String {
     let cleaned: String = name
         .chars()
-        .map(|c| if c.is_control() || matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') { ' ' } else { c })
+        .map(|c| {
+            if c.is_control() || matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') {
+                ' '
+            } else {
+                c
+            }
+        })
         .collect();
     let cleaned = cleaned.split_whitespace().collect::<Vec<_>>().join(" ");
-    let cleaned = cleaned.trim_start_matches('.').trim_end_matches(['.', ' ']).trim();
+    let cleaned = cleaned
+        .trim_start_matches('.')
+        .trim_end_matches(['.', ' '])
+        .trim();
     let stem = cleaned.split('.').next().unwrap_or_default();
-    if DEVICE_NAMES.iter().any(|device| device.eq_ignore_ascii_case(stem)) {
+    if DEVICE_NAMES
+        .iter()
+        .any(|device| device.eq_ignore_ascii_case(stem))
+    {
         format!("{stem}_{}", &cleaned[stem.len()..])
     } else {
         cleaned.to_string()
@@ -708,17 +918,32 @@ pub fn markdown(
     words: &Words,
 ) -> (String, Outcome) {
     let mut outcome = Outcome::default();
-    let title = if story.title.trim().is_empty() { words.untitled.as_str() } else { story.title.trim() };
+    let title = if story.title.trim().is_empty() {
+        words.untitled.as_str()
+    } else {
+        story.title.trim()
+    };
     let mut out = format!("# {}\n\n", md(title));
     if !story.subtitle.trim().is_empty() {
         let _ = write!(out, "*{}*\n\n", md(story.subtitle.trim()));
     }
-    let byline: Vec<&str> = [Some(story.author.trim()).filter(|a| !a.is_empty()), dates.filter(|_| story.show_date)].into_iter().flatten().collect();
+    let byline: Vec<&str> = [
+        Some(story.author.trim()).filter(|a| !a.is_empty()),
+        dates.filter(|_| story.show_date),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
     if !byline.is_empty() {
         let _ = write!(out, "{}\n\n", md(&byline.join(" · ")));
     }
     if let Some(cover) = story.cover_key() {
-        out.push_str(&md_image(&MediaUse::new(cover), images, words, &mut outcome));
+        out.push_str(&md_image(
+            &MediaUse::new(cover),
+            images,
+            words,
+            &mut outcome,
+        ));
     }
     let sections = headings(blocks);
     if crate::trip::template_code(&story.template) == "guide" && !sections.is_empty() {
@@ -739,14 +964,26 @@ pub fn markdown(
             }
             Block::Paragraph(text) | Block::Credits(text) => md_paragraphs(&mut out, text),
             Block::Info { title, items } => {
-                let items: Vec<&(String, String)> = items.iter().filter(|(label, value)| !label.trim().is_empty() || !value.trim().is_empty()).collect();
+                let items: Vec<&(String, String)> = items
+                    .iter()
+                    .filter(|(label, value)| !label.trim().is_empty() || !value.trim().is_empty())
+                    .collect();
                 if !title.trim().is_empty() {
                     let _ = write!(out, "**{}**\n\n", md(title.trim()));
                 }
                 for (label, value) in &items {
                     match (label.trim(), value.trim()) {
-                        ("", value) => { let _ = writeln!(out, "- {}", inline::to_markdown(value)); }
-                        (label, value) => { let _ = writeln!(out, "- **{}:** {}", md(label), inline::to_markdown(value)); }
+                        ("", value) => {
+                            let _ = writeln!(out, "- {}", inline::to_markdown(value));
+                        }
+                        (label, value) => {
+                            let _ = writeln!(
+                                out,
+                                "- **{}:** {}",
+                                md(label),
+                                inline::to_markdown(value)
+                            );
+                        }
                     }
                 }
                 if !items.is_empty() {
@@ -754,20 +991,30 @@ pub fn markdown(
                 }
             }
             Block::Link { url, title, note } => {
-                let shown = if title.trim().is_empty() { url.trim() } else { title.trim() };
+                let shown = if title.trim().is_empty() {
+                    url.trim()
+                } else {
+                    title.trim()
+                };
                 let line = match crate::trip::web_address(url) {
                     Some(url) => format!("[{}](<{}>)", md(shown), url.replace('>', "%3E")),
                     None => md(shown),
                 };
                 match note.trim() {
                     "" if line.is_empty() => {}
-                    "" => { let _ = write!(out, "{line}\n\n"); }
-                    note => { let _ = write!(out, "{line} — {}\n\n", inline::to_markdown(note)); }
+                    "" => {
+                        let _ = write!(out, "{line}\n\n");
+                    }
+                    note => {
+                        let _ = write!(out, "{line} — {}\n\n", inline::to_markdown(note));
+                    }
                 }
             }
             Block::YouTube { url, caption } => {
                 let line = match crate::trip::youtube(url) {
-                    Some(video) if caption.trim().is_empty() => format!("▶ [{}](<{}>)", md(&words.watch), video.watch()),
+                    Some(video) if caption.trim().is_empty() => {
+                        format!("▶ [{}](<{}>)", md(&words.watch), video.watch())
+                    }
                     Some(video) => format!("▶ [{}](<{}>)", md(caption.trim()), video.watch()),
                     None => md(caption.trim()),
                 };
@@ -778,7 +1025,13 @@ pub fn markdown(
             Block::Video { media, .. } => {
                 match clips.get(&block.uid) {
                     Some(clip) => {
-                        let alt = media.alt.trim().replace('\\', "\\\\").replace('[', "\\[").replace(']', "\\]").replace('\n', " ");
+                        let alt = media
+                            .alt
+                            .trim()
+                            .replace('\\', "\\\\")
+                            .replace('[', "\\[")
+                            .replace(']', "\\]")
+                            .replace('\n', " ");
                         let _ = writeln!(out, "[![{alt}]({})]({})", clip.poster.file, clip.file);
                     }
                     None => {
@@ -791,10 +1044,24 @@ pub fn markdown(
                 }
                 out.push('\n');
             }
-            Block::Table { header, rows, caption, .. } => md_table(&mut out, *header, rows, caption),
+            Block::Table {
+                header,
+                rows,
+                caption,
+                ..
+            } => md_table(&mut out, *header, rows, caption),
             Block::List { ordered, items } => {
-                for (n, item) in items.iter().map(|item| item.trim()).filter(|item| !item.is_empty()).enumerate() {
-                    let bullet = if *ordered { format!("{}.", n + 1) } else { "-".into() };
+                for (n, item) in items
+                    .iter()
+                    .map(|item| item.trim())
+                    .filter(|item| !item.is_empty())
+                    .enumerate()
+                {
+                    let bullet = if *ordered {
+                        format!("{}.", n + 1)
+                    } else {
+                        "-".into()
+                    };
                     let _ = writeln!(out, "{bullet} {}", inline::to_markdown(item));
                 }
                 out.push('\n');
@@ -819,7 +1086,10 @@ pub fn markdown(
             // Markdown has no grid: the photos in order, then the description.
             Block::Grid { caption, media, .. } => {
                 for item in media {
-                    let bare = MediaUse { caption: String::new(), ..item.clone() };
+                    let bare = MediaUse {
+                        caption: String::new(),
+                        ..item.clone()
+                    };
                     out.push_str(&md_image(&bare, images, words, &mut outcome));
                 }
                 if !caption.trim().is_empty() {
@@ -831,10 +1101,21 @@ pub fn markdown(
             Block::Route { caption, route, .. } => {
                 if !route.is_empty() {
                     if let Some(RouteImage { image, credit }) = maps.get(&block.uid) {
-                        let _ = write!(out, "![{}]({})\n{}\n\n", md(caption.trim()), image.file, md(credit));
+                        let _ = write!(
+                            out,
+                            "![{}]({})\n{}\n\n",
+                            md(caption.trim()),
+                            image.file,
+                            md(credit)
+                        );
                     }
                     let length = crate::track::format_distance(crate::trip::route_meters(route));
-                    let words = [caption.trim(), &length].into_iter().filter(|text| !text.is_empty()).map(md).collect::<Vec<_>>().join(" · ");
+                    let words = [caption.trim(), &length]
+                        .into_iter()
+                        .filter(|text| !text.is_empty())
+                        .map(md)
+                        .collect::<Vec<_>>()
+                        .join(" · ");
                     let _ = write!(out, "*{words}*\n\n");
                 }
             }
@@ -847,16 +1128,34 @@ pub fn markdown(
 
 /// Paragraphs split by blank lines, each line kept as its own.
 fn md_paragraphs(out: &mut String, text: &str) {
-    for part in text.split("\n\n").map(str::trim).filter(|part| !part.is_empty()) {
-        let lines: Vec<String> = part.lines().map(|line| inline::to_markdown(line.trim_end())).collect();
+    for part in text
+        .split("\n\n")
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+    {
+        let lines: Vec<String> = part
+            .lines()
+            .map(|line| inline::to_markdown(line.trim_end()))
+            .collect();
         let _ = write!(out, "{}\n\n", lines.join("  \n"));
     }
 }
 
-fn md_image(media: &MediaUse, images: &HashMap<i64, WebImage>, words: &Words, outcome: &mut Outcome) -> String {
+fn md_image(
+    media: &MediaUse,
+    images: &HashMap<i64, WebImage>,
+    words: &Words,
+    outcome: &mut Outcome,
+) -> String {
     let mut out = match images.get(&media.media_id) {
         Some(image) => {
-            let alt = media.alt.trim().replace('\\', "\\\\").replace('[', "\\[").replace(']', "\\]").replace('\n', " ");
+            let alt = media
+                .alt
+                .trim()
+                .replace('\\', "\\\\")
+                .replace('[', "\\[")
+                .replace(']', "\\]")
+                .replace('\n', " ");
             format!("![{alt}]({})\n", image.file)
         }
         None => {
@@ -891,7 +1190,10 @@ pub fn md(text: &str) -> String {
     if let Some(first) = out.chars().next().filter(|c| matches!(c, '-' | '+')) {
         out.replace_range(..first.len_utf8(), &format!("\\{first}"));
     }
-    if let Some(dot) = out.find(". ").filter(|&at| at > 0 && out[..at].chars().all(|c| c.is_ascii_digit())) {
+    if let Some(dot) = out
+        .find(". ")
+        .filter(|&at| at > 0 && out[..at].chars().all(|c| c.is_ascii_digit()))
+    {
         out.replace_range(dot..dot + 1, "\\.");
     }
     out
@@ -899,7 +1201,10 @@ pub fn md(text: &str) -> String {
 
 /// A name for rendered bytes, the same whenever the bytes are.
 fn key(bytes: &[u8]) -> String {
-    digest::digest(&digest::SHA256, bytes).as_ref()[..8].iter().map(|b| format!("{b:02x}")).collect()
+    digest::digest(&digest::SHA256, bytes).as_ref()[..8]
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }
 
 /// The page's HTML. Photos missing from `images`, and videos missing from
@@ -914,7 +1219,11 @@ pub fn page(
     words: &Words,
 ) -> (String, Outcome) {
     let mut outcome = Outcome::default();
-    let title = if story.title.trim().is_empty() { words.untitled.as_str() } else { story.title.trim() };
+    let title = if story.title.trim().is_empty() {
+        words.untitled.as_str()
+    } else {
+        story.title.trim()
+    };
     let template = crate::trip::template_code(&story.template);
     let mut html = String::new();
     let _ = write!(
@@ -926,13 +1235,29 @@ pub fn page(
         color_style()
     );
     if let Some(cover) = story.cover_key() {
-        html.push_str(&figure(&MediaUse::new(cover), images, words, "cover", &mut outcome));
+        html.push_str(&figure(
+            &MediaUse::new(cover),
+            images,
+            words,
+            "cover",
+            &mut outcome,
+        ));
     }
     let _ = writeln!(html, "<h1>{}</h1>", esc(title));
     if !story.subtitle.trim().is_empty() {
-        let _ = writeln!(html, "<p class=\"subtitle\">{}</p>", esc(story.subtitle.trim()));
+        let _ = writeln!(
+            html,
+            "<p class=\"subtitle\">{}</p>",
+            esc(story.subtitle.trim())
+        );
     }
-    let byline: Vec<&str> = [Some(story.author.trim()).filter(|a| !a.is_empty()), dates.filter(|_| story.show_date)].into_iter().flatten().collect();
+    let byline: Vec<&str> = [
+        Some(story.author.trim()).filter(|a| !a.is_empty()),
+        dates.filter(|_| story.show_date),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
     if !byline.is_empty() {
         let _ = writeln!(html, "<p class=\"byline\">{}</p>", esc(&byline.join(" · ")));
     }
@@ -941,19 +1266,32 @@ pub fn page(
     if template == "guide" && !sections.is_empty() {
         let _ = write!(html, "<nav class=\"contents\" aria-labelledby=\"contents\">\n<h2 id=\"contents\">{}</h2>\n<ol>\n", esc(&words.contents));
         for (n, text) in sections.iter().enumerate() {
-            let _ = writeln!(html, "<li><a href=\"#section-{}\">{}</a></li>", n + 1, inline::to_html(text));
+            let _ = writeln!(
+                html,
+                "<li><a href=\"#section-{}\">{}</a></li>",
+                n + 1,
+                inline::to_html(text)
+            );
         }
         html.push_str("</ol>\n</nav>\n");
     }
     if !story.introduction.trim().is_empty() {
-        let _ = write!(html, "<section class=\"introduction\">\n{}</section>\n", paragraphs(&story.introduction));
+        let _ = write!(
+            html,
+            "<section class=\"introduction\">\n{}</section>\n",
+            paragraphs(&story.introduction)
+        );
     }
     let mut section = 0;
     for block in blocks {
         match &block.block {
             Block::Heading(text) if !text.trim().is_empty() => {
                 section += 1;
-                let _ = writeln!(html, "<h2 id=\"section-{section}\">{}</h2>", inline::to_html(text.trim()));
+                let _ = writeln!(
+                    html,
+                    "<h2 id=\"section-{section}\">{}</h2>",
+                    inline::to_html(text.trim())
+                );
             }
             Block::Heading(_) => {}
             Block::Subheading(text) => {
@@ -963,7 +1301,11 @@ pub fn page(
             Block::List { ordered, items } => {
                 let tag = if *ordered { "ol" } else { "ul" };
                 let _ = writeln!(html, "<{tag}>");
-                for item in items.iter().map(|item| item.trim()).filter(|item| !item.is_empty()) {
+                for item in items
+                    .iter()
+                    .map(|item| item.trim())
+                    .filter(|item| !item.is_empty())
+                {
                     let _ = writeln!(html, "<li>{}</li>", inline::to_html(item));
                 }
                 let _ = writeln!(html, "</{tag}>");
@@ -975,7 +1317,9 @@ pub fn page(
                 }
                 html.push_str("</blockquote>\n");
             }
-            Block::Photo(media) => html.push_str(&figure(media, images, words, "photo", &mut outcome)),
+            Block::Photo(media) => {
+                html.push_str(&figure(media, images, words, "photo", &mut outcome))
+            }
             Block::Gallery(items) => {
                 html.push_str("<div class=\"gallery\">\n");
                 for media in items {
@@ -983,7 +1327,12 @@ pub fn page(
                 }
                 html.push_str("</div>\n");
             }
-            Block::Grid { columns, caption, media, .. } => {
+            Block::Grid {
+                columns,
+                caption,
+                media,
+                ..
+            } => {
                 let ratio = if *columns == 1 { "3/2" } else { "4/3" };
                 let _ = writeln!(html, "<figure class=\"grid\" style=\"--cols:{columns};--ratio:{ratio}\"><div class=\"cells\">");
                 for item in media {
@@ -1000,7 +1349,11 @@ pub fn page(
                         }
                         None => {
                             outcome.missing += 1;
-                            let _ = writeln!(html, "<div class=\"missing\">{}</div>", esc(&words.unavailable));
+                            let _ = writeln!(
+                                html,
+                                "<div class=\"missing\">{}</div>",
+                                esc(&words.unavailable)
+                            );
                         }
                     }
                 }
@@ -1012,22 +1365,44 @@ pub fn page(
             }
             Block::Separator => html.push_str("<hr>\n"),
             Block::Route { caption, route, .. } => match maps.get(&block.uid) {
-                Some(RouteImage { image, credit }) => html.push_str(&route_picture(route, caption, image, credit)),
+                Some(RouteImage { image, credit }) => {
+                    html.push_str(&route_picture(route, caption, image, credit))
+                }
                 None => html.push_str(&route_figure(route, caption)),
             },
             Block::Credits(text) => {
-                let _ = write!(html, "<footer class=\"credits\">\n{}</footer>\n", paragraphs(text));
+                let _ = write!(
+                    html,
+                    "<footer class=\"credits\">\n{}</footer>\n",
+                    paragraphs(text)
+                );
             }
             Block::Info { title, items } => html.push_str(&info_html(title, items)),
             Block::Link { url, title, note } => html.push_str(&link_html(url, title, note)),
-            Block::YouTube { url, caption } => html.push_str(&youtube_html(url, caption, &words.watch)),
-            Block::Video { media, .. } => html.push_str(&video_figure(media, clips.get(&block.uid), words, &mut outcome)),
-            Block::Table { header, rows, widths, caption } => html.push_str(&table_html(*header, rows, widths, caption)),
+            Block::YouTube { url, caption } => {
+                html.push_str(&youtube_html(url, caption, &words.watch))
+            }
+            Block::Video { media, .. } => html.push_str(&video_figure(
+                media,
+                clips.get(&block.uid),
+                words,
+                &mut outcome,
+            )),
+            Block::Table {
+                header,
+                rows,
+                widths,
+                caption,
+            } => html.push_str(&table_html(*header, rows, widths, caption)),
             Block::Unknown { .. } => outcome.unknown += 1,
         }
     }
     if !story.conclusion.trim().is_empty() {
-        let _ = write!(html, "<section class=\"conclusion\">\n{}</section>\n", paragraphs(&story.conclusion));
+        let _ = write!(
+            html,
+            "<section class=\"conclusion\">\n{}</section>\n",
+            paragraphs(&story.conclusion)
+        );
     }
     html.push_str("</article>\n</body>\n</html>\n");
     (html, outcome)
@@ -1052,17 +1427,37 @@ pub fn route_figure(route: &[Vec<[i32; 2]>], caption: &str) -> String {
     let Some((_, shape)) = crate::trip::route_shape(route, width, height, ROUTE_PAD) else {
         return String::new();
     };
-    let (Some(start), Some(end)) = (shape.first().and_then(|segment| segment.first()), shape.last().and_then(|segment| segment.last())) else {
+    let (Some(start), Some(end)) = (
+        shape.first().and_then(|segment| segment.first()),
+        shape.last().and_then(|segment| segment.last()),
+    ) else {
         return String::new();
     };
-    let mut svg = format!("<svg viewBox=\"0 0 {width} {height}\" role=\"img\" aria-label=\"{}\">", esc(caption.trim()));
+    let mut svg = format!(
+        "<svg viewBox=\"0 0 {width} {height}\" role=\"img\" aria-label=\"{}\">",
+        esc(caption.trim())
+    );
     for segment in &shape {
-        let points: Vec<String> = segment.iter().map(|[x, y]| format!("{x:.1},{y:.1}")).collect();
+        let points: Vec<String> = segment
+            .iter()
+            .map(|[x, y]| format!("{x:.1},{y:.1}"))
+            .collect();
         let _ = write!(svg, "<polyline points=\"{}\"/>", points.join(" "));
     }
-    let _ = write!(svg, "<circle class=\"start\" cx=\"{:.1}\" cy=\"{:.1}\" r=\"6\"/>", start[0], start[1]);
-    let _ = write!(svg, "<circle class=\"end\" cx=\"{:.1}\" cy=\"{:.1}\" r=\"6\"/></svg>", end[0], end[1]);
-    format!("<figure class=\"route\">{svg}<figcaption>{}</figcaption></figure>\n", route_words(route, caption, ""))
+    let _ = write!(
+        svg,
+        "<circle class=\"start\" cx=\"{:.1}\" cy=\"{:.1}\" r=\"6\"/>",
+        start[0], start[1]
+    );
+    let _ = write!(
+        svg,
+        "<circle class=\"end\" cx=\"{:.1}\" cy=\"{:.1}\" r=\"6\"/></svg>",
+        end[0], end[1]
+    );
+    format!(
+        "<figure class=\"route\">{svg}<figcaption>{}</figcaption></figure>\n",
+        route_words(route, caption, "")
+    )
 }
 
 /// A Route block as its picture on the map, with its words, length, and
@@ -1081,7 +1476,11 @@ fn route_picture(route: &[Vec<[i32; 2]>], caption: &str, image: &WebImage, credi
 /// A route's description and length, and the map's credit, as escaped text.
 pub fn route_words(route: &[Vec<[i32; 2]>], caption: &str, credit: &str) -> String {
     let length = crate::track::format_distance(crate::trip::route_meters(route));
-    let words = [esc(caption.trim()), esc(&length)].into_iter().filter(|text| !text.is_empty()).collect::<Vec<_>>().join(" · ");
+    let words = [esc(caption.trim()), esc(&length)]
+        .into_iter()
+        .filter(|text| !text.is_empty())
+        .collect::<Vec<_>>()
+        .join(" · ");
     if credit.is_empty() {
         words
     } else {
@@ -1103,7 +1502,11 @@ const ROUTE_INK: [u8; 3] = [0x1f, 0x7a, 0x7a];
 /// `None` when the source needs a key it doesn't have or no tile could be
 /// had, so the page draws the route on its own. A `profile` is drawn in
 /// its bottom-right corner.
-pub fn route_map(route: &[Vec<[i32; 2]>], tiles: &MapTiles, profile: Option<&[[f32; 2]]>) -> Option<image::RgbaImage> {
+pub fn route_map(
+    route: &[Vec<[i32; 2]>],
+    tiles: &MapTiles,
+    profile: Option<&[[f32; 2]]>,
+) -> Option<image::RgbaImage> {
     let (width, height) = ROUTE_SIZE;
     let (view, shape) = crate::trip::route_shape(route, width, height, ROUTE_PAD)?;
     let scale = ROUTE_SCALE as f32;
@@ -1120,14 +1523,49 @@ pub fn route_map(route: &[Vec<[i32; 2]>], tiles: &MapTiles, profile: Option<&[[f
     }
     let line = line.finish()?;
     let (white, ink) = (paint([255, 255, 255]), paint(ROUTE_INK));
-    let stroke = |width: f32| tiny_skia::Stroke { width: width * scale, line_cap: tiny_skia::LineCap::Round, line_join: tiny_skia::LineJoin::Round, ..Default::default() };
-    pixmap.stroke_path(&line, &white, &stroke(7.0), tiny_skia::Transform::identity(), None);
-    pixmap.stroke_path(&line, &ink, &stroke(4.0), tiny_skia::Transform::identity(), None);
-    let ends = [shape.first().and_then(|segment| segment.first()), shape.last().and_then(|segment| segment.last())];
+    let stroke = |width: f32| tiny_skia::Stroke {
+        width: width * scale,
+        line_cap: tiny_skia::LineCap::Round,
+        line_join: tiny_skia::LineJoin::Round,
+        ..Default::default()
+    };
+    pixmap.stroke_path(
+        &line,
+        &white,
+        &stroke(7.0),
+        tiny_skia::Transform::identity(),
+        None,
+    );
+    pixmap.stroke_path(
+        &line,
+        &ink,
+        &stroke(4.0),
+        tiny_skia::Transform::identity(),
+        None,
+    );
+    let ends = [
+        shape.first().and_then(|segment| segment.first()),
+        shape.last().and_then(|segment| segment.last()),
+    ];
     for (n, [x, y]) in ends.into_iter().flatten().enumerate() {
-        let Some(dot) = tiny_skia::PathBuilder::from_circle(x * scale, y * scale, 6.0 * scale) else { continue };
-        pixmap.fill_path(&dot, if n == 0 { &ink } else { &white }, tiny_skia::FillRule::Winding, tiny_skia::Transform::identity(), None);
-        pixmap.stroke_path(&dot, if n == 0 { &white } else { &ink }, &stroke(3.0), tiny_skia::Transform::identity(), None);
+        let Some(dot) = tiny_skia::PathBuilder::from_circle(x * scale, y * scale, 6.0 * scale)
+        else {
+            continue;
+        };
+        pixmap.fill_path(
+            &dot,
+            if n == 0 { &ink } else { &white },
+            tiny_skia::FillRule::Winding,
+            tiny_skia::Transform::identity(),
+            None,
+        );
+        pixmap.stroke_path(
+            &dot,
+            if n == 0 { &white } else { &ink },
+            &stroke(3.0),
+            tiny_skia::Transform::identity(),
+            None,
+        );
     }
     if let Some(profile) = profile {
         crate::elevation::draw(&mut pixmap, profile, scale, ROUTE_INK);
@@ -1142,9 +1580,13 @@ const PLACES_MAX_ZOOM: u8 = 13;
 /// Places, each `(lat, lon)`, as numbered pins on the map tiles of
 /// `tiles`, in the order given, from 1. `None` as for [`route_map`].
 pub fn places_map(places: &[(f64, f64)], tiles: &MapTiles) -> Option<image::RgbaImage> {
-    let points: Vec<[i32; 2]> = places.iter().map(|(lat, lon)| [(lat * 1e5).round() as i32, (lon * 1e5).round() as i32]).collect();
+    let points: Vec<[i32; 2]> = places
+        .iter()
+        .map(|(lat, lon)| [(lat * 1e5).round() as i32, (lon * 1e5).round() as i32])
+        .collect();
     let (width, height) = ROUTE_SIZE;
-    let (mut view, mut shape) = crate::trip::route_shape(&[points], width, height, ROUTE_PAD * 2.0)?;
+    let (mut view, mut shape) =
+        crate::trip::route_shape(&[points], width, height, ROUTE_PAD * 2.0)?;
     if view.zoom > PLACES_MAX_ZOOM {
         let shrink = f64::from(1u32 << (view.zoom - PLACES_MAX_ZOOM));
         let (half_w, half_h) = (width / 2.0, height / 2.0);
@@ -1152,24 +1594,46 @@ pub fn places_map(places: &[(f64, f64)], tiles: &MapTiles) -> Option<image::Rgba
             *x = half_w + (*x - half_w) / shrink as f32;
             *y = half_h + (*y - half_h) / shrink as f32;
         }
-        view = crate::trip::RouteView { zoom: PLACES_MAX_ZOOM, x: view.x / shrink, y: view.y / shrink };
+        view = crate::trip::RouteView {
+            zoom: PLACES_MAX_ZOOM,
+            x: view.x / shrink,
+            y: view.y / shrink,
+        };
     }
     let scale = ROUTE_SCALE as f32;
     let mut pixmap = map_picture(&view, tiles)?;
     let (white, ink) = (paint([255, 255, 255]), paint(ROUTE_INK));
-    let ring = tiny_skia::Stroke { width: 2.5 * scale, ..Default::default() };
+    let ring = tiny_skia::Stroke {
+        width: 2.5 * scale,
+        ..Default::default()
+    };
     // The first place is drawn last, so it stays on top where pins overlap.
     let pins: Vec<[f32; 2]> = shape.into_iter().flatten().collect();
     for (n, [x, y]) in pins.into_iter().enumerate().rev() {
         let (x, y) = (x * scale, y * scale);
-        let Some(pin) = tiny_skia::PathBuilder::from_circle(x, y, 12.0 * scale) else { continue };
-        pixmap.fill_path(&pin, &ink, tiny_skia::FillRule::Winding, tiny_skia::Transform::identity(), None);
+        let Some(pin) = tiny_skia::PathBuilder::from_circle(x, y, 12.0 * scale) else {
+            continue;
+        };
+        pixmap.fill_path(
+            &pin,
+            &ink,
+            tiny_skia::FillRule::Winding,
+            tiny_skia::Transform::identity(),
+            None,
+        );
         pixmap.stroke_path(&pin, &white, &ring, tiny_skia::Transform::identity(), None);
         let (number, size) = ((n + 1).to_string(), 15.0 * scale);
         let left = x - crate::elevation::text_width(&number, size) / 2.0;
         // The interface's font is light; written twice, a hair apart, it reads at a glance.
         for nudge in [-0.4, 0.4] {
-            crate::elevation::text(&mut pixmap, &number, left + nudge * scale, y + size * 0.35, size, [255, 255, 255]);
+            crate::elevation::text(
+                &mut pixmap,
+                &number,
+                left + nudge * scale,
+                y + size * 0.35,
+                size,
+                [255, 255, 255],
+            );
         }
     }
     let (w, h) = (pixmap.width(), pixmap.height());
@@ -1193,23 +1657,47 @@ fn map_picture(view: &crate::trip::RouteView, tiles: &MapTiles) -> Option<tiny_s
     let (width, height) = ROUTE_SIZE;
     let (w, h) = (width as u32 * ROUTE_SCALE, height as u32 * ROUTE_SCALE);
     let zoom = view.zoom + 1;
-    let (left, top) = (view.x * f64::from(ROUTE_SCALE) - f64::from(w) / 2.0, view.y * f64::from(ROUTE_SCALE) - f64::from(h) / 2.0);
+    let (left, top) = (
+        view.x * f64::from(ROUTE_SCALE) - f64::from(w) / 2.0,
+        view.y * f64::from(ROUTE_SCALE) - f64::from(h) / 2.0,
+    );
     let tile = crate::geo::TILE_PX;
     let last = (1u32 << zoom) - 1;
-    let range = |from: f64, size: u32| (from / tile).floor().max(0.0) as u32..=(((from + f64::from(size)) / tile).floor().max(0.0) as u32).min(last);
+    let range = |from: f64, size: u32| {
+        (from / tile).floor().max(0.0) as u32
+            ..=(((from + f64::from(size)) / tile).floor().max(0.0) as u32).min(last)
+    };
     let jobs: Vec<crate::geo::TileJob> = range(top, h)
         .flat_map(|y| range(left, w).map(move |x| (x, y)))
-        .map(|(x, y)| crate::geo::TileJob { source: tiles.source, generation: 0, key: tiles.key.clone(), z: zoom, x, y })
+        .map(|(x, y)| crate::geo::TileJob {
+            source: tiles.source,
+            generation: 0,
+            key: tiles.key.clone(),
+            z: zoom,
+            x,
+            y,
+        })
         .collect();
     let loaded = crate::geo::load_tiles(&jobs, &tiles.cache);
     let mut picture = image::RgbaImage::from_pixel(w, h, image::Rgba([0xe8, 0xe4, 0xdc, 0xff]));
     let mut any = false;
     for (job, loaded) in jobs.iter().zip(loaded) {
         let Some(loaded) = loaded else { continue };
-        let Some(pixels) = image::RgbaImage::from_raw(loaded.w as u32, loaded.h as u32, loaded.rgba) else { continue };
+        let Some(pixels) =
+            image::RgbaImage::from_raw(loaded.w as u32, loaded.h as u32, loaded.rgba)
+        else {
+            continue;
+        };
         let side = tile as u32;
-        let pixels = if pixels.width() == side { pixels } else { image::imageops::resize(&pixels, side, side, image::imageops::FilterType::Triangle) };
-        let (x, y) = (f64::from(job.x) * tile - left, f64::from(job.y) * tile - top);
+        let pixels = if pixels.width() == side {
+            pixels
+        } else {
+            image::imageops::resize(&pixels, side, side, image::imageops::FilterType::Triangle)
+        };
+        let (x, y) = (
+            f64::from(job.x) * tile - left,
+            f64::from(job.y) * tile - top,
+        );
         image::imageops::overlay(&mut picture, &pixels, x.round() as i64, y.round() as i64);
         any = true;
     }
@@ -1219,8 +1707,18 @@ fn map_picture(view: &crate::trip::RouteView, tiles: &MapTiles) -> Option<tiny_s
     tiny_skia::Pixmap::from_vec(picture.into_raw(), tiny_skia::IntSize::from_wh(w, h)?)
 }
 
-fn figure(media: &MediaUse, images: &HashMap<i64, WebImage>, words: &Words, class: &str, outcome: &mut Outcome) -> String {
-    let class = if class.is_empty() { String::new() } else { format!(" class=\"{class}\"") };
+fn figure(
+    media: &MediaUse,
+    images: &HashMap<i64, WebImage>,
+    words: &Words,
+    class: &str,
+    outcome: &mut Outcome,
+) -> String {
+    let class = if class.is_empty() {
+        String::new()
+    } else {
+        format!(" class=\"{class}\"")
+    };
     let caption = if media.caption.trim().is_empty() {
         String::new()
     } else {
@@ -1244,7 +1742,12 @@ fn figure(media: &MediaUse, images: &HashMap<i64, WebImage>, words: &Words, clas
 /// A Video block: its part, played on the page with the browser's own
 /// controls and its poster shown until then, or a note that it is
 /// unavailable when it couldn't be made.
-fn video_figure(media: &MediaUse, clip: Option<&WebVideo>, words: &Words, outcome: &mut Outcome) -> String {
+fn video_figure(
+    media: &MediaUse,
+    clip: Option<&WebVideo>,
+    words: &Words,
+    outcome: &mut Outcome,
+) -> String {
     let caption = if media.caption.trim().is_empty() {
         String::new()
     } else {
@@ -1252,9 +1755,16 @@ fn video_figure(media: &MediaUse, clip: Option<&WebVideo>, words: &Words, outcom
     };
     let Some(clip) = clip else {
         outcome.missing += 1;
-        return format!("<figure class=\"video\"><div class=\"missing\">{}</div>{caption}</figure>\n", esc(&words.video_unavailable));
+        return format!(
+            "<figure class=\"video\"><div class=\"missing\">{}</div>{caption}</figure>\n",
+            esc(&words.video_unavailable)
+        );
     };
-    let label = if media.alt.trim().is_empty() { String::new() } else { format!(" aria-label=\"{}\"", esc(media.alt.trim())) };
+    let label = if media.alt.trim().is_empty() {
+        String::new()
+    } else {
+        format!(" aria-label=\"{}\"", esc(media.alt.trim()))
+    };
     format!(
         "<figure class=\"video\"><video controls playsinline preload=\"metadata\" src=\"{}\" poster=\"{}\" width=\"{}\" height=\"{}\"{label}></video>{caption}</figure>\n",
         esc(&clip.file),
@@ -1278,7 +1788,11 @@ pub fn crop_cover(rgba: &image::RgbaImage, crop: crate::trip::CoverCrop) -> imag
 /// Text as paragraphs: a blank line starts a new one, a line break stays.
 fn paragraphs(text: &str) -> String {
     let mut html = String::new();
-    for part in text.split("\n\n").map(str::trim).filter(|part| !part.is_empty()) {
+    for part in text
+        .split("\n\n")
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+    {
         let lines: Vec<String> = part.lines().map(inline::to_html).collect();
         let _ = writeln!(html, "<p>{}</p>", lines.join("<br>\n"));
     }
@@ -1304,7 +1818,10 @@ pub fn esc(text: &str) -> String {
 /// A Practical info block: its title and a list of label and value lines.
 /// Lines with neither are left out, and an empty block draws nothing.
 pub fn info_html(title: &str, items: &[(String, String)]) -> String {
-    let items: Vec<&(String, String)> = items.iter().filter(|(label, value)| !label.trim().is_empty() || !value.trim().is_empty()).collect();
+    let items: Vec<&(String, String)> = items
+        .iter()
+        .filter(|(label, value)| !label.trim().is_empty() || !value.trim().is_empty())
+        .collect();
     if title.trim().is_empty() && items.is_empty() {
         return String::new();
     }
@@ -1315,7 +1832,12 @@ pub fn info_html(title: &str, items: &[(String, String)]) -> String {
     if !items.is_empty() {
         html.push_str("<dl>\n");
         for (label, value) in items {
-            let _ = writeln!(html, "<dt>{}</dt><dd>{}</dd>", esc(label.trim()), inline::to_html(value.trim()));
+            let _ = writeln!(
+                html,
+                "<dt>{}</dt><dd>{}</dd>",
+                esc(label.trim()),
+                inline::to_html(value.trim())
+            );
         }
         html.push_str("</dl>\n");
     }
@@ -1326,15 +1848,30 @@ pub fn info_html(title: &str, items: &[(String, String)]) -> String {
 /// A Link block: its title linked to its address, with the note below.
 /// An address that isn't a web page is shown as text, not followed.
 pub fn link_html(url: &str, title: &str, note: &str) -> String {
-    let shown = if title.trim().is_empty() { url.trim() } else { title.trim() };
+    let shown = if title.trim().is_empty() {
+        url.trim()
+    } else {
+        title.trim()
+    };
     if shown.is_empty() && note.trim().is_empty() {
         return String::new();
     }
     let link = match crate::trip::web_address(url) {
-        Some(url) => format!("<a href=\"{}\" rel=\"noopener\">{}</a>", esc(url), esc(shown)),
+        Some(url) => format!(
+            "<a href=\"{}\" rel=\"noopener\">{}</a>",
+            esc(url),
+            esc(shown)
+        ),
         None => esc(shown),
     };
-    let note = if note.trim().is_empty() { String::new() } else { format!("<br><span class=\"note\">{}</span>", inline::to_html(note.trim())) };
+    let note = if note.trim().is_empty() {
+        String::new()
+    } else {
+        format!(
+            "<br><span class=\"note\">{}</span>",
+            inline::to_html(note.trim())
+        )
+    };
     format!("<p class=\"link\">{link}{note}</p>\n")
 }
 
@@ -1348,7 +1885,11 @@ pub fn youtube_html(url: &str, caption: &str, watch: &str) -> String {
         caption => format!("<figcaption>{}</figcaption>", esc(caption)),
     };
     let Some(video) = crate::trip::youtube(url) else {
-        return if caption.is_empty() { String::new() } else { format!("<figure class=\"youtube\">{caption}</figure>\n") };
+        return if caption.is_empty() {
+            String::new()
+        } else {
+            format!("<figure class=\"youtube\">{caption}</figure>\n")
+        };
     };
     let start = match video.start_label().as_str() {
         "" => String::new(),
@@ -1380,14 +1921,29 @@ fn table_parts<'a>(header: bool, rows: &'a [Vec<String>], widths: &[u8]) -> Tabl
     let body: Vec<&Vec<String>> = body.iter().filter(filled).collect();
     let columns = rows.first().map_or(0, Vec::len);
     let blank = |row: &Vec<String>, c: usize| row.get(c).is_none_or(|cell| cell.trim().is_empty());
-    let kept: Vec<usize> = (0..columns).filter(|&c| !head.iter().chain(&body).all(|row| blank(row, c))).collect();
-    let pick = |row: &'a Vec<String>| -> Vec<&'a str> { kept.iter().map(|&c| row.get(c).map_or("", String::as_str)).collect() };
+    let kept: Vec<usize> = (0..columns)
+        .filter(|&c| !head.iter().chain(&body).all(|row| blank(row, c)))
+        .collect();
+    let pick = |row: &'a Vec<String>| -> Vec<&'a str> {
+        kept.iter()
+            .map(|&c| row.get(c).map_or("", String::as_str))
+            .collect()
+    };
     let widths = if widths.len() == columns && !kept.is_empty() {
-        crate::trip::spread_widths(&kept.iter().map(|&c| f32::from(widths[c])).collect::<Vec<_>>())
+        crate::trip::spread_widths(
+            &kept
+                .iter()
+                .map(|&c| f32::from(widths[c]))
+                .collect::<Vec<_>>(),
+        )
     } else {
         Vec::new()
     };
-    TableParts { head: head.map(pick), body: body.into_iter().map(pick).collect(), widths }
+    TableParts {
+        head: head.map(pick),
+        body: body.into_iter().map(pick).collect(),
+        widths,
+    }
 }
 
 /// A Table block's rows as `<thead>` and `<tbody>`, or nothing when no
@@ -1395,9 +1951,21 @@ fn table_parts<'a>(header: bool, rows: &'a [Vec<String>], widths: &[u8]) -> Tabl
 /// [`TableParts`] has them. `scope` marks the header cells as the heads
 /// of their columns. `line` writes a line of a cell's text, as the page or
 /// the post styles it.
-pub fn table_sections(header: bool, rows: &[Vec<String>], widths: &[u8], scope: bool, line: fn(&str) -> String) -> (String, Vec<u8>) {
+pub fn table_sections(
+    header: bool,
+    rows: &[Vec<String>],
+    widths: &[u8],
+    scope: bool,
+    line: fn(&str) -> String,
+) -> (String, Vec<u8>) {
     let TableParts { head, body, widths } = table_parts(header, rows, widths);
-    let cell = |text: &str| text.trim().lines().map(line).collect::<Vec<_>>().join("<br>");
+    let cell = |text: &str| {
+        text.trim()
+            .lines()
+            .map(line)
+            .collect::<Vec<_>>()
+            .join("<br>")
+    };
     let mut html = String::new();
     if let Some(head) = head {
         let th = if scope { "<th scope=\"col\">" } else { "<th>" };
@@ -1423,7 +1991,10 @@ pub fn table_sections(header: bool, rows: &[Vec<String>], widths: &[u8], scope: 
 
 /// Columns of the widths in percent, for a table's `<colgroup>`.
 pub fn table_columns(widths: &[u8]) -> String {
-    widths.iter().map(|width| format!("<col style=\"width:{width}%\">")).collect()
+    widths
+        .iter()
+        .map(|width| format!("<col style=\"width:{width}%\">"))
+        .collect()
 }
 
 /// A Table block: its table, and its caption below. An empty table draws
@@ -1433,8 +2004,16 @@ pub fn table_html(header: bool, rows: &[Vec<String>], widths: &[u8], caption: &s
     if sections.is_empty() {
         return String::new();
     }
-    let columns = if widths.is_empty() { String::new() } else { format!("<colgroup>{}</colgroup>", table_columns(&widths)) };
-    let caption = if caption.trim().is_empty() { String::new() } else { format!("<figcaption>{}</figcaption>\n", esc(caption.trim())) };
+    let columns = if widths.is_empty() {
+        String::new()
+    } else {
+        format!("<colgroup>{}</colgroup>", table_columns(&widths))
+    };
+    let caption = if caption.trim().is_empty() {
+        String::new()
+    } else {
+        format!("<figcaption>{}</figcaption>\n", esc(caption.trim()))
+    };
     format!("<figure class=\"table\">\n<table>{columns}{sections}</table>\n{caption}</figure>\n")
 }
 
@@ -1450,7 +2029,14 @@ fn md_table(out: &mut String, header: bool, rows: &[Vec<String>], caption: &str)
     let cell = |text: &&str| {
         let mut out = String::new();
         let mut backslashes = 0;
-        for c in text.trim().lines().map(inline::to_markdown).collect::<Vec<_>>().join("<br>").chars() {
+        for c in text
+            .trim()
+            .lines()
+            .map(inline::to_markdown)
+            .collect::<Vec<_>>()
+            .join("<br>")
+            .chars()
+        {
             if c == '|' && backslashes % 2 == 0 {
                 out.push('\\');
             }
@@ -1459,7 +2045,12 @@ fn md_table(out: &mut String, header: bool, rows: &[Vec<String>], caption: &str)
         }
         out
     };
-    let line = |cells: &[&str]| format!("| {} |\n", cells.iter().map(cell).collect::<Vec<_>>().join(" | "));
+    let line = |cells: &[&str]| {
+        format!(
+            "| {} |\n",
+            cells.iter().map(cell).collect::<Vec<_>>().join(" | ")
+        )
+    };
     match &head {
         Some(head) => out.push_str(&line(head)),
         None => out.push_str(&line(&vec![""; columns])),
@@ -1492,7 +2083,12 @@ fn color_style() -> String {
     let mut dark = String::new();
     for color in crate::inline::Color::ALL {
         let name = color.name();
-        let _ = writeln!(css, ".color-{name}{{color:{}}}\n.essay .color-{name}{{color:{}}}", color.hex(false), color.hex(true));
+        let _ = writeln!(
+            css,
+            ".color-{name}{{color:{}}}\n.essay .color-{name}{{color:{}}}",
+            color.hex(false),
+            color.hex(true)
+        );
         let _ = write!(dark, ".color-{name}{{color:{}}}", color.hex(true));
     }
     let _ = writeln!(css, "@media (prefers-color-scheme:dark){{{dark}}}");
@@ -1645,7 +2241,10 @@ pub(crate) mod tests {
         let (lat, lon) = (37.1773, -3.5986);
         let zoom = PLACES_MAX_ZOOM + 1;
         let (x, y) = crate::geo::latlon_to_world(lat, lon, zoom);
-        let (tile_x, tile_y) = ((x / crate::geo::TILE_PX) as u32, (y / crate::geo::TILE_PX) as u32);
+        let (tile_x, tile_y) = (
+            (x / crate::geo::TILE_PX) as u32,
+            (y / crate::geo::TILE_PX) as u32,
+        );
         let side = crate::geo::TILE_PX as u32;
         let grey = image::RgbaImage::from_pixel(side, side, image::Rgba([200, 200, 200, 255]));
         for tx in tile_x - 4..=tile_x + 4 {
@@ -1655,14 +2254,31 @@ pub(crate) mod tests {
                 grey.save(&path).unwrap();
             }
         }
-        let tiles = MapTiles { source: crate::geo::MapSource::OpenStreetMap, key: String::new(), cache: cache.clone() };
+        let tiles = MapTiles {
+            source: crate::geo::MapSource::OpenStreetMap,
+            key: String::new(),
+            cache: cache.clone(),
+        };
         let map = places_map(&[(lat, lon)], &tiles).unwrap();
         let (w, h) = (map.width(), map.height());
-        assert_eq!((w, h), (ROUTE_SIZE.0 as u32 * ROUTE_SCALE, ROUTE_SIZE.1 as u32 * ROUTE_SCALE));
+        assert_eq!(
+            (w, h),
+            (
+                ROUTE_SIZE.0 as u32 * ROUTE_SCALE,
+                ROUTE_SIZE.1 as u32 * ROUTE_SCALE
+            )
+        );
         assert_eq!(map.get_pixel(4, 4).0, [200, 200, 200, 255], "the tiles");
         let [r, g, b] = ROUTE_INK;
-        assert_eq!(map.get_pixel(w / 2 - 18, h / 2).0, [r, g, b, 255], "the pin, in the middle");
-        let white = (w / 2 - 10..w / 2 + 10).flat_map(|x| (h / 2 - 14..h / 2 + 14).map(move |y| (x, y))).filter(|&(x, y)| map.get_pixel(x, y).0[..3].iter().all(|&c| c > 220)).count();
+        assert_eq!(
+            map.get_pixel(w / 2 - 18, h / 2).0,
+            [r, g, b, 255],
+            "the pin, in the middle"
+        );
+        let white = (w / 2 - 10..w / 2 + 10)
+            .flat_map(|x| (h / 2 - 14..h / 2 + 14).map(move |y| (x, y)))
+            .filter(|&(x, y)| map.get_pixel(x, y).0[..3].iter().all(|&c| c > 220))
+            .count();
         assert!(white > 20, "its number, in white: {white} pixels");
         assert!(places_map(&[], &tiles).is_none());
         let _ = std::fs::remove_dir_all(cache);
@@ -1675,13 +2291,23 @@ pub(crate) mod tests {
         assert_eq!(folder_name("Trip."), "Trip");
         assert_eq!(folder_name("..."), "Story");
         assert_eq!(folder_name("古都の春"), "古都の春");
-        assert_eq!(folder_name(&format!("{}.b", "a".repeat(79))), "a".repeat(79), "no dot left at the end once shortened");
+        assert_eq!(
+            folder_name(&format!("{}.b", "a".repeat(79))),
+            "a".repeat(79),
+            "no dot left at the end once shortened"
+        );
         assert_eq!(portable_name("aux.jpg"), "aux_.jpg");
         assert_eq!(portable_name("com1.tar.gz"), "com1_.tar.gz");
         assert_eq!(portable_name("LPT9"), "LPT9_");
         assert_eq!(portable_name("a:b.jpg"), "a b.jpg");
         assert_eq!(portable_name("photo. "), "photo");
-        for kept in ["Console.jpg", "COM10.jpg", "nul-trip.jpg", "IMG_0001.JPG", "Día 1.heic"] {
+        for kept in [
+            "Console.jpg",
+            "COM10.jpg",
+            "nul-trip.jpg",
+            "IMG_0001.JPG",
+            "Día 1.heic",
+        ] {
             assert_eq!(portable_name(kept), kept);
         }
     }
@@ -1708,36 +2334,108 @@ pub(crate) mod tests {
     }
 
     fn words() -> Words {
-        Words { lang: "en", untitled: "Untitled story".into(), unavailable: "Photo unavailable".into(), video_unavailable: "Video unavailable".into(), contents: "Contents".into(), watch: "Watch on YouTube".into() }
+        Words {
+            lang: "en",
+            untitled: "Untitled story".into(),
+            unavailable: "Photo unavailable".into(),
+            video_unavailable: "Video unavailable".into(),
+            contents: "Contents".into(),
+            watch: "Watch on YouTube".into(),
+        }
     }
 
     #[test]
     fn practical_info_and_links_are_escaped_and_only_web_addresses_followed() {
         let blocks = vec![
-            StoryBlock::new(Block::Info { title: "Getting <there>".into(), items: vec![("Train".into(), "2 h, *book ahead*".into()), (" ".into(), " ".into())] }),
-            StoryBlock::new(Block::Info { title: " ".into(), items: vec![(String::new(), String::new())] }),
-            StoryBlock::new(Block::Link { url: "https://example.com/?a=1&b=2".into(), title: "Ferry \"times\"".into(), note: "Summer only".into() }),
-            StoryBlock::new(Block::Link { url: "javascript:alert(1)".into(), title: "Trick".into(), note: String::new() }),
+            StoryBlock::new(Block::Info {
+                title: "Getting <there>".into(),
+                items: vec![
+                    ("Train".into(), "2 h, *book ahead*".into()),
+                    (" ".into(), " ".into()),
+                ],
+            }),
+            StoryBlock::new(Block::Info {
+                title: " ".into(),
+                items: vec![(String::new(), String::new())],
+            }),
+            StoryBlock::new(Block::Link {
+                url: "https://example.com/?a=1&b=2".into(),
+                title: "Ferry \"times\"".into(),
+                note: "Summer only".into(),
+            }),
+            StoryBlock::new(Block::Link {
+                url: "javascript:alert(1)".into(),
+                title: "Trick".into(),
+                note: String::new(),
+            }),
         ];
-        let (html, _) = page(&story(), None, &blocks, &HashMap::new(), &HashMap::new(), &HashMap::new(), &words());
+        let (html, _) = page(
+            &story(),
+            None,
+            &blocks,
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &words(),
+        );
         assert!(html.contains("<aside class=\"info\">\n<h3>Getting &lt;there&gt;</h3>\n<dl>\n<dt>Train</dt><dd>2 h, <em>book ahead</em></dd>\n</dl>\n</aside>"), "{html}");
-        assert_eq!(html.matches("<aside").count(), 1, "an empty block draws nothing");
+        assert_eq!(
+            html.matches("<aside").count(),
+            1,
+            "an empty block draws nothing"
+        );
         assert!(html.contains("<p class=\"link\"><a href=\"https://example.com/?a=1&amp;b=2\" rel=\"noopener\">Ferry &quot;times&quot;</a><br><span class=\"note\">Summer only</span></p>"));
         assert!(html.contains("<p class=\"link\">Trick</p>") && !html.contains("javascript:"));
-        let (md, _) = markdown(&story(), None, &blocks, &HashMap::new(), &HashMap::new(), &HashMap::new(), &words());
-        assert!(md.contains("**Getting &lt;there&gt;**\n\n- **Train:** 2 h, *book ahead*\n\n"), "{md}");
-        assert!(md.contains("[Ferry \"times\"](<https://example.com/?a=1&b=2>) — Summer only") && md.contains("Trick\n\n") && !md.contains("javascript:"), "{md}");
+        let (md, _) = markdown(
+            &story(),
+            None,
+            &blocks,
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &words(),
+        );
+        assert!(
+            md.contains("**Getting &lt;there&gt;**\n\n- **Train:** 2 h, *book ahead*\n\n"),
+            "{md}"
+        );
+        assert!(
+            md.contains("[Ferry \"times\"](<https://example.com/?a=1&b=2>) — Summer only")
+                && md.contains("Trick\n\n")
+                && !md.contains("javascript:"),
+            "{md}"
+        );
     }
 
     #[test]
     fn a_youtube_video_is_a_card_that_plays_it_on_youtube_and_fetches_nothing() {
         let blocks = vec![
-            StoryBlock::new(Block::YouTube { url: "https://youtu.be/abc-DEF_123?t=90".into(), caption: "The \"ferry\" leaving".into() }),
-            StoryBlock::new(Block::YouTube { url: "https://www.youtube.com/shorts/xyz-UVW_789".into(), caption: " ".into() }),
-            StoryBlock::new(Block::YouTube { url: "javascript:alert('youtu.be/abc-DEF_123')".into(), caption: "Trick".into() }),
-            StoryBlock::new(Block::YouTube { url: String::new(), caption: String::new() }),
+            StoryBlock::new(Block::YouTube {
+                url: "https://youtu.be/abc-DEF_123?t=90".into(),
+                caption: "The \"ferry\" leaving".into(),
+            }),
+            StoryBlock::new(Block::YouTube {
+                url: "https://www.youtube.com/shorts/xyz-UVW_789".into(),
+                caption: " ".into(),
+            }),
+            StoryBlock::new(Block::YouTube {
+                url: "javascript:alert('youtu.be/abc-DEF_123')".into(),
+                caption: "Trick".into(),
+            }),
+            StoryBlock::new(Block::YouTube {
+                url: String::new(),
+                caption: String::new(),
+            }),
         ];
-        let (html, outcome) = page(&story(), None, &blocks, &HashMap::new(), &HashMap::new(), &HashMap::new(), &words());
+        let (html, outcome) = page(
+            &story(),
+            None,
+            &blocks,
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &words(),
+        );
         assert_eq!(outcome, Outcome::default());
         assert!(
             html.contains(
@@ -1746,39 +2444,123 @@ pub(crate) mod tests {
             "{html}"
         );
         assert!(html.contains("href=\"https://www.youtube.com/watch?v=xyz-UVW_789\" rel=\"noopener\"><span class=\"button\" aria-hidden=\"true\"></span><span>Watch on YouTube</span></a></figure>"), "{html}");
-        assert!(html.contains("<figure class=\"youtube\"><figcaption>Trick</figcaption></figure>") && !html.contains("javascript:"), "{html}");
-        assert_eq!(html.matches("<figure class=\"youtube\"").count(), 3, "an empty block draws nothing");
-        assert!(!html.contains("<iframe") && !html.contains("src=\"http") && !html.contains("url(http"), "the page fetches nothing from YouTube");
+        assert!(
+            html.contains("<figure class=\"youtube\"><figcaption>Trick</figcaption></figure>")
+                && !html.contains("javascript:"),
+            "{html}"
+        );
+        assert_eq!(
+            html.matches("<figure class=\"youtube\"").count(),
+            3,
+            "an empty block draws nothing"
+        );
+        assert!(
+            !html.contains("<iframe") && !html.contains("src=\"http") && !html.contains("url(http"),
+            "the page fetches nothing from YouTube"
+        );
         let (story, words) = (story(), words());
-        let check = preflight(&Page { story: &story, dates: None, blocks: &blocks, sources: &HashMap::new(), words: &words, map: None, profiles: &HashMap::new(), videos: &Videos::default() });
-        assert_eq!((check.not_youtube, check.first[5], check.blocked(false)), (2, Some(2), false), "the trick and the empty one, only a warning");
-        let (md, _) = markdown(&story, None, &blocks, &HashMap::new(), &HashMap::new(), &HashMap::new(), &words);
+        let check = preflight(&Page {
+            story: &story,
+            dates: None,
+            blocks: &blocks,
+            sources: &HashMap::new(),
+            words: &words,
+            map: None,
+            profiles: &HashMap::new(),
+            videos: &Videos::default(),
+        });
+        assert_eq!(
+            (check.not_youtube, check.first[5], check.blocked(false)),
+            (2, Some(2), false),
+            "the trick and the empty one, only a warning"
+        );
+        let (md, _) = markdown(
+            &story,
+            None,
+            &blocks,
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &words,
+        );
         assert!(md.contains("▶ [The \"ferry\" leaving](<https://www.youtube.com/watch?v=abc-DEF_123&t=90s>)\n\n"), "{md}");
-        assert!(md.contains("▶ [Watch on YouTube](<https://www.youtube.com/watch?v=xyz-UVW_789>)\n\n") && md.contains("Trick\n\n") && !md.contains("javascript:"), "{md}");
+        assert!(
+            md.contains("▶ [Watch on YouTube](<https://www.youtube.com/watch?v=xyz-UVW_789>)\n\n")
+                && md.contains("Trick\n\n")
+                && !md.contains("javascript:"),
+            "{md}"
+        );
     }
 
     #[test]
     fn a_table_leaves_out_its_empty_rows_and_columns_keeps_its_widths_and_escapes_its_cells() {
-        let rows = |cells: &[&[&str]]| cells.iter().map(|row| row.iter().map(|cell| cell.to_string()).collect()).collect::<Vec<Vec<String>>>();
+        let rows = |cells: &[&[&str]]| {
+            cells
+                .iter()
+                .map(|row| row.iter().map(|cell| cell.to_string()).collect())
+                .collect::<Vec<Vec<String>>>()
+        };
         let blocks = vec![
             StoryBlock::new(Block::Table {
                 header: true,
-                rows: rows(&[&["", "Ferry", "Leaves"], &[" ", "", ""], &["", "<Seaport>", "9:00\n*9:30*"]]),
+                rows: rows(&[
+                    &["", "Ferry", "Leaves"],
+                    &[" ", "", ""],
+                    &["", "<Seaport>", "9:00\n*9:30*"],
+                ]),
                 widths: vec![20, 20, 60],
                 caption: "In \"summer\"".into(),
             }),
-            StoryBlock::new(Block::Table { header: false, rows: rows(&[&["a|b", "`c|d`"]]), widths: Vec::new(), caption: String::new() }),
-            StoryBlock::new(Block::Table { header: true, rows: rows(&[&["", ""], &["", " "]]), widths: Vec::new(), caption: "Nothing".into() }),
+            StoryBlock::new(Block::Table {
+                header: false,
+                rows: rows(&[&["a|b", "`c|d`"]]),
+                widths: Vec::new(),
+                caption: String::new(),
+            }),
+            StoryBlock::new(Block::Table {
+                header: true,
+                rows: rows(&[&["", ""], &["", " "]]),
+                widths: Vec::new(),
+                caption: "Nothing".into(),
+            }),
         ];
-        let (html, _) = page(&story(), None, &blocks, &HashMap::new(), &HashMap::new(), &HashMap::new(), &words());
+        let (html, _) = page(
+            &story(),
+            None,
+            &blocks,
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &words(),
+        );
         let first = "<figure class=\"table\">\n<table><colgroup><col style=\"width:25%\"><col style=\"width:75%\"></colgroup><thead><tr><th scope=\"col\">Ferry</th><th scope=\"col\">Leaves</th></tr></thead>\
                      <tbody><tr><td>&lt;Seaport&gt;</td><td>9:00<br><em>9:30</em></td></tr></tbody></table>\n<figcaption>In &quot;summer&quot;</figcaption>\n</figure>";
         assert!(html.contains(first), "{html}");
-        assert!(html.contains("<table><tbody><tr><td>a|b</td><td><code>c|d</code></td></tr></tbody></table>"), "no header row: {html}");
-        assert_eq!(html.matches("<figure class=\"table\">").count(), 2, "an empty table draws nothing");
-        let (md, _) = markdown(&story(), None, &blocks, &HashMap::new(), &HashMap::new(), &HashMap::new(), &words());
+        assert!(
+            html.contains(
+                "<table><tbody><tr><td>a|b</td><td><code>c|d</code></td></tr></tbody></table>"
+            ),
+            "no header row: {html}"
+        );
+        assert_eq!(
+            html.matches("<figure class=\"table\">").count(),
+            2,
+            "an empty table draws nothing"
+        );
+        let (md, _) = markdown(
+            &story(),
+            None,
+            &blocks,
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &words(),
+        );
         assert!(md.contains("| Ferry | Leaves |\n| --- | --- |\n| &lt;Seaport&gt; | 9:00<br>*9:30* |\n\n*In \"summer\"*\n\n"), "{md}");
-        assert!(md.contains("|  |  |\n| --- | --- |\n| a\\|b | `c\\|d` |\n\n"), "{md}");
+        assert!(
+            md.contains("|  |  |\n| --- | --- |\n| a\\|b | `c\\|d` |\n\n"),
+            "{md}"
+        );
         assert!(!md.contains("Nothing"));
     }
 
@@ -1787,21 +2569,50 @@ pub(crate) mod tests {
         let folder = std::env::temp_dir().join(format!("picasso-small-{}", std::process::id()));
         std::fs::create_dir_all(&folder).unwrap();
         let small = folder.join("small.jpg");
-        image::RgbImage::from_pixel(800, 600, image::Rgb([90, 120, 150])).save(&small).unwrap();
+        image::RgbImage::from_pixel(800, 600, image::Rgb([90, 120, 150]))
+            .save(&small)
+            .unwrap();
         let large = Path::new(env!("CARGO_MANIFEST_DIR")).join("images/banner.jpg");
-        let sources = HashMap::from([(1, Some((small, Settings::default(), 0))), (2, Some((large, Settings::default(), 0)))]);
+        let sources = HashMap::from([
+            (1, Some((small, Settings::default(), 0))),
+            (2, Some((large, Settings::default(), 0))),
+        ]);
         let mut first = MediaUse::new(2);
         first.alt = "Harbor".into();
         let mut second = MediaUse::new(1);
         second.alt = "Boats".into();
-        let blocks = [StoryBlock::new(Block::Photo(first)), StoryBlock::new(Block::Photo(second))];
+        let blocks = [
+            StoryBlock::new(Block::Photo(first)),
+            StoryBlock::new(Block::Photo(second)),
+        ];
         let mut story = story();
         let words = words();
-        let check = preflight(&Page { story: &story, dates: None, blocks: &blocks, sources: &sources, words: &words, map: None, profiles: &HashMap::new(), videos: &Videos::default() });
-        assert_eq!((check.low_res, check.first[4], check.no_cover), (1, Some(1), true));
+        let check = preflight(&Page {
+            story: &story,
+            dates: None,
+            blocks: &blocks,
+            sources: &sources,
+            words: &words,
+            map: None,
+            profiles: &HashMap::new(),
+            videos: &Videos::default(),
+        });
+        assert_eq!(
+            (check.low_res, check.first[4], check.no_cover),
+            (1, Some(1), true)
+        );
         assert!(!check.blocked(false), "neither stops an export");
         story.cover = Some(2);
-        let check = preflight(&Page { story: &story, dates: None, blocks: &blocks, sources: &sources, words: &words, map: None, profiles: &HashMap::new(), videos: &Videos::default() });
+        let check = preflight(&Page {
+            story: &story,
+            dates: None,
+            blocks: &blocks,
+            sources: &sources,
+            words: &words,
+            map: None,
+            profiles: &HashMap::new(),
+            videos: &Videos::default(),
+        });
         assert!(!check.no_cover);
         let _ = std::fs::remove_dir_all(&folder);
     }
@@ -1814,37 +2625,125 @@ pub(crate) mod tests {
             StoryBlock::new(Block::Heading("Where to eat".into())),
         ];
         let render = |template: &str| {
-            let story = Story { template: template.into(), ..story() };
-            page(&story, None, &blocks, &HashMap::new(), &HashMap::new(), &HashMap::new(), &words()).0
+            let story = Story {
+                template: template.into(),
+                ..story()
+            };
+            page(
+                &story,
+                None,
+                &blocks,
+                &HashMap::new(),
+                &HashMap::new(),
+                &HashMap::new(),
+                &words(),
+            )
+            .0
         };
-        let pages: Vec<String> = crate::trip::TEMPLATES.iter().map(|code| render(code)).collect();
+        let pages: Vec<String> = crate::trip::TEMPLATES
+            .iter()
+            .map(|code| render(code))
+            .collect();
         for (n, html) in pages.iter().enumerate() {
             assert!(html.contains(&format!("<body class=\"{}\">", crate::trip::TEMPLATES[n])));
-            assert!(html.contains("<h2 id=\"section-2\">Where to eat</h2>") && html.contains("Take the early train."));
-            assert!(pages.iter().enumerate().all(|(m, other)| m == n || other != html), "every template looks different");
+            assert!(
+                html.contains("<h2 id=\"section-2\">Where to eat</h2>")
+                    && html.contains("Take the early train.")
+            );
+            assert!(
+                pages
+                    .iter()
+                    .enumerate()
+                    .all(|(m, other)| m == n || other != html),
+                "every template looks different"
+            );
         }
         let guide = &pages[2];
-        assert!(guide.contains("<nav class=\"contents\"") && guide.contains("<a href=\"#section-1\">Getting there</a>"));
-        assert!(!pages[0].contains("<nav"), "only the guide lists its sections");
-        assert_eq!(render("unknown"), pages[0], "an unknown template reads as the journal");
+        assert!(
+            guide.contains("<nav class=\"contents\"")
+                && guide.contains("<a href=\"#section-1\">Getting there</a>")
+        );
+        assert!(
+            !pages[0].contains("<nav"),
+            "only the guide lists its sections"
+        );
+        assert_eq!(
+            render("unknown"),
+            pages[0],
+            "an unknown template reads as the journal"
+        );
 
-        let guide_story = Story { template: "guide".into(), ..story() };
-        let (md, _) = markdown(&guide_story, None, &blocks, &HashMap::new(), &HashMap::new(), &HashMap::new(), &words());
+        let guide_story = Story {
+            template: "guide".into(),
+            ..story()
+        };
+        let (md, _) = markdown(
+            &guide_story,
+            None,
+            &blocks,
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &words(),
+        );
         assert!(md.contains("**Contents**\n\n1. Getting there\n2. Where to eat\n"));
     }
 
     #[test]
     fn a_route_on_its_map_is_a_picture_with_the_map_credit() {
         let route = vec![vec![[3_500_000, 13_500_000], [3_510_000, 13_510_000]]];
-        let blocks = vec![StoryBlock::new(Block::Route { caption: "Walk <1>".into(), source: String::new(), route })];
-        let image = WebImage { file: "images/r.jpg".into(), width: 1440, height: 800 };
-        let maps = HashMap::from([(blocks[0].uid.clone(), RouteImage { image, credit: "© OpenStreetMap contributors" })]);
-        let (html, _) = page(&story(), None, &blocks, &HashMap::new(), &maps, &HashMap::new(), &words());
-        assert!(html.contains("<img src=\"images/r.jpg\" width=\"1440\" height=\"800\" alt=\"Walk &lt;1&gt;\""));
+        let blocks = vec![StoryBlock::new(Block::Route {
+            caption: "Walk <1>".into(),
+            source: String::new(),
+            route,
+        })];
+        let image = WebImage {
+            file: "images/r.jpg".into(),
+            width: 1440,
+            height: 800,
+        };
+        let maps = HashMap::from([(
+            blocks[0].uid.clone(),
+            RouteImage {
+                image,
+                credit: "© OpenStreetMap contributors",
+            },
+        )]);
+        let (html, _) = page(
+            &story(),
+            None,
+            &blocks,
+            &HashMap::new(),
+            &maps,
+            &HashMap::new(),
+            &words(),
+        );
+        assert!(html.contains(
+            "<img src=\"images/r.jpg\" width=\"1440\" height=\"800\" alt=\"Walk &lt;1&gt;\""
+        ));
         assert!(html.contains("<small class=\"credit\">© OpenStreetMap contributors</small>"));
-        let (drawn, _) = page(&story(), None, &blocks, &HashMap::new(), &HashMap::new(), &HashMap::new(), &words());
-        assert!(drawn.contains("<svg") && !drawn.contains("<img"), "without its map, the route is drawn on its own");
-        let (text, _) = markdown(&story(), None, &blocks, &HashMap::new(), &maps, &HashMap::new(), &words());
+        let (drawn, _) = page(
+            &story(),
+            None,
+            &blocks,
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &words(),
+        );
+        assert!(
+            drawn.contains("<svg") && !drawn.contains("<img"),
+            "without its map, the route is drawn on its own"
+        );
+        let (text, _) = markdown(
+            &story(),
+            None,
+            &blocks,
+            &HashMap::new(),
+            &maps,
+            &HashMap::new(),
+            &words(),
+        );
         assert!(text.contains("![Walk <1>](images/r.jpg)") || text.contains("](images/r.jpg)"));
     }
 
@@ -1852,9 +2751,19 @@ pub(crate) mod tests {
     fn text_is_escaped_and_paragraphs_kept() {
         let blocks = [
             StoryBlock::new(Block::Heading("Day 1 & 2".into())),
-            StoryBlock::new(Block::Paragraph("First \"line\"\nsecond\n\n<script>x</script>".into())),
+            StoryBlock::new(Block::Paragraph(
+                "First \"line\"\nsecond\n\n<script>x</script>".into(),
+            )),
         ];
-        let (html, _) = page(&story(), Some("1 – 3 March"), &blocks, &HashMap::new(), &HashMap::new(), &HashMap::new(), &words());
+        let (html, _) = page(
+            &story(),
+            Some("1 – 3 March"),
+            &blocks,
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &words(),
+        );
         assert!(html.contains("<title>Temple &lt;in&gt; spring</title>"));
         assert!(html.contains("<h2 id=\"section-1\">Day 1 &amp; 2</h2>"));
         assert!(html.contains("<p>First &quot;line&quot;<br>\nsecond</p>"));
@@ -1869,13 +2778,47 @@ pub(crate) mod tests {
         story.introduction = "Why we went".into();
         story.conclusion = "We'll be back".into();
         let blocks = [StoryBlock::new(Block::Heading("Day 1".into()))];
-        let (html, _) = page(&story, None, &blocks, &HashMap::new(), &HashMap::new(), &HashMap::new(), &words());
+        let (html, _) = page(
+            &story,
+            None,
+            &blocks,
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &words(),
+        );
         let at = |text: &str| html.find(text).unwrap();
-        assert!(at("</header>") < at("Why we went") && at("Why we went") < at("<h2 id=\"section-1\">Day 1</h2>") && at("<h2 id=\"section-1\">Day 1</h2>") < at("We&#39;ll be back"));
-        let (text, _) = markdown(&story, None, &blocks, &HashMap::new(), &HashMap::new(), &HashMap::new(), &words());
-        assert!(text.find("Why we went").unwrap() < text.find("## Day 1").unwrap() && text.find("## Day 1").unwrap() < text.find("We'll be back").unwrap());
-        let (plain, _) = page(&self::story(), None, &blocks, &HashMap::new(), &HashMap::new(), &HashMap::new(), &words());
-        assert!(!plain.contains("<section"), "left empty, neither is written");
+        assert!(
+            at("</header>") < at("Why we went")
+                && at("Why we went") < at("<h2 id=\"section-1\">Day 1</h2>")
+                && at("<h2 id=\"section-1\">Day 1</h2>") < at("We&#39;ll be back")
+        );
+        let (text, _) = markdown(
+            &story,
+            None,
+            &blocks,
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &words(),
+        );
+        assert!(
+            text.find("Why we went").unwrap() < text.find("## Day 1").unwrap()
+                && text.find("## Day 1").unwrap() < text.find("We'll be back").unwrap()
+        );
+        let (plain, _) = page(
+            &self::story(),
+            None,
+            &blocks,
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &words(),
+        );
+        assert!(
+            !plain.contains("<section"),
+            "left empty, neither is written"
+        );
     }
 
     #[test]
@@ -1886,15 +2829,44 @@ pub(crate) mod tests {
         let blocks = [
             StoryBlock::new(Block::Photo(shown)),
             StoryBlock::new(Block::Gallery(vec![MediaUse::new(2), MediaUse::new(1)])),
-            StoryBlock::new(Block::Unknown { kind: "map".into(), version: 9, payload: "{}".into(), media: Vec::new() }),
+            StoryBlock::new(Block::Unknown {
+                kind: "map".into(),
+                version: 9,
+                payload: "{}".into(),
+                media: Vec::new(),
+            }),
         ];
-        let images = HashMap::from([(1, WebImage { file: "images/ab.jpg".into(), width: 1600, height: 1067 })]);
-        let (html, outcome) = page(&story(), None, &blocks, &images, &HashMap::new(), &HashMap::new(), &words());
-        assert_eq!(outcome, Outcome { missing: 1, unknown: 1 });
+        let images = HashMap::from([(
+            1,
+            WebImage {
+                file: "images/ab.jpg".into(),
+                width: 1600,
+                height: 1067,
+            },
+        )]);
+        let (html, outcome) = page(
+            &story(),
+            None,
+            &blocks,
+            &images,
+            &HashMap::new(),
+            &HashMap::new(),
+            &words(),
+        );
+        assert_eq!(
+            outcome,
+            Outcome {
+                missing: 1,
+                unknown: 1
+            }
+        );
         assert!(html.contains("<img src=\"images/ab.jpg\" width=\"1600\" height=\"1067\" alt=\"A &quot;red&quot; gate\""));
         assert!(html.contains("<figcaption>Fushimi</figcaption>"));
         assert!(html.contains("<div class=\"missing\">Photo unavailable</div>"));
-        assert!(html.contains("<p class=\"byline\">Ana</p>"), "the author alone without dates");
+        assert!(
+            html.contains("<p class=\"byline\">Ana</p>"),
+            "the author alone without dates"
+        );
     }
 
     #[test]
@@ -1905,11 +2877,28 @@ pub(crate) mod tests {
             StoryBlock::new(Block::Gallery(vec![MediaUse::new(2), MediaUse::new(3)])),
             StoryBlock::new(Block::Photo(MediaUse::new(3))),
         ];
-        let mut sources = HashMap::from([(1, Some((photo.clone(), Settings::default(), 0))), (2, None), (3, None)]);
+        let mut sources = HashMap::from([
+            (1, Some((photo.clone(), Settings::default(), 0))),
+            (2, None),
+            (3, None),
+        ]);
         let (mut story, words) = (story(), words());
         story.cover = Some(1);
-        let check = preflight(&Page { story: &story, dates: None, blocks: &blocks, sources: &sources, words: &words, map: None, profiles: &HashMap::new(), videos: &Videos::default() });
-        assert_eq!((check.missing, check.first[0], check.no_alt, check.first[1]), (3, Some(1), 1, Some(0)), "one line for each kind, pointing at its first block");
+        let check = preflight(&Page {
+            story: &story,
+            dates: None,
+            blocks: &blocks,
+            sources: &sources,
+            words: &words,
+            map: None,
+            profiles: &HashMap::new(),
+            videos: &Videos::default(),
+        });
+        assert_eq!(
+            (check.missing, check.first[0], check.no_alt, check.first[1]),
+            (3, Some(1), 1, Some(0)),
+            "one line for each kind, pointing at its first block"
+        );
         assert!(check.blocked(false));
 
         // The files are found again and every photo described: checked again, nothing is left.
@@ -1919,12 +2908,26 @@ pub(crate) mod tests {
         for block in &mut blocks {
             match &mut block.block {
                 Block::Photo(media) => media.alt = "Harbor".into(),
-                Block::Gallery(media) => media.iter_mut().for_each(|media| media.alt = "Boats".into()),
+                Block::Gallery(media) => media
+                    .iter_mut()
+                    .for_each(|media| media.alt = "Boats".into()),
                 _ => {}
             }
         }
-        let check = preflight(&Page { story: &story, dates: None, blocks: &blocks, sources: &sources, words: &words, map: None, profiles: &HashMap::new(), videos: &Videos::default() });
-        assert_eq!((check.missing, check.no_alt, check.first[0], check.first[1]), (0, 0, None, None));
+        let check = preflight(&Page {
+            story: &story,
+            dates: None,
+            blocks: &blocks,
+            sources: &sources,
+            words: &words,
+            map: None,
+            profiles: &HashMap::new(),
+            videos: &Videos::default(),
+        });
+        assert_eq!(
+            (check.missing, check.no_alt, check.first[0], check.first[1]),
+            (0, 0, None, None)
+        );
         assert!(!check.blocked(false));
     }
 
@@ -1934,24 +2937,78 @@ pub(crate) mod tests {
         let _ = std::fs::remove_dir_all(&folder);
         let photo = Path::new(env!("CARGO_MANIFEST_DIR")).join("images/banner.jpg");
         let sources = HashMap::from([(1, Some((photo, Settings::default(), 0))), (2, None)]);
-        let blocks = [StoryBlock::new(Block::Photo(MediaUse::new(1))), StoryBlock::new(Block::Photo(MediaUse::new(2)))];
+        let blocks = [
+            StoryBlock::new(Block::Photo(MediaUse::new(1))),
+            StoryBlock::new(Block::Photo(MediaUse::new(2))),
+        ];
         let (story, words) = (story(), words());
-        let page = Page { story: &story, dates: None, blocks: &blocks, sources: &sources, words: &words, map: None, profiles: &HashMap::new(), videos: &Videos::default() };
+        let page = Page {
+            story: &story,
+            dates: None,
+            blocks: &blocks,
+            sources: &sources,
+            words: &words,
+            map: None,
+            profiles: &HashMap::new(),
+            videos: &Videos::default(),
+        };
         let check = preflight(&page);
-        assert_eq!(check, Preflight { missing: 1, no_alt: 1, no_cover: true, first: [Some(1), Some(0), None, None, None, None, None], photos: 1, ..Preflight::default() });
-        assert!(check.blocked(false) && !check.blocked(true), "missing photos wait for the user");
-        let (index, outcome) = write_story(&folder, Format::Html, Profile::default(), &page, &Progress::default()).unwrap();
+        assert_eq!(
+            check,
+            Preflight {
+                missing: 1,
+                no_alt: 1,
+                no_cover: true,
+                first: [Some(1), Some(0), None, None, None, None, None],
+                photos: 1,
+                ..Preflight::default()
+            }
+        );
+        assert!(
+            check.blocked(false) && !check.blocked(true),
+            "missing photos wait for the user"
+        );
+        let (index, outcome) = write_story(
+            &folder,
+            Format::Html,
+            Profile::default(),
+            &page,
+            &Progress::default(),
+        )
+        .unwrap();
         assert_eq!(outcome.missing, 1);
         let html = std::fs::read_to_string(&index).unwrap();
-        let file = html.split("src=\"").nth(1).unwrap().split('"').next().unwrap();
-        assert!(file.starts_with("images/") && folder.join(file).is_file(), "{file}");
+        let file = html
+            .split("src=\"")
+            .nth(1)
+            .unwrap()
+            .split('"')
+            .next()
+            .unwrap();
+        assert!(
+            file.starts_with("images/") && folder.join(file).is_file(),
+            "{file}"
+        );
         let jpeg = std::fs::read(folder.join(file)).unwrap();
-        assert!(!jpeg.windows(4).any(|w| w == b"Exif"), "no camera metadata in the page's photos");
+        assert!(
+            !jpeg.windows(4).any(|w| w == b"Exif"),
+            "no camera metadata in the page's photos"
+        );
         let text = std::fs::read_to_string(folder.join("manifest.json")).unwrap();
         let manifest: serde_json::Value = serde_json::from_str(&text).unwrap();
-        assert_eq!((manifest["story"].as_i64(), manifest["revision"].as_i64()), (Some(1), Some(1)));
-        assert_eq!(manifest["profile"]["version"].as_u64(), Some(u64::from(Profile::VERSION)));
-        assert_eq!(manifest["photos"].as_array().unwrap().len(), 1, "only photos that were rendered");
+        assert_eq!(
+            (manifest["story"].as_i64(), manifest["revision"].as_i64()),
+            (Some(1), Some(1))
+        );
+        assert_eq!(
+            manifest["profile"]["version"].as_u64(),
+            Some(u64::from(Profile::VERSION))
+        );
+        assert_eq!(
+            manifest["photos"].as_array().unwrap().len(),
+            1,
+            "only photos that were rendered"
+        );
         assert_eq!(manifest["photos"][0]["file"].as_str(), Some(file));
         assert!(!text.contains("banner"), "no source paths or names");
         let _ = std::fs::remove_dir_all(&folder);
@@ -1970,45 +3027,138 @@ pub(crate) mod tests {
         item.caption = "Waves".into();
         item.alt = "The sea".into();
         let blocks = [
-            StoryBlock::new(Block::Video { media: item.clone(), start: 1_000, end: 2_000 }),
-            StoryBlock::new(Block::Video { media: item, start: 1_000, end: 2_000 }),
-            StoryBlock::new(Block::Video { media: MediaUse::new(6), start: 0, end: 0 }),
+            StoryBlock::new(Block::Video {
+                media: item.clone(),
+                start: 1_000,
+                end: 2_000,
+            }),
+            StoryBlock::new(Block::Video {
+                media: item,
+                start: 1_000,
+                end: 2_000,
+            }),
+            StoryBlock::new(Block::Video {
+                media: MediaUse::new(6),
+                start: 0,
+                end: 0,
+            }),
         ];
-        let videos = Videos { sources: HashMap::from([(5, Some((clip.clone(), 3.0))), (6, None)]), cache: Some(work.join("cache")) };
+        let videos = Videos {
+            sources: HashMap::from([(5, Some((clip.clone(), 3.0))), (6, None)]),
+            cache: Some(work.join("cache")),
+        };
         let (story, words, sources) = (story(), words(), HashMap::new());
-        let page = Page { story: &story, dates: None, blocks: &blocks, sources: &sources, words: &words, map: None, profiles: &HashMap::new(), videos: &videos };
+        let page = Page {
+            story: &story,
+            dates: None,
+            blocks: &blocks,
+            sources: &sources,
+            words: &words,
+            map: None,
+            profiles: &HashMap::new(),
+            videos: &videos,
+        };
         let check = preflight(&page);
-        assert_eq!((check.missing, check.photos, check.videos, check.video_ms, check.first[0]), (1, 2, 2, 2_000, Some(2)), "each block counts; the part is made once");
-        assert!(check.blocked(false) && !check.blocked(true), "a missing video waits for the user like a photo");
+        assert_eq!(
+            (
+                check.missing,
+                check.photos,
+                check.videos,
+                check.video_ms,
+                check.first[0]
+            ),
+            (1, 2, 2, 2_000, Some(2)),
+            "each block counts; the part is made once"
+        );
+        assert!(
+            check.blocked(false) && !check.blocked(true),
+            "a missing video waits for the user like a photo"
+        );
 
         let folder = work.join("html");
-        let (index, outcome) = write_story(&folder, Format::Html, Profile::default(), &page, &Progress::default()).unwrap();
+        let (index, outcome) = write_story(
+            &folder,
+            Format::Html,
+            Profile::default(),
+            &page,
+            &Progress::default(),
+        )
+        .unwrap();
         assert_eq!(outcome.missing, 1);
         let html = std::fs::read_to_string(&index).unwrap();
-        let attr = |name: &str| html.split("<video ").nth(1).unwrap().split(&format!(" {name}=\"")).nth(1).unwrap().split('"').next().unwrap().to_string();
+        let attr = |name: &str| {
+            html.split("<video ")
+                .nth(1)
+                .unwrap()
+                .split(&format!(" {name}=\""))
+                .nth(1)
+                .unwrap()
+                .split('"')
+                .next()
+                .unwrap()
+                .to_string()
+        };
         let (file, poster) = (attr("src"), attr("poster"));
-        assert!(file.starts_with("videos/") && poster.starts_with("images/") && folder.join(&poster).is_file(), "{file} {poster}");
+        assert!(
+            file.starts_with("videos/")
+                && poster.starts_with("images/")
+                && folder.join(&poster).is_file(),
+            "{file} {poster}"
+        );
         let made = crate::video::info(&folder.join(&file)).unwrap();
-        assert!(made.video_codec == "h264" && (made.duration - 1.0).abs() < 0.3, "{made:?}");
+        assert!(
+            made.video_codec == "h264" && (made.duration - 1.0).abs() < 0.3,
+            "{made:?}"
+        );
         assert_eq!(html.matches("<video ").count(), 2);
-        assert!(html.contains("aria-label=\"The sea\"") && html.contains("<figcaption>Waves</figcaption>") && html.contains("Video unavailable"), "{html}");
-        let manifest: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(folder.join("manifest.json")).unwrap()).unwrap();
-        assert_eq!(manifest["videos"]["parts"].as_array().map(Vec::len), Some(1));
-        assert_eq!(manifest["videos"]["parts"][0]["file"].as_str(), Some(file.as_str()));
-        assert_eq!(manifest["photos"].as_array().map(Vec::len), Some(0), "a poster isn't a photo of the Story");
+        assert!(
+            html.contains("aria-label=\"The sea\"")
+                && html.contains("<figcaption>Waves</figcaption>")
+                && html.contains("Video unavailable"),
+            "{html}"
+        );
+        let manifest: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(folder.join("manifest.json")).unwrap())
+                .unwrap();
+        assert_eq!(
+            manifest["videos"]["parts"].as_array().map(Vec::len),
+            Some(1)
+        );
+        assert_eq!(
+            manifest["videos"]["parts"][0]["file"].as_str(),
+            Some(file.as_str())
+        );
+        assert_eq!(
+            manifest["photos"].as_array().map(Vec::len),
+            Some(0),
+            "a poster isn't a photo of the Story"
+        );
 
         // Markdown links its poster to the part, made once and kept.
         let folder = work.join("markdown");
-        let (index, _) = write_story(&folder, Format::Markdown, Profile::default(), &page, &Progress::default()).unwrap();
+        let (index, _) = write_story(
+            &folder,
+            Format::Markdown,
+            Profile::default(),
+            &page,
+            &Progress::default(),
+        )
+        .unwrap();
         let markdown = std::fs::read_to_string(&index).unwrap();
-        assert!(markdown.contains(&format!("[![The sea]({poster})]({file})")) && markdown.contains("*Waves*") && markdown.contains("*Video unavailable*"), "{markdown}");
+        assert!(
+            markdown.contains(&format!("[![The sea]({poster})]({file})"))
+                && markdown.contains("*Waves*")
+                && markdown.contains("*Video unavailable*"),
+            "{markdown}"
+        );
         assert_eq!(std::fs::read_dir(work.join("cache")).unwrap().count(), 1);
         let _ = std::fs::remove_dir_all(&work);
     }
 
     #[test]
     fn a_cropped_cover_is_a_picture_of_its_own_and_the_photo_stays_whole() {
-        let folder = std::env::temp_dir().join(format!("picasso-story-cover-{}", std::process::id()));
+        let folder =
+            std::env::temp_dir().join(format!("picasso-story-cover-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&folder);
         let photo = Path::new(env!("CARGO_MANIFEST_DIR")).join("images/banner.jpg");
         let sources = HashMap::from([(1, Some((photo, Settings::default(), 0)))]);
@@ -2018,14 +3168,39 @@ pub(crate) mod tests {
         story.cover_crop = crate::trip::CoverCrop([2_500, 0, 7_500, 5_000]);
         assert_eq!(story.cover_key(), Some(-1));
         let words = words();
-        let page = Page { story: &story, dates: None, blocks: &blocks, sources: &sources, words: &words, map: None, profiles: &HashMap::new(), videos: &Videos::default() };
-        let (index, outcome) = write_story(&folder, Format::Html, Profile::default(), &page, &Progress::default()).unwrap();
+        let page = Page {
+            story: &story,
+            dates: None,
+            blocks: &blocks,
+            sources: &sources,
+            words: &words,
+            map: None,
+            profiles: &HashMap::new(),
+            videos: &Videos::default(),
+        };
+        let (index, outcome) = write_story(
+            &folder,
+            Format::Html,
+            Profile::default(),
+            &page,
+            &Progress::default(),
+        )
+        .unwrap();
         assert_eq!(outcome.missing, 0);
         let html = std::fs::read_to_string(&index).unwrap();
         let size = |class: &str| {
             let at = html.find(&format!("<figure class=\"{class}\">")).unwrap();
             let tag = &html[at..];
-            let number = |name: &str| tag.split(&format!("{name}=\"")).nth(1).unwrap().split('"').next().unwrap().parse::<u32>().unwrap();
+            let number = |name: &str| {
+                tag.split(&format!("{name}=\""))
+                    .nth(1)
+                    .unwrap()
+                    .split('"')
+                    .next()
+                    .unwrap()
+                    .parse::<u32>()
+                    .unwrap()
+            };
             (number("width"), number("height"))
         };
         let (cover, whole) = (size("cover"), size("photo"));
@@ -2033,7 +3208,11 @@ pub(crate) mod tests {
         assert_eq!(cover.1, whole.1 / 2, "half the height");
         let text = std::fs::read_to_string(folder.join("manifest.json")).unwrap();
         let manifest: serde_json::Value = serde_json::from_str(&text).unwrap();
-        assert_eq!(manifest["photos"].as_array().unwrap().len(), 1, "the source is listed once");
+        assert_eq!(
+            manifest["photos"].as_array().unwrap().len(),
+            1,
+            "the source is listed once"
+        );
         let _ = std::fs::remove_dir_all(&folder);
     }
 
@@ -2046,27 +3225,55 @@ pub(crate) mod tests {
         let mut described = MediaUse::new(1);
         described.alt = "Something".into();
         let sources = HashMap::from([(1, Some((bad, Settings::default(), 0)))]);
-        let blocks = [StoryBlock::new(Block::Heading("Day 1".into())), StoryBlock::new(Block::Photo(described))];
+        let blocks = [
+            StoryBlock::new(Block::Heading("Day 1".into())),
+            StoryBlock::new(Block::Photo(described)),
+        ];
         let (story, words) = (story(), words());
-        let page = Page { story: &story, dates: None, blocks: &blocks, sources: &sources, words: &words, map: None, profiles: &HashMap::new(), videos: &Videos::default() };
+        let page = Page {
+            story: &story,
+            dates: None,
+            blocks: &blocks,
+            sources: &sources,
+            words: &words,
+            map: None,
+            profiles: &HashMap::new(),
+            videos: &Videos::default(),
+        };
         let check = preflight(&page);
-        assert_eq!((check.unreadable, check.missing, check.photos, check.first[3]), (1, 0, 0, Some(1)));
+        assert_eq!(
+            (
+                check.unreadable,
+                check.missing,
+                check.photos,
+                check.first[3]
+            ),
+            (1, 0, 0, Some(1))
+        );
         assert!(check.blocked(false) && !check.blocked(true));
         let _ = std::fs::remove_dir_all(&folder);
     }
 
     #[test]
     fn the_size_estimate_grows_with_photos_size_and_quality() {
-        let small = Profile { edge: 1200, quality: 60 };
-        let large = Profile { edge: 2400, quality: 95 };
+        let small = Profile {
+            edge: 1200,
+            quality: 60,
+        };
+        let large = Profile {
+            edge: 2400,
+            quality: 95,
+        };
         assert!(estimated_bytes(0, 0, small) > 0, "the page itself");
         assert!(estimated_bytes(10, 0, small) < estimated_bytes(20, 0, small));
         assert!(estimated_bytes(10, 0, small) < estimated_bytes(10, 0, large));
         // A 1600 px JPEG at 85 is typically 300–500 KB; the estimate errs high.
-        let one = estimated_bytes(1, 0, Profile::default()) - estimated_bytes(0, 0, Profile::default());
+        let one =
+            estimated_bytes(1, 0, Profile::default()) - estimated_bytes(0, 0, Profile::default());
         assert!((400_000..1_000_000).contains(&one), "{one}");
         // 1080p H.264 is typically 4–6 megabits a second.
-        let minute = estimated_bytes(0, 60_000, Profile::default()) - estimated_bytes(0, 0, Profile::default());
+        let minute = estimated_bytes(0, 60_000, Profile::default())
+            - estimated_bytes(0, 0, Profile::default());
         assert_eq!(minute, 60_000_000);
         #[cfg(unix)]
         assert!(free_space(&std::env::temp_dir()).is_some_and(|free| free > 0));
@@ -2078,17 +3285,32 @@ pub(crate) mod tests {
         let cache = std::env::temp_dir().join(format!("picasso-clip-cache-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&cache);
         std::fs::create_dir_all(&cache).unwrap();
-        let (kept, stopped, making) = (cache.join("a.mp4"), cache.join("b.partial-1-0"), cache.join("c.partial-2-0"));
+        let (kept, stopped, making) = (
+            cache.join("a.mp4"),
+            cache.join("b.partial-1-0"),
+            cache.join("c.partial-2-0"),
+        );
         for file in [&kept, &stopped, &making] {
             std::fs::write(file, b"video").unwrap();
         }
         let long_ago = std::time::SystemTime::now() - HALF_MADE_AGE * 2;
         for file in [&kept, &stopped] {
-            std::fs::File::options().write(true).open(file).unwrap().set_modified(long_ago).unwrap();
+            std::fs::File::options()
+                .write(true)
+                .open(file)
+                .unwrap()
+                .set_modified(long_ago)
+                .unwrap();
         }
         trim_clips(&cache, Path::new("none.mp4"));
-        assert!(kept.is_file(), "a whole part is kept while the cache has room");
-        assert!(!stopped.exists(), "a part left half made long ago is removed");
+        assert!(
+            kept.is_file(),
+            "a whole part is kept while the cache has room"
+        );
+        assert!(
+            !stopped.exists(),
+            "a part left half made long ago is removed"
+        );
         assert!(making.is_file(), "a part still being made is left alone");
         let _ = std::fs::remove_dir_all(&cache);
     }
@@ -2098,22 +3320,69 @@ pub(crate) mod tests {
         let mut first = MediaUse::new(1);
         first.alt = "A boat".into();
         first.caption = "hidden in a grid".into();
-        let grid = Block::Grid { columns: 2, rows: 2, caption: "Morning <market>".into(), media: vec![first, MediaUse::new(2), MediaUse::new(3)] };
+        let grid = Block::Grid {
+            columns: 2,
+            rows: 2,
+            caption: "Morning <market>".into(),
+            media: vec![first, MediaUse::new(2), MediaUse::new(3)],
+        };
         let blocks = [StoryBlock::new(grid)];
         let images = HashMap::from([
-            (1, WebImage { file: "images/a.jpg".into(), width: 10, height: 10 }),
-            (2, WebImage { file: "images/b.jpg".into(), width: 10, height: 10 }),
+            (
+                1,
+                WebImage {
+                    file: "images/a.jpg".into(),
+                    width: 10,
+                    height: 10,
+                },
+            ),
+            (
+                2,
+                WebImage {
+                    file: "images/b.jpg".into(),
+                    width: 10,
+                    height: 10,
+                },
+            ),
         ]);
-        let (html, outcome) = page(&story(), None, &blocks, &images, &HashMap::new(), &HashMap::new(), &words());
-        assert_eq!(outcome.missing, 1, "the third photo is shown as unavailable, not left out");
-        assert!(html.contains("<figure class=\"grid\" style=\"--cols:2;--ratio:4/3\">"), "{html}");
+        let (html, outcome) = page(
+            &story(),
+            None,
+            &blocks,
+            &images,
+            &HashMap::new(),
+            &HashMap::new(),
+            &words(),
+        );
+        assert_eq!(
+            outcome.missing, 1,
+            "the third photo is shown as unavailable, not left out"
+        );
+        assert!(
+            html.contains("<figure class=\"grid\" style=\"--cols:2;--ratio:4/3\">"),
+            "{html}"
+        );
         assert_eq!(html.matches("<img src=\"images/").count(), 2);
         assert!(html.contains("alt=\"A boat\""));
         assert!(html.contains("<figcaption>Morning &lt;market&gt;</figcaption>"));
         assert!(!html.contains("hidden in a grid"));
-        let (text, _) = markdown(&story(), None, &blocks, &images, &HashMap::new(), &HashMap::new(), &words());
-        assert!(text.contains("![A boat](images/a.jpg)\n\n![](images/b.jpg)"), "{text}");
-        assert!(text.contains("*Morning &lt;market&gt;*") && !text.contains("hidden"), "{text}");
+        let (text, _) = markdown(
+            &story(),
+            None,
+            &blocks,
+            &images,
+            &HashMap::new(),
+            &HashMap::new(),
+            &words(),
+        );
+        assert!(
+            text.contains("![A boat](images/a.jpg)\n\n![](images/b.jpg)"),
+            "{text}"
+        );
+        assert!(
+            text.contains("*Morning &lt;market&gt;*") && !text.contains("hidden"),
+            "{text}"
+        );
     }
 
     #[test]
@@ -2128,13 +3397,37 @@ pub(crate) mod tests {
             StoryBlock::new(Block::Photo(MediaUse::new(2))),
             StoryBlock::new(Block::Separator),
         ];
-        let images = HashMap::from([(1, WebImage { file: "images/ab.jpg".into(), width: 10, height: 10 })]);
-        let (text, outcome) = markdown(&story(), None, &blocks, &images, &HashMap::new(), &HashMap::new(), &words());
+        let images = HashMap::from([(
+            1,
+            WebImage {
+                file: "images/ab.jpg".into(),
+                width: 10,
+                height: 10,
+            },
+        )]);
+        let (text, outcome) = markdown(
+            &story(),
+            None,
+            &blocks,
+            &images,
+            &HashMap::new(),
+            &HashMap::new(),
+            &words(),
+        );
         assert_eq!(outcome.missing, 1);
-        assert!(text.starts_with("# Temple &lt;in&gt; spring\n\nAna\n\n"), "{text}");
+        assert!(
+            text.starts_with("# Temple &lt;in&gt; spring\n\nAna\n\n"),
+            "{text}"
+        );
         assert!(text.contains("## \\# Day 1\n"));
-        assert!(text.contains("\\- not a list  \n1\\. not a number &lt;b&gt;\n"), "{text}");
-        assert!(text.contains("![gate \\[red\\]](images/ab.jpg)\n*\\*Fushimi\\**\n"), "{text}");
+        assert!(
+            text.contains("\\- not a list  \n1\\. not a number &lt;b&gt;\n"),
+            "{text}"
+        );
+        assert!(
+            text.contains("![gate \\[red\\]](images/ab.jpg)\n*\\*Fushimi\\**\n"),
+            "{text}"
+        );
         assert!(text.contains("*Photo unavailable*\n"));
         assert!(text.contains("---\n"));
     }
@@ -2146,23 +3439,70 @@ pub(crate) mod tests {
         std::fs::create_dir_all(parent.join("Temple in spring")).unwrap();
         std::fs::write(parent.join("Temple in spring/mine.txt"), "keep").unwrap();
         let (story, words, sources) = (story(), words(), HashMap::new());
-        let page = Page { story: &story, dates: None, blocks: &[], sources: &sources, words: &words, map: None, profiles: &HashMap::new(), videos: &Videos::default() };
-        let export = |format| export_story(&parent, "Temple: in/spring", format, Profile::default(), &page, &Progress::default());
+        let page = Page {
+            story: &story,
+            dates: None,
+            blocks: &[],
+            sources: &sources,
+            words: &words,
+            map: None,
+            profiles: &HashMap::new(),
+            videos: &Videos::default(),
+        };
+        let export = |format| {
+            export_story(
+                &parent,
+                "Temple: in/spring",
+                format,
+                Profile::default(),
+                &page,
+                &Progress::default(),
+            )
+        };
         let (first, _) = export(Format::Html).unwrap();
         assert_eq!(first, parent.join("Temple in spring 2"));
         assert!(first.join("index.html").is_file());
         let (second, _) = export(Format::Markdown).unwrap();
         assert_eq!(second, parent.join("Temple in spring 3"));
         assert!(second.join("story.md").is_file());
-        assert_eq!(std::fs::read_to_string(parent.join("Temple in spring/mine.txt")).unwrap(), "keep");
-        let names: Vec<_> = std::fs::read_dir(&parent).unwrap().map(|entry| entry.unwrap().file_name()).collect();
+        assert_eq!(
+            std::fs::read_to_string(parent.join("Temple in spring/mine.txt")).unwrap(),
+            "keep"
+        );
+        let names: Vec<_> = std::fs::read_dir(&parent)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
         assert_eq!(names.len(), 3, "no staging folder is left: {names:?}");
         let stopped = Progress::default();
         stopped.cancel.store(true, Ordering::Relaxed);
         let photo = HashMap::from([(1, None)]);
-        let page = Page { story: &story, dates: None, blocks: &[], sources: &photo, words: &words, map: None, profiles: &HashMap::new(), videos: &Videos::default() };
-        assert_eq!(export_story(&parent, "Stopped", Format::Html, Profile::default(), &page, &stopped), Err(CANCELLED.into()));
-        assert_eq!(std::fs::read_dir(&parent).unwrap().count(), 3, "a cancelled export leaves nothing");
+        let page = Page {
+            story: &story,
+            dates: None,
+            blocks: &[],
+            sources: &photo,
+            words: &words,
+            map: None,
+            profiles: &HashMap::new(),
+            videos: &Videos::default(),
+        };
+        assert_eq!(
+            export_story(
+                &parent,
+                "Stopped",
+                Format::Html,
+                Profile::default(),
+                &page,
+                &stopped
+            ),
+            Err(CANCELLED.into())
+        );
+        assert_eq!(
+            std::fs::read_dir(&parent).unwrap().count(),
+            3,
+            "a cancelled export leaves nothing"
+        );
         assert_eq!(folder_name(" ..hidden "), "hidden");
         assert_eq!(folder_name("/"), "Story");
         let _ = std::fs::remove_dir_all(&parent);
@@ -2171,7 +3511,13 @@ pub(crate) mod tests {
     /// A photo of `w` × `h` whose colours differ with `n`, so each one's
     /// rendered bytes, and file, are its own.
     fn photo(n: u32, w: u32, h: u32) -> image::RgbImage {
-        image::RgbImage::from_fn(w, h, |x, y| image::Rgb([(n * 37 % 256) as u8, (x * 255 / w) as u8, (y * 255 / h) as u8]))
+        image::RgbImage::from_fn(w, h, |x, y| {
+            image::Rgb([
+                (n * 37 % 256) as u8,
+                (x * 255 / w) as u8,
+                (y * 255 / h) as u8,
+            ])
+        })
     }
 
     /// A TIFF-based raw file from a camera no decoder knows, as some
@@ -2206,14 +3552,21 @@ pub(crate) mod tests {
             entry(279, 4, jpeg.len() as u32),
             entry(330, 4, sub_at),
         ]));
-        out.extend(ifd(&[entry(256, 4, width * 2), entry(257, 4, height * 2), entry(259, 3, 1), entry(262, 3, 32803), entry(273, 4, preview_at)]));
+        out.extend(ifd(&[
+            entry(256, 4, width * 2),
+            entry(257, 4, height * 2),
+            entry(259, 3, 1),
+            entry(262, 3, 32803),
+            entry(273, 4, preview_at),
+        ]));
         out.extend(jpeg);
         out
     }
 
     #[test]
     fn twenty_photos_with_edits_and_a_raw_export_whole_and_offline() {
-        let root = std::env::temp_dir().join(format!("picasso-export-twenty-{}", std::process::id()));
+        let root =
+            std::env::temp_dir().join(format!("picasso-export-twenty-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let (originals, out) = (root.join("photos"), root.join("out"));
         std::fs::create_dir_all(&originals).unwrap();
@@ -2226,7 +3579,10 @@ pub(crate) mod tests {
             let (w, h) = if n % 2 == 0 { (800, 1200) } else { (1200, 800) };
             let path = originals.join(format!("{n:02}.jpg"));
             photo(n, w, h).save(&path).unwrap();
-            sources.insert(i64::from(n), Some((path, Settings::default(), if n == 17 { 90 } else { 0 })));
+            sources.insert(
+                i64::from(n),
+                Some((path, Settings::default(), if n == 17 { 90 } else { 0 })),
+            );
         }
         let exposure = crate::edit::Control::from_key("light.exposure").unwrap();
         let mut edit = Settings::default();
@@ -2236,7 +3592,12 @@ pub(crate) mod tests {
         let mut raw_edit = Settings::default();
         raw_edit.set(exposure, -0.5);
         let mut preview = Vec::new();
-        image::DynamicImage::ImageRgb8(photo(19, 1200, 800)).write_to(&mut std::io::Cursor::new(&mut preview), image::ImageFormat::Jpeg).unwrap();
+        image::DynamicImage::ImageRgb8(photo(19, 1200, 800))
+            .write_to(
+                &mut std::io::Cursor::new(&mut preview),
+                image::ImageFormat::Jpeg,
+            )
+            .unwrap();
         let raw = originals.join("19.3fr");
         std::fs::write(&raw, raw_with_preview(&preview, 1200, 800)).unwrap();
         sources.insert(19, Some((raw, raw_edit, 0)));
@@ -2244,7 +3605,11 @@ pub(crate) mod tests {
         photo(20, 1200, 800).save(&twentieth).unwrap();
         sources.insert(20, Some((twentieth, Settings::default(), 0)));
         let digest = |sources: &HashMap<i64, Source>| -> Vec<String> {
-            let mut all: Vec<_> = sources.values().flatten().map(|(path, _, _)| key(&std::fs::read(path).unwrap())).collect();
+            let mut all: Vec<_> = sources
+                .values()
+                .flatten()
+                .map(|(path, _, _)| key(&std::fs::read(path).unwrap()))
+                .collect();
             all.sort();
             all
         };
@@ -2260,7 +3625,12 @@ pub(crate) mod tests {
             StoryBlock::new(Block::Paragraph("Rain, then sun.".into())),
             StoryBlock::new(Block::Photo(described(1))),
             StoryBlock::new(Block::Gallery((2..=7).map(described).collect())),
-            StoryBlock::new(Block::Grid { columns: 2, rows: 2, caption: "Market".into(), media: (8..=11).map(described).collect() }),
+            StoryBlock::new(Block::Grid {
+                columns: 2,
+                rows: 2,
+                caption: "Market".into(),
+                media: (8..=11).map(described).collect(),
+            }),
             StoryBlock::new(Block::Heading("Day 2".into())),
             StoryBlock::new(Block::Gallery((12..=16).map(described).collect())),
             StoryBlock::new(Block::Photo(described(17))),
@@ -2268,45 +3638,110 @@ pub(crate) mod tests {
             StoryBlock::new(Block::Photo(described(19))),
             StoryBlock::new(Block::Photo(described(20))),
         ];
-        let story = Story { cover: Some(2), ..story() };
+        let story = Story {
+            cover: Some(2),
+            ..story()
+        };
         let words = words();
-        let page = Page { story: &story, dates: None, blocks: &blocks, sources: &sources, words: &words, map: None, profiles: &HashMap::new(), videos: &Videos::default() };
+        let page = Page {
+            story: &story,
+            dates: None,
+            blocks: &blocks,
+            sources: &sources,
+            words: &words,
+            map: None,
+            profiles: &HashMap::new(),
+            videos: &Videos::default(),
+        };
         let check = preflight(&page);
-        assert_eq!((check.photos, check.missing, check.unreadable, check.no_alt, check.blocked(false)), (20, 0, 0, 0, false), "{check:?}");
+        assert_eq!(
+            (
+                check.photos,
+                check.missing,
+                check.unreadable,
+                check.no_alt,
+                check.blocked(false)
+            ),
+            (20, 0, 0, 0, false),
+            "{check:?}"
+        );
 
-        let profile = Profile { edge: 1000, quality: 85 };
+        let profile = Profile {
+            edge: 1000,
+            quality: 85,
+        };
         for format in [Format::Html, Format::Markdown] {
-            let (folder, outcome) = export_story(&out, "Twenty photos", format, profile, &page, &Progress::default()).unwrap();
+            let (folder, outcome) = export_story(
+                &out,
+                "Twenty photos",
+                format,
+                profile,
+                &page,
+                &Progress::default(),
+            )
+            .unwrap();
             assert_eq!(outcome, Outcome::default(), "every photo shown");
             let (text, links): (String, Vec<String>) = match format {
                 Format::Html => {
                     let html = std::fs::read_to_string(folder.join("index.html")).unwrap();
-                    let links = html.split("src=\"").skip(1).map(|rest| rest.split('"').next().unwrap().to_string()).collect();
+                    let links = html
+                        .split("src=\"")
+                        .skip(1)
+                        .map(|rest| rest.split('"').next().unwrap().to_string())
+                        .collect();
                     (html, links)
                 }
                 Format::Markdown => {
                     let md = std::fs::read_to_string(folder.join("story.md")).unwrap();
-                    let links = md.split("](").skip(1).map(|rest| rest.split(')').next().unwrap().to_string()).collect();
+                    let links = md
+                        .split("](")
+                        .skip(1)
+                        .map(|rest| rest.split(')').next().unwrap().to_string())
+                        .collect();
                     (md, links)
                 }
             };
-            assert!(!text.contains("http") && !text.contains("file:") && !text.contains(originals.to_str().unwrap()), "nothing outside the folder");
+            assert!(
+                !text.contains("http")
+                    && !text.contains("file:")
+                    && !text.contains(originals.to_str().unwrap()),
+                "nothing outside the folder"
+            );
             let distinct: std::collections::HashSet<_> = links.iter().collect();
-            assert_eq!(distinct.len(), 20, "{format:?}: one picture a photo, the cover reusing its photo's");
+            assert_eq!(
+                distinct.len(),
+                20,
+                "{format:?}: one picture a photo, the cover reusing its photo's"
+            );
             for link in &links {
-                assert!(link.starts_with("images/") && !link.contains(".."), "{link}");
+                assert!(
+                    link.starts_with("images/") && !link.contains(".."),
+                    "{link}"
+                );
                 assert!(folder.join(link).is_file(), "{link}");
             }
-            let manifest: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(folder.join("manifest.json")).unwrap()).unwrap();
+            let manifest: serde_json::Value = serde_json::from_str(
+                &std::fs::read_to_string(folder.join("manifest.json")).unwrap(),
+            )
+            .unwrap();
             let photos = manifest["photos"].as_array().unwrap();
             assert_eq!(photos.len(), 20);
             let size = |media: i64| {
-                let entry = photos.iter().find(|entry| entry["media"].as_i64() == Some(media)).unwrap();
+                let entry = photos
+                    .iter()
+                    .find(|entry| entry["media"].as_i64() == Some(media))
+                    .unwrap();
                 let file = folder.join(entry["file"].as_str().unwrap());
                 let jpeg = std::fs::read(&file).unwrap();
-                assert!(!jpeg.windows(4).any(|w| w == b"Exif"), "no camera details in {file:?}");
+                assert!(
+                    !jpeg.windows(4).any(|w| w == b"Exif"),
+                    "no camera details in {file:?}"
+                );
                 let (w, h) = image::image_dimensions(&file).unwrap();
-                assert_eq!((entry["width"].as_u64(), entry["height"].as_u64()), (Some(u64::from(w)), Some(u64::from(h))));
+                assert_eq!(
+                    (entry["width"].as_u64(), entry["height"].as_u64()),
+                    (Some(u64::from(w)), Some(u64::from(h)))
+                );
                 (w, h)
             };
             assert_eq!(size(1), (1000, 667), "landscape fits the edge");
@@ -2315,12 +3750,21 @@ pub(crate) mod tests {
             assert_eq!(size(18), (333, 1000), "the left half of a portrait photo");
             assert_eq!(size(19), (1000, 667), "the raw file's picture");
             let brightness = |pixels: image::GrayImage| {
-                pixels.pixels().map(|p| u64::from(p[0])).sum::<u64>() / u64::from(pixels.width() * pixels.height())
+                pixels.pixels().map(|p| u64::from(p[0])).sum::<u64>()
+                    / u64::from(pixels.width() * pixels.height())
             };
-            let entry = photos.iter().find(|entry| entry["media"].as_i64() == Some(19)).unwrap();
-            let exported = image::open(folder.join(entry["file"].as_str().unwrap())).unwrap().to_luma8();
+            let entry = photos
+                .iter()
+                .find(|entry| entry["media"].as_i64() == Some(19))
+                .unwrap();
+            let exported = image::open(folder.join(entry["file"].as_str().unwrap()))
+                .unwrap()
+                .to_luma8();
             let original = image::DynamicImage::ImageRgb8(photo(19, 1200, 800)).to_luma8();
-            assert!(brightness(exported) + 10 < brightness(original), "the raw file's edit is applied");
+            assert!(
+                brightness(exported) + 10 < brightness(original),
+                "the raw file's edit is applied"
+            );
         }
         assert_eq!(digest(&sources), before, "the originals are untouched");
         let _ = std::fs::remove_dir_all(&root);
@@ -2329,7 +3773,8 @@ pub(crate) mod tests {
     #[cfg(unix)]
     #[test]
     fn an_export_cut_short_by_a_crash_is_cleared_by_the_next_and_earlier_ones_stay() {
-        let parent = std::env::temp_dir().join(format!("picasso-export-crash-{}", std::process::id()));
+        let parent =
+            std::env::temp_dir().join(format!("picasso-export-crash-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&parent);
         std::fs::create_dir_all(parent.join("Temple")).unwrap();
         std::fs::write(parent.join("Temple/index.html"), "the earlier export").unwrap();
@@ -2337,26 +3782,53 @@ pub(crate) mod tests {
         let mut ended = std::process::Command::new("true").spawn().unwrap();
         ended.wait().unwrap();
         let crashed = parent.join(format!(".Temple.partial-{}", ended.id()));
-        let running = parent.join(format!(".Temple.partial-{}", std::os::unix::process::parent_id()));
+        let running = parent.join(format!(
+            ".Temple.partial-{}",
+            std::os::unix::process::parent_id()
+        ));
         for staging in [&crashed, &running] {
             std::fs::create_dir_all(staging.join("images")).unwrap();
             std::fs::write(staging.join("images/half.jpg"), "half written").unwrap();
         }
         let (story, words, sources) = (story(), words(), HashMap::new());
         let blocks = [StoryBlock::new(Block::Paragraph("Hello".into()))];
-        let page = Page { story: &story, dates: None, blocks: &blocks, sources: &sources, words: &words, map: None, profiles: &HashMap::new(), videos: &Videos::default() };
-        let (folder, _) = export_story(&parent, "Temple", Format::Html, Profile::default(), &page, &Progress::default()).unwrap();
+        let page = Page {
+            story: &story,
+            dates: None,
+            blocks: &blocks,
+            sources: &sources,
+            words: &words,
+            map: None,
+            profiles: &HashMap::new(),
+            videos: &Videos::default(),
+        };
+        let (folder, _) = export_story(
+            &parent,
+            "Temple",
+            Format::Html,
+            Profile::default(),
+            &page,
+            &Progress::default(),
+        )
+        .unwrap();
         assert_eq!(folder, parent.join("Temple 2"));
         assert!(!crashed.exists(), "what a stopped export left is cleared");
-        assert!(running.join("images/half.jpg").is_file(), "an export still being written is left alone");
-        assert_eq!(std::fs::read_to_string(parent.join("Temple/index.html")).unwrap(), "the earlier export");
+        assert!(
+            running.join("images/half.jpg").is_file(),
+            "an export still being written is left alone"
+        );
+        assert_eq!(
+            std::fs::read_to_string(parent.join("Temple/index.html")).unwrap(),
+            "the earlier export"
+        );
         let _ = std::fs::remove_dir_all(&parent);
     }
 
     #[test]
     fn a_photo_changed_while_exporting_stops_it_and_leaves_nothing() {
         use std::io::Write as _;
-        let root = std::env::temp_dir().join(format!("picasso-export-changed-{}", std::process::id()));
+        let root =
+            std::env::temp_dir().join(format!("picasso-export-changed-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let out = root.join("out");
         std::fs::create_dir_all(&out).unwrap();
@@ -2368,31 +3840,60 @@ pub(crate) mod tests {
         for n in 2..=4 {
             sources.insert(n, Some((large.clone(), Settings::default(), 0)));
         }
-        let blocks: Vec<_> = (1..=4).map(|n| StoryBlock::new(Block::Photo(MediaUse::new(n)))).collect();
+        let blocks: Vec<_> = (1..=4)
+            .map(|n| StoryBlock::new(Block::Photo(MediaUse::new(n))))
+            .collect();
         let (story, words) = (story(), words());
-        let page = Page { story: &story, dates: None, blocks: &blocks, sources: &sources, words: &words, map: None, profiles: &HashMap::new(), videos: &Videos::default() };
+        let page = Page {
+            story: &story,
+            dates: None,
+            blocks: &blocks,
+            sources: &sources,
+            words: &words,
+            map: None,
+            profiles: &HashMap::new(),
+            videos: &Videos::default(),
+        };
         let progress = Progress::default();
         let finished = AtomicBool::new(false);
         let result = std::thread::scope(|scope| {
             scope.spawn(|| {
                 // Once the first photo is rendered and the next begun, its file is saved again.
-                while progress.done.load(Ordering::Relaxed) < 2 && !finished.load(Ordering::Relaxed) {
+                while progress.done.load(Ordering::Relaxed) < 2 && !finished.load(Ordering::Relaxed)
+                {
                     std::thread::yield_now();
                 }
-                std::fs::OpenOptions::new().append(true).open(&first).unwrap().write_all(b"saved again").unwrap();
+                std::fs::OpenOptions::new()
+                    .append(true)
+                    .open(&first)
+                    .unwrap()
+                    .write_all(b"saved again")
+                    .unwrap();
             });
-            let result = export_story(&out, "Changed", Format::Html, Profile::default(), &page, &progress);
+            let result = export_story(
+                &out,
+                "Changed",
+                Format::Html,
+                Profile::default(),
+                &page,
+                &progress,
+            );
             finished.store(true, Ordering::Relaxed);
             result
         });
         assert_eq!(result, Err(SOURCE_CHANGED.into()));
-        assert_eq!(std::fs::read_dir(&out).unwrap().count(), 0, "no page made of two versions, and no staging left");
+        assert_eq!(
+            std::fs::read_dir(&out).unwrap().count(),
+            0,
+            "no page made of two versions, and no staging left"
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
     fn an_export_keeps_what_it_started_with_and_the_next_one_shows_the_changes() {
-        let root = std::env::temp_dir().join(format!("picasso-export-pinned-{}", std::process::id()));
+        let root =
+            std::env::temp_dir().join(format!("picasso-export-pinned-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let out = root.join("out");
         std::fs::create_dir_all(&out).unwrap();
@@ -2400,35 +3901,101 @@ pub(crate) mod tests {
         photo(1, 3000, 2000).save(&file).unwrap();
         let (story, words) = (story(), words());
         let page_of = |text: &str, settings: Settings| {
-            let blocks = vec![StoryBlock::new(Block::Paragraph(text.into())), StoryBlock::new(Block::Photo(MediaUse::new(1))), StoryBlock::new(Block::Photo(MediaUse::new(2)))];
-            let sources = HashMap::from([(1, Some((file.clone(), settings.clone(), 0))), (2, Some((file.clone(), settings, 0)))]);
+            let blocks = vec![
+                StoryBlock::new(Block::Paragraph(text.into())),
+                StoryBlock::new(Block::Photo(MediaUse::new(1))),
+                StoryBlock::new(Block::Photo(MediaUse::new(2))),
+            ];
+            let sources = HashMap::from([
+                (1, Some((file.clone(), settings.clone(), 0))),
+                (2, Some((file.clone(), settings, 0))),
+            ]);
             (blocks, sources)
         };
         let shown = |folder: &Path| {
             let html = std::fs::read_to_string(folder.join("index.html")).unwrap();
-            let manifest: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(folder.join("manifest.json")).unwrap()).unwrap();
+            let manifest: serde_json::Value = serde_json::from_str(
+                &std::fs::read_to_string(folder.join("manifest.json")).unwrap(),
+            )
+            .unwrap();
             let first = &manifest["photos"][0];
-            (html.contains("Before"), html.contains("After"), (first["width"].as_u64().unwrap(), first["height"].as_u64().unwrap()))
+            (
+                html.contains("Before"),
+                html.contains("After"),
+                (
+                    first["width"].as_u64().unwrap(),
+                    first["height"].as_u64().unwrap(),
+                ),
+            )
         };
         let (blocks, sources) = page_of("Before", Settings::default());
-        let started = Page { story: &story, dates: None, blocks: &blocks, sources: &sources, words: &words, map: None, profiles: &HashMap::new(), videos: &Videos::default() };
+        let started = Page {
+            story: &story,
+            dates: None,
+            blocks: &blocks,
+            sources: &sources,
+            words: &words,
+            map: None,
+            profiles: &HashMap::new(),
+            videos: &Videos::default(),
+        };
         let progress = Progress::default();
         let mut cropped = Settings::default();
         cropped.set(crate::edit::Control::CROP_RIGHT, 0.5);
         let (first, next) = std::thread::scope(|scope| {
-            let running = scope.spawn(|| export_story(&out, "Temple", Format::Html, Profile::default(), &started, &progress).unwrap().0);
+            let running = scope.spawn(|| {
+                export_story(
+                    &out,
+                    "Temple",
+                    Format::Html,
+                    Profile::default(),
+                    &started,
+                    &progress,
+                )
+                .unwrap()
+                .0
+            });
             // The text and the photo's crop change while it runs; the next export is made of those.
             while progress.done.load(Ordering::Relaxed) < 1 && !running.is_finished() {
                 std::thread::yield_now();
             }
             let (blocks, sources) = page_of("After", cropped);
-            let changed = Page { story: &story, dates: None, blocks: &blocks, sources: &sources, words: &words, map: None, profiles: &HashMap::new(), videos: &Videos::default() };
+            let changed = Page {
+                story: &story,
+                dates: None,
+                blocks: &blocks,
+                sources: &sources,
+                words: &words,
+                map: None,
+                profiles: &HashMap::new(),
+                videos: &Videos::default(),
+            };
             let first = running.join().unwrap();
-            (first, export_story(&out, "Temple", Format::Html, Profile::default(), &changed, &Progress::default()).unwrap().0)
+            (
+                first,
+                export_story(
+                    &out,
+                    "Temple",
+                    Format::Html,
+                    Profile::default(),
+                    &changed,
+                    &Progress::default(),
+                )
+                .unwrap()
+                .0,
+            )
         });
         assert_ne!(first, next, "a new folder");
-        assert_eq!(shown(&first), (true, false, (1600, 1067)), "the first export as it started");
-        assert_eq!(shown(&next), (false, true, (1200, 1600)), "the next one with the new text and crop");
+        assert_eq!(
+            shown(&first),
+            (true, false, (1600, 1067)),
+            "the first export as it started"
+        );
+        assert_eq!(
+            shown(&next),
+            (false, true, (1200, 1600)),
+            "the next one with the new text and crop"
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -2440,46 +4007,130 @@ pub(crate) mod tests {
         let file = root.join("a.jpg");
         photo(1, 300, 200).save(&file).unwrap();
         let (story, words) = (story(), words());
-        let blocks = vec![StoryBlock::new(Block::Paragraph("Before".into())), StoryBlock::new(Block::Photo(MediaUse::new(1)))];
+        let blocks = vec![
+            StoryBlock::new(Block::Paragraph("Before".into())),
+            StoryBlock::new(Block::Photo(MediaUse::new(1))),
+        ];
         let sources = HashMap::from([(1, Some((file.clone(), Settings::default(), 0)))]);
         let key = |story: &Story, blocks: &[StoryBlock], sources: &HashMap<i64, Source>| {
-            content_key(&Page { story, dates: None, blocks, sources, words: &words, map: None, profiles: &HashMap::new(), videos: &Videos::default() })
+            content_key(&Page {
+                story,
+                dates: None,
+                blocks,
+                sources,
+                words: &words,
+                map: None,
+                profiles: &HashMap::new(),
+                videos: &Videos::default(),
+            })
         };
         let exported = key(&story, &blocks, &sources);
 
-        let saved = Story { revision: story.revision + 1, updated_at: 99, finished: true, ..story.clone() };
-        assert_eq!(key(&saved, &blocks, &sources), exported, "saved again, or marked finished, it shows the same");
+        let saved = Story {
+            revision: story.revision + 1,
+            updated_at: 99,
+            finished: true,
+            ..story.clone()
+        };
+        assert_eq!(
+            key(&saved, &blocks, &sources),
+            exported,
+            "saved again, or marked finished, it shows the same"
+        );
 
         let mut edited = blocks.clone();
         edited[0].block = Block::Paragraph("After".into());
         assert_ne!(key(&story, &edited, &sources), exported, "new text");
-        assert_ne!(key(&Story { title: "Elsewhere".into(), ..story.clone() }, &blocks, &sources), exported, "a new title");
-        let framed = Story { cover: Some(1), cover_crop: crate::trip::CoverCrop([0, 0, 10_000, 5_000]), ..story.clone() };
-        assert_ne!(key(&framed, &blocks, &sources), exported, "the cover framed");
+        assert_ne!(
+            key(
+                &Story {
+                    title: "Elsewhere".into(),
+                    ..story.clone()
+                },
+                &blocks,
+                &sources
+            ),
+            exported,
+            "a new title"
+        );
+        let framed = Story {
+            cover: Some(1),
+            cover_crop: crate::trip::CoverCrop([0, 0, 10_000, 5_000]),
+            ..story.clone()
+        };
+        assert_ne!(
+            key(&framed, &blocks, &sources),
+            exported,
+            "the cover framed"
+        );
         let mut cropped = Settings::default();
         cropped.set(crate::edit::Control::CROP_RIGHT, 0.5);
-        assert_ne!(key(&story, &blocks, &HashMap::from([(1, Some((file.clone(), cropped, 0)))])), exported, "the photo's crop");
-        assert_ne!(key(&story, &blocks, &HashMap::from([(1, Some((file.clone(), Settings::default(), 90)))])), exported, "the photo turned");
-        assert_ne!(key(&story, &blocks, &HashMap::from([(1, None)])), exported, "the photo unavailable");
+        assert_ne!(
+            key(
+                &story,
+                &blocks,
+                &HashMap::from([(1, Some((file.clone(), cropped, 0)))])
+            ),
+            exported,
+            "the photo's crop"
+        );
+        assert_ne!(
+            key(
+                &story,
+                &blocks,
+                &HashMap::from([(1, Some((file.clone(), Settings::default(), 90)))])
+            ),
+            exported,
+            "the photo turned"
+        );
+        assert_ne!(
+            key(&story, &blocks, &HashMap::from([(1, None)])),
+            exported,
+            "the photo unavailable"
+        );
         assert_eq!(key(&story, &blocks, &sources), exported);
         photo(2, 300, 201).save(&file).unwrap();
-        assert_ne!(key(&story, &blocks, &sources), exported, "the photo's file replaced");
+        assert_ne!(
+            key(&story, &blocks, &sources),
+            exported,
+            "the photo's file replaced"
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
     fn a_write_that_fails_is_an_error_not_a_shorter_page() {
         // As when the disk fills up: the photos are written, the page can't be.
-        let folder = std::env::temp_dir().join(format!("picasso-export-full-{}", std::process::id()));
+        let folder =
+            std::env::temp_dir().join(format!("picasso-export-full-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&folder);
         std::fs::create_dir_all(folder.join("index.html/taken")).unwrap();
         let photo = Path::new(env!("CARGO_MANIFEST_DIR")).join("images/banner.jpg");
         let sources = HashMap::from([(1, Some((photo, Settings::default(), 0)))]);
         let blocks = [StoryBlock::new(Block::Photo(MediaUse::new(1)))];
         let (story, words) = (story(), words());
-        let page = Page { story: &story, dates: None, blocks: &blocks, sources: &sources, words: &words, map: None, profiles: &HashMap::new(), videos: &Videos::default() };
-        assert!(write_story(&folder, Format::Html, Profile::default(), &page, &Progress::default()).is_err());
-        assert!(!folder.join("manifest.json").exists(), "nothing claims the export is whole");
+        let page = Page {
+            story: &story,
+            dates: None,
+            blocks: &blocks,
+            sources: &sources,
+            words: &words,
+            map: None,
+            profiles: &HashMap::new(),
+            videos: &Videos::default(),
+        };
+        assert!(write_story(
+            &folder,
+            Format::Html,
+            Profile::default(),
+            &page,
+            &Progress::default()
+        )
+        .is_err());
+        assert!(
+            !folder.join("manifest.json").exists(),
+            "nothing claims the export is whole"
+        );
         let _ = std::fs::remove_dir_all(&folder);
     }
 
@@ -2487,7 +4138,8 @@ pub(crate) mod tests {
     #[test]
     fn a_folder_that_refuses_writing_stops_the_export_and_keeps_what_is_there() {
         use std::os::unix::fs::PermissionsExt;
-        let parent = std::env::temp_dir().join(format!("picasso-export-refused-{}", std::process::id()));
+        let parent =
+            std::env::temp_dir().join(format!("picasso-export-refused-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&parent);
         std::fs::create_dir_all(&parent).unwrap();
         std::fs::write(parent.join("mine.txt"), "keep").unwrap();
@@ -2498,22 +4150,55 @@ pub(crate) mod tests {
         let sources = HashMap::from([(1, Some((photo, Settings::default(), 0)))]);
         let blocks = [StoryBlock::new(Block::Photo(MediaUse::new(1)))];
         let (story, words) = (story(), words());
-        let page = Page { story: &story, dates: None, blocks: &blocks, sources: &sources, words: &words, map: None, profiles: &HashMap::new(), videos: &Videos::default() };
-        let result = export_story(&parent, "Refused", Format::Html, Profile::default(), &page, &Progress::default());
+        let page = Page {
+            story: &story,
+            dates: None,
+            blocks: &blocks,
+            sources: &sources,
+            words: &words,
+            map: None,
+            profiles: &HashMap::new(),
+            videos: &Videos::default(),
+        };
+        let result = export_story(
+            &parent,
+            "Refused",
+            Format::Html,
+            Profile::default(),
+            &page,
+            &Progress::default(),
+        );
         std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o755)).unwrap();
         if refused {
             assert!(result.is_err(), "{result:?}");
-            let names: Vec<_> = std::fs::read_dir(&parent).unwrap().map(|entry| entry.unwrap().file_name()).collect();
+            let names: Vec<_> = std::fs::read_dir(&parent)
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name())
+                .collect();
             assert_eq!(names, ["mine.txt"]);
-            assert_eq!(std::fs::read_to_string(parent.join("mine.txt")).unwrap(), "keep");
+            assert_eq!(
+                std::fs::read_to_string(parent.join("mine.txt")).unwrap(),
+                "keep"
+            );
         }
         let _ = std::fs::remove_dir_all(&parent);
     }
 
     #[test]
     fn the_page_needs_nothing_from_the_network() {
-        let (html, _) = page(&story(), None, &[], &HashMap::new(), &HashMap::new(), &HashMap::new(), &words());
-        assert!(!html.contains("http"), "no remote fonts, styles, or scripts");
+        let (html, _) = page(
+            &story(),
+            None,
+            &[],
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &words(),
+        );
+        assert!(
+            !html.contains("http"),
+            "no remote fonts, styles, or scripts"
+        );
         assert_eq!(key(b"same"), key(b"same"));
         assert_ne!(key(b"same"), key(b"other"));
     }

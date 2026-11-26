@@ -20,7 +20,11 @@ pub fn latest() -> Result<Option<Release>, String> {
     let config = ureq::Agent::config_builder()
         .timeout_global(Some(Duration::from_secs(15)))
         .http_status_as_error(false)
-        .user_agent(concat!("Picasso/", env!("CARGO_PKG_VERSION"), " (update check)"))
+        .user_agent(concat!(
+            "Picasso/",
+            env!("CARGO_PKG_VERSION"),
+            " (update check)"
+        ))
         .build();
     let agent = ureq::Agent::new_with_config(config);
     let mut response = agent
@@ -33,10 +37,17 @@ pub fn latest() -> Result<Option<Release>, String> {
         404 => return Ok(None),
         status => return Err(format!("HTTP {status}")),
     }
-    let body = response.body_mut().with_config().limit(1 << 20).read_to_string().map_err(|err| err.to_string())?;
+    let body = response
+        .body_mut()
+        .with_config()
+        .limit(1 << 20)
+        .read_to_string()
+        .map_err(|err| err.to_string())?;
     let json: serde_json::Value = serde_json::from_str(&body).map_err(|err| err.to_string())?;
     let tag = json["tag_name"].as_str().ok_or("no tag_name")?;
-    let url = json["html_url"].as_str().unwrap_or(env!("CARGO_PKG_REPOSITORY"));
+    let url = json["html_url"]
+        .as_str()
+        .unwrap_or(env!("CARGO_PKG_REPOSITORY"));
     Ok(Some(Release {
         version: tag.trim_start_matches(['v', 'V']).to_string(),
         url: url.to_string(),

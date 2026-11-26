@@ -23,11 +23,13 @@ use image::RgbaImage;
 pub use auto::{auto_tone, auto_white_balance, sample, white_balance_for};
 pub use color::hue_rgb;
 pub use curve::{parametric_points, sample as sample_curve};
-pub use geometry::{canvas_size, constrain, inside, is_convex, with_aspect, Geometry, FULL, SQUARE};
+pub use geometry::{
+    canvas_size, constrain, inside, is_convex, with_aspect, Geometry, FULL, SQUARE,
+};
 pub use pipeline::{Cache, Options};
 pub use settings::{
-    Control, Curve, History, Kind, Mask, Shape, Settings, Step, Unit, BANDS, CURVE_CHANNELS, HDR_METHODS, LOCALS, MIX_PARTS, PROFILES,
-    ZONES,
+    Control, Curve, History, Kind, Mask, Settings, Shape, Step, Unit, BANDS, CURVE_CHANNELS,
+    HDR_METHODS, LOCALS, MIX_PARTS, PROFILES, ZONES,
 };
 
 use crate::i18n::tr;
@@ -44,7 +46,9 @@ pub fn apply(rgba: &mut RgbaImage, settings: &Settings) {
     if settings.is_identity() {
         return;
     }
-    let result = std::panic::catch_unwind(AssertUnwindSafe(|| pipeline::render(rgba, settings, &Options::default(), None)));
+    let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
+        pipeline::render(rgba, settings, &Options::default(), None)
+    }));
     if let Ok(result) = result {
         *rgba = result;
     }
@@ -111,21 +115,37 @@ pub fn edit_loop(jobs: Receiver<EditJob>, events: Sender<UiEvent>, ctx: eframe::
                 } => {
                     let small = draft && base.width().max(base.height()) > DRAFT_EDGE;
                     let (source, cache) = if small {
-                        if draft_base.as_ref().is_none_or(|(of, _)| !Arc::ptr_eq(of, &base)) {
+                        if draft_base
+                            .as_ref()
+                            .is_none_or(|(of, _)| !Arc::ptr_eq(of, &base))
+                        {
                             let image = image::DynamicImage::ImageRgba8((*base).clone());
                             let shrunk = Arc::new(crate::image_io::limit_rgba(image, DRAFT_EDGE));
                             quick.clear();
                             draft_base = Some((base.clone(), shrunk));
                         }
-                        (draft_base.as_ref().map(|(_, small)| small.clone()).unwrap_or(base), &mut quick)
+                        (
+                            draft_base
+                                .as_ref()
+                                .map(|(_, small)| small.clone())
+                                .unwrap_or(base),
+                            &mut quick,
+                        )
                     } else {
                         (base, &mut full)
                     };
                     let rendered = std::panic::catch_unwind(AssertUnwindSafe(|| {
                         let mut image = pipeline::render(&source, &settings, &options, Some(cache));
-                        let histogram = (purpose == Purpose::Preview).then(|| Box::new(Histogram::from_rgba(image.as_raw())));
+                        let histogram = (purpose == Purpose::Preview)
+                            .then(|| Box::new(Histogram::from_rgba(image.as_raw())));
                         let canvas = [source.width() as f32, source.height() as f32];
-                        pipeline::decorate(&mut image, &settings, &options, canvas, pipeline::view(&settings, &options));
+                        pipeline::decorate(
+                            &mut image,
+                            &settings,
+                            &options,
+                            canvas,
+                            pipeline::view(&settings, &options),
+                        );
                         (image, histogram)
                     }));
                     match rendered {
@@ -159,7 +179,8 @@ pub fn edit_loop(jobs: Receiver<EditJob>, events: Sender<UiEvent>, ctx: eframe::
 
 fn load_preview(id: i64, path: &str) -> UiEvent {
     let path = Path::new(path);
-    let decoded = std::panic::catch_unwind(|| crate::image_io::load_at_least(path, PREVIEW_EDGE)).unwrap_or_else(|_| Err("decoder fault".into()));
+    let decoded = std::panic::catch_unwind(|| crate::image_io::load_at_least(path, PREVIEW_EDGE))
+        .unwrap_or_else(|_| Err("decoder fault".into()));
     match decoded {
         Ok(image) => UiEvent::EditBase {
             id,
@@ -188,7 +209,13 @@ impl Default for ExportOptions {
 
 /// Writes the edited photo to `target`: JPEG, PNG, or TIFF by extension.
 /// `rotation` is the clockwise turn stored in the catalog.
-pub fn export(source: &Path, target: &Path, settings: &Settings, rotation: i32, options: ExportOptions) -> Result<(), String> {
+pub fn export(
+    source: &Path,
+    target: &Path,
+    settings: &Settings,
+    rotation: i32,
+    options: ExportOptions,
+) -> Result<(), String> {
     if same_file(source, target) {
         return Err(tr("Choose a different name than the original").into());
     }
@@ -206,13 +233,21 @@ pub fn export(source: &Path, target: &Path, settings: &Settings, rotation: i32, 
 
 /// The photo at `source` with the edit applied and turned by the catalog's
 /// clockwise `rotation`, at most `long_edge` pixels on its longest side.
-pub fn render_edited(source: &Path, settings: &Settings, rotation: i32, long_edge: Option<u32>) -> Result<RgbaImage, String> {
-    let image = std::panic::catch_unwind(|| crate::image_io::load_oriented(source)).unwrap_or_else(|_| Err("decoder fault".into()))?;
+pub fn render_edited(
+    source: &Path,
+    settings: &Settings,
+    rotation: i32,
+    long_edge: Option<u32>,
+) -> Result<RgbaImage, String> {
+    let image = std::panic::catch_unwind(|| crate::image_io::load_oriented(source))
+        .unwrap_or_else(|_| Err("decoder fault".into()))?;
     let mut rgba = image.to_rgba8();
     drop(image);
     if !settings.is_identity() {
-        rgba = std::panic::catch_unwind(AssertUnwindSafe(|| pipeline::render(&rgba, settings, &Options::default(), None)))
-            .map_err(|_| tr("The edit couldn't be rendered").to_string())?;
+        rgba = std::panic::catch_unwind(AssertUnwindSafe(|| {
+            pipeline::render(&rgba, settings, &Options::default(), None)
+        }))
+        .map_err(|_| tr("The edit couldn't be rendered").to_string())?;
     }
     if let Some(edge) = long_edge.filter(|edge| *edge < rgba.width().max(rgba.height())) {
         let scale = edge as f32 / rgba.width().max(rgba.height()) as f32;
@@ -241,7 +276,11 @@ fn same_file(a: &Path, b: &Path) -> bool {
         }
     }
     match (a.canonicalize(), b.canonicalize()) {
-        (Ok(a), Ok(b)) => a == b || (cfg!(windows) && a.to_string_lossy().to_lowercase() == b.to_string_lossy().to_lowercase()),
+        (Ok(a), Ok(b)) => {
+            a == b
+                || (cfg!(windows)
+                    && a.to_string_lossy().to_lowercase() == b.to_string_lossy().to_lowercase())
+        }
         _ => false,
     }
 }
@@ -276,7 +315,9 @@ mod tests {
         for (code, &value) in decode.iter().enumerate() {
             assert_eq!(color::encode(value) as usize, code, "code {code}");
         }
-        let mut image = RgbaImage::from_fn(16, 16, |x, y| image::Rgba([(x * 16) as u8, (y * 16) as u8, 77, 255]));
+        let mut image = RgbaImage::from_fn(16, 16, |x, y| {
+            image::Rgba([(x * 16) as u8, (y * 16) as u8, 77, 255])
+        });
         let original = image.clone();
         apply(&mut image, &Settings::default());
         assert_eq!(image, original);

@@ -14,7 +14,9 @@ use std::sync::{Arc, OnceLock};
 use image::RgbaImage;
 use rayon::prelude::*;
 
-use super::color::{self, decode_table, encode, from_oklab, hue_direction, luminance, smoothstep, to_oklab};
+use super::color::{
+    self, decode_table, encode, from_oklab, hue_direction, luminance, smoothstep, to_oklab,
+};
 use super::curve;
 use super::filters::{box_blur, guided, min_filter, shrink, Low};
 use super::geometry::{warp, Geometry, FULL};
@@ -135,13 +137,26 @@ impl Frame {
         let rgb: Vec<[f32; 3]> = warped
             .as_raw()
             .par_chunks_exact(4)
-            .map(|p| [decode[p[0] as usize], decode[p[1] as usize], decode[p[2] as usize]])
+            .map(|p| {
+                [
+                    decode[p[0] as usize],
+                    decode[p[1] as usize],
+                    decode[p[2] as usize],
+                ]
+            })
             .collect();
-        let log = rgb.par_iter().map(|rgb| (luminance(*rgb) + LOG_FLOOR).log2()).collect();
+        let log = rgb
+            .par_iter()
+            .map(|rgb| (luminance(*rgb) + LOG_FLOOR).log2())
+            .collect();
         Frame {
             w: warped.width() as usize,
             h: warped.height() as usize,
-            canvas: super::geometry::canvas_size(geometry.angle, source.width() as f32, source.height() as f32),
+            canvas: super::geometry::canvas_size(
+                geometry.angle,
+                source.width() as f32,
+                source.height() as f32,
+            ),
             view: geometry.crop,
             rgb,
             log,
@@ -154,7 +169,9 @@ impl Frame {
 
     /// Average and extremes of the brightness, which HDR tone maps from.
     fn stats(&self) -> hdr::Stats {
-        *self.stats.get_or_init(|| hdr::Stats::of(&shrink(&self.log, self.w, self.h, 512).0))
+        *self
+            .stats
+            .get_or_init(|| hdr::Stats::of(&shrink(&self.log, self.w, self.h, 512).0))
     }
 
     /// Edge-aware large-scale luminance, the base local tone works on.
@@ -174,7 +191,12 @@ impl Frame {
     fn fine(&self) -> &[f32] {
         self.fine.get_or_init(|| {
             let radius = ((self.w.max(self.h) as f32 * 0.0025).round() as usize).max(1);
-            box_blur(&box_blur(&self.log, self.w, self.h, radius), self.w, self.h, radius)
+            box_blur(
+                &box_blur(&self.log, self.w, self.h, radius),
+                self.w,
+                self.h,
+                radius,
+            )
         })
     }
 
@@ -182,7 +204,9 @@ impl Frame {
     /// through it.
     fn haze(&self) -> &Haze {
         self.haze.get_or_init(|| {
-            let plane = |channel: usize| -> Vec<f32> { self.rgb.par_iter().map(|rgb| rgb[channel]).collect() };
+            let plane = |channel: usize| -> Vec<f32> {
+                self.rgb.par_iter().map(|rgb| rgb[channel]).collect()
+            };
             let (r, w, h) = shrink(&plane(0), self.w, self.h, 512);
             let (g, _, _) = shrink(&plane(1), self.w, self.h, 512);
             let (b, _, _) = shrink(&plane(2), self.w, self.h, 512);
@@ -212,7 +236,11 @@ impl Frame {
                 .collect();
             Haze {
                 light,
-                transmission: Low { data: transmission, w, h },
+                transmission: Low {
+                    data: transmission,
+                    w,
+                    h,
+                },
             }
         })
     }
@@ -242,11 +270,20 @@ pub fn view(settings: &Settings, options: &Options) -> [f32; 4] {
 
 /// The photo with every edit in `settings` applied. Overlays are left to
 /// [`decorate`].
-pub fn render(source: &RgbaImage, settings: &Settings, options: &Options, cache: Option<&mut Cache>) -> RgbaImage {
+pub fn render(
+    source: &RgbaImage,
+    settings: &Settings,
+    options: &Options,
+    cache: Option<&mut Cache>,
+) -> RgbaImage {
     let mut geometry = Geometry::from_settings(settings);
     geometry.crop = view(settings, options);
     if !options.adjust {
-        return if geometry.is_identity() { source.clone() } else { warp(source, &geometry) };
+        return if geometry.is_identity() {
+            source.clone()
+        } else {
+            warp(source, &geometry)
+        };
     }
     let frame = match cache {
         Some(cache) => cache.frame(source, &geometry),
@@ -284,10 +321,15 @@ impl Area {
             Shape::Linear { from, to } => {
                 let (dx, dy) = ((to[0] - from[0]) * canvas[0], (to[1] - from[1]) * canvas[1]);
                 let length = (dx * dx + dy * dy).max(1e-6);
-                let t = ((fx - from[0]) * canvas[0] * dx + (fy - from[1]) * canvas[1] * dy) / length;
+                let t =
+                    ((fx - from[0]) * canvas[0] * dx + (fy - from[1]) * canvas[1] * dy) / length;
                 1.0 - smoothstep(0.0, 1.0, t)
             }
-            Shape::Radial { center, radius, feather } => {
+            Shape::Radial {
+                center,
+                radius,
+                feather,
+            } => {
                 let x = (fx - center[0]) / radius[0].max(1e-4);
                 let y = (fy - center[1]) / radius[1].max(1e-4);
                 let d = (x * x + y * y).sqrt();
@@ -337,17 +379,27 @@ fn bands(hue: f32) -> (usize, usize, f32) {
     let n = BAND_HUES.len();
     for k in 0..n {
         let low = BAND_HUES[k];
-        let high = if k + 1 < n { BAND_HUES[k + 1] } else { BAND_HUES[0] + 360.0 };
+        let high = if k + 1 < n {
+            BAND_HUES[k + 1]
+        } else {
+            BAND_HUES[0] + 360.0
+        };
         let h = if hue < low { hue + 360.0 } else { hue };
         if h >= low && h < high {
-            return (k, (k + 1) % n, smoothstep(0.0, 1.0, (h - low) / (high - low)));
+            return (
+                k,
+                (k + 1) % n,
+                smoothstep(0.0, 1.0, (h - low) / (high - low)),
+            );
         }
     }
     (0, 1, 0.0)
 }
 
 fn hash(x: i32, y: i32, seed: u32) -> f32 {
-    let mut h = (x as u32).wrapping_mul(0x8da6_b343) ^ (y as u32).wrapping_mul(0xd816_3841) ^ seed.wrapping_mul(0xcb1a_b31f);
+    let mut h = (x as u32).wrapping_mul(0x8da6_b343)
+        ^ (y as u32).wrapping_mul(0xd816_3841)
+        ^ seed.wrapping_mul(0xcb1a_b31f);
     h ^= h >> 13;
     h = h.wrapping_mul(0x5bd1_e995);
     h ^= h >> 15;
@@ -361,7 +413,8 @@ fn value_noise(x: f32, y: f32, cell: f32, seed: u32) -> f32 {
     let (tx, ty) = (smoothstep(0.0, 1.0, x - x0), smoothstep(0.0, 1.0, y - y0));
     let (ix, iy) = (x0 as i32, y0 as i32);
     let top = hash(ix, iy, seed) + (hash(ix + 1, iy, seed) - hash(ix, iy, seed)) * tx;
-    let bottom = hash(ix, iy + 1, seed) + (hash(ix + 1, iy + 1, seed) - hash(ix, iy + 1, seed)) * tx;
+    let bottom =
+        hash(ix, iy + 1, seed) + (hash(ix + 1, iy + 1, seed) - hash(ix, iy + 1, seed)) * tx;
     top + (bottom - top) * ty
 }
 
@@ -370,7 +423,11 @@ fn process(frame: &Frame, s: &Settings) -> RgbaImage {
     let n = |control: Control| s.get(control) / 100.0;
 
     let exposure = s.get(Control::EXPOSURE);
-    let (contrast, highlights, shadows) = (n(Control::CONTRAST), n(Control::HIGHLIGHTS), n(Control::SHADOWS));
+    let (contrast, highlights, shadows) = (
+        n(Control::CONTRAST),
+        n(Control::HIGHLIGHTS),
+        n(Control::SHADOWS),
+    );
     let (whites, blacks) = (n(Control::WHITES), n(Control::BLACKS));
     let (temperature, tint) = (n(Control::TEMPERATURE), n(Control::TINT));
     let (texture, clarity, dehaze) = (n(Control::TEXTURE), n(Control::CLARITY), n(Control::DEHAZE));
@@ -403,7 +460,14 @@ fn process(frame: &Frame, s: &Settings) -> RgbaImage {
     if chroma_nr > 0.0 {
         let radius = ((w.max(h) as f32 * 0.01 * chroma_nr).round() as usize).max(1);
         let planes: Vec<Vec<f32>> = (0..3)
-            .map(|channel| box_blur(&frame.rgb.iter().map(|rgb| rgb[channel]).collect::<Vec<_>>(), w, h, radius))
+            .map(|channel| {
+                box_blur(
+                    &frame.rgb.iter().map(|rgb| rgb[channel]).collect::<Vec<_>>(),
+                    w,
+                    h,
+                    radius,
+                )
+            })
             .collect();
         let y: Vec<f32> = frame.rgb.iter().map(|rgb| luminance(*rgb)).collect();
         let y_blur = box_blur(&y, w, h, radius);
@@ -412,7 +476,11 @@ fn process(frame: &Frame, s: &Settings) -> RgbaImage {
                 .into_par_iter()
                 .map(|i| {
                     let scale = y[i] / y_blur[i].max(1e-6);
-                    let smooth = [planes[0][i] * scale, planes[1][i] * scale, planes[2][i] * scale];
+                    let smooth = [
+                        planes[0][i] * scale,
+                        planes[1][i] * scale,
+                        planes[2][i] * scale,
+                    ];
                     let original = frame.rgb[i];
                     std::array::from_fn(|c| original[c] + (smooth[c] - original[c]) * chroma_nr)
                 })
@@ -423,7 +491,14 @@ fn process(frame: &Frame, s: &Settings) -> RgbaImage {
         let radius = 1 + (luma_nr * 3.0).round() as usize;
         let eps = (0.05 + 0.4 * luma_nr).powi(2);
         let smooth = guided(&frame.log, w, h, radius, eps);
-        log = Cow::Owned(frame.log.iter().zip(smooth).map(|(l, s)| l + (s - l) * luma_nr).collect());
+        log = Cow::Owned(
+            frame
+                .log
+                .iter()
+                .zip(smooth)
+                .map(|(l, s)| l + (s - l) * luma_nr)
+                .collect(),
+        );
     }
 
     let sharpen_amount = s.get(Control::SHARPEN_AMOUNT) / 100.0;
@@ -453,7 +528,13 @@ fn process(frame: &Frame, s: &Settings) -> RgbaImage {
     let hdr_strength = n(Control::HDR_STRENGTH);
     let hdr = (hdr_strength > 0.0).then(|| {
         let method = hdr::Method::from_index(s.get(Control::HDR_METHOD).round() as usize);
-        Hdr::new(method, hdr_strength, s.get(Control::HDR_DETAIL), frame.stats(), exposure)
+        Hdr::new(
+            method,
+            hdr_strength,
+            s.get(Control::HDR_DETAIL),
+            frame.stats(),
+            exposure,
+        )
     });
 
     let needs_base = hdr.is_some()
@@ -466,9 +547,11 @@ fn process(frame: &Frame, s: &Settings) -> RgbaImage {
     let base = needs_base.then(|| frame.base());
     let fine = (texture != 0.0).then(|| frame.fine());
     let haze = (dehaze != 0.0 || local_any(LOCAL_DEHAZE)).then(|| frame.haze());
-    let tone_table = (contrast != 0.0 || whites != 0.0 || blacks != 0.0).then(|| tone_table(contrast, whites, blacks));
+    let tone_table = (contrast != 0.0 || whites != 0.0 || blacks != 0.0)
+        .then(|| tone_table(contrast, whites, blacks));
 
-    let mix_parts: [[f32; 8]; 3] = std::array::from_fn(|part| std::array::from_fn(|band| n(Control::mix(part, band))));
+    let mix_parts: [[f32; 8]; 3] =
+        std::array::from_fn(|part| std::array::from_fn(|band| n(Control::mix(part, band))));
     let mixing = mix_parts.iter().flatten().any(|v| *v != 0.0);
     let bw_mix: [f32; 8] = std::array::from_fn(|band| n(Control::bw(band)));
     let grades: [([f32; 2], f32, f32); 4] = std::array::from_fn(|zone| {
@@ -476,10 +559,17 @@ fn process(frame: &Frame, s: &Settings) -> RgbaImage {
         let strength = n(Control::grade(zone, 1)) * 0.06;
         (direction, strength, n(Control::grade(zone, 2)) * 0.15)
     });
-    let grading = grades.iter().any(|(_, strength, lum)| *strength != 0.0 || *lum != 0.0);
+    let grading = grades
+        .iter()
+        .any(|(_, strength, lum)| *strength != 0.0 || *lum != 0.0);
     let blending = 0.05 + 0.25 * n(Control::GRADE_BLENDING);
     let center = 0.5 - 0.2 * n(Control::GRADE_BALANCE);
-    let color_stage = mixing || grading || monochrome || vibrance != 0.0 || saturation != 0.0 || local_any(LOCAL_SATURATION);
+    let color_stage = mixing
+        || grading
+        || monochrome
+        || vibrance != 0.0
+        || saturation != 0.0
+        || local_any(LOCAL_SATURATION);
 
     let vignette = n(Control::VIGNETTE_AMOUNT);
     let vignette_mid = 0.4 + 0.8 * n(Control::VIGNETTE_MIDPOINT);
@@ -499,7 +589,9 @@ fn process(frame: &Frame, s: &Settings) -> RgbaImage {
         n(Control::CURVE_LIGHTS),
         n(Control::CURVE_HIGHLIGHTS),
     ];
-    let curves: Option<[[u8; 256]; 3]> = (parametric.iter().any(|v| *v != 0.0) || s.curves.iter().any(|c| !c.is_identity())).then(|| {
+    let curves: Option<[[u8; 256]; 3]> = (parametric.iter().any(|v| *v != 0.0)
+        || s.curves.iter().any(|c| !c.is_identity()))
+    .then(|| {
         let param = curve::sample(&curve::parametric_points(parametric, split), 256);
         let rgb = curve::sample(&s.curves[0].0, 1024);
         std::array::from_fn(|channel| {
@@ -521,7 +613,7 @@ fn process(frame: &Frame, s: &Settings) -> RgbaImage {
     out.par_chunks_mut(w * 4).enumerate().for_each(|(y, row)| {
         let fy = (y as f32 + 0.5) / h as f32;
         let cy = view[1] + fy * (view[3] - view[1]);
-        for (x, pixel) in row.chunks_exact_mut(4).enumerate() {
+        for (x, pixel) in row.as_chunks_mut::<4>().0.iter_mut().enumerate() {
             let i = y * w + x;
             let fx = (x as f32 + 0.5) / w as f32;
             let mut local = [0.0f32; 9];
@@ -556,7 +648,10 @@ fn process(frame: &Frame, s: &Settings) -> RgbaImage {
                 }
             }
 
-            let gains = white_balance_gains(temperature + local[LOCAL_TEMPERATURE], tint + local[LOCAL_TINT]);
+            let gains = white_balance_gains(
+                temperature + local[LOCAL_TEMPERATURE],
+                tint + local[LOCAL_TINT],
+            );
             let gain = (exposure + local[LOCAL_EXPOSURE]).exp2();
             rgb = std::array::from_fn(|c| rgb[c] * gains[c] * gain);
 
@@ -565,8 +660,10 @@ fn process(frame: &Frame, s: &Settings) -> RgbaImage {
                 let current = (luminance(rgb) + LOG_FLOOR).log2();
                 let detail = l0 - base.sample(fx, fy);
                 let b = current - detail;
-                let lift = (shadows + local[LOCAL_SHADOWS]) * 2.2 * (1.0 - smoothstep(-6.5, -1.5, b));
-                let recover = (highlights + local[LOCAL_HIGHLIGHTS]) * 1.4 * smoothstep(-2.5, 0.0, b);
+                let lift =
+                    (shadows + local[LOCAL_SHADOWS]) * 2.2 * (1.0 - smoothstep(-6.5, -1.5, b));
+                let recover =
+                    (highlights + local[LOCAL_HIGHLIGHTS]) * 1.4 * smoothstep(-2.5, 0.0, b);
                 let mid = (1.0 - ((b + 2.5) / 5.0).powi(2)).clamp(0.0, 1.0);
                 delta += lift + recover + (clarity + local[LOCAL_CLARITY]) * 0.6 * detail * mid;
             }
@@ -618,7 +715,11 @@ fn process(frame: &Frame, s: &Settings) -> RgbaImage {
                 }
                 if vibrance != 0.0 {
                     let skin = (-((hue.rem_euclid(360.0) - 60.0) / 22.0).powi(2)).exp();
-                    let room = if vibrance > 0.0 { (1.0 - chroma / 0.25).clamp(0.0, 1.0) * (1.0 - skin * 0.6) } else { 1.0 };
+                    let room = if vibrance > 0.0 {
+                        (1.0 - chroma / 0.25).clamp(0.0, 1.0) * (1.0 - skin * 0.6)
+                    } else {
+                        1.0
+                    };
                     chroma *= (1.0 + vibrance * room).max(0.0);
                 }
                 chroma *= (1.0 + saturation + local[LOCAL_SATURATION]).max(0.0);
@@ -629,9 +730,16 @@ fn process(frame: &Frame, s: &Settings) -> RgbaImage {
                 let (sin, cos) = hue.to_radians().sin_cos();
                 let (mut a, mut b) = (chroma * cos, chroma * sin);
                 if grading {
-                    let shadows_w = 1.0 - smoothstep(center - 0.25 - blending, center - 0.25 + blending, l);
-                    let highlights_w = smoothstep(center + 0.25 - blending, center + 0.25 + blending, l);
-                    let weights = [shadows_w, (1.0 - shadows_w - highlights_w).max(0.0), highlights_w, 1.0];
+                    let shadows_w =
+                        1.0 - smoothstep(center - 0.25 - blending, center - 0.25 + blending, l);
+                    let highlights_w =
+                        smoothstep(center + 0.25 - blending, center + 0.25 + blending, l);
+                    let weights = [
+                        shadows_w,
+                        (1.0 - shadows_w - highlights_w).max(0.0),
+                        highlights_w,
+                        1.0,
+                    ];
                     for ((direction, strength, lum), weight) in grades.iter().zip(weights) {
                         a += direction[0] * strength * weight;
                         b += direction[1] * strength * weight;
@@ -653,7 +761,11 @@ fn process(frame: &Frame, s: &Settings) -> RgbaImage {
                 }
                 let power = 2.0 + (-roundness).max(0.0) * 6.0;
                 let d = (dx.abs().powf(power) + dy.abs().powf(power)).powf(1.0 / power);
-                let weight = smoothstep(vignette_mid - vignette_half, vignette_mid + vignette_half, d);
+                let weight = smoothstep(
+                    vignette_mid - vignette_half,
+                    vignette_mid + vignette_half,
+                    d,
+                );
                 if vignette < 0.0 {
                     let protect = 1.0 - vignette_protect * smoothstep(0.4, 1.0, luminance(rgb));
                     let scale = 1.0 + vignette * weight * protect;
@@ -684,37 +796,50 @@ fn process(frame: &Frame, s: &Settings) -> RgbaImage {
 
 /// Paints the clipping warning and the selected mask over a render.
 /// `canvas` is the photo's size and `view` the part of it the render shows.
-pub fn decorate(image: &mut RgbaImage, settings: &Settings, options: &Options, canvas: [f32; 2], view: [f32; 4]) {
-    let area = options.overlay.and_then(|index| settings.masks.get(index)).map(|mask| Area {
-        shape: mask.shape,
-        invert: mask.invert,
-        amounts: mask.amounts,
-    });
+pub fn decorate(
+    image: &mut RgbaImage,
+    settings: &Settings,
+    options: &Options,
+    canvas: [f32; 2],
+    view: [f32; 4],
+) {
+    let area = options
+        .overlay
+        .and_then(|index| settings.masks.get(index))
+        .map(|mask| Area {
+            shape: mask.shape,
+            invert: mask.invert,
+            amounts: mask.amounts,
+        });
     if !options.clipping && area.is_none() {
         return;
     }
     let (w, h) = (image.width() as usize, image.height() as usize);
-    image.par_chunks_mut(w * 4).enumerate().for_each(|(y, row)| {
-        let cy = view[1] + (y as f32 + 0.5) / h as f32 * (view[3] - view[1]);
-        for (x, pixel) in row.chunks_exact_mut(4).enumerate() {
-            if options.clipping {
-                let max = pixel[0].max(pixel[1]).max(pixel[2]);
-                if max == 255 {
-                    pixel[..3].copy_from_slice(&[255, 40, 40]);
-                } else if max <= 1 {
-                    pixel[..3].copy_from_slice(&[40, 90, 255]);
+    image
+        .par_chunks_mut(w * 4)
+        .enumerate()
+        .for_each(|(y, row)| {
+            let cy = view[1] + (y as f32 + 0.5) / h as f32 * (view[3] - view[1]);
+            for (x, pixel) in row.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+                if options.clipping {
+                    let max = pixel[0].max(pixel[1]).max(pixel[2]);
+                    if max == 255 {
+                        pixel[..3].copy_from_slice(&[255, 40, 40]);
+                    } else if max <= 1 {
+                        pixel[..3].copy_from_slice(&[40, 90, 255]);
+                    }
+                }
+                if let Some(area) = &area {
+                    let cx = view[0] + (x as f32 + 0.5) / w as f32 * (view[2] - view[0]);
+                    let shown = area.weight(cx, cy, canvas);
+                    let tint = [255.0, 64.0, 64.0];
+                    for c in 0..3 {
+                        pixel[c] = (pixel[c] as f32 + (tint[c] - pixel[c] as f32) * shown * 0.5)
+                            .round() as u8;
+                    }
                 }
             }
-            if let Some(area) = &area {
-                let cx = view[0] + (x as f32 + 0.5) / w as f32 * (view[2] - view[0]);
-                let shown = area.weight(cx, cy, canvas);
-                let tint = [255.0, 64.0, 64.0];
-                for c in 0..3 {
-                    pixel[c] = (pixel[c] as f32 + (tint[c] - pixel[c] as f32) * shown * 0.5).round() as u8;
-                }
-            }
-        }
-    });
+        });
 }
 
 #[cfg(test)]
@@ -722,7 +847,9 @@ mod tests {
     use super::*;
 
     fn gradient() -> RgbaImage {
-        RgbaImage::from_fn(64, 48, |x, y| image::Rgba([(x * 4) as u8, (y * 5) as u8, 128, 255]))
+        RgbaImage::from_fn(64, 48, |x, y| {
+            image::Rgba([(x * 4) as u8, (y * 5) as u8, 128, 255])
+        })
     }
 
     /// Bright sky with a white sun over a dark, textured foreground.
@@ -750,9 +877,15 @@ mod tests {
             settings.set(Control::HDR_METHOD, method as f32);
             settings.set(Control::HDR_STRENGTH, 100.0);
             let out = render(&source, &settings, &Options::default(), Some(&mut cache));
-            assert!(out.get_pixel(168, 29)[0] < 255, "{method}: the sun comes down from white");
+            assert!(
+                out.get_pixel(168, 29)[0] < 255,
+                "{method}: the sun comes down from white"
+            );
             if *name != "Filmic" {
-                assert!(out.get_pixel(40, 140)[0] > source.get_pixel(40, 140)[0], "{method}: shadows open up");
+                assert!(
+                    out.get_pixel(40, 140)[0] > source.get_pixel(40, 140)[0],
+                    "{method}: shadows open up"
+                );
             }
         }
     }

@@ -63,16 +63,33 @@ fn run(db: &Database, jobs: &Receiver<LoadJob>, done: &Sender<Loaded>, ctx: &egu
             let folders = db.folders();
             let tree = tree::build(&folders, &db.photo_dirs());
             let mut trips = db.trips(&TripQuery::default());
-            trips.extend(db.trips(&TripQuery { archived: true, ..TripQuery::default() }));
-            Lists { folders, tree, albums: db.albums(), trips }
+            trips.extend(db.trips(&TripQuery {
+                archived: true,
+                ..TripQuery::default()
+            }));
+            Lists {
+                folders,
+                tree,
+                albums: db.albums(),
+                trips,
+            }
         });
         let photos = match job.nav {
-            Nav::Trip(id) if job.search.trim().is_empty() => db.trip_photos(id, &job.trip_filter, job.sort),
+            Nav::Trip(id) if job.search.trim().is_empty() => {
+                db.trip_photos(id, &job.trip_filter, job.sort)
+            }
             // The Trips page lists Trips, and its search finds them, not photos.
             Nav::Trips => Vec::new(),
             _ => db.photos(&job.nav, &job.search, job.sort),
         };
-        if done.send(Loaded { seq: job.seq, lists, photos }).is_err() {
+        if done
+            .send(Loaded {
+                seq: job.seq,
+                lists,
+                photos,
+            })
+            .is_err()
+        {
             return;
         }
         ctx.request_repaint();

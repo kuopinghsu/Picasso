@@ -4,13 +4,13 @@
 
 ![Picasso](images/banner.jpg)
 
-Picasso 是適用於 **Windows、macOS 與 Linux** 的免費開源相片管理、檢視與編輯工具。您可以直接管理現有資料夾中的相片，依日期或地點瀏覽，並在不變更原始檔案的情況下編輯相片。
+Picasso 是適用於 **Windows、macOS 與 Linux** 的免費開源相片管理、檢視與編輯工具。你可以直接管理現有資料夾中的相片，依日期或地點瀏覽，並在不變更原始檔案的情況下編輯相片。
 
-Picasso 以 Picasa 為靈感，使用 Rust 開發。相片資料庫與編輯紀錄儲存在本機，不需要雲端帳號；只有在您將故事發佈到自己的 WordPress 網站時，才會上傳相片。
+Picasso 以 Picasa 為靈感，使用 Rust 開發。相片圖庫與編輯記錄儲存在本機，不需要雲端帳號；只有在你將故事發佈到自己的 WordPress 網站時，才會上傳相片。
 
-[下載](https://github.com/kuopinghsu/picasso/releases/latest) · [使用手冊](docs/USER_GUIDE_zh-TW.adoc) · [版本紀錄](CHANGELOG.md)
+[下載](https://github.com/kuopinghsu/picasso/releases/latest) · [使用手冊](docs/USER_GUIDE_zh-TW.adoc) · [版本記錄](CHANGELOG.md)
 
-![Photo library](images/picasso.png)
+![相片圖庫](images/picasso.png)
 
 ## 目錄
 
@@ -28,7 +28,7 @@ Picasso 以 Picasa 為靈感，使用 Rust 開發。相片資料庫與編輯紀�
 
 - [開發](#開發)
 
-- [版本發佈](#版本發佈)
+- [版本發行](#版本發行)
 
 - [參與貢獻](#參與貢獻)
 
@@ -42,11 +42,11 @@ Picasso 以 Picasa 為靈感，使用 Rust 開發。相片資料庫與編輯紀�
 
 - 依檔名、資料夾路徑、說明文字、相機、鏡頭或相簿名稱搜尋，也能組合日期與關鍵字，例如 `2019-05 beach`。
 
-- 使用 `type:raw`、`gps:yes` 與 `is:edited` 等搜尋篩選器，以 `-` 排除字詞，並重用最近的搜尋。
+- 使用 `type:raw`、`gps:yes` 與 `is:edited` 等搜尋篩選器，以 `-` 排除字詞，並再次使用最近的搜尋。
 
 - 依日期或中繼資料樣式重新命名相片與影片。套用前可預覽名稱，重新啟動 Picasso 後也能復原重新命名。
 
-- 在背景掃描資料夾並監控變更（包括資料夾的改名、搬移與刪除），也能匯入 Picasa 中繼資料檔案的星號、說明文字與旋轉設定。
+- 在背景掃描資料夾並監看變更（包括資料夾的改名、搬移與刪除），也能匯入 Picasa 中繼資料檔案的星號、說明文字與旋轉設定。
 
 - 透過內容檢查與 SHA-256 驗證尋找重複檔案，檢視結果後再將不需要的副本移至系統垃圾桶。
 
@@ -54,55 +54,55 @@ Picasso 以 Picasa 為靈感，使用 Rust 開發。相片資料庫與編輯紀�
 
 ### 檢視、編輯與匯出
 
-- 使用縮放、平移、底片列、EXIF 詳細資訊、直方圖與幻燈片功能檢視相片；安裝 FFmpeg 後可播放有聲影片。
+- 使用縮放、平移、縮圖列、EXIF 詳細資訊、色階分佈圖與投影片播放功能檢視相片；安裝 FFmpeg 後可播放有聲影片。
 
 - 調整光線、色調曲線、白平衡、色彩、細節與效果，並使用預設集、裁切、透視校正、角點變形及線性或放射狀遮罩。
 
 - 可獨立篩選已編輯相片，並在空白畫面直接清除搜尋或篩選，不影響排序方式。
 
-- 保留編輯歷史，支援復原、重做與前後比較。可將設定複製到其他相片，但不包含裁切與變形設定。
+- 保留編輯步驟記錄，支援復原、重做與前後比較。可將設定複製到其他相片，但不包含裁切與變形設定。
 
 - 將編輯結果個別或批次匯出為 JPEG、PNG 或 TIFF 副本，並選擇輸出尺寸與 JPEG 品質。
 
-![Photo editor](images/editor.png)
+![相片編輯器](images/editor.png)
 
 可將編輯後的相片複製到剪貼簿、複製檔案路徑，或以預設應用程式開啟檔案。投影片支援隨機播放與淡入淡出。
 
 ### 探索地點與 GPS 軌跡
 
-- 在 **Places（地點）** 中使用 OpenFreeMap、OpenStreetMap、CARTO 或 Esri 地圖顯示具有 GPS 座標的相片。可手動放置相片，或依拍攝時間與 GPS 軌跡比對。「地點」也支援搜尋與星號篩選，點選軌跡可找出沿途拍攝的相片。
+- 在 **地點** 中使用 OpenFreeMap、OpenStreetMap、CARTO 或 Esri 地圖顯示具有 GPS 座標的相片。可手動標記相片的拍攝地點，或依拍攝時間與 GPS 軌跡比對。「地點」也支援搜尋與星號篩選，點選軌跡可找出沿途拍攝的相片。
 
 - 顯示 GPX、KML 軌跡與 Polarsteps JSON 位置匯出資料，編輯軌跡點、移除異常點、簡化路徑，再匯出新的 GPX 或 KML 副本。
 
-- 使用 **Travel Map（旅行地圖）** 查看相片拍攝所在的國家與支援的地區。地球與平面地圖採用內建 Natural Earth 邊界資料，可離線使用。
+- 使用 **旅行地圖** 查看相片拍攝所在的國家與支援的地區。地球儀與平面地圖採用內建 Natural Earth 邊界資料，可離線使用。
 
-![Places](images/places.png)
+![地點](images/places.png)
 
-![GPS track editor](images/trackedit.png)
+![GPS 軌跡編輯器](images/trackedit.png)
 
-![Travel Map](images/travelmap.png)
+![旅行地圖](images/travelmap.png)
 
-![Library statistics](images/statistics.png)
+![圖庫統計資料](images/statistics.png)
 
 ### 旅程、故事與發佈
 
-- 將一趟旅行的相片從任何資料夾集中到 **Trip（旅程）**。**Suggest trips（建議旅程）** 依日期從資料庫中找出旅行；**Suggest days（建議分天）** 依相機時間與旅程的時區將相片分到各天，時間不確定的相片會留待檢查，不會自行猜測。旅程絕不會變更您的相片。
+- 將一趟旅行的相片從任何資料夾集中到 **旅程**。**建議旅程** 依日期從圖庫中找出旅程；**建議分天** 依相機時間與旅程的時區將相片分到各天，時間不確定的相片會留待檢查，不會自行猜測。旅程絕不會變更你的相片。
 
-- 將旅程的相片歸入地點、連結 GPS 軌跡、把車票、訂位與連結保存為不公開的資料，並以 **Similar photos（相似相片）** 找出連拍。
+- 將旅程的相片歸入地點、連結 GPS 軌跡、把車票、訂位與連結保存為不公開的資料，並以 **相似相片** 找出連拍。
 
-- 以旅程的相片撰寫 **Story（故事）**，包含標題、文字、相片、相片集、格狀排列、路線圖與實用資訊。可裁切封面、選擇四種範本之一、復原任何變更，並在網頁瀏覽器中預覽。
+- 以旅程的相片撰寫 **故事**，包含標題、文字、相片、相片集、格狀排列、路線圖與實用資訊。可裁切封面、選擇四種範本之一、復原任何變更，並在網頁瀏覽器中預覽。
 
 - 將故事匯出為可離線瀏覽的網頁或 Markdown 資料夾，或將整個旅程以 `.picassotrip` 套件搬到另一台電腦。
 
-- 將故事發佈到您自架的 WordPress 網站。故事會先儲存為草稿，只有在您確認讀者將看到的內容後才會公開。相片以 2048 或 1280 像素送出，絕不附帶位置。
+- 將故事發佈到你自架的 WordPress 網站。故事會先儲存為草稿，只有在你確認讀者將看到的內容後才會公開。相片以 2048 或 1280 像素送出，絕不附帶位置。
 
 ### 語言與外觀
 
-介面支援英文、繁體中文、簡體中文、日文、韓文、德文、西班牙文、法文、義大利文與巴西葡萄牙文。可在 **Settings → General（設定 → 一般）** 選擇語言，以及淺色、深色或系統主題。
+介面支援英文、繁體中文、簡體中文、日文、韓文、德文、西班牙文、法文、義大利文與巴西葡萄牙文。可在 **設定 → 一般** 選擇語言，以及淺色、深色或系統主題。
 
 ## 安裝
 
-從 [GitHub Releases](https://github.com/kuopinghsu/picasso/releases/latest) 下載套件。Intel 或 AMD 系統請選 x64，64 位元 Arm 系統請選 Arm64。發佈檔案也包含英文與繁體中文 PDF 使用手冊，以及 SHA-256 校驗碼檔案。
+從 [最新發行版本](https://github.com/kuopinghsu/picasso/releases/latest) 下載套件。Intel 或 AMD 系統請選 x64，64 位元 Arm 系統請選 Arm64。發行套件也包含英文與繁體中文 PDF 使用手冊，以及 SHA-256 檢查碼檔案。
 
 ### Windows
 
@@ -110,7 +110,7 @@ Picasso 以 Picasa 為靈感，使用 Rust 開發。相片資料庫與編輯紀�
 
 ### macOS
 
-支援 Apple silicon 與 Intel Mac，需 macOS 11 或更新版本。開啟 `.dmg`，將 **Picasso** 拖曳至 **Applications（應用程式）**。也可使用 `.zip` 內的應用程式套件。
+支援 Apple 晶片 與 Intel Mac，需 macOS 11 或更新版本。開啟 `.dmg`，將 **Picasso** 拖曳至 **應用程式**。也可使用 `.zip` 內的應用程式套件。
 
 請查看版本說明中的簽署與公證狀態。若未經公證的版本遭到阻擋，先嘗試開啟一次，再到 **系統設定 → 隱私權與安全性** 選擇 **強制打開**。
 
@@ -122,7 +122,7 @@ Picasso 以 Picasa 為靈感，使用 Rust 開發。相片資料庫與編輯紀�
 
 - **TAR 壓縮檔：** 在 Ubuntu 22.04 建置，包含執行檔、桌面項目與圖示，可手動安裝。
 
-檔案對話框使用 XDG desktop portal，通常由桌面環境提供。AppImage 內含應用程式所需的函式庫，但仍需系統提供 glibc 與顯示驅動程式。
+檔案對話框使用 XDG 桌面入口服務，通常由桌面環境提供。AppImage 內含應用程式所需的函式庫，但仍需系統提供 glibc 與顯示驅動程式。
 
 ### 選用的影片支援
 
@@ -139,14 +139,14 @@ Picasso 會搜尋 `PATH`、應用程式資料夾、常見的 WinGet 與 Homebrew
 ## 開始使用
 
 1. 啟動 Picasso。首次啟動時，若系統有「圖片」資料夾，程式會自動加入並在背景掃描，逐步顯示相片。
-2. 使用 **+ Import（匯入）** 或將資料夾拖曳至視窗以加入其他資料夾。Picasso 直接索引原位置的檔案，不會將檔案搬入專用資料夾。
+2. 使用 **+ 匯入** 或將資料夾拖曳至視窗以加入其他資料夾。Picasso 直接索引原位置的檔案，不會將檔案搬入專用資料夾。
 3. 選取相片後按 **Enter** 檢視、**E** 編輯，或 **S** 標記星號。可利用相簿與說明文字整理相片。
-4. 選擇 **Export…（匯出）** 儲存編輯後的副本。匯出前，編輯紀錄保留在資料庫內，原始檔案不變。
-5. 按 **F1** 或 **?** 開啟說明與快捷鍵，按 **F5** 重新掃描資料夾。
+4. 選擇 **匯出…** 儲存編輯後的副本。編輯設定儲存在圖庫中，匯出時會套用到副本，原始檔案不會變更。
+5. 按 **F1** 或 **?** 開啟說明與快速鍵，按 **F5** 重新掃描資料夾。
 
 ### 命令列用法
 
-可將相片資料夾路徑傳給執行檔，或使用地理標記指令比對相片與軌跡。下列範例假設 `picasso` 已加入 `PATH`，否則請使用完整路徑。
+可將相片資料夾路徑傳給執行檔，或使用地點標記指令比對相片與軌跡。下列範例假設 `picasso` 已加入 `PATH`，否則請使用完整路徑。
 
 ```sh
 picasso ~/Pictures ~/Photos
@@ -156,11 +156,11 @@ picasso geotag --from-photos ~/Pictures/Trip --dry-run
 picasso geotag --help
 ```
 
-地理標記範例只預覽比對結果，不寫入變更：第一個依兩個軌跡比對，第二個依有 GPS 的相片比對。移除預覽選項後，位置會儲存到資料庫及相片旁的 `.picasso-geotags.json` 檔案。時差請設定為相機時鐘相對於 UTC 的偏移量；若換一個時差能標記更多相片，預覽會指出該時差。
+地點標記範例只預覽比對結果，不寫入變更：第一個依兩個軌跡比對，第二個依有 GPS 的相片比對。移除 `--dry-run` 後，位置會儲存到資料庫及相片旁的 `.picasso-geotags.json` 檔案。時差請設定為相機時鐘相對於 UTC 的偏移量；若換一個時差能標記更多相片，預覽會指出該時差。
 
 ## 設定與資料
 
-使用齒輪按鈕開啟 **Settings（設定）**，調整語言、主題、監控與排除的資料夾、檔案類型、地圖來源、GPS 軌跡預設值及儲存空間。**Settings → Storage（設定 → 儲存空間）** 顯示實際資料路徑，並提供快取與備份控制。
+使用齒輪按鈕開啟 **設定**，調整語言、主題、監看與排除的資料夾、檔案類型、地圖來源、GPS 軌跡預設值及儲存空間。**設定 → 儲存空間** 顯示實際資料路徑，並提供快取與備份控制。
 
 ### 儲存位置
 
@@ -176,21 +176,21 @@ picasso geotag --help
 
 ### 備份與復原
 
-啟動時，若最新的資料庫備份已超過一週，或尚無備份，Picasso 就會建立備份，並在資料庫旁的資料夾保留最新五份。也可在 **Settings → Storage（設定 → 儲存空間）** 手動建立或還原備份。
+啟動時，若最新的資料庫備份已超過一週，或尚無備份，Picasso 就會建立備份，並在資料庫旁的資料夾保留最新五份。也可在 **設定 → 儲存空間** 手動建立或還原備份。
 
-**資料庫備份不包含相片、影片與設定檔，請另外備份這些檔案。** 資料庫備份包含相簿、星號、說明文字、編輯與歷史、預設集、GPS 軌跡、旅程與故事，以及發佈紀錄。WordPress 密碼保存在系統的憑證儲存區，不在備份中。
+**資料庫備份不包含相片、影片與設定檔，請另外備份這些檔案。** 資料庫備份包含相簿、星號、說明文字、編輯設定與步驟記錄、預設集、GPS 軌跡、旅程與故事，以及發佈記錄。WordPress 密碼保存在系統的憑證儲存區，不在備份中。
 
 若資料庫無法開啟，Picasso 會顯示復原選項。損壞的資料庫可先保留，再以可讀取的備份或新資料庫取代。忙碌中或無權存取的資料庫不會被取代。復原步驟請參閱[使用手冊](docs/USER_GUIDE_zh-TW.adoc)。
 
-重新命名歷史儲存在相片旁的 `.picasso-renames.json`，請與媒體檔案一起保留，以便復原先前的重新命名。
+重新命名記錄儲存在相片旁的 `.picasso-renames.json`，請與媒體檔案一起保留，以便復原先前的重新命名。
 
 ## 隱私與限制
 
-- **網路存取：** 相片瀏覽與編輯在本機執行。線上地圖會下載圖磚，高度查詢會下載軌跡區域的地形圖磚，因此服務提供者可得知所請求的區域。在設定中開啟線上查詢地點名稱後，會將四捨五入到約 100 公尺的位置送到 OpenStreetMap。旅行地圖使用內建邊界資料，可離線使用。
+- **網路存取：** 相片瀏覽與編輯在本機執行。線上地圖會下載圖磚，海拔查詢會下載軌跡區域的地形圖磚，因此服務提供者可得知所請求的區域。在設定中開啟線上查詢地點名稱後，會將四捨五入到約 100 公尺的位置送到 OpenStreetMap。旅行地圖使用內建邊界資料，可離線使用。
 
-- **發佈：** 只有在您選擇時，故事的文字與套用編輯後的相片才會送到您連結的 WordPress 網站。在文章仍是草稿時，網站上的相片也能以其網址開啟。相機資訊只在您選擇保留時才會送出，位置則絕不送出。僅支援使用「應用程式密碼」的自架 WordPress 網站。密碼保存在 macOS 鑰匙圈、Windows 認證管理員或 Linux 的 Secret Service 鑰匙圈；若沒有這些服務，密碼只保留到 Picasso 結束。
+- **發佈：** 只有在你選擇時，故事的文字與套用編輯後的相片才會送到你連結的 WordPress 網站。即使文章仍是草稿，上傳的相片也能透過網址開啟。相機資訊只在你選擇保留時才會送出，相片中的位置資訊則一律移除。你可以另外選擇在文章地圖上顯示指定的地點。僅支援使用「應用程式密碼」的自架 WordPress 網站。密碼保存在 macOS 鑰匙圈、Windows 認證管理員或 Linux 的 Secret Service 鑰匙圈；若沒有這些服務，密碼只保留到 Picasso 結束。
 
-- **更新：** 預設啟用自動更新檢查，每天最多向 GitHub 查詢一次。可在 **Settings → General（設定 → 一般）** 關閉。更新檔案須從發佈頁面手動下載。
+- **更新：** 預設啟用自動更新檢查，每天最多向 GitHub 查詢一次。可在 **設定 → 一般** 關閉。更新檔案須從發佈頁面手動下載。
 
 - **原始檔案：** 相片編輯、旋轉與日期修正儲存在資料庫，GPS 比對另會寫入附屬檔案。重新命名檔案或將相片移至垃圾桶等明確的檔案操作，會影響磁碟上的檔案。
 
@@ -198,11 +198,11 @@ picasso geotag --help
 
 - **編輯範圍：** 不提供 AI 遮罩、修復、多張相片 HDR 合併、全景接合或鏡頭描述檔。HDR 控制只調整單張相片。
 
-- **軌跡匯入：** 資料庫掃描支援 GPX、KML 與 Polarsteps JSON，不索引 KMZ 壓縮檔或區域輪廓。
+- **軌跡匯入：** 圖庫掃描支援 GPX、KML 與 Polarsteps JSON，不索引 KMZ 壓縮檔或區域輪廓。
 
 ## 文件
 
-- [英文使用手冊](docs/USER_GUIDE.adoc)與[繁體中文使用手冊](docs/USER_GUIDE_zh-TW.adoc)：完整操作流程、快捷鍵與疑難排解。
+- [英文使用手冊](docs/USER_GUIDE.adoc)與[繁體中文使用手冊](docs/USER_GUIDE_zh-TW.adoc)：完整操作流程、快速鍵與疑難排解。
 
 - [資料庫](docs/DATABASE.md)：資料庫內容、結構版本與升級。
 
@@ -212,7 +212,7 @@ picasso geotag --help
 
 - [效能](docs/PERFORMANCE.md)：基準測試及外接、網路磁碟的行為。
 
-- [發佈流程](docs/RELEASING.md)與[版本紀錄](CHANGELOG.md)。
+- [發佈流程](docs/RELEASING.md)與[版本記錄](CHANGELOG.md)。
 
 ## 開發
 
@@ -240,13 +240,24 @@ cargo run --release --locked -- ~/Pictures
 cargo test --release --locked
 ```
 
-macOS 與 Linux 的執行檔為 `target/release/picasso`，Windows 則為 `target/release/picasso.exe`。Release 建置的掃描、縮圖與編輯效能優於除錯建置。
+macOS 與 Linux 的執行檔為 `target/release/picasso`，Windows 則為 `target/release/picasso.exe`。正式建置的掃描、縮圖與編輯效能優於除錯建置。
 
-在 macOS 上，以臨時（ad hoc）方式簽署的建置對鑰匙圈而言都是新的 App，因此每個已儲存的 WordPress 密碼都會詢問兩次，下次建置時也會忘記**永遠允許**。若要讓每次建置都以相同方式簽署，請執行一次 `make sign-identity`：它會在登入鑰匙圈中建立名為 `Picasso Development` 的自簽程式碼簽署憑證。之後 `make` 與 `make run` 會用它簽署 `target/release/picasso`（可用 `SIGN_IDENTITY=...` 指定其他名稱）；第一次簽署時會詢問是否使用鑰匙圈，選擇**永遠允許**後，之後的建置就不會再詢問。直接用 `cargo` 建置的版本不會以此方式簽署。
+### macOS 開發簽署
 
-只要安裝 Docker，就能在任何系統上執行 `make appimage-docker` 建置 Linux AppImage。它與 CI 一樣在 AlmaLinux 8 容器（glibc 2.28）中建置，因此 `dist/` 中的 AppImage 可在 RHEL 8.4 及更新版本上執行。設定 `APPIMAGE_PLATFORM=linux/arm64` 則改為建置 Arm64 版本。接著執行 `make appimage-docker-check`，會在精簡的 AlmaLinux 8.4 容器中檢查它所需的每個函式庫與 glibc 符號是否都存在。以 `make appimage` 建置的 AppImage 只能在與建置系統同樣新或更新的系統上執行。
+在 macOS 上，以臨時（ad hoc）方式簽署的建置對鑰匙圈而言都是新的應用程式，因此每個已儲存的 WordPress 密碼都會詢問兩次，下次建置時也會忘記**永遠允許**。若要讓每次建置都以相同方式簽署，請執行一次 `make sign-identity`：它會在登入鑰匙圈中建立名為 `Picasso Development` 的自簽程式碼簽署憑證。
 
-CI 建置的發行版本仍以臨時（ad hoc）方式簽署，除非已設定 Developer ID 的密鑰。
+之後 `make` 與 `make run` 會用它簽署 `target/release/picasso`（可用 `SIGN_IDENTITY=...` 指定其他名稱）；第一次簽署時會詢問是否使用鑰匙圈，選擇**永遠允許**後，之後的建置就不會再詢問。直接用 `cargo` 建置的版本不會以此方式簽署。
+
+CI 建置的發行版本仍以臨時（ad hoc）方式簽署，除非已設定 Developer ID 的機密設定。
+
+### Linux AppImage 打包
+
+只要安裝 Docker，就能在任何系統上執行 `make appimage-docker` 建置 Linux AppImage。它與 CI 一樣在 AlmaLinux 8 容器（glibc 2.28）中建置，因此 `dist/` 中的 AppImage 可在 RHEL 8.4 及更新版本上執行。設定 `APPIMAGE_PLATFORM=linux/arm64` 則改為建置 Arm64 版本。
+
+接著執行 `make appimage-docker-check`，會在精簡的 AlmaLinux 8.4 容器中檢查它所需的每個函式庫與 glibc 符號是否都存在。以 `make appimage` 建置的 AppImage 只能在與建置系統同樣新或更新的系統上執行。
+
+
+### 繪圖後端
 
 預設使用 OpenGL 繪圖。設定 `PICASSO_RENDERER=wgpu` 可改用 wgpu 繪圖後端。
 
@@ -258,7 +269,7 @@ CI 建置的發行版本仍以臨時（ad hoc）方式簽署，除非已設定 D
 
 - 資料庫、掃描與縮圖：[src/db.rs](src/db.rs)、[src/worker.rs](src/worker.rs) 與 [src/thumbs.rs](src/thumbs.rs)。
 
-- GPS 軌跡與地理標記：[src/track.rs](src/track.rs)、[src/track_edit.rs](src/track_edit.rs) 與 [src/geotag.rs](src/geotag.rs)。
+- GPS 軌跡與地點標記：[src/track.rs](src/track.rs)、[src/track_edit.rs](src/track_edit.rs) 與 [src/geotag.rs](src/geotag.rs)。
 
 - 翻譯：[src/i18n/](src/i18n)；語言選擇邏輯位於 [src/i18n.rs](src/i18n.rs)。
 
@@ -268,29 +279,31 @@ CI 建置的發行版本仍以臨時（ad hoc）方式簽署，除非已設定 D
 
 - `make check`：檢查應用程式與測試的型別。
 
+- `make fmt`：格式化 Rust 程式碼；`make fmt-check`：檢查格式，不修改檔案。
+
 - `make lint`：執行 Clippy，顯示警告但不視為錯誤。
 
-- `make test`：執行 Release 模式測試；可用 `make test T=backup` 依名稱篩選。
+- `make test`：執行 正式模式測試；可用 `make test T=backup` 依名稱篩選。
 
 - `make check-docs`：依原始碼驗證文件連結、指令與設定。
 
-- `make ci`：檢查文件與相依套件、執行測試並檢查基準測試門檻，需要 cargo-deny。
+- `make ci`：檢查 Rust 格式、文件與相依套件、執行測試並檢查基準測試門檻，需要 cargo-deny。
 
 - `make guide` 與 `make guide-pdf`：將兩種語言的使用手冊建置為 HTML 或 PDF，需要 Asciidoctor 或 Asciidoctor PDF，以及 Makefile 說明的字型。
 
 CI 使用原生 x64 與 Arm64 執行環境建置及測試 Windows、Linux 套件，並產生 macOS 通用應用程式。另會檢查 Linux 套件安裝與啟動、AppImage 相容性、文件及相依套件授權。完整檢查請參閱[工作流程](.github/workflows/ci.yml)。
 
-## 版本發佈
+## 版本發行
 
-例如 `v0.9.5` 的版本標籤會觸發發佈。標籤必須符合 Cargo.toml 的版本，以及 CHANGELOG.md 中已填寫日期的章節。含連字號的標籤會作為預先發佈版本。CI 讀取版本紀錄產生發佈說明，不會修改檔案。
+例如 `v0.9.5` 的版本標籤會觸發發佈。標籤必須符合 Cargo.toml 的版本，以及 CHANGELOG.md 中已填寫日期的章節。含連字號的標籤會作為預先發佈版本。CI 讀取版本記錄產生發佈說明，不會修改檔案。
 
-每次發佈包含兩種架構的 Windows 執行檔與 ZIP 套件、Linux TAR、Debian 與 AppImage 套件，以及 macOS 通用 DMG 與 ZIP 套件。另包含兩份 PDF 手冊、RAW 解碼器原始碼與 SHA-256 校驗碼。封裝套件包含第三方授權聲明，單獨的 Windows 執行檔除外。
+每次發佈包含兩種架構的 Windows 執行檔與 ZIP 套件、Linux TAR、Debian 與 AppImage 套件，以及 macOS 通用 DMG 與 ZIP 套件。另包含兩份 PDF 手冊、RAW 解碼器原始碼與 SHA-256 檢查碼。封裝套件包含第三方授權聲明，單獨的 Windows 執行檔除外。
 
 建立標籤前，請依照[發佈檢查清單](docs/RELEASING.md)操作。已發佈版本保持不變；若發佈失敗或內容有誤，請建立新的修補版本，不要移動標籤或替換已發佈檔案。
 
 ## 參與貢獻
 
-歡迎透過 [GitHub Issues](https://github.com/kuopinghsu/picasso/issues) 與 pull request 回報問題、建議功能、改善文件或提供翻譯。回報問題時，請說明重現步驟並附上 **About（關於）** 顯示的版本。提交程式碼變更前，請執行相關測試與文件檢查。
+歡迎透過 [GitHub 問題回報](https://github.com/kuopinghsu/picasso/issues) 與 合併請求 回報問題、建議功能、改善文件或提供翻譯。回報問題時，請說明重現步驟並附上 **關於 Picasso** 顯示的版本。提交程式碼變更前，請執行相關測試與文件檢查。
 
 ## 授權
 

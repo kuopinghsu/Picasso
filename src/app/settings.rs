@@ -34,7 +34,15 @@ enum Page {
 }
 
 impl Page {
-    const ALL: [Page; 7] = [Page::General, Page::Folders, Page::FileTypes, Page::Map, Page::Tracks, Page::Publishing, Page::Storage];
+    const ALL: [Page; 7] = [
+        Page::General,
+        Page::Folders,
+        Page::FileTypes,
+        Page::Map,
+        Page::Tracks,
+        Page::Publishing,
+        Page::Storage,
+    ];
 
     fn label(self) -> &'static str {
         match self {
@@ -69,7 +77,11 @@ pub(super) fn load_carto_key(config: &mut Config) -> String {
 
 /// What the key field starts with: the mask when a key is saved.
 fn masked(key: &str) -> String {
-    if key.is_empty() { String::new() } else { KEY_MASK.to_string() }
+    if key.is_empty() {
+        String::new()
+    } else {
+        KEY_MASK.to_string()
+    }
 }
 
 fn source_note(source: MapSource) -> &'static str {
@@ -150,8 +162,13 @@ impl PicassoApp {
         if let Some(tracks) = self.settings.tracks.take() {
             tracks.save(&mut self.config);
         }
-        let Some(picked) = self.settings.file_types.take() else { return };
-        let picked: Vec<FileType> = FileType::ALL.into_iter().filter(|kind| picked.contains(kind)).collect();
+        let Some(picked) = self.settings.file_types.take() else {
+            return;
+        };
+        let picked: Vec<FileType> = FileType::ALL
+            .into_iter()
+            .filter(|kind| picked.contains(kind))
+            .collect();
         if picked.is_empty() || picked == self.config.file_types() {
             return;
         }
@@ -167,28 +184,32 @@ impl PicassoApp {
     fn measure_storage(&mut self, ctx: &egui::Context, clear: bool) {
         let (sender, receiver) = crossbeam_channel::bounded(1);
         let (data, cache, ctx) = (self.data_dir.clone(), self.cache_dir.clone(), ctx.clone());
-        let spawned = std::thread::Builder::new().name("picasso-storage".into()).spawn(move || {
-            if clear {
-                ThumbStore::open(&cache).clear();
-                for suffix in ["", "-wal", "-shm"] {
-                    let _ = std::fs::remove_file(cache.join(format!("{}{suffix}", super::dupes::HASHES_FILE)));
+        let spawned = std::thread::Builder::new()
+            .name("picasso-storage".into())
+            .spawn(move || {
+                if clear {
+                    ThumbStore::open(&cache).clear();
+                    for suffix in ["", "-wal", "-shm"] {
+                        let _ = std::fs::remove_file(
+                            cache.join(format!("{}{suffix}", super::dupes::HASHES_FILE)),
+                        );
+                    }
+                    let tiles = cache.join("tiles");
+                    let _ = std::fs::remove_dir_all(&tiles);
+                    let _ = std::fs::create_dir_all(&tiles);
                 }
-                let tiles = cache.join("tiles");
-                let _ = std::fs::remove_dir_all(&tiles);
-                let _ = std::fs::create_dir_all(&tiles);
-            }
-            let usage = Usage {
-                library: dir_size(&data),
-                thumbs: ["thumbs.db", "thumbs.db-wal", "thumbs.db-shm"]
-                    .iter()
-                    .map(|name| file_size(&cache.join(name)))
-                    .sum::<u64>()
-                    + dir_size(&cache.join("thumbs")),
-                tiles: dir_size(&cache.join("tiles")),
-            };
-            let _ = sender.send(usage);
-            ctx.request_repaint();
-        });
+                let usage = Usage {
+                    library: dir_size(&data),
+                    thumbs: ["thumbs.db", "thumbs.db-wal", "thumbs.db-shm"]
+                        .iter()
+                        .map(|name| file_size(&cache.join(name)))
+                        .sum::<u64>()
+                        + dir_size(&cache.join("thumbs")),
+                    tiles: dir_size(&cache.join("tiles")),
+                };
+                let _ = sender.send(usage);
+                ctx.request_repaint();
+            });
         if spawned.is_ok() {
             self.settings.pending = Some(receiver);
             self.settings.clearing = clear;
@@ -223,7 +244,9 @@ impl PicassoApp {
     /// Saves a newly typed key. An empty field keeps the saved key, which
     /// only the Remove button clears.
     fn save_carto_key(&mut self) {
-        let Some(typed) = &self.settings.carto_key else { return };
+        let Some(typed) = &self.settings.carto_key else {
+            return;
+        };
         let key = typed.trim().to_string();
         if key.is_empty() || key == KEY_MASK {
             return;
@@ -236,7 +259,11 @@ impl PicassoApp {
         if key == self.carto_key {
             return;
         }
-        let sealed = if key.is_empty() { Some(String::new()) } else { secret::seal(&key) };
+        let sealed = if key.is_empty() {
+            Some(String::new())
+        } else {
+            secret::seal(&key)
+        };
         if let Some(sealed) = sealed {
             self.config.set("carto_key", sealed);
         }
@@ -247,7 +274,12 @@ impl PicassoApp {
     }
 
     pub(super) fn settings_modal(&mut self, ctx: &egui::Context) {
-        if let Some(usage) = self.settings.pending.as_ref().and_then(|pending| pending.try_recv().ok()) {
+        if let Some(usage) = self
+            .settings
+            .pending
+            .as_ref()
+            .and_then(|pending| pending.try_recv().ok())
+        {
             if self.settings.clearing {
                 self.activity = tr("Cache cleared").to_string();
             }
@@ -256,39 +288,50 @@ impl PicassoApp {
             self.settings.clearing = false;
         }
         let mut close = false;
-        let response = egui::Modal::new(egui::Id::unique("settings")).frame(about::dialog_frame()).show(ctx, |ui| {
-            ui.set_width(NAV_WIDTH + PAGE_WIDTH + 52.0);
-            ui.spacing_mut().item_spacing.y = 0.0;
-            help::title_bar(ui, tr("Settings"), &mut close);
-            egui::Frame::new().inner_margin(Margin { left: 12, right: 20, top: 14, bottom: 18 }).show(ui, |ui| {
-                ui.horizontal_top(|ui| {
-                    ui.spacing_mut().item_spacing = Vec2::new(16.0, 8.0);
-                    ui.vertical(|ui| {
-                        ui.set_width(NAV_WIDTH);
-                        ui.spacing_mut().item_spacing.y = 2.0;
-                        for page in Page::ALL {
-                            if nav_item(ui, tr(page.label()), self.settings.page == page).clicked() {
-                                self.settings.page = page;
-                            }
-                        }
+        let response = egui::Modal::new(egui::Id::unique("settings"))
+            .frame(about::dialog_frame())
+            .show(ctx, |ui| {
+                ui.set_width(NAV_WIDTH + PAGE_WIDTH + 52.0);
+                ui.spacing_mut().item_spacing.y = 0.0;
+                help::title_bar(ui, tr("Settings"), &mut close);
+                egui::Frame::new()
+                    .inner_margin(Margin {
+                        left: 12,
+                        right: 20,
+                        top: 14,
+                        bottom: 18,
+                    })
+                    .show(ui, |ui| {
+                        ui.horizontal_top(|ui| {
+                            ui.spacing_mut().item_spacing = Vec2::new(16.0, 8.0);
+                            ui.vertical(|ui| {
+                                ui.set_width(NAV_WIDTH);
+                                ui.spacing_mut().item_spacing.y = 2.0;
+                                for page in Page::ALL {
+                                    if nav_item(ui, tr(page.label()), self.settings.page == page)
+                                        .clicked()
+                                    {
+                                        self.settings.page = page;
+                                    }
+                                }
+                            });
+                            ui.vertical(|ui| {
+                                ui.set_width(PAGE_WIDTH);
+                                ui.set_min_height(PAGE_HEIGHT);
+                                ui.spacing_mut().item_spacing.y = 8.0;
+                                match self.settings.page {
+                                    Page::General => self.general_page(ui),
+                                    Page::Folders => self.folders_page(ui),
+                                    Page::FileTypes => self.file_types_page(ui),
+                                    Page::Map => self.map_page(ui),
+                                    Page::Tracks => self.tracks_page(ui),
+                                    Page::Publishing => self.publishing_page(ui),
+                                    Page::Storage => self.storage_page(ui),
+                                }
+                            });
+                        });
                     });
-                    ui.vertical(|ui| {
-                        ui.set_width(PAGE_WIDTH);
-                        ui.set_min_height(PAGE_HEIGHT);
-                        ui.spacing_mut().item_spacing.y = 8.0;
-                        match self.settings.page {
-                            Page::General => self.general_page(ui),
-                            Page::Folders => self.folders_page(ui),
-                            Page::FileTypes => self.file_types_page(ui),
-                            Page::Map => self.map_page(ui),
-                            Page::Tracks => self.tracks_page(ui),
-                            Page::Publishing => self.publishing_page(ui),
-                            Page::Storage => self.storage_page(ui),
-                        }
-                    });
-                });
             });
-        });
         if close || response.should_close() {
             self.modal = Modal::None;
         }
@@ -296,57 +339,85 @@ impl PicassoApp {
 
     fn general_page(&mut self, ui: &mut egui::Ui) {
         heading(ui, tr("Appearance"));
-        egui::Grid::new("settings-appearance").num_columns(2).spacing([24.0, 10.0]).show(ui, |ui| {
-            ui.label(tr("Language"));
-            let system = trf("System language ({})", &[&i18n::system().native_name()]);
-            let current = self.language.map_or(system.clone(), |lang| lang.native_name().to_string());
-            let mut picked = None;
-            egui::ComboBox::from_id_salt("settings-language")
-                .selected_text(current)
-                .width(220.0)
-                .show_ui(ui, |ui| {
-                    if ui.selectable_label(self.language.is_none(), system).clicked() {
-                        picked = Some(None);
-                    }
-                    for lang in Lang::ALL {
-                        if ui.selectable_label(self.language == Some(lang), lang.native_name()).clicked() {
-                            picked = Some(Some(lang));
+        egui::Grid::new("settings-appearance")
+            .num_columns(2)
+            .spacing([24.0, 10.0])
+            .show(ui, |ui| {
+                ui.label(tr("Language"));
+                let system = trf("System language ({})", &[&i18n::system().native_name()]);
+                let current = self
+                    .language
+                    .map_or(system.clone(), |lang| lang.native_name().to_string());
+                let mut picked = None;
+                egui::ComboBox::from_id_salt("settings-language")
+                    .selected_text(current)
+                    .width(220.0)
+                    .show_ui(ui, |ui| {
+                        if ui
+                            .selectable_label(self.language.is_none(), system)
+                            .clicked()
+                        {
+                            picked = Some(None);
+                        }
+                        for lang in Lang::ALL {
+                            if ui
+                                .selectable_label(self.language == Some(lang), lang.native_name())
+                                .clicked()
+                            {
+                                picked = Some(Some(lang));
+                            }
+                        }
+                    });
+                if let Some(language) = picked {
+                    self.set_language(language);
+                }
+                ui.end_row();
+
+                ui.label(tr("Color theme"));
+                ui.horizontal(|ui| {
+                    for mode in ThemeMode::ALL {
+                        if ui
+                            .selectable_label(self.theme_mode == mode, tr(mode.label()))
+                            .clicked()
+                        {
+                            self.set_theme_mode(ui.ctx(), mode);
                         }
                     }
                 });
-            if let Some(language) = picked {
-                self.set_language(language);
-            }
-            ui.end_row();
-
-            ui.label(tr("Color theme"));
-            ui.horizontal(|ui| {
-                for mode in ThemeMode::ALL {
-                    if ui.selectable_label(self.theme_mode == mode, tr(mode.label())).clicked() {
-                        self.set_theme_mode(ui.ctx(), mode);
-                    }
-                }
+                ui.end_row();
             });
-            ui.end_row();
-        });
 
         heading(ui, tr("Browsing"));
-        egui::Grid::new("settings-browsing").num_columns(2).spacing([24.0, 10.0]).show(ui, |ui| {
-            ui.label(tr("Thumbnail size"));
-            let mut size = self.thumb_size;
-            let response = ui.add(egui::Slider::new(&mut size, super::MIN_THUMB..=super::MAX_THUMB).suffix(" px").fixed_decimals(0));
-            self.set_thumb_size(size, &response);
-            ui.end_row();
+        egui::Grid::new("settings-browsing")
+            .num_columns(2)
+            .spacing([24.0, 10.0])
+            .show(ui, |ui| {
+                ui.label(tr("Thumbnail size"));
+                let mut size = self.thumb_size;
+                let response = ui.add(
+                    egui::Slider::new(&mut size, super::MIN_THUMB..=super::MAX_THUMB)
+                        .suffix(" px")
+                        .fixed_decimals(0),
+                );
+                self.set_thumb_size(size, &response);
+                ui.end_row();
 
-            ui.label(tr("Slideshow interval"));
-            let mut interval = self.slideshow_interval;
-            let response = ui.add(egui::Slider::new(&mut interval, 1.0..=15.0).suffix(" s").fixed_decimals(0));
-            self.set_slideshow_interval(interval, &response);
-            ui.end_row();
-        });
+                ui.label(tr("Slideshow interval"));
+                let mut interval = self.slideshow_interval;
+                let response = ui.add(
+                    egui::Slider::new(&mut interval, 1.0..=15.0)
+                        .suffix(" s")
+                        .fixed_decimals(0),
+                );
+                self.set_slideshow_interval(interval, &response);
+                ui.end_row();
+            });
         ui.add_space(4.0);
         let mut confirm = self.confirm_trash;
-        if ui.checkbox(&mut confirm, tr("Ask before moving photos to the trash")).changed() {
+        if ui
+            .checkbox(&mut confirm, tr("Ask before moving photos to the trash"))
+            .changed()
+        {
             self.confirm_trash = confirm;
             self.config.set("confirm_trash", confirm);
         }
@@ -356,32 +427,55 @@ impl PicassoApp {
     }
 
     fn file_types_page(&mut self, ui: &mut egui::Ui) {
-        let picked = self.settings.file_types.get_or_insert_with(|| FileType::ALL.to_vec());
+        let picked = self
+            .settings
+            .file_types
+            .get_or_insert_with(|| FileType::ALL.to_vec());
         heading(ui, tr("File types"));
-        note(ui, tr("Picasso adds files of the ticked types when it scans your folders."));
+        note(
+            ui,
+            tr("Picasso adds files of the ticked types when it scans your folders."),
+        );
         ui.add_space(2.0);
 
         let mut all = picked.len() == FileType::ALL.len();
         let some = !picked.is_empty() && !all;
-        if ui.add(egui::Checkbox::new(&mut all, RichText::new(tr("Select all")).strong()).indeterminate(some)).changed() {
-            *picked = if all { FileType::ALL.to_vec() } else { Vec::new() };
+        if ui
+            .add(
+                egui::Checkbox::new(&mut all, RichText::new(tr("Select all")).strong())
+                    .indeterminate(some),
+            )
+            .changed()
+        {
+            *picked = if all {
+                FileType::ALL.to_vec()
+            } else {
+                Vec::new()
+            };
         }
-        egui::Grid::new("settings-file-types").num_columns(2).spacing([24.0, 8.0]).show(ui, |ui| {
-            for kind in FileType::ALL {
-                let mut on = picked.contains(&kind);
-                ui.horizontal(|ui| {
-                    ui.add_space(18.0);
-                    if ui.checkbox(&mut on, tr(kind.label())).changed() {
-                        picked.retain(|other| *other != kind);
-                        if on {
-                            picked.push(kind);
+        egui::Grid::new("settings-file-types")
+            .num_columns(2)
+            .spacing([24.0, 8.0])
+            .show(ui, |ui| {
+                for kind in FileType::ALL {
+                    let mut on = picked.contains(&kind);
+                    ui.horizontal(|ui| {
+                        ui.add_space(18.0);
+                        if ui.checkbox(&mut on, tr(kind.label())).changed() {
+                            picked.retain(|other| *other != kind);
+                            if on {
+                                picked.push(kind);
+                            }
                         }
-                    }
-                });
-                ui.label(RichText::new(extension_list(kind)).size(12.0).color(theme::muted()));
-                ui.end_row();
-            }
-        });
+                    });
+                    ui.label(
+                        RichText::new(extension_list(kind))
+                            .size(12.0)
+                            .color(theme::muted()),
+                    );
+                    ui.end_row();
+                }
+            });
 
         ui.add_space(4.0);
         if picked.is_empty() {
@@ -399,13 +493,28 @@ impl PicassoApp {
         note(ui, tr("Places and the Map panel show this map."));
         ui.add_space(2.0);
         let carto = MapSource::CARTO_STYLES[0];
-        for source in MapSource::ALL.into_iter().filter(|source| !source.needs_key() || *source == carto) {
-            let chosen = if source.needs_key() { self.map_source.needs_key() } else { self.map_source == source };
-            let name = if source.needs_key() { "CARTO" } else { source.name() };
+        for source in MapSource::ALL
+            .into_iter()
+            .filter(|source| !source.needs_key() || *source == carto)
+        {
+            let chosen = if source.needs_key() {
+                self.map_source.needs_key()
+            } else {
+                self.map_source == source
+            };
+            let name = if source.needs_key() {
+                "CARTO"
+            } else {
+                source.name()
+            };
             ui.scope(|ui| {
                 ui.spacing_mut().item_spacing.y = 2.0;
                 if ui.radio(chosen, RichText::new(name).strong()).clicked() && !chosen {
-                    let picked = if source.needs_key() { self.carto_style() } else { source };
+                    let picked = if source.needs_key() {
+                        self.carto_style()
+                    } else {
+                        source
+                    };
                     self.set_map_source(picked);
                 }
                 ui.horizontal(|ui| {
@@ -418,7 +527,8 @@ impl PicassoApp {
                     ui.add_space(24.0);
                     ui.label(tr("Style"));
                     for style in MapSource::CARTO_STYLES {
-                        let button = ui.selectable_label(self.map_source == style, style.style_name());
+                        let button =
+                            ui.selectable_label(self.map_source == style, style.style_name());
                         if button.on_hover_text(tr(style_note(style))).clicked() {
                             self.set_map_source(style);
                         }
@@ -427,7 +537,10 @@ impl PicassoApp {
                 ui.horizontal(|ui| {
                     ui.add_space(24.0);
                     ui.label(tr("CARTO API key"));
-                    let typed = self.settings.carto_key.get_or_insert_with(|| masked(&self.carto_key));
+                    let typed = self
+                        .settings
+                        .carto_key
+                        .get_or_insert_with(|| masked(&self.carto_key));
                     let field = ui.add(
                         egui::TextEdit::singleline(typed)
                             .hint_text(tr("Paste your key here"))
@@ -438,7 +551,12 @@ impl PicassoApp {
                     }
                     if field.lost_focus() {
                         self.save_carto_key();
-                        if self.settings.carto_key.as_deref().is_some_and(|typed| typed.trim().is_empty()) {
+                        if self
+                            .settings
+                            .carto_key
+                            .as_deref()
+                            .is_some_and(|typed| typed.trim().is_empty())
+                        {
                             self.settings.carto_key = Some(masked(&self.carto_key));
                         }
                     }
@@ -450,12 +568,19 @@ impl PicassoApp {
                 });
                 ui.horizontal(|ui| {
                     ui.add_space(24.0);
-                    note(ui, tr("The key is saved encrypted and works only on this computer."));
+                    note(
+                        ui,
+                        tr("The key is saved encrypted and works only on this computer."),
+                    );
                 });
                 if self.carto_key.is_empty() {
                     ui.horizontal(|ui| {
                         ui.add_space(24.0);
-                        ui.label(RichText::new(tr("The map stays blank until you add a key.")).size(12.5).color(theme::DANGER));
+                        ui.label(
+                            RichText::new(tr("The map stays blank until you add a key."))
+                                .size(12.5)
+                                .color(theme::DANGER),
+                        );
                     });
                 }
             }
@@ -466,7 +591,10 @@ impl PicassoApp {
         heading(ui, tr("Place names"));
         note(ui, tr("Edit place can look up a name for a Place's position. Picasso sends only that position, rounded to about 100 m, to OpenStreetMap Nominatim, and only when you press Look up name. Answers are kept on this computer."));
         let mut allowed = self.config.flag("place_lookup").unwrap_or(false);
-        if ui.checkbox(&mut allowed, tr("Look up place names online")).changed() {
+        if ui
+            .checkbox(&mut allowed, tr("Look up place names online"))
+            .changed()
+        {
             self.config.set("place_lookup", allowed);
         }
     }
@@ -475,23 +603,34 @@ impl PicassoApp {
         heading(ui, tr("Track cleanup"));
         note(ui, tr("The track editor cleans each GPX, KML, and Polarsteps track up with these settings when it opens one. Tracks saved by Picasso or GPXViewer open as saved."));
         ui.add_space(2.0);
-        let settings = self.settings.tracks.get_or_insert_with(|| crate::track_edit::Settings::load(&self.config));
+        let settings = self
+            .settings
+            .tracks
+            .get_or_insert_with(|| crate::track_edit::Settings::load(&self.config));
         super::track_editor::settings_form(ui, "settings-tracks", settings);
         ui.add_space(4.0);
         if ui.button(tr("Defaults")).clicked() {
             *settings = crate::track_edit::Settings::default();
         }
         // Saved once a drag on a number ends rather than on every step.
-        if !ui.input(|input| input.pointer.any_down()) && *settings != crate::track_edit::Settings::load(&self.config) {
+        if !ui.input(|input| input.pointer.any_down())
+            && *settings != crate::track_edit::Settings::load(&self.config)
+        {
             settings.save(&mut self.config);
         }
     }
 
     fn folders_page(&mut self, ui: &mut egui::Ui) {
         heading(ui, tr("Photo folders"));
-        note(ui, tr("Picasso watches this folder and adds new photos as they appear."));
-        let folders: Vec<(i64, String, i64)> =
-            self.folders.iter().map(|folder| (folder.id, folder.path.clone(), folder.count)).collect();
+        note(
+            ui,
+            tr("Picasso watches this folder and adds new photos as they appear."),
+        );
+        let folders: Vec<(i64, String, i64)> = self
+            .folders
+            .iter()
+            .map(|folder| (folder.id, folder.path.clone(), folder.count))
+            .collect();
         egui::Frame::new()
             .fill(theme::tray())
             .stroke(egui::Stroke::new(1.0, theme::hairline()))
@@ -499,19 +638,29 @@ impl PicassoApp {
             .inner_margin(Margin::symmetric(10, 8))
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
-                egui::ScrollArea::vertical().max_height(220.0).auto_shrink([false, true]).show(ui, |ui| {
-                    ui.spacing_mut().item_spacing.y = 6.0;
-                    if folders.is_empty() {
-                        ui.label(RichText::new(tr("No folders yet")).color(theme::muted()));
-                    }
-                    for (id, path, count) in folders {
-                        self.folder_row(ui, id, &path, count);
-                    }
-                });
+                egui::ScrollArea::vertical()
+                    .max_height(220.0)
+                    .auto_shrink([false, true])
+                    .show(ui, |ui| {
+                        ui.spacing_mut().item_spacing.y = 6.0;
+                        if folders.is_empty() {
+                            ui.label(RichText::new(tr("No folders yet")).color(theme::muted()));
+                        }
+                        for (id, path, count) in folders {
+                            self.folder_row(ui, id, &path, count);
+                        }
+                    });
             });
         ui.horizontal(|ui| {
-            if ui.add(theme::primary_button(tr("+  Import"))).on_hover_text(tr("Add Folder to Picasso…")).clicked() {
-                if let Some(picked) = rfd::FileDialog::new().set_title(tr("Add a photo folder")).pick_folder() {
+            if ui
+                .add(theme::primary_button(tr("+  Import")))
+                .on_hover_text(tr("Add Folder to Picasso…"))
+                .clicked()
+            {
+                if let Some(picked) = rfd::FileDialog::new()
+                    .set_title(tr("Add a photo folder"))
+                    .pick_folder()
+                {
                     match self.add_folder(&picked) {
                         Ok(()) => self.settings.error.clear(),
                         Err(err) => self.settings.error = err,
@@ -536,26 +685,48 @@ impl PicassoApp {
                 .inner_margin(Margin::symmetric(10, 8))
                 .show(ui, |ui| {
                     ui.set_width(ui.available_width());
-                    egui::ScrollArea::vertical().id_salt("settings-excluded").max_height(110.0).auto_shrink([false, true]).show(ui, |ui| {
-                        ui.spacing_mut().item_spacing.y = 6.0;
-                        for (dir, _) in excluded {
-                            ui.horizontal(|ui| {
-                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                    if ui.button(tr("Include again")).clicked() {
-                                        self.include_dir(&dir);
-                                    }
-                                    ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                                        ui.add(egui::Label::new(display_path(Path::new(&dir))).truncate());
-                                    });
+                    egui::ScrollArea::vertical()
+                        .id_salt("settings-excluded")
+                        .max_height(110.0)
+                        .auto_shrink([false, true])
+                        .show(ui, |ui| {
+                            ui.spacing_mut().item_spacing.y = 6.0;
+                            for (dir, _) in excluded {
+                                ui.horizontal(|ui| {
+                                    ui.with_layout(
+                                        egui::Layout::right_to_left(egui::Align::Center),
+                                        |ui| {
+                                            if ui.button(tr("Include again")).clicked() {
+                                                self.include_dir(&dir);
+                                            }
+                                            ui.with_layout(
+                                                egui::Layout::left_to_right(egui::Align::Center),
+                                                |ui| {
+                                                    ui.add(
+                                                        egui::Label::new(display_path(Path::new(
+                                                            &dir,
+                                                        )))
+                                                        .truncate(),
+                                                    );
+                                                },
+                                            );
+                                        },
+                                    );
                                 });
-                            });
-                        }
-                    });
+                            }
+                        });
                 });
         }
-        let start = self.folders.first().map(|folder| PathBuf::from(display_path(Path::new(&folder.path))));
-        if ui.add_enabled(start.is_some(), egui::Button::new(tr("Exclude a folder…"))).clicked() {
-            let mut dialog = rfd::FileDialog::new().set_title(tr("Pick a folder for Picasso to skip"));
+        let start = self
+            .folders
+            .first()
+            .map(|folder| PathBuf::from(display_path(Path::new(&folder.path))));
+        if ui
+            .add_enabled(start.is_some(), egui::Button::new(tr("Exclude a folder…")))
+            .clicked()
+        {
+            let mut dialog =
+                rfd::FileDialog::new().set_title(tr("Pick a folder for Picasso to skip"));
             if let Some(start) = start {
                 dialog = dialog.set_directory(start);
             }
@@ -574,18 +745,31 @@ impl PicassoApp {
     fn folder_row(&mut self, ui: &mut egui::Ui, id: i64, path: &str, count: i64) {
         ui.horizontal(|ui| {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.button(tr("Remove…")).on_hover_text(tr("Remove from Picasso…")).clicked() {
+                if ui
+                    .button(tr("Remove…"))
+                    .on_hover_text(tr("Remove from Picasso…"))
+                    .clicked()
+                {
                     self.remove_asked = Some(id);
                 }
-                if ui.button(tr("Refresh")).on_hover_text(tr("Rescan this folder")).clicked() {
+                if ui
+                    .button(tr("Refresh"))
+                    .on_hover_text(tr("Rescan this folder"))
+                    .clicked()
+                {
                     let _ = self.cmd_tx.send(Command::Scan(id));
                 }
                 if ui.button(tr("Open folder")).clicked() {
                     let _ = open::that(path);
                 }
                 ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                    ui.add(egui::Label::new(RichText::new(display_path(Path::new(path))).color(theme::text())).truncate())
-                        .on_hover_text(super::photo_count(count as usize));
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(display_path(Path::new(path))).color(theme::text()),
+                        )
+                        .truncate(),
+                    )
+                    .on_hover_text(super::photo_count(count as usize));
                 });
             });
         });
@@ -594,25 +778,43 @@ impl PicassoApp {
     fn storage_page(&mut self, ui: &mut egui::Ui) {
         let usage = self.settings.usage;
         let busy = self.settings.pending.is_some();
-        let size = |pick: fn(&Usage) -> u64| usage.as_ref().map_or_else(|| tr("Measuring…").to_string(), |usage| format_bytes(pick(usage)));
+        let size = |pick: fn(&Usage) -> u64| {
+            usage.as_ref().map_or_else(
+                || tr("Measuring…").to_string(),
+                |usage| format_bytes(pick(usage)),
+            )
+        };
 
         heading(ui, tr("Library database"));
-        note(ui, tr("Albums, stars, captions, and edits. Your photo files stay where they are."));
+        note(
+            ui,
+            tr("Albums, stars, captions, and edits. Your photo files stay where they are."),
+        );
         location(ui, &self.data_dir, &size(|usage| usage.library));
 
         self.backups_section(ui);
 
         heading(ui, tr("Cache"));
-        note(ui, tr("Thumbnails and map tiles. Safe to clear; Picasso makes them again when needed."));
-        location(ui, &self.cache_dir, &size(|usage| usage.thumbs + usage.tiles));
-        egui::Grid::new("settings-cache").num_columns(2).spacing([24.0, 4.0]).show(ui, |ui| {
-            ui.label(RichText::new(tr("Thumbnails")).color(theme::muted()));
-            ui.label(size(|usage| usage.thumbs));
-            ui.end_row();
-            ui.label(RichText::new(tr("Map tiles")).color(theme::muted()));
-            ui.label(size(|usage| usage.tiles));
-            ui.end_row();
-        });
+        note(
+            ui,
+            tr("Thumbnails and map tiles. Safe to clear; Picasso makes them again when needed."),
+        );
+        location(
+            ui,
+            &self.cache_dir,
+            &size(|usage| usage.thumbs + usage.tiles),
+        );
+        egui::Grid::new("settings-cache")
+            .num_columns(2)
+            .spacing([24.0, 4.0])
+            .show(ui, |ui| {
+                ui.label(RichText::new(tr("Thumbnails")).color(theme::muted()));
+                ui.label(size(|usage| usage.thumbs));
+                ui.end_row();
+                ui.label(RichText::new(tr("Map tiles")).color(theme::muted()));
+                ui.label(size(|usage| usage.tiles));
+                ui.end_row();
+            });
         ui.horizontal(|ui| {
             let clear = ui.add_enabled(!busy, theme::danger_button(tr("Clear cache")));
             if clear.clicked() {
@@ -630,7 +832,12 @@ impl PicassoApp {
     }
 
     fn backups_section(&mut self, ui: &mut egui::Ui) {
-        if let Some(result) = self.settings.backing_up.as_ref().and_then(|done| done.try_recv().ok()) {
+        if let Some(result) = self
+            .settings
+            .backing_up
+            .as_ref()
+            .and_then(|done| done.try_recv().ok())
+        {
             self.settings.backing_up = None;
             self.settings.backup_note = match result {
                 Ok(_) => tr("Backup saved").to_string(),
@@ -647,7 +854,12 @@ impl PicassoApp {
         );
         let backups = backup::list(&self.data_dir);
         if let Some(ask) = &self.settings.restore {
-            let name = ask.path.file_name().unwrap_or_default().to_string_lossy().into_owned();
+            let name = ask
+                .path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned();
             let question = trf(
                 "Restore the library from {}? It holds {} photos. Picasso restarts, and backs up the current library first.",
                 &[&name, &ask.photos],
@@ -656,7 +868,9 @@ impl PicassoApp {
             let mut confirmed = false;
             let mut cancel = false;
             ui.horizontal(|ui| {
-                confirmed = ui.add(theme::danger_button(tr("Restore and restart"))).clicked();
+                confirmed = ui
+                    .add(theme::danger_button(tr("Restore and restart")))
+                    .clicked();
                 cancel = ui.button(tr("Cancel")).clicked();
             });
             if cancel {
@@ -672,7 +886,12 @@ impl PicassoApp {
         ui.horizontal(|ui| {
             let last = backups.first().map_or_else(
                 || tr("No backup yet").to_string(),
-                |newest| trf("Last backup: {} · {}", &[&local_time(newest.made_at), &format_bytes(newest.bytes)]),
+                |newest| {
+                    trf(
+                        "Last backup: {} · {}",
+                        &[&local_time(newest.made_at), &format_bytes(newest.bytes)],
+                    )
+                },
             );
             ui.label(RichText::new(last).color(theme::muted()));
             if busy {
@@ -686,10 +905,17 @@ impl PicassoApp {
                     let _ = std::fs::create_dir_all(&folder);
                     let _ = open::that(folder);
                 }
-                if ui.button(tr("Restore…")).on_hover_text(tr("Choose a backup to bring back")).clicked() {
+                if ui
+                    .button(tr("Restore…"))
+                    .on_hover_text(tr("Choose a backup to bring back"))
+                    .clicked()
+                {
                     self.pick_backup();
                 }
-                if ui.add_enabled(!busy, egui::Button::new(tr("Back up now"))).clicked() {
+                if ui
+                    .add_enabled(!busy, egui::Button::new(tr("Back up now")))
+                    .clicked()
+                {
                     self.back_up_now(ui.ctx());
                 }
             });
@@ -699,10 +925,12 @@ impl PicassoApp {
     fn back_up_now(&mut self, ctx: &egui::Context) {
         let (sender, receiver) = crossbeam_channel::bounded(1);
         let (data_dir, ctx) = (self.data_dir.clone(), ctx.clone());
-        let spawned = std::thread::Builder::new().name("picasso-backup".into()).spawn(move || {
-            let _ = sender.send(backup::create(&data_dir));
-            ctx.request_repaint();
-        });
+        let spawned = std::thread::Builder::new()
+            .name("picasso-backup".into())
+            .spawn(move || {
+                let _ = sender.send(backup::create(&data_dir));
+                ctx.request_repaint();
+            });
         if spawned.is_ok() {
             self.settings.backup_note.clear();
             self.settings.backing_up = Some(receiver);
@@ -733,7 +961,10 @@ impl PicassoApp {
         }
         match backup::relaunch() {
             Ok(()) => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
-            Err(_) => self.settings.backup_note = tr("Restart Picasso to finish restoring the backup").to_string(),
+            Err(_) => {
+                self.settings.backup_note =
+                    tr("Restart Picasso to finish restoring the backup").to_string()
+            }
         }
     }
 
@@ -767,16 +998,22 @@ fn nav_item(ui: &mut egui::Ui, label: &str, selected: bool) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(Vec2::new(NAV_WIDTH, 32.0), Sense::click());
     let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
     if selected {
-        ui.painter().rect_filled(rect, theme::RADIUS, theme::select());
+        ui.painter()
+            .rect_filled(rect, theme::RADIUS, theme::select());
     } else if response.hovered() {
-        ui.painter().rect_filled(rect, theme::RADIUS, theme::hover());
+        ui.painter()
+            .rect_filled(rect, theme::RADIUS, theme::hover());
     }
     ui.painter().text(
         rect.left_center() + Vec2::new(12.0, 0.0),
         egui::Align2::LEFT_CENTER,
         label,
         egui::FontId::proportional(13.5),
-        if selected { theme::accent() } else { theme::text() },
+        if selected {
+            theme::accent()
+        } else {
+            theme::text()
+        },
     );
     response
 }
@@ -785,7 +1022,12 @@ fn nav_item(ui: &mut egui::Ui, label: &str, selected: bool) -> egui::Response {
 pub(super) fn heading(ui: &mut egui::Ui, title: &str) {
     let first = ui.min_rect().height() < 1.0;
     ui.add_space(if first { 0.0 } else { 12.0 });
-    ui.label(RichText::new(title).size(14.5).strong().color(theme::text()));
+    ui.label(
+        RichText::new(title)
+            .size(14.5)
+            .strong()
+            .color(theme::text()),
+    );
 }
 
 pub(super) fn note(ui: &mut egui::Ui, text: &str) {
@@ -803,8 +1045,16 @@ fn location(ui: &mut egui::Ui, path: &Path, size: &str) {
             ui.label(RichText::new(size).strong().color(theme::text()));
             ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                 let text = display_path(path);
-                ui.add(egui::Label::new(RichText::new(&text).monospace().size(11.5).color(theme::muted())).truncate())
-                    .on_hover_text(text);
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(&text)
+                            .monospace()
+                            .size(11.5)
+                            .color(theme::muted()),
+                    )
+                    .truncate(),
+                )
+                .on_hover_text(text);
             });
         });
     });
@@ -818,11 +1068,23 @@ fn settings_file(ui: &mut egui::Ui, path: &Path) {
             if ui.button(tr("Show in folder")).clicked() {
                 crate::shell::reveal(&path.display().to_string());
             }
-            ui.label(RichText::new(format_bytes(file_size(path))).strong().color(theme::text()));
+            ui.label(
+                RichText::new(format_bytes(file_size(path)))
+                    .strong()
+                    .color(theme::text()),
+            );
             ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                 let text = display_path(path);
-                ui.add(egui::Label::new(RichText::new(&text).monospace().size(11.5).color(theme::muted())).truncate())
-                    .on_hover_text(text);
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(&text)
+                            .monospace()
+                            .size(11.5)
+                            .color(theme::muted()),
+                    )
+                    .truncate(),
+                )
+                .on_hover_text(text);
             });
         });
     });
@@ -832,7 +1094,12 @@ fn settings_file(ui: &mut egui::Ui, path: &Path) {
 fn extension_list(kind: FileType) -> String {
     const SHOWN: usize = 6;
     let extensions = kind.extensions();
-    let mut text = extensions.iter().take(SHOWN).map(|ext| format!(".{ext}")).collect::<Vec<_>>().join("  ");
+    let mut text = extensions
+        .iter()
+        .take(SHOWN)
+        .map(|ext| format!(".{ext}"))
+        .collect::<Vec<_>>()
+        .join("  ");
     if extensions.len() > SHOWN {
         text.push_str(&format!("  +{}", extensions.len() - SHOWN));
     }
@@ -842,12 +1109,19 @@ fn extension_list(kind: FileType) -> String {
 /// Unix seconds as local date and time, e.g. `2026-10-23 09:58`.
 pub(super) fn local_time(secs: i64) -> String {
     chrono::DateTime::from_timestamp(secs, 0)
-        .map(|time| time.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M").to_string())
+        .map(|time| {
+            time.with_timezone(&chrono::Local)
+                .format("%Y-%m-%d %H:%M")
+                .to_string()
+        })
         .unwrap_or_default()
 }
 
 pub(super) fn display_path(path: &Path) -> String {
-    path.display().to_string().trim_start_matches(r"\\?\").to_string()
+    path.display()
+        .to_string()
+        .trim_start_matches(r"\\?\")
+        .to_string()
 }
 
 fn file_size(path: &Path) -> u64 {

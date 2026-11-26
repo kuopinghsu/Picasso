@@ -113,21 +113,34 @@ pub struct PackStory {
 /// without edits, such as a video, is carried as it is.
 fn photo_bytes(source: &(PathBuf, Settings, i32)) -> Result<(Vec<u8>, String), String> {
     let (path, settings, rotation) = source;
-    let ext = path.extension().and_then(|ext| ext.to_str()).unwrap_or("").to_ascii_lowercase();
+    let ext = path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
     let unedited = *settings == Settings::default() && *rotation == 0;
     if unedited && (ext == "jpg" || ext == "jpeg") {
-        return Ok((std::fs::read(path).map_err(|err| err.to_string())?, "jpg".into()));
+        return Ok((
+            std::fs::read(path).map_err(|err| err.to_string())?,
+            "jpg".into(),
+        ));
     }
     match crate::edit::render_edited(path, settings, *rotation, None) {
         Ok(rgba) => Ok((crate::image_io::encode_jpeg(&rgba, 95)?, "jpg".into())),
-        Err(_) if unedited && !ext.is_empty() => Ok((std::fs::read(path).map_err(|err| err.to_string())?, ext)),
+        Err(_) if unedited && !ext.is_empty() => {
+            Ok((std::fs::read(path).map_err(|err| err.to_string())?, ext))
+        }
         Err(err) => Err(err),
     }
 }
 
 /// A file name for a photo from its source: the same stem, never a path.
 fn photo_name(source: &Path, ext: &str, key: i64) -> String {
-    match source.file_stem().and_then(|stem| stem.to_str()).filter(|stem| !stem.trim().is_empty()) {
+    match source
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .filter(|stem| !stem.trim().is_empty())
+    {
         Some(stem) => format!("{}.{ext}", crate::story_html::folder_name(stem)),
         None => format!("photo-{key}.{ext}"),
     }
@@ -137,9 +150,17 @@ fn photo_name(source: &Path, ext: &str, key: i64) -> String {
 /// It is written beside `path` under a hidden name and renamed once
 /// complete, so a failed or cancelled write leaves nothing. Photos that
 /// can't be read are carried as unavailable. Returns how many those were.
-pub fn write_package(path: &Path, package: &Package, sources: &HashMap<i64, Source>, progress: &Progress) -> Result<usize, String> {
+pub fn write_package(
+    path: &Path,
+    package: &Package,
+    sources: &HashMap<i64, Source>,
+    progress: &Progress,
+) -> Result<usize, String> {
     let parent = path.parent().ok_or("no folder to write in")?;
-    let name = path.file_name().and_then(|name| name.to_str()).unwrap_or("trip");
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("trip");
     let staging = parent.join(format!(".{name}.partial-{}", std::process::id()));
     let data = parent.join(format!(".{name}.data-{}", std::process::id()));
     let result = write_staged(&staging, &data, package, sources, progress).and_then(|missing| {
@@ -153,7 +174,13 @@ pub fn write_package(path: &Path, package: &Package, sources: &HashMap<i64, Sour
     result
 }
 
-fn write_staged(staging: &Path, data: &Path, package: &Package, sources: &HashMap<i64, Source>, progress: &Progress) -> Result<usize, String> {
+fn write_staged(
+    staging: &Path,
+    data: &Path,
+    package: &Package,
+    sources: &HashMap<i64, Source>,
+    progress: &Progress,
+) -> Result<usize, String> {
     let io = |err: std::io::Error| err.to_string();
     // The photos go to a side file first: the header, which says how long
     // each is, comes before them.
@@ -168,13 +195,18 @@ fn write_staged(staging: &Path, data: &Path, package: &Package, sources: &HashMa
                 return Err(CANCELLED.into());
             }
             progress.done.fetch_add(1, Ordering::Relaxed);
-            let read = sources.get(&photo.key).and_then(Option::as_ref).and_then(|source| photo_bytes(source).ok().map(|bytes| (source, bytes)));
+            let read = sources
+                .get(&photo.key)
+                .and_then(Option::as_ref)
+                .and_then(|source| photo_bytes(source).ok().map(|bytes| (source, bytes)));
             match read {
                 Some((source, (bytes, ext))) => {
                     out.write_all(&bytes).map_err(io)?;
                     photo.name = photo_name(&source.0, &ext, photo.key);
                     photo.size = Some(bytes.len() as u64);
-                    photo.hash = Some(hex(ring::digest::digest(&ring::digest::SHA256, &bytes).as_ref()));
+                    photo.hash = Some(hex(
+                        ring::digest::digest(&ring::digest::SHA256, &bytes).as_ref()
+                    ));
                 }
                 None => {
                     missing += 1;
@@ -193,18 +225,32 @@ fn write_staged(staging: &Path, data: &Path, package: &Package, sources: &HashMa
             .map(|(track, bytes)| {
                 out.write_all(&bytes).map_err(io)?;
                 let hash = hex(ring::digest::digest(&ring::digest::SHA256, &bytes).as_ref());
-                Ok(PackTrack { size: bytes.len() as u64, hash, path: None, ..track.clone() })
+                Ok(PackTrack {
+                    size: bytes.len() as u64,
+                    hash,
+                    path: None,
+                    ..track.clone()
+                })
             })
             .collect::<Result<_, String>>()?;
         out.flush().map_err(io)?;
     }
-    let header = header(&Package { photos, tracks, ..package.clone() }).to_string();
+    let header = header(&Package {
+        photos,
+        tracks,
+        ..package.clone()
+    })
+    .to_string();
     let mut out = BufWriter::new(File::create(staging).map_err(io)?);
     out.write_all(MAGIC).map_err(io)?;
-    out.write_all(&(header.len() as u64).to_le_bytes()).map_err(io)?;
+    out.write_all(&(header.len() as u64).to_le_bytes())
+        .map_err(io)?;
     out.write_all(header.as_bytes()).map_err(io)?;
     std::io::copy(&mut File::open(data).map_err(io)?, &mut out).map_err(io)?;
-    out.into_inner().map_err(|err| err.to_string())?.sync_all().map_err(io)?;
+    out.into_inner()
+        .map_err(|err| err.to_string())?
+        .sync_all()
+        .map_err(io)?;
     Ok(missing)
 }
 
@@ -213,7 +259,13 @@ fn day_text(day: Option<NaiveDate>) -> Value {
 }
 
 fn header(package: &Package) -> Value {
-    let Package { trip, days, stories, photos, tracks } = package;
+    let Package {
+        trip,
+        days,
+        stories,
+        photos,
+        tracks,
+    } = package;
     json!({
         "package": VERSION,
         "trip": {
@@ -244,7 +296,8 @@ fn header(package: &Package) -> Value {
 /// Reads the header of the package at `path`. Returns it, and where the
 /// photos' bytes start.
 pub fn read_package(path: &Path) -> Result<(Package, u64), String> {
-    let damaged = || crate::i18n::tr("This file isn't a Trip package, or it is damaged.").to_string();
+    let damaged =
+        || crate::i18n::tr("This file isn't a Trip package, or it is damaged.").to_string();
     let mut file = BufReader::new(File::open(path).map_err(|err| err.to_string())?);
     let mut magic = vec![0; MAGIC.len()];
     file.read_exact(&mut magic).map_err(|_| damaged())?;
@@ -260,14 +313,24 @@ pub fn read_package(path: &Path) -> Result<(Package, u64), String> {
     let mut text = vec![0; len as usize];
     file.read_exact(&mut text).map_err(|_| damaged())?;
     let value: Value = serde_json::from_slice(&text).map_err(|_| damaged())?;
-    if value["package"].as_u64().is_none_or(|version| version > VERSION) {
+    if value["package"]
+        .as_u64()
+        .is_none_or(|version| version > VERSION)
+    {
         return Err(crate::i18n::tr("This Trip package was made by a newer Picasso.").into());
     }
     let package = parse(&value).ok_or_else(damaged)?;
     // Every photo's bytes must be there, and nothing more.
     let start = (MAGIC.len() + 8) as u64 + len;
-    let total: u64 = package.photos.iter().filter_map(|photo| photo.size).sum::<u64>() + package.tracks.iter().map(|track| track.size).sum::<u64>();
-    let file_len = std::fs::metadata(path).map_err(|err| err.to_string())?.len();
+    let total: u64 = package
+        .photos
+        .iter()
+        .filter_map(|photo| photo.size)
+        .sum::<u64>()
+        + package.tracks.iter().map(|track| track.size).sum::<u64>();
+    let file_len = std::fs::metadata(path)
+        .map_err(|err| err.to_string())?
+        .len();
     if file_len != start + total {
         return Err(damaged());
     }
@@ -294,7 +357,13 @@ fn parse(value: &Value) -> Option<Package> {
     let days = value["days"]
         .as_array()?
         .iter()
-        .map(|item| Some(PackDay { day: day(&item["day"])?, title: text(&item["title"])?, notes: text(&item["notes"])? }))
+        .map(|item| {
+            Some(PackDay {
+                day: day(&item["day"])?,
+                title: text(&item["title"])?,
+                notes: text(&item["notes"])?,
+            })
+        })
         .collect::<Option<Vec<_>>>()?;
     let photos = value["photos"]
         .as_array()?
@@ -303,22 +372,40 @@ fn parse(value: &Value) -> Option<Package> {
             let name = text(&item["name"])?;
             let day = match &item["day"] {
                 Value::Null => None,
-                index => Some(index.as_u64().filter(|&index| (index as usize) < days.len())? as usize),
+                index => Some(
+                    index
+                        .as_u64()
+                        .filter(|&index| (index as usize) < days.len())?
+                        as usize,
+                ),
             };
             let size = match &item["size"] {
                 Value::Null => None,
                 size => Some(size.as_u64()?),
             };
             // A photo carried has a file name, never a way out of the folder.
-            if size.is_some() && (name.is_empty() || name.contains(['/', '\\']) || name.starts_with('.')) {
+            if size.is_some()
+                && (name.is_empty() || name.contains(['/', '\\']) || name.starts_with('.'))
+            {
                 return None;
             }
-            Some(PackPhoto { key: item["key"].as_i64()?, name, day, size, member: item["member"].as_bool().unwrap_or(true), hash: text(&item["hash"]) })
+            Some(PackPhoto {
+                key: item["key"].as_i64()?,
+                name,
+                day,
+                size,
+                member: item["member"].as_bool().unwrap_or(true),
+                hash: text(&item["hash"]),
+            })
         })
         .collect::<Option<Vec<_>>>()?;
     let day_index = |value: &Value| match value {
         Value::Null => Some(None),
-        index => Some(Some(index.as_u64().filter(|&index| (index as usize) < days.len())? as usize)),
+        index => Some(Some(
+            index
+                .as_u64()
+                .filter(|&index| (index as usize) < days.len())? as usize,
+        )),
     };
     // Packages made before tracks were carried have none.
     let tracks = match &value["tracks"] {
@@ -328,10 +415,20 @@ fn parse(value: &Value) -> Option<Package> {
             .iter()
             .map(|item| {
                 let file = text(&item["file"])?;
-                if !crate::track::is_track_path(Path::new(&file)) || file.contains(['/', '\\']) || file.starts_with('.') {
+                if !crate::track::is_track_path(Path::new(&file))
+                    || file.contains(['/', '\\'])
+                    || file.starts_with('.')
+                {
                     return None;
                 }
-                Some(PackTrack { name: text(&item["name"])?, file, day: day_index(&item["day"])?, size: item["size"].as_u64()?, hash: text(&item["hash"])?, path: None })
+                Some(PackTrack {
+                    name: text(&item["name"])?,
+                    file,
+                    day: day_index(&item["day"])?,
+                    size: item["size"].as_u64()?,
+                    hash: text(&item["hash"])?,
+                    path: None,
+                })
             })
             .collect::<Option<Vec<_>>>()?,
     };
@@ -352,11 +449,23 @@ fn parse(value: &Value) -> Option<Package> {
                         .iter()
                         .map(|use_| {
                             let key = use_["key"].as_i64().filter(|key| keys.contains(key))?;
-                            Some(MediaUse { media_id: key, caption: text(&use_["caption"])?, alt: text(&use_["alt"])? })
+                            Some(MediaUse {
+                                media_id: key,
+                                caption: text(&use_["caption"])?,
+                                alt: text(&use_["alt"])?,
+                            })
                         })
                         .collect::<Option<Vec<_>>>()?;
-                    let block = Block::read(item["kind"].as_str()?, item["version"].as_i64()?, item["payload"].as_str()?, media);
-                    Some(StoryBlock { uid: text(&item["uid"])?, block })
+                    let block = Block::read(
+                        item["kind"].as_str()?,
+                        item["version"].as_i64()?,
+                        item["payload"].as_str()?,
+                        media,
+                    );
+                    Some(StoryBlock {
+                        uid: text(&item["uid"])?,
+                        block,
+                    })
                 })
                 .collect::<Option<Vec<_>>>()?;
 
@@ -381,7 +490,9 @@ fn parse(value: &Value) -> Option<Package> {
                     Value::Null => None,
                     cover => Some(cover.as_i64().filter(|key| keys.contains(key))?),
                 },
-                cover_crop: crate::trip::CoverCrop::from_text(item["cover_crop"].as_str().unwrap_or_default()),
+                cover_crop: crate::trip::CoverCrop::from_text(
+                    item["cover_crop"].as_str().unwrap_or_default(),
+                ),
                 template: text(&item["template"]).unwrap_or_else(|| DEFAULT_TEMPLATE.into()),
                 archived: item["archived"].as_bool()?,
                 finished: item["finished"].as_bool()?,
@@ -391,7 +502,13 @@ fn parse(value: &Value) -> Option<Package> {
             Some(PackStory { story, blocks })
         })
         .collect::<Option<Vec<_>>>()?;
-    Some(Package { trip, days, stories, photos, tracks })
+    Some(Package {
+        trip,
+        days,
+        stories,
+        photos,
+        tracks,
+    })
 }
 
 fn hex(bytes: &[u8]) -> String {
@@ -434,7 +551,9 @@ pub fn extract_photos(
     file.seek(SeekFrom::Start(start)).map_err(io)?;
     let mut written = HashMap::new();
     let mut taken = names_in(folder);
-    progress.total.store(package.photos.len(), Ordering::Relaxed);
+    progress
+        .total
+        .store(package.photos.len(), Ordering::Relaxed);
     for photo in &package.photos {
         progress.done.fetch_add(1, Ordering::Relaxed);
         let Some(size) = photo.size else { continue };
@@ -450,13 +569,16 @@ pub fn extract_photos(
         let copied = std::io::copy(&mut (&mut file).take(size), &mut out).map_err(io)?;
         out.flush().map_err(io)?;
         if copied != size {
-            return Err(crate::i18n::tr("This file isn't a Trip package, or it is damaged.").into());
+            return Err(
+                crate::i18n::tr("This file isn't a Trip package, or it is damaged.").into(),
+            );
         }
         written.insert(photo.key, target);
     }
     for track in &mut package.tracks {
         if track.path.is_some() {
-            file.seek(SeekFrom::Current(track.size as i64)).map_err(io)?;
+            file.seek(SeekFrom::Current(track.size as i64))
+                .map_err(io)?;
             continue;
         }
         let target = free_name(folder, &track.file, &mut taken);
@@ -464,7 +586,9 @@ pub fn extract_photos(
         let copied = std::io::copy(&mut (&mut file).take(track.size), &mut out).map_err(io)?;
         out.flush().map_err(io)?;
         if copied != track.size {
-            return Err(crate::i18n::tr("This file isn't a Trip package, or it is damaged.").into());
+            return Err(
+                crate::i18n::tr("This file isn't a Trip package, or it is damaged.").into(),
+            );
         }
         track.path = Some(target);
     }
@@ -473,8 +597,13 @@ pub fn extract_photos(
 
 /// The names in `folder`, in lower case.
 fn names_in(folder: &Path) -> HashSet<String> {
-    let Ok(entries) = std::fs::read_dir(folder) else { return HashSet::new() };
-    entries.flatten().map(|entry| entry.file_name().to_string_lossy().to_lowercase()).collect()
+    let Ok(entries) = std::fs::read_dir(folder) else {
+        return HashSet::new();
+    };
+    entries
+        .flatten()
+        .map(|entry| entry.file_name().to_string_lossy().to_lowercase())
+        .collect()
 }
 
 /// A path in `folder` for `name` under a name not yet in `taken`, the
@@ -483,7 +612,11 @@ fn names_in(folder: &Path) -> HashSet<String> {
 /// share a folder, whatever system it is written on.
 fn free_name(folder: &Path, name: &str, taken: &mut HashSet<String>) -> PathBuf {
     let name = crate::story_html::portable_name(name);
-    let name = if name.is_empty() { "photo".to_string() } else { name };
+    let name = if name.is_empty() {
+        "photo".to_string()
+    } else {
+        name
+    };
     let name = name.as_str();
     let (stem, ext) = name.rsplit_once('.').unwrap_or((name, ""));
     let free = (1..)
@@ -511,7 +644,12 @@ mod tests {
         cover.alt = "A gate".into();
         let blocks = vec![
             StoryBlock::new(Block::Heading("Day 1".into())),
-            StoryBlock::new(Block::Grid { columns: 2, rows: 1, caption: "Two".into(), media: vec![cover, MediaUse::new(12)] }),
+            StoryBlock::new(Block::Grid {
+                columns: 2,
+                rows: 1,
+                caption: "Two".into(),
+                media: vec![cover, MediaUse::new(12)],
+            }),
             StoryBlock::new(Block::Photo(MediaUse::new(13))),
         ];
         let story = Story {
@@ -532,10 +670,26 @@ mod tests {
             revision: 9,
             updated_at: 0,
         };
-        let photo = |key, day| PackPhoto { key, name: String::new(), day, size: None, member: true, hash: None };
+        let photo = |key, day| PackPhoto {
+            key,
+            name: String::new(),
+            day,
+            size: None,
+            member: true,
+            hash: None,
+        };
         Package {
-            trip: PackTrip { title: "Islands".into(), zone: "Asia/Tokyo".into(), first_day: NaiveDate::from_ymd_opt(2026, 4, 1), ..PackTrip::default() },
-            days: vec![PackDay { day: NaiveDate::from_ymd_opt(2026, 4, 1), title: "Arrival".into(), notes: String::new() }],
+            trip: PackTrip {
+                title: "Islands".into(),
+                zone: "Asia/Tokyo".into(),
+                first_day: NaiveDate::from_ymd_opt(2026, 4, 1),
+                ..PackTrip::default()
+            },
+            days: vec![PackDay {
+                day: NaiveDate::from_ymd_opt(2026, 4, 1),
+                title: "Arrival".into(),
+                notes: String::new(),
+            }],
             stories: vec![PackStory { story, blocks }],
             photos: vec![photo(11, Some(0)), photo(12, None), photo(13, Some(0))],
             tracks: Vec::new(),
@@ -549,40 +703,117 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let banner = Path::new(env!("CARGO_MANIFEST_DIR")).join("images/banner.jpg");
         let original = std::fs::read(&banner).unwrap();
-        let sources: HashMap<i64, Source> =
-            HashMap::from([(11, Some((banner.clone(), Settings::default(), 0))), (12, Some((banner.clone(), Settings::default(), 90))), (13, None)]);
+        let sources: HashMap<i64, Source> = HashMap::from([
+            (11, Some((banner.clone(), Settings::default(), 0))),
+            (12, Some((banner.clone(), Settings::default(), 90))),
+            (13, None),
+        ]);
         let mut package = package();
         let gpx = dir.join("walk.gpx");
         std::fs::write(&gpx, "<gpx></gpx>").unwrap();
         package.tracks = vec![
-            PackTrack { name: "Walk".into(), file: "walk.gpx".into(), day: Some(0), path: Some(gpx.clone()), ..PackTrack::default() },
-            PackTrack { name: "Gone".into(), file: "gone.gpx".into(), path: Some(dir.join("gone.gpx")), ..PackTrack::default() },
+            PackTrack {
+                name: "Walk".into(),
+                file: "walk.gpx".into(),
+                day: Some(0),
+                path: Some(gpx.clone()),
+                ..PackTrack::default()
+            },
+            PackTrack {
+                name: "Gone".into(),
+                file: "gone.gpx".into(),
+                path: Some(dir.join("gone.gpx")),
+                ..PackTrack::default()
+            },
         ];
         let path = dir.join("Islands.picassotrip");
-        assert_eq!(write_package(&path, &package, &sources, &Progress::default()).unwrap(), 1, "one photo was unavailable");
+        assert_eq!(
+            write_package(&path, &package, &sources, &Progress::default()).unwrap(),
+            1,
+            "one photo was unavailable"
+        );
         std::fs::remove_file(&gpx).unwrap();
-        assert!(std::fs::read_dir(&dir).unwrap().count() == 1, "nothing left beside it");
+        assert!(
+            std::fs::read_dir(&dir).unwrap().count() == 1,
+            "nothing left beside it"
+        );
 
         let (mut read, start) = read_package(&path).unwrap();
-        assert_eq!((&read.trip, &read.days, &read.stories[0].blocks), (&package.trip, &package.days, &package.stories[0].blocks));
+        assert_eq!(
+            (&read.trip, &read.days, &read.stories[0].blocks),
+            (&package.trip, &package.days, &package.stories[0].blocks)
+        );
         let story = &read.stories[0].story;
-        assert_eq!((story.title.as_str(), story.cover, story.finished, story.dates), ("Temple", Some(11), true, package.stories[0].story.dates));
-        assert_eq!(read.photos.iter().map(|photo| photo.size.is_some()).collect::<Vec<_>>(), [true, true, false]);
+        assert_eq!(
+            (
+                story.title.as_str(),
+                story.cover,
+                story.finished,
+                story.dates
+            ),
+            ("Temple", Some(11), true, package.stories[0].story.dates)
+        );
+        assert_eq!(
+            read.photos
+                .iter()
+                .map(|photo| photo.size.is_some())
+                .collect::<Vec<_>>(),
+            [true, true, false]
+        );
         assert_eq!(read.photos[0].name, "banner.jpg");
-        assert_eq!(read.photos[0].hash, file_hash(&banner), "an unedited photo's hash is its file's");
+        assert_eq!(
+            read.photos[0].hash,
+            file_hash(&banner),
+            "an unedited photo's hash is its file's"
+        );
         assert_eq!(read.photos[2].hash, None);
 
         let folder = dir.join("photos");
         std::fs::create_dir_all(&folder).unwrap();
         std::fs::write(folder.join("banner.jpg"), b"already here").unwrap();
-        assert_eq!(read.tracks.len(), 1, "a track whose file is gone is left out");
-        assert_eq!((read.tracks[0].name.as_str(), read.tracks[0].day, read.tracks[0].path.as_ref()), ("Walk", Some(0), None));
-        let files = extract_photos(&path, &mut read, start, &folder, &HashSet::new(), &Progress::default()).unwrap();
+        assert_eq!(
+            read.tracks.len(),
+            1,
+            "a track whose file is gone is left out"
+        );
+        assert_eq!(
+            (
+                read.tracks[0].name.as_str(),
+                read.tracks[0].day,
+                read.tracks[0].path.as_ref()
+            ),
+            ("Walk", Some(0), None)
+        );
+        let files = extract_photos(
+            &path,
+            &mut read,
+            start,
+            &folder,
+            &HashSet::new(),
+            &Progress::default(),
+        )
+        .unwrap();
         assert_eq!(files.len(), 2);
-        assert_eq!(std::fs::read(folder.join("banner.jpg")).unwrap(), b"already here", "nothing is replaced");
-        assert_eq!(std::fs::read(&files[&11]).unwrap(), original, "an unedited JPEG is carried as it is");
-        assert_ne!(std::fs::read(&files[&12]).unwrap(), original, "a turned photo is carried as shown");
-        assert_eq!(std::fs::read(read.tracks[0].path.as_ref().unwrap()).unwrap(), b"<gpx></gpx>", "the track comes after the photos");
+        assert_eq!(
+            std::fs::read(folder.join("banner.jpg")).unwrap(),
+            b"already here",
+            "nothing is replaced"
+        );
+        assert_eq!(
+            std::fs::read(&files[&11]).unwrap(),
+            original,
+            "an unedited JPEG is carried as it is"
+        );
+        assert_ne!(
+            std::fs::read(&files[&12]).unwrap(),
+            original,
+            "a turned photo is carried as shown"
+        );
+        assert_eq!(
+            std::fs::read(read.tracks[0].path.as_ref().unwrap()).unwrap(),
+            b"<gpx></gpx>",
+            "the track comes after the photos"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -606,20 +837,35 @@ mod tests {
         package.photos[0].size = Some(3);
         let good = header(&package);
         assert!(read_package(&write("good", &good, b"abc")).is_ok());
-        assert!(read_package(&write("short", &good, b"ab")).is_err(), "a photo's bytes are missing");
+        assert!(
+            read_package(&write("short", &good, b"ab")).is_err(),
+            "a photo's bytes are missing"
+        );
         let mut escape = good.clone();
         escape["photos"][0]["name"] = json!("../../evil.jpg");
-        assert!(read_package(&write("escape", &escape, b"abc")).is_err(), "a name can't leave the folder");
+        assert!(
+            read_package(&write("escape", &escape, b"abc")).is_err(),
+            "a name can't leave the folder"
+        );
         let mut track = good.clone();
-        track["tracks"] = json!([{ "name": "Walk", "file": "../walk.gpx", "day": null, "size": 0, "hash": "" }]);
-        assert!(read_package(&write("track", &track, b"abc")).is_err(), "a track's name can't leave the folder either");
+        track["tracks"] =
+            json!([{ "name": "Walk", "file": "../walk.gpx", "day": null, "size": 0, "hash": "" }]);
+        assert!(
+            read_package(&write("track", &track, b"abc")).is_err(),
+            "a track's name can't leave the folder either"
+        );
         let mut old = good.clone();
         old.as_object_mut().unwrap().remove("tracks");
         old["package"] = json!(1);
-        assert!(read_package(&write("old", &old, b"abc")).is_ok_and(|(read, _)| read.tracks.is_empty()), "an older package has no tracks");
+        assert!(
+            read_package(&write("old", &old, b"abc")).is_ok_and(|(read, _)| read.tracks.is_empty()),
+            "an older package has no tracks"
+        );
         let mut newer = good.clone();
         newer["package"] = json!(VERSION + 1);
-        assert!(read_package(&write("newer", &newer, b"abc")).unwrap_err().contains("newer"));
+        assert!(read_package(&write("newer", &newer, b"abc"))
+            .unwrap_err()
+            .contains("newer"));
         std::fs::write(dir.join("text"), b"hello").unwrap();
         assert!(read_package(&dir.join("text")).is_err());
         let _ = std::fs::remove_dir_all(&dir);
@@ -627,15 +873,26 @@ mod tests {
 
     #[test]
     fn names_from_another_system_are_each_written_under_one_this_system_takes() {
-        let dir = std::env::temp_dir().join(format!("picasso-package-names-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("picasso-package-names-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let mut package = package();
         // Made on Linux, which takes all of these.
-        for (photo, (name, size)) in package.photos.iter_mut().zip([("IMG_1.jpg", 1), ("img_1.JPG", 2), ("a:b.jpg", 3)]) {
+        for (photo, (name, size)) in
+            package
+                .photos
+                .iter_mut()
+                .zip([("IMG_1.jpg", 1), ("img_1.JPG", 2), ("a:b.jpg", 3)])
+        {
             (photo.name, photo.size) = (name.into(), Some(size));
         }
-        package.tracks = vec![PackTrack { name: "Walk".into(), file: "CON.gpx".into(), size: 4, ..PackTrack::default() }];
+        package.tracks = vec![PackTrack {
+            name: "Walk".into(),
+            file: "CON.gpx".into(),
+            size: 4,
+            ..PackTrack::default()
+        }];
         let mut bytes = MAGIC.to_vec();
         let text = header(&package).to_string();
         bytes.extend((text.len() as u64).to_le_bytes());
@@ -646,12 +903,40 @@ mod tests {
 
         let (mut read, start) = read_package(&path).unwrap();
         let folder = dir.join("photos");
-        let files = extract_photos(&path, &mut read, start, &folder, &HashSet::new(), &Progress::default()).unwrap();
-        let contents: Vec<Vec<u8>> = [11, 12, 13].iter().map(|key| std::fs::read(&files[key]).unwrap()).collect();
-        assert_eq!(contents, [b"a".to_vec(), b"bb".to_vec(), b"ccc".to_vec()], "each photo keeps its own bytes");
-        let names: Vec<String> = [11, 12, 13].iter().map(|key| files[key].file_name().unwrap().to_string_lossy().into_owned()).collect();
+        let files = extract_photos(
+            &path,
+            &mut read,
+            start,
+            &folder,
+            &HashSet::new(),
+            &Progress::default(),
+        )
+        .unwrap();
+        let contents: Vec<Vec<u8>> = [11, 12, 13]
+            .iter()
+            .map(|key| std::fs::read(&files[key]).unwrap())
+            .collect();
+        assert_eq!(
+            contents,
+            [b"a".to_vec(), b"bb".to_vec(), b"ccc".to_vec()],
+            "each photo keeps its own bytes"
+        );
+        let names: Vec<String> = [11, 12, 13]
+            .iter()
+            .map(|key| {
+                files[key]
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect();
         let distinct: HashSet<String> = names.iter().map(|name| name.to_lowercase()).collect();
-        assert_eq!(distinct.len(), 3, "no two names differ only in case: {names:?}");
+        assert_eq!(
+            distinct.len(),
+            3,
+            "no two names differ only in case: {names:?}"
+        );
         assert_eq!(names[2], "a b.jpg");
         let track = read.tracks[0].path.as_ref().unwrap();
         assert_eq!(track.file_name().unwrap(), "CON_.gpx");

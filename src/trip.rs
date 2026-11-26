@@ -25,7 +25,11 @@ impl TripZone {
     /// the timezone data packaged with Picasso, such as `Asia/Taipei`.
     pub fn parse(text: &str) -> Option<TripZone> {
         let text = text.trim();
-        if text.starts_with(['+', '-']) || ["UTC", "GMT", "Z"].iter().any(|prefix| text.starts_with(prefix)) {
+        if text.starts_with(['+', '-'])
+            || ["UTC", "GMT", "Z"]
+                .iter()
+                .any(|prefix| text.starts_with(prefix))
+        {
             return parse_utc_offset(text).map(TripZone::Fixed);
         }
         let zone: chrono_tz::Tz = text.parse().ok()?;
@@ -36,8 +40,12 @@ impl TripZone {
     pub fn day_of(&self, instant: i64) -> Option<NaiveDate> {
         let utc = chrono::DateTime::from_timestamp(instant, 0)?;
         Some(match self {
-            TripZone::Named(name) => utc.with_timezone(&name.parse::<chrono_tz::Tz>().ok()?).date_naive(),
-            TripZone::Fixed(seconds) => utc.with_timezone(&chrono::FixedOffset::east_opt(*seconds)?).date_naive(),
+            TripZone::Named(name) => utc
+                .with_timezone(&name.parse::<chrono_tz::Tz>().ok()?)
+                .date_naive(),
+            TripZone::Fixed(seconds) => utc
+                .with_timezone(&chrono::FixedOffset::east_opt(*seconds)?)
+                .date_naive(),
         })
     }
 
@@ -47,8 +55,16 @@ impl TripZone {
     pub fn instant_of(&self, clock: NaiveDateTime) -> Option<i64> {
         use chrono::TimeZone;
         let local = match self {
-            TripZone::Named(name) => name.parse::<chrono_tz::Tz>().ok()?.from_local_datetime(&clock).single()?.timestamp(),
-            TripZone::Fixed(seconds) => chrono::FixedOffset::east_opt(*seconds)?.from_local_datetime(&clock).single()?.timestamp(),
+            TripZone::Named(name) => name
+                .parse::<chrono_tz::Tz>()
+                .ok()?
+                .from_local_datetime(&clock)
+                .single()?
+                .timestamp(),
+            TripZone::Fixed(seconds) => chrono::FixedOffset::east_opt(*seconds)?
+                .from_local_datetime(&clock)
+                .single()?
+                .timestamp(),
         };
         Some(local)
     }
@@ -69,7 +85,10 @@ pub enum Capture {
     Unread,
     /// The camera's clock reading, and its offset from UTC when the file
     /// records it (`OffsetTimeOriginal`).
-    Clock { clock: NaiveDateTime, offset: Option<i32> },
+    Clock {
+        clock: NaiveDateTime,
+        offset: Option<i32>,
+    },
     /// An instant in UTC, as videos record it.
     Utc(i64),
     /// No capture time; the library shows the file's modification time.
@@ -91,7 +110,12 @@ pub enum Review {
 }
 
 impl Review {
-    pub const ALL: [Review; 4] = [Review::Unread, Review::NoOffset, Review::Ambiguous, Review::NoTime];
+    pub const ALL: [Review; 4] = [
+        Review::Unread,
+        Review::NoOffset,
+        Review::Ambiguous,
+        Review::NoTime,
+    ];
 
     pub fn code(self) -> i64 {
         self as i64 + 1
@@ -118,7 +142,10 @@ pub fn read_capture(path: &std::path::Path, modified_at: i64) -> Capture {
     // The probe read the clock as a time on this computer; reading it back
     // the same way gives the clock's own reading.
     match chrono::DateTime::from_timestamp(probe.taken_at, 0) {
-        Some(time) => Capture::Clock { clock: time.with_timezone(&chrono::Local).naive_local(), offset: probe.zone },
+        Some(time) => Capture::Clock {
+            clock: time.with_timezone(&chrono::Local).naive_local(),
+            offset: probe.zone,
+        },
         None => Capture::Missing,
     }
 }
@@ -142,7 +169,12 @@ pub struct DaySuggestion {
 /// once. `trip_time` says the user accepted that cameras without a
 /// recorded offset were set to Trip time. The computer's own time zone is
 /// never used, so the same inputs give the same day anywhere.
-pub fn capture_day(capture: Capture, shift: i64, zone: &TripZone, trip_time: bool) -> Result<NaiveDate, Review> {
+pub fn capture_day(
+    capture: Capture,
+    shift: i64,
+    zone: &TripZone,
+    trip_time: bool,
+) -> Result<NaiveDate, Review> {
     let instant = capture_instant(capture, zone, trip_time)?;
     zone.day_of(instant + shift).ok_or(Review::NoTime)
 }
@@ -155,9 +187,15 @@ pub fn capture_instant(capture: Capture, zone: &TripZone, trip_time: bool) -> Re
         Capture::Unread => return Err(Review::Unread),
         Capture::Missing => return Err(Review::NoTime),
         Capture::Utc(instant) => instant,
-        Capture::Clock { clock, offset: Some(offset) } => clock.and_utc().timestamp() - i64::from(offset),
+        Capture::Clock {
+            clock,
+            offset: Some(offset),
+        } => clock.and_utc().timestamp() - i64::from(offset),
         Capture::Clock { offset: None, .. } if !trip_time => return Err(Review::NoOffset),
-        Capture::Clock { clock, offset: None } => zone.instant_of(clock).ok_or(Review::Ambiguous)?,
+        Capture::Clock {
+            clock,
+            offset: None,
+        } => zone.instant_of(clock).ok_or(Review::Ambiguous)?,
     })
 }
 
@@ -265,7 +303,10 @@ pub struct TripPlace {
 
 /// A position on Earth, as a Place must have.
 pub fn valid_position(lat: f64, lon: f64) -> bool {
-    lat.is_finite() && lon.is_finite() && (-90.0..=90.0).contains(&lat) && (-180.0..=180.0).contains(&lon)
+    lat.is_finite()
+        && lon.is_finite()
+        && (-90.0..=90.0).contains(&lat)
+        && (-180.0..=180.0).contains(&lon)
 }
 
 /// A member with a position, as Suggest places sees it.
@@ -302,10 +343,17 @@ pub struct PlaceCluster {
 /// of the one before; visits within `distance` of each other are one Place,
 /// so coming back to a spot doesn't make another.
 pub fn cluster_places(points: &[Located], distance: f64, gap: i64) -> Vec<PlaceCluster> {
-    let mut sorted: Vec<&Located> = points.iter().filter(|point| valid_position(point.lat, point.lon)).collect();
+    let mut sorted: Vec<&Located> = points
+        .iter()
+        .filter(|point| valid_position(point.lat, point.lon))
+        .collect();
     sorted.sort_by_key(|point| (point.at, point.media_id));
     let near = |a: (f64, f64), b: (f64, f64)| {
-        let point = |(lat, lon): (f64, f64)| crate::track::Point { lat, lon, time: None };
+        let point = |(lat, lon): (f64, f64)| crate::track::Point {
+            lat,
+            lon,
+            time: None,
+        };
         crate::track::distance_m(&point(a), &point(b)) <= distance
     };
     // Each visit: the sum of its positions, its members, and its last time.
@@ -322,7 +370,13 @@ pub fn cluster_places(points: &[Located], distance: f64, gap: i64) -> Vec<PlaceC
                 members.push(point.media_id);
                 *last = point.at;
             }
-            _ => visits.push((point.lat, point.lon, vec![point.media_id], point.at, point.at)),
+            _ => visits.push((
+                point.lat,
+                point.lon,
+                vec![point.media_id],
+                point.at,
+                point.at,
+            )),
         }
     }
     let mut places: Vec<(f64, f64, Vec<i64>, i64)> = Vec::new();
@@ -346,7 +400,12 @@ pub fn cluster_places(points: &[Located], distance: f64, gap: i64) -> Vec<PlaceC
         .into_iter()
         .map(|(lat, lon, members, first)| {
             let n = members.len() as f64;
-            PlaceCluster { lat: lat / n, lon: lon / n, first, members }
+            PlaceCluster {
+                lat: lat / n,
+                lon: lon / n,
+                first,
+                members,
+            }
         })
         .collect()
 }
@@ -476,7 +535,10 @@ pub fn shift_cameras(shots: &[Shot], shifts: &std::collections::HashMap<String, 
     shots
         .iter()
         .map(|shot| match shifts.get(&shot.camera) {
-            Some(by) if shot.taken_at != 0 => Shot { taken_at: shot.taken_at + by, ..shot.clone() },
+            Some(by) if shot.taken_at != 0 => Shot {
+                taken_at: shot.taken_at + by,
+                ..shot.clone()
+            },
             _ => shot.clone(),
         })
         .collect()
@@ -486,13 +548,23 @@ pub fn shift_cameras(shots: &[Shot], shifts: &std::collections::HashMap<String, 
 /// photo, keeping groups of at least `min` photos, the latest first. With
 /// `skip_in_trip`, photos already in a Trip are left out before grouping.
 /// Photos with no time can't be placed and are never in a group.
-pub fn suggest_trips(shots: &[Shot], gap: i64, min: usize, skip_in_trip: bool) -> Vec<TripCandidate> {
-    let mut timed: Vec<&Shot> = shots.iter().filter(|shot| shot.taken_at != 0 && !(skip_in_trip && shot.in_trip)).collect();
+pub fn suggest_trips(
+    shots: &[Shot],
+    gap: i64,
+    min: usize,
+    skip_in_trip: bool,
+) -> Vec<TripCandidate> {
+    let mut timed: Vec<&Shot> = shots
+        .iter()
+        .filter(|shot| shot.taken_at != 0 && !(skip_in_trip && shot.in_trip))
+        .collect();
     timed.sort_by_key(|shot| (shot.taken_at, shot.id));
     let mut groups: Vec<Vec<&Shot>> = Vec::new();
     for shot in timed {
         match groups.last_mut() {
-            Some(group) if shot.taken_at - group.last().map_or(0, |last| last.taken_at) < gap => group.push(shot),
+            Some(group) if shot.taken_at - group.last().map_or(0, |last| last.taken_at) < gap => {
+                group.push(shot)
+            }
             _ => groups.push(vec![shot]),
         }
     }
@@ -574,7 +646,12 @@ pub enum ResourceKind {
 }
 
 impl ResourceKind {
-    pub const ALL: [ResourceKind; 4] = [ResourceKind::Document, ResourceKind::Link, ResourceKind::Note, ResourceKind::Track];
+    pub const ALL: [ResourceKind; 4] = [
+        ResourceKind::Document,
+        ResourceKind::Link,
+        ResourceKind::Note,
+        ResourceKind::Track,
+    ];
 
     pub fn code(self) -> &'static str {
         match self {
@@ -586,7 +663,10 @@ impl ResourceKind {
     }
 
     pub fn from_code(code: &str) -> ResourceKind {
-        ResourceKind::ALL.into_iter().find(|kind| kind.code() == code).unwrap_or_default()
+        ResourceKind::ALL
+            .into_iter()
+            .find(|kind| kind.code() == code)
+            .unwrap_or_default()
     }
 
     pub fn label(self) -> &'static str {
@@ -622,11 +702,15 @@ impl TripResource {
     pub fn problem(&self) -> Option<&'static str> {
         let reference = self.reference.trim();
         match self.kind {
-            ResourceKind::Link if !(reference.starts_with("https://") || reference.starts_with("http://")) => {
+            ResourceKind::Link
+                if !(reference.starts_with("https://") || reference.starts_with("http://")) =>
+            {
                 Some("Type a web address starting with https://")
             }
             kind if kind.is_file() && reference.is_empty() => Some("Choose a file"),
-            ResourceKind::Note if self.title.trim().is_empty() && self.notes.trim().is_empty() => Some("Give the note a title or some text"),
+            ResourceKind::Note if self.title.trim().is_empty() && self.notes.trim().is_empty() => {
+                Some("Give the note a title or some text")
+            }
             _ => None,
         }
     }
@@ -647,7 +731,14 @@ impl TripResource {
             }
         }
         if self.kind == ResourceKind::Note {
-            return self.notes.lines().next().unwrap_or_default().chars().take(40).collect();
+            return self
+                .notes
+                .lines()
+                .next()
+                .unwrap_or_default()
+                .chars()
+                .take(40)
+                .collect();
         }
         self.reference.clone()
     }
@@ -736,18 +827,32 @@ impl CoverCrop {
     /// The largest frame of `shape` on a photo `photo_w` × `photo_h`,
     /// scaled by `zoom` (1 is the largest, less is tighter), centred on
     /// `centre` as fractions, kept on the photo.
-    pub fn framed(shape: Option<(u32, u32)>, photo_w: u32, photo_h: u32, zoom: f32, centre: [f32; 2]) -> CoverCrop {
+    pub fn framed(
+        shape: Option<(u32, u32)>,
+        photo_w: u32,
+        photo_h: u32,
+        zoom: f32,
+        centre: [f32; 2],
+    ) -> CoverCrop {
         let (pw, ph) = (photo_w.max(1) as f32, photo_h.max(1) as f32);
         let ratio = shape.map_or(pw / ph, |(w, h)| w.max(1) as f32 / h.max(1) as f32);
         // The frame's size as fractions of the photo's width and height.
-        let (mut w, mut h) = if ratio >= pw / ph { (1.0, pw / ratio / ph) } else { (ph * ratio / pw, 1.0) };
+        let (mut w, mut h) = if ratio >= pw / ph {
+            (1.0, pw / ratio / ph)
+        } else {
+            (ph * ratio / pw, 1.0)
+        };
         let zoom = zoom.clamp(0.2, 1.0);
         (w, h) = (w * zoom, h * zoom);
         let left = (centre[0] - w / 2.0).clamp(0.0, 1.0 - w);
         let top = (centre[1] - h / 2.0).clamp(0.0, 1.0 - h);
         let edge = |fraction: f32| (fraction.clamp(0.0, 1.0) * 10_000.0).round() as u16;
         let crop = CoverCrop([edge(left), edge(top), edge(left + w), edge(top + h)]);
-        if crop.0[2] <= crop.0[0] || crop.0[3] <= crop.0[1] { Self::FULL } else { crop }
+        if crop.0[2] <= crop.0[0] || crop.0[3] <= crop.0[1] {
+            Self::FULL
+        } else {
+            crop
+        }
     }
 
     /// The smallest a frame can be, as a fraction of the photo's side.
@@ -758,7 +863,12 @@ impl CoverCrop {
     pub fn from_fractions([left, top, right, bottom]: [f32; 4]) -> CoverCrop {
         let side = |low: f32, high: f32| {
             let (low, high) = (low.min(high).clamp(0.0, 1.0), high.max(low).clamp(0.0, 1.0));
-            if high - low >= Self::SMALLEST { (low, high) } else { let low = low.min(1.0 - Self::SMALLEST); (low, low + Self::SMALLEST) }
+            if high - low >= Self::SMALLEST {
+                (low, high)
+            } else {
+                let low = low.min(1.0 - Self::SMALLEST);
+                (low, low + Self::SMALLEST)
+            }
         };
         let ((left, right), (top, bottom)) = (side(left, right), side(top, bottom));
         let edge = |fraction: f32| (fraction * 10_000.0).round() as u16;
@@ -767,15 +877,26 @@ impl CoverCrop {
 
     /// As stored: "left,top,right,bottom", or empty for the whole photo.
     pub fn to_text(self) -> String {
-        if self.is_full() { String::new() } else { self.0.map(|edge| edge.to_string()).join(",") }
+        if self.is_full() {
+            String::new()
+        } else {
+            self.0.map(|edge| edge.to_string()).join(",")
+        }
     }
 
     /// Read back from [`CoverCrop::to_text`]; anything unreadable or empty
     /// is the whole photo.
     pub fn from_text(text: &str) -> CoverCrop {
-        let edges: Vec<u16> = text.split(',').filter_map(|part| part.trim().parse().ok()).collect();
+        let edges: Vec<u16> = text
+            .split(',')
+            .filter_map(|part| part.trim().parse().ok())
+            .collect();
         match edges[..] {
-            [left, top, right, bottom] if left < right && top < bottom && right <= 10_000 && bottom <= 10_000 => CoverCrop([left, top, right, bottom]),
+            [left, top, right, bottom]
+                if left < right && top < bottom && right <= 10_000 && bottom <= 10_000 =>
+            {
+                CoverCrop([left, top, right, bottom])
+            }
             _ => Self::FULL,
         }
     }
@@ -786,7 +907,13 @@ impl Story {
     /// negative when the Story crops it, so the photo uncropped in a block
     /// and cropped as the cover are two pictures.
     pub fn cover_key(&self) -> Option<i64> {
-        self.cover.map(|media| if self.cover_crop.is_full() { media } else { -media })
+        self.cover.map(|media| {
+            if self.cover_crop.is_full() {
+                media
+            } else {
+                -media
+            }
+        })
     }
 }
 
@@ -799,7 +926,10 @@ pub const TEMPLATES: [&str; 4] = [DEFAULT_TEMPLATE, "diary", "guide", "essay"];
 
 /// A template's code as stored, with an unknown one read as the default.
 pub fn template_code(code: &str) -> &'static str {
-    TEMPLATES.into_iter().find(|known| *known == code).unwrap_or(DEFAULT_TEMPLATE)
+    TEMPLATES
+        .into_iter()
+        .find(|known| *known == code)
+        .unwrap_or(DEFAULT_TEMPLATE)
 }
 
 /// A template's name, to translate.
@@ -822,7 +952,10 @@ pub struct MediaUse {
 
 impl MediaUse {
     pub fn new(media_id: i64) -> Self {
-        Self { media_id, ..Self::default() }
+        Self {
+            media_id,
+            ..Self::default()
+        }
     }
 }
 
@@ -840,36 +973,75 @@ pub enum Block {
     Gallery(Vec<MediaUse>),
     /// Photos in a grid of `columns` across and `rows` down, with one
     /// description for all. More photos than places make more rows.
-    Grid { columns: u8, rows: u8, caption: String, media: Vec<MediaUse> },
+    Grid {
+        columns: u8,
+        rows: u8,
+        caption: String,
+        media: Vec<MediaUse>,
+    },
     Separator,
     Credits(String),
     /// Items with bullets, or numbered when `ordered`.
-    List { ordered: bool, items: Vec<String> },
+    List {
+        ordered: bool,
+        items: Vec<String>,
+    },
     /// Quoted words, and who said or wrote them.
-    Quote { text: String, citation: String },
+    Quote {
+        text: String,
+        citation: String,
+    },
     /// A GPS track drawn as a line: its stretches as [latitude, longitude]
     /// in hundred-thousandths of a degree, copied from the Trip's tracks
     /// when chosen so the Story keeps it wherever it goes. `source` names
     /// the track chosen, or is empty for all of the Trip's.
-    Route { caption: String, source: String, route: Vec<Vec<[i32; 2]>> },
+    Route {
+        caption: String,
+        source: String,
+        route: Vec<Vec<[i32; 2]>>,
+    },
     /// Practical information under a title, as label and value lines, such
     /// as "Getting there" and "Train from the airport, 2 h".
-    Info { title: String, items: Vec<(String, String)> },
+    Info {
+        title: String,
+        items: Vec<(String, String)>,
+    },
     /// A web page to read more, with its title and a note.
-    Link { url: String, title: String, note: String },
+    Link {
+        url: String,
+        title: String,
+        note: String,
+    },
     /// A YouTube video by its web address (see [`youtube`]), with a
     /// caption below.
-    YouTube { url: String, caption: String },
+    YouTube {
+        url: String,
+        caption: String,
+    },
     /// One of the library's videos, played from `start` to `end` in
     /// milliseconds; an `end` of 0 plays it to its end (see [`clip_range`]).
-    Video { media: MediaUse, start: u32, end: u32 },
+    Video {
+        media: MediaUse,
+        start: u32,
+        end: u32,
+    },
     /// Text in rows and columns, every row as long as the others, the
     /// first the header row when `header`, with a caption below. `widths`
     /// are the columns' shares of the width in percent, or none when the
     /// columns fit their text (see [`table_widths_fit`]).
-    Table { header: bool, rows: Vec<Vec<String>>, widths: Vec<u8>, caption: String },
+    Table {
+        header: bool,
+        rows: Vec<Vec<String>>,
+        widths: Vec<u8>,
+        caption: String,
+    },
     /// A kind or version this build doesn't know, kept as it was read.
-    Unknown { kind: String, version: i64, payload: String, media: Vec<MediaUse> },
+    Unknown {
+        kind: String,
+        version: i64,
+        payload: String,
+        media: Vec<MediaUse>,
+    },
 }
 
 impl Block {
@@ -877,7 +1049,12 @@ impl Block {
     /// what a table allows.
     pub fn table(columns: usize, rows: usize) -> Block {
         let row = vec![String::new(); columns.clamp(1, TABLE_COLUMNS_MAX)];
-        Block::Table { header: true, rows: vec![row; rows.clamp(1, TABLE_ROWS_MAX)], widths: Vec::new(), caption: String::new() }
+        Block::Table {
+            header: true,
+            rows: vec![row; rows.clamp(1, TABLE_ROWS_MAX)],
+            widths: Vec::new(),
+            caption: String::new(),
+        }
     }
 
     /// Name stored with the block.
@@ -914,16 +1091,42 @@ impl Block {
     /// own rows, so the library knows which ones each Story uses.
     pub fn payload(&self) -> String {
         match self {
-            Block::Heading(text) | Block::Subheading(text) | Block::Paragraph(text) | Block::Credits(text) => json!({ "text": text }).to_string(),
-            Block::List { ordered, items } => json!({ "ordered": ordered, "items": items }).to_string(),
-            Block::Quote { text, citation } => json!({ "text": text, "citation": citation }).to_string(),
-            Block::Grid { columns, rows, caption, .. } => json!({ "columns": columns, "rows": rows, "caption": caption }).to_string(),
-            Block::Route { caption, source, route } => json!({ "caption": caption, "source": source, "route": route }).to_string(),
+            Block::Heading(text)
+            | Block::Subheading(text)
+            | Block::Paragraph(text)
+            | Block::Credits(text) => json!({ "text": text }).to_string(),
+            Block::List { ordered, items } => {
+                json!({ "ordered": ordered, "items": items }).to_string()
+            }
+            Block::Quote { text, citation } => {
+                json!({ "text": text, "citation": citation }).to_string()
+            }
+            Block::Grid {
+                columns,
+                rows,
+                caption,
+                ..
+            } => json!({ "columns": columns, "rows": rows, "caption": caption }).to_string(),
+            Block::Route {
+                caption,
+                source,
+                route,
+            } => json!({ "caption": caption, "source": source, "route": route }).to_string(),
             Block::Info { title, items } => json!({ "title": title, "items": items }).to_string(),
-            Block::Link { url, title, note } => json!({ "url": url, "title": title, "note": note }).to_string(),
-            Block::YouTube { url, caption } => json!({ "url": url, "caption": caption }).to_string(),
+            Block::Link { url, title, note } => {
+                json!({ "url": url, "title": title, "note": note }).to_string()
+            }
+            Block::YouTube { url, caption } => {
+                json!({ "url": url, "caption": caption }).to_string()
+            }
             Block::Video { start, end, .. } => json!({ "start": start, "end": end }).to_string(),
-            Block::Table { header, rows, widths, caption } => json!({ "header": header, "rows": rows, "widths": widths, "caption": caption }).to_string(),
+            Block::Table {
+                header,
+                rows,
+                widths,
+                caption,
+            } => json!({ "header": header, "rows": rows, "widths": widths, "caption": caption })
+                .to_string(),
             Block::Photo(_) | Block::Gallery(_) | Block::Separator => "{}".into(),
             Block::Unknown { payload, .. } => payload.clone(),
         }
@@ -932,7 +1135,9 @@ impl Block {
     pub fn media(&self) -> &[MediaUse] {
         match self {
             Block::Photo(one) | Block::Video { media: one, .. } => std::slice::from_ref(one),
-            Block::Gallery(media) | Block::Grid { media, .. } | Block::Unknown { media, .. } => media,
+            Block::Gallery(media) | Block::Grid { media, .. } | Block::Unknown { media, .. } => {
+                media
+            }
             _ => &[],
         }
     }
@@ -940,7 +1145,12 @@ impl Block {
     /// The block stored as `kind`, `version`, `payload`, and `media`. What
     /// this build can't read whole comes back as [`Block::Unknown`].
     pub fn read(kind: &str, version: i64, payload: &str, mut media: Vec<MediaUse>) -> Block {
-        let unknown = |media| Block::Unknown { kind: kind.into(), version, payload: payload.into(), media };
+        let unknown = |media| Block::Unknown {
+            kind: kind.into(),
+            version,
+            payload: payload.into(),
+            media,
+        };
         let Ok(value) = serde_json::from_str::<Value>(payload) else {
             return unknown(media);
         };
@@ -949,54 +1159,101 @@ impl Block {
         }
         let text = value["text"].as_str().map(str::to_string);
         if kind == "grid" {
-            let size = |key: &str| value[key].as_u64().filter(|n| (1..=GRID_MAX as u64).contains(n)).map(|n| n as u8);
+            let size = |key: &str| {
+                value[key]
+                    .as_u64()
+                    .filter(|n| (1..=GRID_MAX as u64).contains(n))
+                    .map(|n| n as u8)
+            };
             return match (size("columns"), size("rows"), value["caption"].as_str()) {
-                (Some(columns), Some(rows), Some(caption)) => Block::Grid { columns, rows, caption: caption.into(), media },
+                (Some(columns), Some(rows), Some(caption)) => Block::Grid {
+                    columns,
+                    rows,
+                    caption: caption.into(),
+                    media,
+                },
                 _ => unknown(media),
             };
         }
         if kind == "route" {
             let route = serde_json::from_value::<Vec<Vec<[i32; 2]>>>(value["route"].clone()).ok();
             return match (value["caption"].as_str(), value["source"].as_str(), route) {
-                (Some(caption), Some(source), Some(route)) if media.is_empty() => Block::Route { caption: caption.into(), source: source.into(), route },
+                (Some(caption), Some(source), Some(route)) if media.is_empty() => Block::Route {
+                    caption: caption.into(),
+                    source: source.into(),
+                    route,
+                },
                 _ => unknown(media),
             };
         }
         if kind == "info" {
-            let items = serde_json::from_value::<Vec<(String, String)>>(value["items"].clone()).ok();
+            let items =
+                serde_json::from_value::<Vec<(String, String)>>(value["items"].clone()).ok();
             return match (value["title"].as_str(), items) {
-                (Some(title), Some(items)) if media.is_empty() => Block::Info { title: title.into(), items },
+                (Some(title), Some(items)) if media.is_empty() => Block::Info {
+                    title: title.into(),
+                    items,
+                },
                 _ => unknown(media),
             };
         }
         if kind == "link" {
-            return match (value["url"].as_str(), value["title"].as_str(), value["note"].as_str()) {
-                (Some(url), Some(title), Some(note)) if media.is_empty() => Block::Link { url: url.into(), title: title.into(), note: note.into() },
+            return match (
+                value["url"].as_str(),
+                value["title"].as_str(),
+                value["note"].as_str(),
+            ) {
+                (Some(url), Some(title), Some(note)) if media.is_empty() => Block::Link {
+                    url: url.into(),
+                    title: title.into(),
+                    note: note.into(),
+                },
                 _ => unknown(media),
             };
         }
         if kind == "youtube" {
             return match (value["url"].as_str(), value["caption"].as_str()) {
-                (Some(url), Some(caption)) if media.is_empty() => Block::YouTube { url: url.into(), caption: caption.into() },
+                (Some(url), Some(caption)) if media.is_empty() => Block::YouTube {
+                    url: url.into(),
+                    caption: caption.into(),
+                },
                 _ => unknown(media),
             };
         }
         if kind == "video" {
             let time = |key: &str| value[key].as_u64().and_then(|ms| u32::try_from(ms).ok());
             return match (time("start"), time("end")) {
-                (Some(start), Some(end)) if media.len() == 1 && (end == 0 || end > start) => Block::Video { media: media.remove(0), start, end },
+                (Some(start), Some(end)) if media.len() == 1 && (end == 0 || end > start) => {
+                    Block::Video {
+                        media: media.remove(0),
+                        start,
+                        end,
+                    }
+                }
                 _ => unknown(media),
             };
         }
         if kind == "table" {
-            let rows = serde_json::from_value::<Vec<Vec<String>>>(value["rows"].clone()).ok().filter(|rows| table_fits(rows));
+            let rows = serde_json::from_value::<Vec<Vec<String>>>(value["rows"].clone())
+                .ok()
+                .filter(|rows| table_fits(rows));
             // Widths that don't fit the columns leave them fitting their text.
             let widths = |rows: &[Vec<String>]| {
-                let widths = serde_json::from_value::<Vec<u8>>(value["widths"].clone()).unwrap_or_default();
-                if table_widths_fit(&widths, rows[0].len()) { widths } else { Vec::new() }
+                let widths =
+                    serde_json::from_value::<Vec<u8>>(value["widths"].clone()).unwrap_or_default();
+                if table_widths_fit(&widths, rows[0].len()) {
+                    widths
+                } else {
+                    Vec::new()
+                }
             };
             return match (value["header"].as_bool(), rows, value["caption"].as_str()) {
-                (Some(header), Some(rows), Some(caption)) if media.is_empty() => Block::Table { header, widths: widths(&rows), rows, caption: caption.into() },
+                (Some(header), Some(rows), Some(caption)) if media.is_empty() => Block::Table {
+                    header,
+                    widths: widths(&rows),
+                    rows,
+                    caption: caption.into(),
+                },
                 _ => unknown(media),
             };
         }
@@ -1004,11 +1261,19 @@ impl Block {
             ("heading", Some(text), 0) => Block::Heading(text),
             ("subheading", Some(text), 0) => Block::Subheading(text),
             ("quote", Some(text), 0) => match value["citation"].as_str() {
-                Some(citation) => Block::Quote { text, citation: citation.into() },
+                Some(citation) => Block::Quote {
+                    text,
+                    citation: citation.into(),
+                },
                 None => unknown(media),
             },
             ("list", _, 0) => {
-                let items = value["items"].as_array().and_then(|items| items.iter().map(|item| item.as_str().map(str::to_string)).collect::<Option<Vec<_>>>());
+                let items = value["items"].as_array().and_then(|items| {
+                    items
+                        .iter()
+                        .map(|item| item.as_str().map(str::to_string))
+                        .collect::<Option<Vec<_>>>()
+                });
                 match (value["ordered"].as_bool(), items) {
                     (Some(ordered), Some(items)) => Block::List { ordered, items },
                     _ => unknown(media),
@@ -1032,8 +1297,16 @@ pub const CLIP_MIN_MS: u32 = 500;
 /// `end` of 0, or past the video's end, is its end.
 pub fn clip_range(start: u32, end: u32, duration: f64) -> (f64, f64) {
     let start = f64::from(start) / 1000.0;
-    let end = if end == 0 { duration } else { f64::from(end) / 1000.0 };
-    let end = if duration > 0.0 { end.min(duration) } else { end };
+    let end = if end == 0 {
+        duration
+    } else {
+        f64::from(end) / 1000.0
+    };
+    let end = if duration > 0.0 {
+        end.min(duration)
+    } else {
+        end
+    };
     (start.min(end).max(0.0), end.max(0.0))
 }
 
@@ -1043,7 +1316,9 @@ pub fn web_address(url: &str) -> Option<&str> {
     let url = url.trim();
     let lower = url.to_ascii_lowercase();
     let web = lower.starts_with("https://") || lower.starts_with("http://");
-    let host = url.split_once("://").is_some_and(|(_, rest)| !rest.is_empty());
+    let host = url
+        .split_once("://")
+        .is_some_and(|(_, rest)| !rest.is_empty());
     (web && host && !url.contains(char::is_whitespace)).then_some(url)
 }
 
@@ -1085,21 +1360,45 @@ pub fn youtube(url: &str) -> Option<YouTubeVideo> {
     let (place, query) = address.split_once('?').unwrap_or((address, ""));
     let (host, path) = place.split_once('/').unwrap_or((place, ""));
     let host = host.rsplit_once('@').map_or(host, |(_, host)| host);
-    let host = host.split_once(':').map_or(host, |(host, _)| host).to_ascii_lowercase();
-    let host = ["www.", "m.", "music."].iter().find_map(|sub| host.strip_prefix(sub)).unwrap_or(&host);
-    let param = |name: &str| query.split('&').chain(fragment.split('&')).find_map(|pair| pair.strip_prefix(name)?.strip_prefix('='));
+    let host = host
+        .split_once(':')
+        .map_or(host, |(host, _)| host)
+        .to_ascii_lowercase();
+    let host = ["www.", "m.", "music."]
+        .iter()
+        .find_map(|sub| host.strip_prefix(sub))
+        .unwrap_or(&host);
+    let param = |name: &str| {
+        query
+            .split('&')
+            .chain(fragment.split('&'))
+            .find_map(|pair| pair.strip_prefix(name)?.strip_prefix('='))
+    };
     let mut parts = path.split('/');
     let id = match (host, parts.next()) {
         ("youtu.be", Some(id)) => id,
         ("youtube.com" | "youtube-nocookie.com", Some("watch")) => param("v")?,
-        ("youtube.com" | "youtube-nocookie.com", Some("shorts" | "live" | "embed" | "v")) => parts.next()?,
+        ("youtube.com" | "youtube-nocookie.com", Some("shorts" | "live" | "embed" | "v")) => {
+            parts.next()?
+        }
         _ => return None,
     };
-    if id.len() != 11 || id == "videoseries" || !id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_') {
+    if id.len() != 11
+        || id == "videoseries"
+        || !id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+    {
         return None;
     }
-    let start = param("t").or_else(|| param("start")).and_then(seconds).unwrap_or(0);
-    Some(YouTubeVideo { id: id.into(), start })
+    let start = param("t")
+        .or_else(|| param("start"))
+        .and_then(seconds)
+        .unwrap_or(0);
+    Some(YouTubeVideo {
+        id: id.into(),
+        start,
+    })
 }
 
 /// A time such as `90`, `90s`, or `1h2m3s`, in seconds.
@@ -1142,7 +1441,9 @@ pub const TABLE_ROWS_MAX: usize = 30;
 /// the others, with no more columns and rows than allowed.
 pub fn table_fits(rows: &[Vec<String>]) -> bool {
     let columns = rows.first().map_or(0, Vec::len);
-    (1..=TABLE_ROWS_MAX).contains(&rows.len()) && (1..=TABLE_COLUMNS_MAX).contains(&columns) && rows.iter().all(|row| row.len() == columns)
+    (1..=TABLE_ROWS_MAX).contains(&rows.len())
+        && (1..=TABLE_COLUMNS_MAX).contains(&columns)
+        && rows.iter().all(|row| row.len() == columns)
 }
 
 /// Least share of a table's width a column can have, in percent.
@@ -1152,7 +1453,10 @@ pub const TABLE_WIDTH_MIN: u8 = 5;
 /// one share for each column, each at least [`TABLE_WIDTH_MIN`], making
 /// 100 together.
 pub fn table_widths_fit(widths: &[u8], columns: usize) -> bool {
-    widths.is_empty() || (widths.len() == columns && widths.iter().all(|&width| width >= TABLE_WIDTH_MIN) && widths.iter().map(|&width| u32::from(width)).sum::<u32>() == 100)
+    widths.is_empty()
+        || (widths.len() == columns
+            && widths.iter().all(|&width| width >= TABLE_WIDTH_MIN)
+            && widths.iter().map(|&width| u32::from(width)).sum::<u32>() == 100)
 }
 
 /// Shares in percent as `weights` are to each other, each at least
@@ -1162,14 +1466,23 @@ pub fn spread_widths(weights: &[f32]) -> Vec<u8> {
     let even = 100.0 / weights.len().max(1) as f32;
     let mut widths: Vec<u8> = weights
         .iter()
-        .map(|weight| if total > 0.0 { weight.max(0.0) / total * 100.0 } else { even })
+        .map(|weight| {
+            if total > 0.0 {
+                weight.max(0.0) / total * 100.0
+            } else {
+                even
+            }
+        })
         .map(|share| (share.round() as u8).max(TABLE_WIDTH_MIN))
         .collect();
     // Rounding, and the least share, leave them off 100 by a few; the
     // widest column makes it up.
     loop {
         let sum: u32 = widths.iter().map(|&width| u32::from(width)).sum();
-        let Some(widest) = (0..widths.len()).max_by_key(|&n| (widths[n], std::cmp::Reverse(n))) else { break };
+        let Some(widest) = (0..widths.len()).max_by_key(|&n| (widths[n], std::cmp::Reverse(n)))
+        else {
+            break;
+        };
         match sum.cmp(&100) {
             std::cmp::Ordering::Less => widths[widest] += 1,
             std::cmp::Ordering::Greater if widths[widest] > TABLE_WIDTH_MIN => widths[widest] -= 1,
@@ -1187,7 +1500,9 @@ pub fn grid_layout_for(count: usize) -> (u8, u8) {
     GRID_LAYOUTS
         .into_iter()
         .filter(|(columns, rows)| usize::from(columns * rows) >= count)
-        .min_by_key(|(columns, rows)| (usize::from(columns * rows) - count, columns.abs_diff(*rows)))
+        .min_by_key(|(columns, rows)| {
+            (usize::from(columns * rows) - count, columns.abs_diff(*rows))
+        })
         .unwrap_or((3, 3))
 }
 
@@ -1197,10 +1512,16 @@ pub const ROUTE_POINTS: usize = 800;
 /// The points of `tracks` for a Route block, every so many kept so there
 /// are no more than [`ROUTE_POINTS`], each stretch with its last point.
 pub fn route_of(tracks: &[crate::track::Track]) -> Vec<Vec<[i32; 2]>> {
-    let segments: Vec<&Vec<crate::track::Point>> = tracks.iter().flat_map(|track| &track.segments).collect();
+    let segments: Vec<&Vec<crate::track::Point>> =
+        tracks.iter().flat_map(|track| &track.segments).collect();
     let total: usize = segments.iter().map(|segment| segment.len()).sum();
     let step = total.div_ceil(ROUTE_POINTS).max(1);
-    let fixed = |point: &crate::track::Point| [(point.lat * 1e5).round() as i32, (point.lon * 1e5).round() as i32];
+    let fixed = |point: &crate::track::Point| {
+        [
+            (point.lat * 1e5).round() as i32,
+            (point.lon * 1e5).round() as i32,
+        ]
+    };
     segments
         .into_iter()
         .filter_map(|segment| {
@@ -1228,9 +1549,19 @@ pub struct RouteView {
 /// The closest map that shows a Route block's stretches in a `width` ×
 /// `height` box, `pad` from its edges, and the stretches in that box, north
 /// up. `None` for a route without points.
-pub fn route_shape(route: &[Vec<[i32; 2]>], width: f32, height: f32, pad: f32) -> Option<(RouteView, Vec<Vec<[f32; 2]>>)> {
-    let world = |[lat, lon]: [i32; 2]| crate::geo::latlon_to_world(f64::from(lat) / 1e5, f64::from(lon) / 1e5, 0);
-    let points: Vec<Vec<(f64, f64)>> = route.iter().map(|segment| segment.iter().map(|&point| world(point)).collect()).collect();
+pub fn route_shape(
+    route: &[Vec<[i32; 2]>],
+    width: f32,
+    height: f32,
+    pad: f32,
+) -> Option<(RouteView, Vec<Vec<[f32; 2]>>)> {
+    let world = |[lat, lon]: [i32; 2]| {
+        crate::geo::latlon_to_world(f64::from(lat) / 1e5, f64::from(lon) / 1e5, 0)
+    };
+    let points: Vec<Vec<(f64, f64)>> = route
+        .iter()
+        .map(|segment| segment.iter().map(|&point| world(point)).collect())
+        .collect();
     let (mut min, mut max) = ((f64::MAX, f64::MAX), (f64::MIN, f64::MIN));
     for &(x, y) in points.iter().flatten() {
         min = (min.0.min(x), min.1.min(y));
@@ -1239,26 +1570,54 @@ pub fn route_shape(route: &[Vec<[i32; 2]>], width: f32, height: f32, pad: f32) -
     if min.0 > max.0 {
         return None;
     }
-    let (inner_w, inner_h) = (f64::from((width - 2.0 * pad).max(1.0)), f64::from((height - 2.0 * pad).max(1.0)));
+    let (inner_w, inner_h) = (
+        f64::from((width - 2.0 * pad).max(1.0)),
+        f64::from((height - 2.0 * pad).max(1.0)),
+    );
     let fits = |zoom: u8| {
         let scale = f64::from(1u32 << zoom);
         (max.0 - min.0) * scale <= inner_w && (max.1 - min.1) * scale <= inner_h
     };
-    let zoom = (0..=ROUTE_MAX_ZOOM).rev().find(|&zoom| fits(zoom)).unwrap_or(0);
+    let zoom = (0..=ROUTE_MAX_ZOOM)
+        .rev()
+        .find(|&zoom| fits(zoom))
+        .unwrap_or(0);
     let scale = f64::from(1u32 << zoom);
-    let view = RouteView { zoom, x: (min.0 + max.0) / 2.0 * scale, y: (min.1 + max.1) / 2.0 * scale };
+    let view = RouteView {
+        zoom,
+        x: (min.0 + max.0) / 2.0 * scale,
+        y: (min.1 + max.1) / 2.0 * scale,
+    };
     let (half_w, half_h) = (f64::from(width) / 2.0, f64::from(height) / 2.0);
     let shape = points
         .iter()
-        .map(|segment| segment.iter().map(|&(x, y)| [(half_w + x * scale - view.x) as f32, (half_h + y * scale - view.y) as f32]).collect())
+        .map(|segment| {
+            segment
+                .iter()
+                .map(|&(x, y)| {
+                    [
+                        (half_w + x * scale - view.x) as f32,
+                        (half_h + y * scale - view.y) as f32,
+                    ]
+                })
+                .collect()
+        })
         .collect();
     Some((view, shape))
 }
 
 /// How long a Route block's line is, in meters.
 pub fn route_meters(route: &[Vec<[i32; 2]>]) -> f64 {
-    let point = |[lat, lon]: [i32; 2]| crate::track::Point { lat: f64::from(lat) / 1e5, lon: f64::from(lon) / 1e5, time: None };
-    route.iter().flat_map(|segment| segment.windows(2)).map(|pair| crate::track::distance_m(&point(pair[0]), &point(pair[1]))).sum()
+    let point = |[lat, lon]: [i32; 2]| crate::track::Point {
+        lat: f64::from(lat) / 1e5,
+        lon: f64::from(lon) / 1e5,
+        time: None,
+    };
+    route
+        .iter()
+        .flat_map(|segment| segment.windows(2))
+        .map(|pair| crate::track::distance_m(&point(pair[0]), &point(pair[1])))
+        .sum()
 }
 
 /// A block and the id it keeps through edits, moves, and saves.
@@ -1270,7 +1629,10 @@ pub struct StoryBlock {
 
 impl StoryBlock {
     pub fn new(block: Block) -> Self {
-        Self { uid: new_uid(), block }
+        Self {
+            uid: new_uid(),
+            block,
+        }
     }
 }
 
@@ -1281,8 +1643,14 @@ pub fn new_uid() -> String {
     if ring::rand::SystemRandom::new().fill(&mut bytes).is_err() {
         // Without system randomness, the clock and a counter still keep ids apart.
         static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos() as u64);
-        bytes = (nanos ^ COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed).rotate_left(48)).to_le_bytes();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos() as u64);
+        bytes = (nanos
+            ^ COUNTER
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                .rotate_left(48))
+        .to_le_bytes();
     }
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
@@ -1292,7 +1660,12 @@ mod tests {
     #[test]
     fn photos_taken_close_together_are_one_place_and_a_return_joins_it() {
         // About 111 m per 0.001 degree of latitude.
-        let at = |media_id: i64, at: i64, lat: f64| Located { media_id, at, lat, lon: 2.0 };
+        let at = |media_id: i64, at: i64, lat: f64| Located {
+            media_id,
+            at,
+            lat,
+            lon: 2.0,
+        };
         let points = vec![
             at(1, 0, 41.000),
             at(2, 600, 41.0005),
@@ -1302,19 +1675,45 @@ mod tests {
             at(6, 9100, 99.0),
         ];
         let places = cluster_places(&points, 200.0, 3600);
-        assert_eq!(places.iter().map(|place| place.members.clone()).collect::<Vec<_>>(), vec![vec![1, 2, 5], vec![3, 4]], "a bad position is left out");
+        assert_eq!(
+            places
+                .iter()
+                .map(|place| place.members.clone())
+                .collect::<Vec<_>>(),
+            vec![vec![1, 2, 5], vec![3, 4]],
+            "a bad position is left out"
+        );
         assert_eq!(places[0].first, 0);
         assert!((places[0].lat - 41.000_266).abs() < 1e-5);
         // A long gap starts a new visit, which still joins the same place.
         assert_eq!(cluster_places(&points, 200.0, 60).len(), 2);
-        assert_eq!(cluster_places(&points, 5_000.0, 3600).len(), 1, "a wider distance makes one place");
-        assert!(!valid_position(91.0, 0.0) && !valid_position(0.0, f64::NAN) && valid_position(-90.0, 180.0));
+        assert_eq!(
+            cluster_places(&points, 5_000.0, 3600).len(),
+            1,
+            "a wider distance makes one place"
+        );
+        assert!(
+            !valid_position(91.0, 0.0)
+                && !valid_position(0.0, f64::NAN)
+                && valid_position(-90.0, 180.0)
+        );
     }
 
     #[test]
     fn photos_far_apart_are_separate_trips_the_latest_first() {
         const DAY: i64 = 86_400;
-        let shot = |id: i64, taken_at: i64, in_trip: bool| Shot { id, taken_at, folder: if id < 10 { "Temple".into() } else { "Lakeside".into() }, camera: "X100".into(), located: id % 2 == 0, in_trip };
+        let shot = |id: i64, taken_at: i64, in_trip: bool| Shot {
+            id,
+            taken_at,
+            folder: if id < 10 {
+                "Temple".into()
+            } else {
+                "Lakeside".into()
+            },
+            camera: "X100".into(),
+            located: id % 2 == 0,
+            in_trip,
+        };
         let shots = vec![
             shot(2, 10 * DAY + 3600, false),
             shot(1, 10 * DAY, false),
@@ -1325,51 +1724,149 @@ mod tests {
             shot(14, 40 * DAY, false),
         ];
         let found = suggest_trips(&shots, 2 * DAY, 2, false);
-        assert_eq!(found.iter().map(|group| group.photos.clone()).collect::<Vec<_>>(), vec![vec![11, 12], vec![1, 2, 3]], "alone and timeless are left out");
-        assert_eq!((found[1].first, found[1].last, found[1].located, found[1].in_trip), (10 * DAY, 11 * DAY, 1, 1));
-        assert_eq!((found[0].folders.clone(), found[0].cameras.clone()), (vec!["Lakeside".to_string()], vec!["X100".to_string()]));
+        assert_eq!(
+            found
+                .iter()
+                .map(|group| group.photos.clone())
+                .collect::<Vec<_>>(),
+            vec![vec![11, 12], vec![1, 2, 3]],
+            "alone and timeless are left out"
+        );
+        assert_eq!(
+            (
+                found[1].first,
+                found[1].last,
+                found[1].located,
+                found[1].in_trip
+            ),
+            (10 * DAY, 11 * DAY, 1, 1)
+        );
+        assert_eq!(
+            (found[0].folders.clone(), found[0].cameras.clone()),
+            (vec!["Lakeside".to_string()], vec!["X100".to_string()])
+        );
         let fresh = suggest_trips(&shots, 2 * DAY, 2, true);
-        assert_eq!(fresh[1].photos, vec![1, 2], "photos already in a trip are skipped");
-        assert_eq!(suggest_trips(&shots, DAY / 2, 2, false).len(), 2, "a shorter gap splits day 10 from day 11");
+        assert_eq!(
+            fresh[1].photos,
+            vec![1, 2],
+            "photos already in a trip are skipped"
+        );
+        assert_eq!(
+            suggest_trips(&shots, DAY / 2, 2, false).len(),
+            2,
+            "a shorter gap splits day 10 from day 11"
+        );
         // A camera a day behind joins the next group once its clock is moved.
         let mut late = shots.clone();
-        late.push(Shot { id: 20, taken_at: 19 * DAY - 7200, camera: "GoPro".into(), ..Shot::default() });
-        late.push(Shot { id: 21, taken_at: 0, camera: "GoPro".into(), ..Shot::default() });
-        let moved = shift_cameras(&late, &std::collections::HashMap::from([("GoPro".to_string(), DAY)]));
-        assert_eq!(suggest_trips(&moved, DAY / 2, 2, false)[0].photos, vec![20, 11, 12]);
-        assert_eq!(moved.iter().find(|shot| shot.id == 21).map(|shot| shot.taken_at), Some(0), "no time stays none");
+        late.push(Shot {
+            id: 20,
+            taken_at: 19 * DAY - 7200,
+            camera: "GoPro".into(),
+            ..Shot::default()
+        });
+        late.push(Shot {
+            id: 21,
+            taken_at: 0,
+            camera: "GoPro".into(),
+            ..Shot::default()
+        });
+        let moved = shift_cameras(
+            &late,
+            &std::collections::HashMap::from([("GoPro".to_string(), DAY)]),
+        );
+        assert_eq!(
+            suggest_trips(&moved, DAY / 2, 2, false)[0].photos,
+            vec![20, 11, 12]
+        );
+        assert_eq!(
+            moved
+                .iter()
+                .find(|shot| shot.id == 21)
+                .map(|shot| shot.taken_at),
+            Some(0),
+            "no time stays none"
+        );
     }
 
     use super::*;
 
     #[test]
     fn a_route_keeps_few_points_and_draws_inside_its_box() {
-        let point = |n: usize| crate::track::Point { lat: 35.0 + n as f64 * 1e-4, lon: 135.0, time: None };
-        let track = crate::track::Track { name: "Walk".into(), segments: vec![(0..2001).map(point).collect(), vec![point(0)]] };
+        let point = |n: usize| crate::track::Point {
+            lat: 35.0 + n as f64 * 1e-4,
+            lon: 135.0,
+            time: None,
+        };
+        let track = crate::track::Track {
+            name: "Walk".into(),
+            segments: vec![(0..2001).map(point).collect(), vec![point(0)]],
+        };
         let route = route_of(&[track]);
         assert_eq!(route.len(), 1, "a stretch of one point is no line");
         assert!(route[0].len() <= ROUTE_POINTS + 1);
-        assert_eq!(route[0].last(), Some(&[3_520_000, 13_500_000]), "the last point stays");
+        assert_eq!(
+            route[0].last(),
+            Some(&[3_520_000, 13_500_000]),
+            "the last point stays"
+        );
         assert!((route_meters(&route) - 22_240.0).abs() < 100.0);
-        let block = Block::Route { caption: "Temple".into(), source: "/w.gpx".into(), route: route.clone() };
-        assert_eq!(Block::read(block.kind(), block.version(), &block.payload(), Vec::new()), block);
+        let block = Block::Route {
+            caption: "Temple".into(),
+            source: "/w.gpx".into(),
+            route: route.clone(),
+        };
+        assert_eq!(
+            Block::read(block.kind(), block.version(), &block.payload(), Vec::new()),
+            block
+        );
         let (view, shape) = route_shape(&route, 200.0, 100.0, 10.0).unwrap();
-        assert!(shape.iter().flatten().all(|&[x, y]| (10.0..=190.0).contains(&x) && (10.0..=90.0).contains(&y)));
+        assert!(shape
+            .iter()
+            .flatten()
+            .all(|&[x, y]| (10.0..=190.0).contains(&x) && (10.0..=90.0).contains(&y)));
         let (closer, _) = route_shape(&route, 400.0, 200.0, 20.0).unwrap();
-        assert_eq!(closer.zoom, view.zoom + 1, "twice the box is one zoom closer");
+        assert_eq!(
+            closer.zoom,
+            view.zoom + 1,
+            "twice the box is one zoom closer"
+        );
         assert!(route_shape(&[], 200.0, 100.0, 10.0).is_none());
     }
 
     #[test]
     fn a_trip_zone_is_a_named_zone_or_a_fixed_offset() {
-        assert_eq!(TripZone::parse("Asia/Taipei"), Some(TripZone::Named("Asia/Taipei".into())));
-        assert_eq!(TripZone::parse("America/Argentina/Buenos_Aires").map(|zone| zone.code()).as_deref(), Some("America/Argentina/Buenos_Aires"));
+        assert_eq!(
+            TripZone::parse("Asia/Taipei"),
+            Some(TripZone::Named("Asia/Taipei".into()))
+        );
+        assert_eq!(
+            TripZone::parse("America/Argentina/Buenos_Aires")
+                .map(|zone| zone.code())
+                .as_deref(),
+            Some("America/Argentina/Buenos_Aires")
+        );
         assert_eq!(TripZone::parse("+08:00"), Some(TripZone::Fixed(8 * 3600)));
-        assert_eq!(TripZone::parse("UTC-03:30"), Some(TripZone::Fixed(-(3 * 3600 + 1800))));
+        assert_eq!(
+            TripZone::parse("UTC-03:30"),
+            Some(TripZone::Fixed(-(3 * 3600 + 1800)))
+        );
         assert_eq!(TripZone::parse("UTC"), Some(TripZone::Fixed(0)));
         assert_eq!(TripZone::Fixed(-(3 * 3600 + 1800)).code(), "-03:30");
-        assert_eq!(TripZone::parse("asia/capital"), None, "names are spelled as in the timezone data");
-        for bad in ["", "  ", "Asia/", "/Capital", "Asia Capital", "Mars/Olympus", "+25:00", "../etc"] {
+        assert_eq!(
+            TripZone::parse("asia/capital"),
+            None,
+            "names are spelled as in the timezone data"
+        );
+        for bad in [
+            "",
+            "  ",
+            "Asia/",
+            "/Capital",
+            "Asia Capital",
+            "Mars/Olympus",
+            "+25:00",
+            "../etc",
+        ] {
             assert_eq!(TripZone::parse(bad), None, "{bad:?}");
         }
     }
@@ -1386,34 +1883,87 @@ mod tests {
     fn a_day_comes_from_the_clock_and_its_offset() {
         let capital = TripZone::parse("Asia/Taipei").unwrap();
         // 00:30 in Metro is 23:30 the evening before in Capital.
-        let metro = Capture::Clock { clock: clock("2026-03-02 00:30:00"), offset: Some(9 * 3600) };
-        assert_eq!(capture_day(metro, 0, &capital, false), Ok(date("2026-03-01")));
-        assert_eq!(capture_day(metro, 3600, &capital, false), Ok(date("2026-03-02")), "an Adjust date shift counts once");
+        let metro = Capture::Clock {
+            clock: clock("2026-03-02 00:30:00"),
+            offset: Some(9 * 3600),
+        };
+        assert_eq!(
+            capture_day(metro, 0, &capital, false),
+            Ok(date("2026-03-01"))
+        );
+        assert_eq!(
+            capture_day(metro, 3600, &capital, false),
+            Ok(date("2026-03-02")),
+            "an Adjust date shift counts once"
+        );
         let video = Capture::Utc(clock("2026-03-01 16:30:00").and_utc().timestamp());
-        assert_eq!(capture_day(video, 0, &capital, false), Ok(date("2026-03-02")));
-        assert_eq!(capture_day(Capture::Missing, 0, &capital, true), Err(Review::NoTime));
-        assert_eq!(capture_day(Capture::Unread, 0, &capital, true), Err(Review::Unread));
+        assert_eq!(
+            capture_day(video, 0, &capital, false),
+            Ok(date("2026-03-02"))
+        );
+        assert_eq!(
+            capture_day(Capture::Missing, 0, &capital, true),
+            Err(Review::NoTime)
+        );
+        assert_eq!(
+            capture_day(Capture::Unread, 0, &capital, true),
+            Err(Review::Unread)
+        );
     }
 
     #[test]
     fn a_clock_without_offset_needs_the_user_and_daylight_saving_care() {
         let new_york = TripZone::parse("America/New_York").unwrap();
-        let bare = |text| Capture::Clock { clock: clock(text), offset: None };
-        assert_eq!(capture_day(bare("2026-07-04 23:59:00"), 0, &new_york, false), Err(Review::NoOffset));
-        assert_eq!(capture_day(bare("2026-07-04 23:59:00"), 0, &new_york, true), Ok(date("2026-07-04")));
+        let bare = |text| Capture::Clock {
+            clock: clock(text),
+            offset: None,
+        };
+        assert_eq!(
+            capture_day(bare("2026-07-04 23:59:00"), 0, &new_york, false),
+            Err(Review::NoOffset)
+        );
+        assert_eq!(
+            capture_day(bare("2026-07-04 23:59:00"), 0, &new_york, true),
+            Ok(date("2026-07-04"))
+        );
         // 02:30 never happens on 8 March 2026, and 01:30 happens twice on 1 November.
-        assert_eq!(capture_day(bare("2026-03-08 02:30:00"), 0, &new_york, true), Err(Review::Ambiguous));
-        assert_eq!(capture_day(bare("2026-11-01 01:30:00"), 0, &new_york, true), Err(Review::Ambiguous));
+        assert_eq!(
+            capture_day(bare("2026-03-08 02:30:00"), 0, &new_york, true),
+            Err(Review::Ambiguous)
+        );
+        assert_eq!(
+            capture_day(bare("2026-11-01 01:30:00"), 0, &new_york, true),
+            Err(Review::Ambiguous)
+        );
         // A fixed offset has no daylight saving.
         let fixed = TripZone::parse("-05:00").unwrap();
-        assert_eq!(capture_day(bare("2026-03-08 02:30:00"), 0, &fixed, true), Ok(date("2026-03-08")));
+        assert_eq!(
+            capture_day(bare("2026-03-08 02:30:00"), 0, &fixed, true),
+            Ok(date("2026-03-08"))
+        );
         // Leap day, and across the date line.
-        assert_eq!(capture_day(bare("2028-02-29 12:00:00"), 0, &fixed, true), Ok(date("2028-02-29")));
+        assert_eq!(
+            capture_day(bare("2028-02-29 12:00:00"), 0, &fixed, true),
+            Ok(date("2028-02-29"))
+        );
         let samoa = TripZone::parse("Pacific/Apia").unwrap();
-        let fiji = Capture::Clock { clock: clock("2026-06-01 10:00:00"), offset: Some(12 * 3600) };
-        assert_eq!(capture_day(fiji, 0, &samoa, false), Ok(date("2026-06-01")), "UTC+13 is ahead of UTC+12");
-        let honolulu = Capture::Clock { clock: clock("2026-06-01 10:00:00"), offset: Some(-10 * 3600) };
-        assert_eq!(capture_day(honolulu, 0, &samoa, false), Ok(date("2026-06-02")));
+        let fiji = Capture::Clock {
+            clock: clock("2026-06-01 10:00:00"),
+            offset: Some(12 * 3600),
+        };
+        assert_eq!(
+            capture_day(fiji, 0, &samoa, false),
+            Ok(date("2026-06-01")),
+            "UTC+13 is ahead of UTC+12"
+        );
+        let honolulu = Capture::Clock {
+            clock: clock("2026-06-01 10:00:00"),
+            offset: Some(-10 * 3600),
+        };
+        assert_eq!(
+            capture_day(honolulu, 0, &samoa, false),
+            Ok(date("2026-06-02"))
+        );
     }
 
     #[test]
@@ -1422,33 +1972,82 @@ mod tests {
         assert_eq!(draft.validate(), Ok(TripZone::Named("Asia/Tokyo".into())));
         draft.first_day = NaiveDate::from_ymd_opt(2026, 4, 2);
         draft.last_day = NaiveDate::from_ymd_opt(2026, 4, 1);
-        assert!(draft.validate().is_err(), "the last day is before the first");
+        assert!(
+            draft.validate().is_err(),
+            "the last day is before the first"
+        );
         draft.last_day = draft.first_day;
         assert!(draft.validate().is_ok(), "a one-day trip");
         assert!(TripDraft::new(" ", "Asia/Tokyo").validate().is_err());
-        assert!(TripDraft::new("Temple", "").validate().is_err(), "the time zone has no default");
+        assert!(
+            TripDraft::new("Temple", "").validate().is_err(),
+            "the time zone has no default"
+        );
     }
 
     #[test]
     fn only_web_addresses_are_followed() {
-        assert_eq!(web_address(" https://example.com/a "), Some("https://example.com/a"));
-        assert_eq!(web_address("HTTP://example.com"), Some("HTTP://example.com"));
-        for bad in ["javascript:alert(1)", "file:///etc/passwd", "example.com", "https://", "https://a b.com", ""] {
+        assert_eq!(
+            web_address(" https://example.com/a "),
+            Some("https://example.com/a")
+        );
+        assert_eq!(
+            web_address("HTTP://example.com"),
+            Some("HTTP://example.com")
+        );
+        for bad in [
+            "javascript:alert(1)",
+            "file:///etc/passwd",
+            "example.com",
+            "https://",
+            "https://a b.com",
+            "",
+        ] {
             assert_eq!(web_address(bad), None, "{bad}");
         }
     }
 
     #[test]
     fn a_youtube_address_gives_its_video_and_where_it_starts() {
-        let video = |id: &str, start| Some(YouTubeVideo { id: id.into(), start });
-        assert_eq!(youtube("https://www.youtube.com/watch?v=dQw4w9WgXcQ"), video("dQw4w9WgXcQ", 0));
-        assert_eq!(youtube(" https://youtu.be/dQw4w9WgXcQ?t=90 "), video("dQw4w9WgXcQ", 90));
-        assert_eq!(youtube("https://m.youtube.com/watch?feature=share&v=dQw4w9WgXcQ&t=1m30s"), video("dQw4w9WgXcQ", 90));
-        assert_eq!(youtube("https://YouTube.com/shorts/abc-DEF_123?si=x"), video("abc-DEF_123", 0));
-        assert_eq!(youtube("https://www.youtube.com/live/abc-DEF_123"), video("abc-DEF_123", 0));
-        assert_eq!(youtube("https://www.youtube-nocookie.com/embed/abc-DEF_123?start=75"), video("abc-DEF_123", 75));
-        assert_eq!(youtube("http://youtube.com/watch?v=abc-DEF_123#t=1h2m3s"), video("abc-DEF_123", 3723));
-        assert_eq!(youtube("https://youtu.be/abc-DEF_123?t=soon"), video("abc-DEF_123", 0), "a start it can't read starts at the beginning");
+        let video = |id: &str, start| {
+            Some(YouTubeVideo {
+                id: id.into(),
+                start,
+            })
+        };
+        assert_eq!(
+            youtube("https://www.youtube.com/watch?v=dQw4w9WgXcQ"),
+            video("dQw4w9WgXcQ", 0)
+        );
+        assert_eq!(
+            youtube(" https://youtu.be/dQw4w9WgXcQ?t=90 "),
+            video("dQw4w9WgXcQ", 90)
+        );
+        assert_eq!(
+            youtube("https://m.youtube.com/watch?feature=share&v=dQw4w9WgXcQ&t=1m30s"),
+            video("dQw4w9WgXcQ", 90)
+        );
+        assert_eq!(
+            youtube("https://YouTube.com/shorts/abc-DEF_123?si=x"),
+            video("abc-DEF_123", 0)
+        );
+        assert_eq!(
+            youtube("https://www.youtube.com/live/abc-DEF_123"),
+            video("abc-DEF_123", 0)
+        );
+        assert_eq!(
+            youtube("https://www.youtube-nocookie.com/embed/abc-DEF_123?start=75"),
+            video("abc-DEF_123", 75)
+        );
+        assert_eq!(
+            youtube("http://youtube.com/watch?v=abc-DEF_123#t=1h2m3s"),
+            video("abc-DEF_123", 3723)
+        );
+        assert_eq!(
+            youtube("https://youtu.be/abc-DEF_123?t=soon"),
+            video("abc-DEF_123", 0),
+            "a start it can't read starts at the beginning"
+        );
         for bad in [
             "https://www.youtube.com/watch?v=short",
             "https://www.youtube.com/watch?v=abc-DEF_123x",
@@ -1464,42 +2063,95 @@ mod tests {
         ] {
             assert_eq!(youtube(bad), None, "{bad}");
         }
-        let started = YouTubeVideo { id: "abc-DEF_123".into(), start: 90 };
-        assert_eq!(started.watch(), "https://www.youtube.com/watch?v=abc-DEF_123&t=90s");
+        let started = YouTubeVideo {
+            id: "abc-DEF_123".into(),
+            start: 90,
+        };
+        assert_eq!(
+            started.watch(),
+            "https://www.youtube.com/watch?v=abc-DEF_123&t=90s"
+        );
         assert_eq!(started.start_label(), "1:30");
-        let long = YouTubeVideo { start: 4500, ..started.clone() };
+        let long = YouTubeVideo {
+            start: 4500,
+            ..started.clone()
+        };
         assert_eq!(long.start_label(), "1:15:00");
-        let whole = YouTubeVideo { start: 0, ..started };
-        assert_eq!((whole.watch().as_str(), whole.start_label().as_str()), ("https://www.youtube.com/watch?v=abc-DEF_123", ""));
+        let whole = YouTubeVideo {
+            start: 0,
+            ..started
+        };
+        assert_eq!(
+            (whole.watch().as_str(), whole.start_label().as_str()),
+            ("https://www.youtube.com/watch?v=abc-DEF_123", "")
+        );
     }
 
     #[test]
     fn blocks_read_back_what_they_store() {
-        let photo = MediaUse { media_id: 3, caption: "Lanes at dusk".into(), alt: "Lanterns on a street".into() };
+        let photo = MediaUse {
+            media_id: 3,
+            caption: "Lanes at dusk".into(),
+            alt: "Lanterns on a street".into(),
+        };
         let blocks = [
             Block::Heading("Day 1 — 古都".into()),
             Block::Paragraph("<script>\"quoted\" & 'odd'</script>".into()),
             Block::Photo(photo.clone()),
             Block::Gallery(vec![photo.clone(), MediaUse::new(4)]),
             Block::Gallery(Vec::new()),
-            Block::Grid { columns: 3, rows: 2, caption: "Market \"day\"".into(), media: vec![photo.clone(), MediaUse::new(5)] },
+            Block::Grid {
+                columns: 3,
+                rows: 2,
+                caption: "Market \"day\"".into(),
+                media: vec![photo.clone(), MediaUse::new(5)],
+            },
             Block::Separator,
             Block::Credits("Photos: me".into()),
-            Block::Info { title: "Getting there".into(), items: vec![("Train".into(), "2 h from Seaport".into()), (String::new(), "No \"booking\" needed".into())] },
-            Block::Link { url: "https://example.com/ferry?a=1&b=2".into(), title: "Ferry times".into(), note: "Summer only".into() },
-            Block::YouTube { url: "https://youtu.be/abc-DEF_123?t=90".into(), caption: "The \"ferry\" leaving".into() },
-            Block::Video { media: photo.clone(), start: 1500, end: 0 },
-            Block::Video { media: MediaUse::new(6), start: 0, end: 12_250 },
+            Block::Info {
+                title: "Getting there".into(),
+                items: vec![
+                    ("Train".into(), "2 h from Seaport".into()),
+                    (String::new(), "No \"booking\" needed".into()),
+                ],
+            },
+            Block::Link {
+                url: "https://example.com/ferry?a=1&b=2".into(),
+                title: "Ferry times".into(),
+                note: "Summer only".into(),
+            },
+            Block::YouTube {
+                url: "https://youtu.be/abc-DEF_123?t=90".into(),
+                caption: "The \"ferry\" leaving".into(),
+            },
+            Block::Video {
+                media: photo.clone(),
+                start: 1500,
+                end: 0,
+            },
+            Block::Video {
+                media: MediaUse::new(6),
+                start: 0,
+                end: 12_250,
+            },
             Block::Table {
                 header: true,
-                rows: vec![vec!["Ferry".into(), "Leaves".into()], vec!["Seaport \"A\"".into(), "9:00\n9:30".into()]],
+                rows: vec![
+                    vec!["Ferry".into(), "Leaves".into()],
+                    vec!["Seaport \"A\"".into(), "9:00\n9:30".into()],
+                ],
                 widths: vec![70, 30],
                 caption: "In summer".into(),
             },
             Block::table(3, 2),
         ];
         for block in blocks {
-            let read = Block::read(block.kind(), block.version(), &block.payload(), block.media().to_vec());
+            let read = Block::read(
+                block.kind(),
+                block.version(),
+                &block.payload(),
+                block.media().to_vec(),
+            );
             assert_eq!(read, block);
         }
     }
@@ -1509,50 +2161,148 @@ mod tests {
         assert_eq!(clip_range(0, 0, 30.0), (0.0, 30.0), "the whole video");
         assert_eq!(clip_range(1500, 12_250, 30.0), (1.5, 12.25));
         assert_eq!(clip_range(1500, 0, 30.0), (1.5, 30.0), "to its end");
-        assert_eq!(clip_range(1500, 45_000, 30.0), (1.5, 30.0), "a video cut shorter since ends at its end");
+        assert_eq!(
+            clip_range(1500, 45_000, 30.0),
+            (1.5, 30.0),
+            "a video cut shorter since ends at its end"
+        );
         assert_eq!(clip_range(40_000, 45_000, 30.0), (30.0, 30.0));
-        assert_eq!(clip_range(1500, 12_250, 0.0), (1.5, 12.25), "while its length is unknown");
-        let read = |payload: &str, media: usize| Block::read("video", 1, payload, vec![MediaUse::new(1); media]);
-        assert_eq!(read(r#"{"start":0,"end":0}"#, 1), Block::Video { media: MediaUse::new(1), start: 0, end: 0 });
-        for kept in [(r#"{"start":5000,"end":5000}"#, 1), (r#"{"start":5000,"end":4000}"#, 1), (r#"{"start":-1,"end":0}"#, 1), (r#"{"start":0}"#, 1), (r#"{"start":0,"end":0}"#, 2), (r#"{"start":0,"end":0}"#, 0)] {
-            assert!(matches!(read(kept.0, kept.1), Block::Unknown { .. }), "{kept:?} is kept as it is");
+        assert_eq!(
+            clip_range(1500, 12_250, 0.0),
+            (1.5, 12.25),
+            "while its length is unknown"
+        );
+        let read = |payload: &str, media: usize| {
+            Block::read("video", 1, payload, vec![MediaUse::new(1); media])
+        };
+        assert_eq!(
+            read(r#"{"start":0,"end":0}"#, 1),
+            Block::Video {
+                media: MediaUse::new(1),
+                start: 0,
+                end: 0
+            }
+        );
+        for kept in [
+            (r#"{"start":5000,"end":5000}"#, 1),
+            (r#"{"start":5000,"end":4000}"#, 1),
+            (r#"{"start":-1,"end":0}"#, 1),
+            (r#"{"start":0}"#, 1),
+            (r#"{"start":0,"end":0}"#, 2),
+            (r#"{"start":0,"end":0}"#, 0),
+        ] {
+            assert!(
+                matches!(read(kept.0, kept.1), Block::Unknown { .. }),
+                "{kept:?} is kept as it is"
+            );
         }
     }
 
     #[test]
     fn a_grid_gets_the_layout_with_fewest_empty_places() {
-        let cases = [(1, (2, 1)), (2, (2, 1)), (3, (3, 1)), (4, (2, 2)), (5, (3, 2)), (6, (3, 2)), (9, (3, 3)), (12, (3, 3))];
+        let cases = [
+            (1, (2, 1)),
+            (2, (2, 1)),
+            (3, (3, 1)),
+            (4, (2, 2)),
+            (5, (3, 2)),
+            (6, (3, 2)),
+            (9, (3, 3)),
+            (12, (3, 3)),
+        ];
         for (count, layout) in cases {
             assert_eq!(grid_layout_for(count), layout, "{count} photos");
         }
-        let wide = Block::read("grid", 1, r#"{"columns":9,"rows":1,"caption":""}"#, Vec::new());
-        assert!(matches!(wide, Block::Unknown { .. }), "a layout this build can't show is kept as it is");
+        let wide = Block::read(
+            "grid",
+            1,
+            r#"{"columns":9,"rows":1,"caption":""}"#,
+            Vec::new(),
+        );
+        assert!(
+            matches!(wide, Block::Unknown { .. }),
+            "a layout this build can't show is kept as it is"
+        );
     }
 
     #[test]
     fn a_table_is_rectangular_and_within_its_size() {
-        assert_eq!(Block::table(3, 2), Block::Table { header: true, rows: vec![vec![String::new(); 3]; 2], widths: Vec::new(), caption: String::new() });
-        assert_eq!(Block::table(0, 99), Block::table(1, TABLE_ROWS_MAX), "sizes are kept within a table's");
-        let read = |rows: &str| Block::read("table", 1, &format!(r#"{{"header":false,"rows":{rows},"caption":""}}"#), Vec::new());
-        assert!(matches!(read(r#"[["a","b"],["c","d"]]"#), Block::Table { header: false, .. }));
-        for kept in [r#"[["a","b"],["c"]]"#, "[]", "[[]]", r#"[["1","2","3","4","5","6","7","8","9"]]"#] {
-            assert!(matches!(read(kept), Block::Unknown { .. }), "{kept} is kept as it is");
+        assert_eq!(
+            Block::table(3, 2),
+            Block::Table {
+                header: true,
+                rows: vec![vec![String::new(); 3]; 2],
+                widths: Vec::new(),
+                caption: String::new()
+            }
+        );
+        assert_eq!(
+            Block::table(0, 99),
+            Block::table(1, TABLE_ROWS_MAX),
+            "sizes are kept within a table's"
+        );
+        let read = |rows: &str| {
+            Block::read(
+                "table",
+                1,
+                &format!(r#"{{"header":false,"rows":{rows},"caption":""}}"#),
+                Vec::new(),
+            )
+        };
+        assert!(matches!(
+            read(r#"[["a","b"],["c","d"]]"#),
+            Block::Table { header: false, .. }
+        ));
+        for kept in [
+            r#"[["a","b"],["c"]]"#,
+            "[]",
+            "[[]]",
+            r#"[["1","2","3","4","5","6","7","8","9"]]"#,
+        ] {
+            assert!(
+                matches!(read(kept), Block::Unknown { .. }),
+                "{kept} is kept as it is"
+            );
         }
     }
 
     #[test]
     fn a_tables_column_widths_make_100_and_wrong_ones_are_none() {
-        let widths = |stored: &str| match Block::read("table", 1, &format!(r#"{{"header":true,"rows":[["a","b"]],{stored}"caption":""}}"#), Vec::new()) {
+        let widths = |stored: &str| match Block::read(
+            "table",
+            1,
+            &format!(r#"{{"header":true,"rows":[["a","b"]],{stored}"caption":""}}"#),
+            Vec::new(),
+        ) {
             Block::Table { widths, .. } => widths,
             other => panic!("{other:?}"),
         };
         assert_eq!(widths(r#""widths":[25,75],"#), [25, 75]);
-        for wrong in ["", r#""widths":[50],"#, r#""widths":[60,60],"#, r#""widths":[2,98],"#, r#""widths":"wide","#] {
-            assert!(widths(wrong).is_empty(), "{wrong} leaves the columns fitting their text");
+        for wrong in [
+            "",
+            r#""widths":[50],"#,
+            r#""widths":[60,60],"#,
+            r#""widths":[2,98],"#,
+            r#""widths":"wide","#,
+        ] {
+            assert!(
+                widths(wrong).is_empty(),
+                "{wrong} leaves the columns fitting their text"
+            );
         }
         assert_eq!(spread_widths(&[1.0, 1.0, 1.0]), [34, 33, 33]);
-        assert_eq!(spread_widths(&[1.0; 8]).iter().map(|&width| u32::from(width)).sum::<u32>(), 100);
-        assert_eq!(spread_widths(&[97.0, 1.0, 2.0]), [90, TABLE_WIDTH_MIN, TABLE_WIDTH_MIN], "no column is narrower than the least");
+        assert_eq!(
+            spread_widths(&[1.0; 8])
+                .iter()
+                .map(|&width| u32::from(width))
+                .sum::<u32>(),
+            100
+        );
+        assert_eq!(
+            spread_widths(&[97.0, 1.0, 2.0]),
+            [90, TABLE_WIDTH_MIN, TABLE_WIDTH_MIN],
+            "no column is narrower than the least"
+        );
         assert_eq!(spread_widths(&[0.0, 0.0]), [50, 50]);
         assert_eq!(spread_widths(&[]), Vec::<u8>::new());
     }
@@ -1560,7 +2310,12 @@ mod tests {
     #[test]
     fn blocks_this_build_cannot_read_are_kept_whole() {
         let media = vec![MediaUse::new(9)];
-        let newer = Block::read("paragraph", BLOCK_VERSION + 1, r#"{"text":"hi","style":"lead"}"#, Vec::new());
+        let newer = Block::read(
+            "paragraph",
+            BLOCK_VERSION + 1,
+            r#"{"text":"hi","style":"lead"}"#,
+            Vec::new(),
+        );
         let map = Block::read("map", 1, r#"{"zoom":7}"#, media.clone());
         let broken = Block::read("heading", 1, "not json", Vec::new());
         for (block, kind) in [(&newer, "paragraph"), (&map, "map"), (&broken, "heading")] {
@@ -1568,7 +2323,11 @@ mod tests {
             assert_eq!(block.kind(), kind);
         }
         assert_eq!(newer.version(), BLOCK_VERSION + 1);
-        assert_eq!(newer.payload(), r#"{"text":"hi","style":"lead"}"#, "written back unchanged");
+        assert_eq!(
+            newer.payload(),
+            r#"{"text":"hi","style":"lead"}"#,
+            "written back unchanged"
+        );
         assert_eq!(map.media(), &media[..], "its photos stay with it");
     }
 
@@ -1594,14 +2353,29 @@ mod cover_tests {
         // Pushed past the edge, it stays on the photo.
         let low = CoverCrop::framed(Some((1, 1)), 3000, 2000, 0.5, [0.9, 1.0]);
         assert_eq!((low.0[2], low.0[3]), (10_000, 10_000));
-        assert_eq!(CoverCrop::framed(None, 3000, 2000, 1.0, [0.5, 0.5]), CoverCrop::FULL);
+        assert_eq!(
+            CoverCrop::framed(None, 3000, 2000, 1.0, [0.5, 0.5]),
+            CoverCrop::FULL
+        );
         assert_eq!(CoverCrop::from_text(&wide.to_text()), wide);
         assert_eq!(CoverCrop::FULL.to_text(), "");
         // Any shape, kept on the photo, never too thin, edges in either order.
-        assert_eq!(CoverCrop::from_fractions([0.1, 0.2, 0.7, 0.4]), CoverCrop([1_000, 2_000, 7_000, 4_000]));
-        assert_eq!(CoverCrop::from_fractions([0.7, 0.4, 0.1, 0.2]), CoverCrop([1_000, 2_000, 7_000, 4_000]));
-        assert_eq!(CoverCrop::from_fractions([-0.5, 0.0, 1.5, 1.0]), CoverCrop::FULL);
-        assert_eq!(CoverCrop::from_fractions([0.99, 0.5, 0.99, 0.5]), CoverCrop([9_500, 5_000, 10_000, 5_500]));
+        assert_eq!(
+            CoverCrop::from_fractions([0.1, 0.2, 0.7, 0.4]),
+            CoverCrop([1_000, 2_000, 7_000, 4_000])
+        );
+        assert_eq!(
+            CoverCrop::from_fractions([0.7, 0.4, 0.1, 0.2]),
+            CoverCrop([1_000, 2_000, 7_000, 4_000])
+        );
+        assert_eq!(
+            CoverCrop::from_fractions([-0.5, 0.0, 1.5, 1.0]),
+            CoverCrop::FULL
+        );
+        assert_eq!(
+            CoverCrop::from_fractions([0.99, 0.5, 0.99, 0.5]),
+            CoverCrop([9_500, 5_000, 10_000, 5_500])
+        );
         for bad in ["", "1,2,3", "5,5,4,9", "0,0,10001,10000", "a,b,c,d"] {
             assert_eq!(CoverCrop::from_text(bad), CoverCrop::FULL, "{bad}");
         }
@@ -1641,21 +2415,58 @@ mod resource_tests {
 
     #[test]
     fn resources_say_what_they_lack() {
-        let link = TripResource { kind: ResourceKind::Link, reference: "example.com".into(), ..Default::default() };
+        let link = TripResource {
+            kind: ResourceKind::Link,
+            reference: "example.com".into(),
+            ..Default::default()
+        };
         assert!(link.problem().is_some());
-        assert!(TripResource { reference: "https://example.com".into(), ..link }.problem().is_none());
-        assert!(TripResource { kind: ResourceKind::Document, ..Default::default() }.problem().is_some());
-        let note = TripResource { kind: ResourceKind::Note, ..Default::default() };
+        assert!(TripResource {
+            reference: "https://example.com".into(),
+            ..link
+        }
+        .problem()
+        .is_none());
+        assert!(TripResource {
+            kind: ResourceKind::Document,
+            ..Default::default()
+        }
+        .problem()
+        .is_some());
+        let note = TripResource {
+            kind: ResourceKind::Note,
+            ..Default::default()
+        };
         assert!(note.problem().is_some());
-        assert!(TripResource { notes: "Ferry at 9".into(), ..note }.problem().is_none());
+        assert!(TripResource {
+            notes: "Ferry at 9".into(),
+            ..note
+        }
+        .problem()
+        .is_none());
     }
 
     #[test]
     fn a_resource_is_named_by_its_title_else_its_file() {
-        let doc = TripResource { kind: ResourceKind::Document, reference: "/trips/coast/tickets.pdf".into(), ..Default::default() };
+        let doc = TripResource {
+            kind: ResourceKind::Document,
+            reference: "/trips/coast/tickets.pdf".into(),
+            ..Default::default()
+        };
         assert_eq!(doc.shown_name(), "tickets.pdf");
         assert!(doc.missing());
-        assert_eq!(TripResource { title: "Train".into(), ..doc }.shown_name(), "Train");
-        assert!(!TripResource { kind: ResourceKind::Link, ..Default::default() }.missing());
+        assert_eq!(
+            TripResource {
+                title: "Train".into(),
+                ..doc
+            }
+            .shown_name(),
+            "Train"
+        );
+        assert!(!TripResource {
+            kind: ResourceKind::Link,
+            ..Default::default()
+        }
+        .missing());
     }
 }

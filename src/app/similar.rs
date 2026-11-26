@@ -41,7 +41,11 @@ impl PicassoApp {
     /// Opens the search for the Trip's similar photos, starting it unless
     /// one for this Trip is open already.
     pub(super) fn show_similar(&mut self, ctx: &egui::Context, trip_id: i64) {
-        if self.similar.as_ref().is_none_or(|scan| scan.trip_id != trip_id) {
+        if self
+            .similar
+            .as_ref()
+            .is_none_or(|scan| scan.trip_id != trip_id)
+        {
             self.search_similar(ctx, trip_id);
         }
         self.modal = Modal::Similar;
@@ -68,42 +72,69 @@ impl PicassoApp {
         let cache = self.cache_dir.clone();
         let events = self.events_tx.clone();
         let ctx = ctx.clone();
-        let _ = std::thread::Builder::new().name("picasso-similar".into()).spawn(move || {
-            let Ok(db) = crate::db::Database::open(&db_path) else { return };
-            let store = crate::thumbs::ThumbStore::open(&cache);
-            let photos: Vec<Photo> = db
-                .trip_photos(trip_id, &MemberQuery::default(), Sort::DateOldest)
-                .into_iter()
-                .filter(|photo| !is_video_path(Path::new(&photo.path)))
-                .collect();
-            let total = photos.len();
-            let mut shots = Vec::with_capacity(total);
-            for (done, photo) in photos.iter().enumerate() {
-                if cancel.load(Ordering::Relaxed) {
+        let _ = std::thread::Builder::new()
+            .name("picasso-similar".into())
+            .spawn(move || {
+                let Ok(db) = crate::db::Database::open(&db_path) else {
                     return;
+                };
+                let store = crate::thumbs::ThumbStore::open(&cache);
+                let photos: Vec<Photo> = db
+                    .trip_photos(trip_id, &MemberQuery::default(), Sort::DateOldest)
+                    .into_iter()
+                    .filter(|photo| !is_video_path(Path::new(&photo.path)))
+                    .collect();
+                let total = photos.len();
+                let mut shots = Vec::with_capacity(total);
+                for (done, photo) in photos.iter().enumerate() {
+                    if cancel.load(Ordering::Relaxed) {
+                        return;
+                    }
+                    if done % REPORT_EVERY == 0 {
+                        let _ = events.send(UiEvent::Similar {
+                            run,
+                            done,
+                            total,
+                            found: None,
+                        });
+                        ctx.request_repaint();
+                    }
+                    let look = store.look(photo.id).or_else(|| {
+                        let thumb =
+                            crate::worker::plain_thumb(&store, photo.id, Path::new(&photo.path))?;
+                        let look = burst::look(&thumb);
+                        store.put_look(photo.id, look);
+                        Some(look)
+                    });
+                    if let Some(look) = look {
+                        shots.push(Shot {
+                            id: photo.id,
+                            taken_at: photo.taken_at,
+                            look,
+                        });
+                    }
                 }
-                if done % REPORT_EVERY == 0 {
-                    let _ = events.send(UiEvent::Similar { run, done, total, found: None });
-                    ctx.request_repaint();
-                }
-                let look = store.look(photo.id).or_else(|| {
-                    let thumb = crate::worker::plain_thumb(&store, photo.id, Path::new(&photo.path))?;
-                    let look = burst::look(&thumb);
-                    store.put_look(photo.id, look);
-                    Some(look)
+                let photos = photos.into_iter().map(|photo| (photo.id, photo)).collect();
+                let _ = events.send(UiEvent::Similar {
+                    run,
+                    done: total,
+                    total,
+                    found: Some((shots, photos)),
                 });
-                if let Some(look) = look {
-                    shots.push(Shot { id: photo.id, taken_at: photo.taken_at, look });
-                }
-            }
-            let photos = photos.into_iter().map(|photo| (photo.id, photo)).collect();
-            let _ = events.send(UiEvent::Similar { run, done: total, total, found: Some((shots, photos)) });
-            ctx.request_repaint();
-        });
+                ctx.request_repaint();
+            });
     }
 
-    pub(super) fn on_similar(&mut self, run: u64, done: usize, total: usize, found: Option<(Vec<Shot>, HashMap<i64, Photo>)>) {
-        let Some(scan) = self.similar.as_mut().filter(|scan| scan.run == run) else { return };
+    pub(super) fn on_similar(
+        &mut self,
+        run: u64,
+        done: usize,
+        total: usize,
+        found: Option<(Vec<Shot>, HashMap<i64, Photo>)>,
+    ) {
+        let Some(scan) = self.similar.as_mut().filter(|scan| scan.run == run) else {
+            return;
+        };
         (scan.done, scan.total) = (done, total);
         if found.is_some() {
             scan.found = found;
@@ -182,21 +213,40 @@ impl PicassoApp {
     }
 
     /// One group: its first photos, how many and when, and Select.
-    fn similar_row(&mut self, ui: &mut egui::Ui, group: &[i64], photos: &HashMap<i64, Photo>) -> Option<Vec<i64>> {
+    fn similar_row(
+        &mut self,
+        ui: &mut egui::Ui,
+        group: &[i64],
+        photos: &HashMap<i64, Photo>,
+    ) -> Option<Vec<i64>> {
         let mut pick = None;
         let size = Vec2::new(ui.available_width(), 56.0);
         ui.allocate_ui_with_layout(size, Layout::right_to_left(Align::Center), |ui| {
             ui.set_min_size(size);
-            if ui.button(tr("Select")).on_hover_text(tr("Select these photos in the grid")).clicked() {
+            if ui
+                .button(tr("Select"))
+                .on_hover_text(tr("Select these photos in the grid"))
+                .clicked()
+            {
                 pick = Some(group.to_vec());
             }
             ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
                 for id in group.iter().take(SHOWN) {
-                    let Some(photo) = photos.get(id) else { continue };
+                    let Some(photo) = photos.get(id) else {
+                        continue;
+                    };
                     self.ensure_thumb(photo.id, &photo.path);
-                    let (rect, response) = ui.allocate_exact_size(Vec2::new(54.0, 40.0), egui::Sense::hover());
+                    let (rect, response) =
+                        ui.allocate_exact_size(Vec2::new(54.0, 40.0), egui::Sense::hover());
                     match self.thumb_texture(photo.id) {
-                        Some((texture, w, h)) => theme::paint_image_rounded(ui.painter(), &texture, rect, theme::cover_uv(w, h), photo.rotation, 4.0),
+                        Some((texture, w, h)) => theme::paint_image_rounded(
+                            ui.painter(),
+                            &texture,
+                            rect,
+                            theme::cover_uv(w, h),
+                            photo.rotation,
+                            4.0,
+                        ),
                         None => {
                             ui.painter().rect_filled(rect, 4, theme::placeholder());
                         }
@@ -204,12 +254,21 @@ impl PicassoApp {
                     response.on_hover_text(&photo.filename);
                 }
                 if group.len() > SHOWN {
-                    ui.label(RichText::new(format!("+{}", group.len() - SHOWN)).color(theme::muted()));
+                    ui.label(
+                        RichText::new(format!("+{}", group.len() - SHOWN)).color(theme::muted()),
+                    );
                 }
                 ui.add_space(6.0);
-                let first = group.first().and_then(|id| photos.get(id)).map_or(0, |photo| photo.taken_at);
+                let first = group
+                    .first()
+                    .and_then(|id| photos.get(id))
+                    .map_or(0, |photo| photo.taken_at);
                 let when = crate::types::format_timestamp(first);
-                ui.label(RichText::new(format!("{} · {when}", trf("{} photos", &[&group.len()]))).size(12.5).color(theme::muted()));
+                ui.label(
+                    RichText::new(format!("{} · {when}", trf("{} photos", &[&group.len()])))
+                        .size(12.5)
+                        .color(theme::muted()),
+                );
             });
         });
         ui.separator();

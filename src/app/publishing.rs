@@ -61,18 +61,26 @@ impl PicassoApp {
             .inner_margin(Margin::symmetric(10, 8))
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
-                egui::ScrollArea::vertical().id_salt("publishing-sites").max_height(150.0).auto_shrink([false, true]).show(ui, |ui| {
-                    ui.spacing_mut().item_spacing.y = 6.0;
-                    if sites.is_empty() {
-                        ui.label(RichText::new(tr("No sites yet")).color(theme::muted()));
-                    }
-                    for site in &sites {
-                        self.site_row(ui, site);
-                    }
-                });
+                egui::ScrollArea::vertical()
+                    .id_salt("publishing-sites")
+                    .max_height(150.0)
+                    .auto_shrink([false, true])
+                    .show(ui, |ui| {
+                        ui.spacing_mut().item_spacing.y = 6.0;
+                        if sites.is_empty() {
+                            ui.label(RichText::new(tr("No sites yet")).color(theme::muted()));
+                        }
+                        for site in &sites {
+                            self.site_row(ui, site);
+                        }
+                    });
             });
         let busy = self.settings.publishing.checking.is_some();
-        if self.settings.publishing.form.is_none() && ui.add_enabled(!busy, egui::Button::new(tr("Connect site…"))).clicked() {
+        if self.settings.publishing.form.is_none()
+            && ui
+                .add_enabled(!busy, egui::Button::new(tr("Connect site…")))
+                .clicked()
+        {
             self.settings.publishing.form = Some(SiteForm::default());
             self.settings.publishing.error.clear();
             self.settings.publishing.note.clear();
@@ -100,15 +108,41 @@ impl PicassoApp {
             ui.vertical(|ui| {
                 ui.spacing_mut().item_spacing.y = 2.0;
                 ui.add(egui::Label::new(RichText::new(&site.label).strong()).truncate());
-                let who = if site.account.is_empty() { site.user.clone() } else { format!("{} ({})", site.account, site.user) };
-                ui.add(egui::Label::new(RichText::new(format!("{} · {who}", site.site_url)).size(12.0).color(theme::muted())).truncate());
+                let who = if site.account.is_empty() {
+                    site.user.clone()
+                } else {
+                    format!("{} ({})", site.account, site.user)
+                };
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(format!("{} · {who}", site.site_url))
+                            .size(12.0)
+                            .color(theme::muted()),
+                    )
+                    .truncate(),
+                );
                 ui.horizontal(|ui| {
-                    for (can, label) in [(site.can_upload, tr("Upload")), (site.can_edit, tr("Edit posts")), (site.can_publish, tr("Publish"))] {
+                    for (can, label) in [
+                        (site.can_upload, tr("Upload")),
+                        (site.can_edit, tr("Edit posts")),
+                        (site.can_publish, tr("Publish")),
+                    ] {
                         // A mark as well as a color, so it reads without color too.
-                        let (mark, color) = if can { ("✓", theme::text()) } else { ("✗", theme::muted()) };
-                        ui.label(RichText::new(format!("{mark} {label}")).size(12.0).color(color));
+                        let (mark, color) = if can {
+                            ("✓", theme::text())
+                        } else {
+                            ("✗", theme::muted())
+                        };
+                        ui.label(
+                            RichText::new(format!("{mark} {label}"))
+                                .size(12.0)
+                                .color(color),
+                        );
                     }
-                    let checked = site.checked_at.map_or_else(|| tr("Never checked").to_string(), |at| trf("Checked {}", &[&local_time(at)]));
+                    let checked = site.checked_at.map_or_else(
+                        || tr("Never checked").to_string(),
+                        |at| trf("Checked {}", &[&local_time(at)]),
+                    );
                     ui.label(RichText::new(checked).size(12.0).color(theme::muted()));
                 });
             });
@@ -151,40 +185,69 @@ impl PicassoApp {
 
     fn site_form(&mut self, ui: &mut egui::Ui) {
         let busy = self.settings.publishing.checking.is_some();
-        let Some(form) = self.settings.publishing.form.as_mut() else { return };
+        let Some(form) = self.settings.publishing.form.as_mut() else {
+            return;
+        };
         let mut submit = false;
         let mut cancel = false;
-        egui::Grid::new("site-form").num_columns(2).spacing([10.0, 6.0]).show(ui, |ui| {
-            ui.label(tr("Site address"));
-            let address = ui.add(egui::TextEdit::singleline(&mut form.address).hint_text("example.com/blog").desired_width(280.0));
-            if form.id == 0 && ui.memory(|memory| memory.focused().is_none()) {
-                address.request_focus();
-            }
-            ui.end_row();
-            ui.label(tr("User name"));
-            ui.add(egui::TextEdit::singleline(&mut form.user).desired_width(280.0));
-            ui.end_row();
-            ui.label(tr("Application Password"));
-            let password = ui.add(egui::TextEdit::singleline(&mut form.password).password(true).desired_width(280.0));
-            submit |= password.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
-            ui.end_row();
-            ui.label(tr("Name"));
-            ui.add(egui::TextEdit::singleline(&mut form.label).hint_text(tr("Travel blog")).desired_width(280.0));
-            ui.end_row();
-        });
+        egui::Grid::new("site-form")
+            .num_columns(2)
+            .spacing([10.0, 6.0])
+            .show(ui, |ui| {
+                ui.label(tr("Site address"));
+                let address = ui.add(
+                    egui::TextEdit::singleline(&mut form.address)
+                        .hint_text("example.com/blog")
+                        .desired_width(280.0),
+                );
+                if form.id == 0 && ui.memory(|memory| memory.focused().is_none()) {
+                    address.request_focus();
+                }
+                ui.end_row();
+                ui.label(tr("User name"));
+                ui.add(egui::TextEdit::singleline(&mut form.user).desired_width(280.0));
+                ui.end_row();
+                ui.label(tr("Application Password"));
+                let password = ui.add(
+                    egui::TextEdit::singleline(&mut form.password)
+                        .password(true)
+                        .desired_width(280.0),
+                );
+                submit |=
+                    password.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
+                ui.end_row();
+                ui.label(tr("Name"));
+                ui.add(
+                    egui::TextEdit::singleline(&mut form.label)
+                        .hint_text(tr("Travel blog"))
+                        .desired_width(280.0),
+                );
+                ui.end_row();
+            });
         if form.id != 0 {
             note(ui, tr("To change the password, make a new Application Password in WordPress, enter it here, and revoke the old one there."));
         }
         let local = SiteUrl::parse(&form.address).is_ok_and(|url| url.is_development_host());
         if local {
-            ui.checkbox(&mut form.development, tr("Development site on this computer: allow plain HTTP"));
+            ui.checkbox(
+                &mut form.development,
+                tr("Development site on this computer: allow plain HTTP"),
+            );
         } else {
             form.development = false;
         }
-        let ready = !form.address.trim().is_empty() && !form.user.trim().is_empty() && !form.password.is_empty();
+        let ready = !form.address.trim().is_empty()
+            && !form.user.trim().is_empty()
+            && !form.password.is_empty();
         ui.horizontal(|ui| {
-            let label = if form.id == 0 { tr("Connect") } else { tr("Save") };
-            submit |= ui.add_enabled(ready && !busy, theme::primary_button(label)).clicked();
+            let label = if form.id == 0 {
+                tr("Connect")
+            } else {
+                tr("Save")
+            };
+            submit |= ui
+                .add_enabled(ready && !busy, theme::primary_button(label))
+                .clicked();
             cancel = ui.button(tr("Cancel")).clicked();
         });
         if cancel {
@@ -192,7 +255,14 @@ impl PicassoApp {
             self.settings.publishing.error.clear();
         } else if submit && ready && !busy {
             let form = form.clone();
-            self.start_check(ui.ctx(), form.id, &form.address, &form.user, &form.password, form.development);
+            self.start_check(
+                ui.ctx(),
+                form.id,
+                &form.address,
+                &form.user,
+                &form.password,
+                form.development,
+            );
         }
     }
 
@@ -203,8 +273,16 @@ impl PicassoApp {
         state.note.clear();
         match self.vault.load(&site.secret_ref) {
             Ok(Some(password)) => {
-                let development = SiteUrl::parse(&site.site_url).is_ok_and(|url| url.scheme == "http");
-                self.start_check(ctx, site.id, &site.site_url, &site.user, &password, development);
+                let development =
+                    SiteUrl::parse(&site.site_url).is_ok_and(|url| url.scheme == "http");
+                self.start_check(
+                    ctx,
+                    site.id,
+                    &site.site_url,
+                    &site.user,
+                    &password,
+                    development,
+                );
             }
             Ok(None) => {
                 state.error = tr("Picasso doesn't have this site's password any more. Use Edit… to enter it again.").to_string();
@@ -213,13 +291,32 @@ impl PicassoApp {
         }
     }
 
-    fn start_check(&mut self, ctx: &egui::Context, id: i64, address: &str, user: &str, password: &str, development: bool) {
+    fn start_check(
+        &mut self,
+        ctx: &egui::Context,
+        id: i64,
+        address: &str,
+        user: &str,
+        password: &str,
+        development: bool,
+    ) {
         let (sender, receiver) = crossbeam_channel::bounded(1);
-        let (address, credentials, ctx) = (address.trim().to_string(), Credentials { user: user.trim().to_string(), password: password.to_string() }, ctx.clone());
+        let (address, credentials, ctx) = (
+            address.trim().to_string(),
+            Credentials {
+                user: user.trim().to_string(),
+                password: password.to_string(),
+            },
+            ctx.clone(),
+        );
         std::thread::spawn(move || {
             let network = Network::new();
             let client = Client::new(&network, Policy { development });
-            let result = client.discover(&address).and_then(|api| client.account(&api, &credentials).map(|account| (api, account)));
+            let result = client.discover(&address).and_then(|api| {
+                client
+                    .account(&api, &credentials)
+                    .map(|account| (api, account))
+            });
             let _ = sender.send(result);
             ctx.request_repaint();
         });
@@ -232,7 +329,9 @@ impl PicassoApp {
     /// Takes in a finished check: keeps the password and the site when it
     /// worked, or says why it didn't.
     fn publishing_results(&mut self, ctx: &egui::Context) {
-        let Some((id, receiver)) = &self.settings.publishing.checking else { return };
+        let Some((id, receiver)) = &self.settings.publishing.checking else {
+            return;
+        };
         let id = *id;
         let Ok(result) = receiver.try_recv() else {
             ctx.request_repaint_after(std::time::Duration::from_millis(200));
@@ -246,9 +345,22 @@ impl PicassoApp {
                 return;
             }
         };
-        let form = self.settings.publishing.form.clone().filter(|form| form.id == id);
+        let form = self
+            .settings
+            .publishing
+            .form
+            .clone()
+            .filter(|form| form.id == id);
         let existing = (id != 0).then(|| self.db.site(id)).flatten();
-        let user = form.as_ref().map_or_else(|| existing.as_ref().map(|site| site.user.clone()).unwrap_or_default(), |form| form.user.trim().to_string());
+        let user = form.as_ref().map_or_else(
+            || {
+                existing
+                    .as_ref()
+                    .map(|site| site.user.clone())
+                    .unwrap_or_default()
+            },
+            |form| form.user.trim().to_string(),
+        );
         let site_url = api.site.to_url();
         let secret_ref = keychain::wordpress_reference(&api.site.origin(), &user);
         let mut kept = None;
@@ -263,10 +375,18 @@ impl PicassoApp {
         }
         let site = Site {
             id,
-            label: form.as_ref().map(|form| form.label.clone()).or_else(|| existing.as_ref().map(|site| site.label.clone())).unwrap_or_default(),
+            label: form
+                .as_ref()
+                .map(|form| form.label.clone())
+                .or_else(|| existing.as_ref().map(|site| site.label.clone()))
+                .unwrap_or_default(),
             site_url,
             api_root: api.root.to_url(),
-            wordpress_url: api.wordpress.as_ref().map(SiteUrl::to_url).unwrap_or_default(),
+            wordpress_url: api
+                .wordpress
+                .as_ref()
+                .map(SiteUrl::to_url)
+                .unwrap_or_default(),
             home_url: api.home.as_ref().map(SiteUrl::to_url).unwrap_or_default(),
             user,
             secret_ref: secret_ref.clone(),
@@ -339,8 +459,12 @@ pub(super) fn failure_text(failure: &Failure) -> String {
 
 fn store_text(err: &keychain::StoreError) -> String {
     match err {
-        keychain::StoreError::Unavailable => tr("This computer's password store couldn't be used.").to_string(),
-        keychain::StoreError::Failed(why) => trf("This computer's password store refused: {}", &[why]),
+        keychain::StoreError::Unavailable => {
+            tr("This computer's password store couldn't be used.").to_string()
+        }
+        keychain::StoreError::Failed(why) => {
+            trf("This computer's password store refused: {}", &[why])
+        }
     }
 }
 

@@ -20,7 +20,9 @@ impl PicassoApp {
         if self.copying {
             return;
         }
-        let Some(photo) = self.index_of(id).and_then(|index| self.photos.get(index)) else { return };
+        let Some(photo) = self.index_of(id).and_then(|index| self.photos.get(index)) else {
+            return;
+        };
         if photo.is_video() {
             self.activity = tr("Videos can't be copied as a picture").into();
             return;
@@ -34,18 +36,24 @@ impl PicassoApp {
         let (ctx, events) = (ctx.clone(), self.events_tx.clone());
         self.activity = tr("Copying the picture…").into();
         self.copying = true;
-        let spawned = std::thread::Builder::new().name("picasso-copy".into()).spawn(move || {
-            // Copied must always arrive, or no picture could be copied again.
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                crate::edit::render_edited(&path, &settings, rotation, Some(CLIPBOARD_EDGE)).map(|rgba| {
-                    let size = [rgba.width() as usize, rgba.height() as usize];
-                    ctx.copy_image(egui::ColorImage::from_rgba_unmultiplied(size, rgba.as_raw()));
-                })
-            }))
-            .unwrap_or_else(|_| Err(tr("The edit couldn't be rendered").into()));
-            let _ = events.send(UiEvent::Copied(result));
-            ctx.request_repaint();
-        });
+        let spawned = std::thread::Builder::new()
+            .name("picasso-copy".into())
+            .spawn(move || {
+                // Copied must always arrive, or no picture could be copied again.
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    crate::edit::render_edited(&path, &settings, rotation, Some(CLIPBOARD_EDGE))
+                        .map(|rgba| {
+                            let size = [rgba.width() as usize, rgba.height() as usize];
+                            ctx.copy_image(egui::ColorImage::from_rgba_unmultiplied(
+                                size,
+                                rgba.as_raw(),
+                            ));
+                        })
+                }))
+                .unwrap_or_else(|_| Err(tr("The edit couldn't be rendered").into()));
+                let _ = events.send(UiEvent::Copied(result));
+                ctx.request_repaint();
+            });
         if let Err(err) = spawned {
             self.copying = false;
             self.activity = err.to_string();
@@ -63,12 +71,21 @@ impl PicassoApp {
             return;
         }
         ctx.copy_text(paths.join("\n"));
-        self.activity = tr(if paths.len() == 1 { "Copied the path" } else { "Copied the paths" }).into();
+        self.activity = tr(if paths.len() == 1 {
+            "Copied the path"
+        } else {
+            "Copied the paths"
+        })
+        .into();
     }
 
     /// Opens photo `id` in the program the system opens its type with.
     pub(super) fn open_externally(&mut self, id: i64) {
-        let Some(path) = self.index_of(id).and_then(|index| self.photos.get(index)).map(|photo| photo.path.clone()) else {
+        let Some(path) = self
+            .index_of(id)
+            .and_then(|index| self.photos.get(index))
+            .map(|photo| photo.path.clone())
+        else {
             return;
         };
         if let Err(err) = open::that_detached(&path) {
@@ -80,14 +97,21 @@ impl PicassoApp {
     /// text, which it then belongs to Picasso.
     pub(super) fn take_copy_command(ctx: &egui::Context) -> bool {
         let text_selected = ctx
-            .with_plugin(|labels: &mut egui::text_selection::LabelSelectionState| labels.has_selection())
+            .with_plugin(|labels: &mut egui::text_selection::LabelSelectionState| {
+                labels.has_selection()
+            })
             .unwrap_or(false);
         if text_selected || ctx.egui_wants_keyboard_input() {
             return false;
         }
         ctx.input_mut(|input| {
-            let copy = input.events.iter().any(|event| matches!(event, egui::Event::Copy));
-            input.events.retain(|event| !matches!(event, egui::Event::Copy));
+            let copy = input
+                .events
+                .iter()
+                .any(|event| matches!(event, egui::Event::Copy));
+            input
+                .events
+                .retain(|event| !matches!(event, egui::Event::Copy));
             copy
         })
     }

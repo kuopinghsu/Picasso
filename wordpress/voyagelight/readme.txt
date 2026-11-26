@@ -15,9 +15,9 @@ VoyageLight is a classic theme for travel stories. The homepage leads with a lar
 
 A location can be typed as coordinates, in degrees and minutes, or pasted as a Google Maps, Apple Maps, OpenStreetMap or geo: link. The editor shows how it reads each location, and lists any line it can't read instead of dropping it. Places can also be picked on a map or found by name, and a Journey's itinerary can be edited as rows.
 
-The theme comes in two builds, English (voyagelight-<version>-en.zip) and Traditional Chinese (voyagelight-<version>-zh-TW.zip), each in its language whatever the site's; set Settings > General > Site Language to match. Posts are shown as written; nothing is translated automatically.
+The theme comes in two builds, English (voyagelight-<version>-en.zip) and Traditional Chinese (voyagelight-<version>-zh-TW.zip), each using its selected language regardless of the site's language; set Settings > General > Site Language to match. Posts are shown as written; nothing is translated automatically.
 
-Gutenberg's wide and full-width images, galleries and columns are supported, and the block editor shows posts in the site's fonts and column width. A photo uploaded with its camera details (camera, focal length, aperture, shutter speed and ISO) shows them under it, unless turned off in Appearance > Customize > VoyageLight homepage; photos in a gallery don't.
+Gutenberg's wide and full-width images, galleries and columns are supported, and the block editor shows posts in the site's fonts and column width. Camera details (camera, focal length, aperture, shutter speed and ISO) appear below photos that contain this metadata. Turn them off in Appearance > Customize > VoyageLight homepage. Photos in galleries do not show camera details.
 
 == Installation ==
 
@@ -29,7 +29,7 @@ Gutenberg's wide and full-width images, galleries and columns are supported, and
 
 = What do readers' browsers fetch from elsewhere? =
 
-Nothing, until a reader presses Load map. Then the browser loads map tiles from tile.openstreetmap.org, which see the reader's IP address. The fonts and the map library, Leaflet, are part of the theme.
+Nothing, until a reader presses Load map. Then the browser loads map tiles from tile.openstreetmap.org, whose provider receives the reader's IP address. The fonts and the map library, Leaflet, are part of the theme.
 
 = What does the editor fetch from elsewhere? =
 
@@ -41,7 +41,7 @@ Links such as maps.app.goo.gl hold no coordinates until they are opened. Open th
 
 = Are photo locations read from the pictures? =
 
-No. A post's coordinates are the ones typed in its editor. Publish only places you are comfortable sharing.
+No. A post's coordinates are entered in its editor or sent by Picasso. Publish only places you are comfortable sharing.
 
 = What happens to Journeys if I change theme? =
 
@@ -68,7 +68,7 @@ Journeys, Destinations, Place types and the map shortcodes belong to this theme.
 * On a new site, the Search, Recent Posts and other widgets WordPress adds on install move to Inactive widgets when the theme is turned on, so the category tree shows; an area with any other widget is left as it is. Photo tiles side by side no longer show the same story's photo twice, password-protected stories' photos are never used for them, and an empty Place types or Destinations panel is left out.
 * A search with no results shows a note, the search box and the travel categories; the footer sits at the bottom of short pages; Featured destinations take as many columns as there are tiles, and an odd last tile on a phone takes the row; the newest story is the large card only when it has a photo; links in a Journey's stop list are in the accent colour; and breadcrumbs stay on one line on a phone, with larger tap targets.
 * Light or dark in Appearance > Customize > Colours: as the visitor's device is set, light or dark, with or without the header's button to switch; a fixed choice without the button is written into the page, so it holds without the script. The sidebar of story lists and the start page's latest stories goes on the right, on the left or nowhere, in Appearance > Customize > VoyageLight stories; on a phone it stays after the stories.
-* English and Traditional Chinese builds: make theme writes voyagelight-<version>-en.zip and voyagelight-<version>-zh-TW.zip to wordpress/, each in its language whatever the site's, without the translators' .po and .pot files.
+* English and Traditional Chinese builds: make theme writes voyagelight-<version>-en.zip and voyagelight-<version>-zh-TW.zip to wordpress/, each using its selected language regardless of the site's language, without the translators' .po and .pot files.
 * setup-categories.sh is gone: categories, Destinations and Place types are made in the Posts menu. Until the site has its own categories, the Food & Culture and Travel Guides tiles lead to all stories.
 * Easier to use: the light and dark button is named by its label and shows whether dark is on; a header menu's sub-menus open with a button, for touch screens and keyboards, and the header turns to the phone menu whenever its links don't fit; a loaded map takes the keyboard focus; and the current category is marked for screen readers. Section labels are written in normal case and capitalised by the stylesheet, and a change in VoyageLight text matches a text whatever its case. Chinese, Japanese and Korean headings keep their own letter spacing; the start page's photo is an image that a phone fetches at its own size; cards without a picture take one of six illustrations; photo tiles that would only repeat the stories link are left out; and the icons are drawn, not characters.
 * Leaflet comes with the theme, so a map fetches only OpenStreetMap's tiles. functions.php is split into files in inc/ by subject.

@@ -26,19 +26,21 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use crossbeam_channel::{bounded, Receiver, RecvTimeoutError, Select, Sender, TryRecvError};
-use image::{DynamicImage, RgbaImage};
 use crate::db::{Database, Known, ScanRecord};
 use crate::edit::{self, Geometry, Settings};
+use crate::geotag::Sidecar;
 use crate::i18n::tr;
 use crate::image_io::{self, Probe};
 use crate::photo_info::{self, Histogram};
-use crate::geotag::Sidecar;
 use crate::picasa_ini::PicasaIni;
 use crate::thumbs::ThumbStore;
 use crate::track::{is_track_path, MapTrack, Track};
-use crate::types::{folder_label, is_media_path, is_video_path, unix_now, NewPhoto, Photo, Unreadable};
+use crate::types::{
+    folder_label, is_media_path, is_video_path, unix_now, NewPhoto, Photo, Unreadable,
+};
 use crate::video;
+use crossbeam_channel::{bounded, Receiver, RecvTimeoutError, Select, Sender, TryRecvError};
+use image::{DynamicImage, RgbaImage};
 
 pub type DisplayGate = Arc<Mutex<HashMap<i64, u64>>>;
 
@@ -54,7 +56,10 @@ const BATCH_INTERVAL: Duration = Duration::from_millis(250);
 
 pub enum Command {
     Scan(i64),
-    RefreshTrack { folder_id: i64, path: String },
+    RefreshTrack {
+        folder_id: i64,
+        path: String,
+    },
     /// Ask the index thread to finish. Sent when the window closes.
     Stop,
 }
@@ -63,9 +68,20 @@ pub enum ThumbJob {
     /// `edit` is applied over the decoded pixels; the disk cache keeps the original.
     /// `edge` is the short edge wanted: [`THUMB_EDGE`] is the cached size, and a
     /// larger one is decoded for a big tile and kept by the window alone.
-    Thumb { id: i64, path: String, edit: Settings, edge: u32 },
+    Thumb {
+        id: i64,
+        path: String,
+        edit: Settings,
+        edge: u32,
+    },
     /// `edge` caps the long side of the decoded photo; videos use their poster.
-    Display { id: i64, path: String, nonce: u64, edit: Settings, edge: u32 },
+    Display {
+        id: i64,
+        path: String,
+        nonce: u64,
+        edit: Settings,
+        edge: u32,
+    },
     /// Writes the disk thumbnail during a scan without sending pixels to the
     /// window, which asks for the ones it shows.
     Cache { id: i64, path: String },
@@ -168,7 +184,10 @@ pub enum UiEvent {
         run: u64,
         done: usize,
         total: usize,
-        found: Option<(Vec<crate::burst::Shot>, std::collections::HashMap<i64, Photo>)>,
+        found: Option<(
+            Vec<crate::burst::Shot>,
+            std::collections::HashMap<i64, Photo>,
+        )>,
     },
     Duplicates {
         run: u64,
@@ -192,10 +211,18 @@ pub enum UiEvent {
         outcome: Result<crate::geocode::PlaceNames, String>,
     },
     /// A Story's preview was written and opened, or why not.
-    StoryPreviewed(std::sync::Arc<crate::story_html::Progress>, Result<crate::story_html::Outcome, String>),
+    StoryPreviewed(
+        std::sync::Arc<crate::story_html::Progress>,
+        Result<crate::story_html::Outcome, String>,
+    ),
     /// Story `.0` was exported to a new folder by job `.1`, or why not, with
     /// the key of what the export was made from.
-    StoryExported(i64, std::sync::Arc<crate::story_html::Progress>, String, Result<(std::path::PathBuf, crate::story_html::Outcome), String>),
+    StoryExported(
+        i64,
+        std::sync::Arc<crate::story_html::Progress>,
+        String,
+        Result<(std::path::PathBuf, crate::story_html::Outcome), String>,
+    ),
     /// The key of what Story `.0` is made from now, for comparison `.1`.
     StoryContent(i64, u64, String),
     /// The elevation along route source `.1` of Story `.0`, read from its
@@ -218,12 +245,21 @@ pub enum UiEvent {
 /// Number of threads that probe files during a scan. A probe mostly waits
 /// on the disk or on ffprobe, so there are more of them than cores.
 pub fn probe_threads() -> usize {
-    (std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4) * 2).clamp(4, 16)
+    (std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4)
+        * 2)
+    .clamp(4, 16)
 }
 
 /// Number of threads that decode thumbnails and full-size views.
 pub fn thumb_threads() -> usize {
-    (std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4) * 3 / 4).clamp(2, 8)
+    (std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4)
+        * 3
+        / 4)
+    .clamp(2, 8)
 }
 
 /// Short edge of a cached thumbnail. Tiles are squares cut from the middle;
@@ -305,7 +341,10 @@ pub fn index_loop(
     let db = match Database::open(&db_path) {
         Ok(db) => db,
         Err(err) => {
-            let _ = events.send(UiEvent::ScanFinished { folder: 0, unreadable: Vec::new() });
+            let _ = events.send(UiEvent::ScanFinished {
+                folder: 0,
+                unreadable: Vec::new(),
+            });
             eprintln!("picasso database: {err}");
             return;
         }
@@ -347,7 +386,9 @@ impl Indexer {
             }
             match self.commands.recv() {
                 Ok(Command::Scan(id)) => self.queue(id),
-                Ok(Command::RefreshTrack { folder_id, path }) => self.refresh_track(folder_id, path),
+                Ok(Command::RefreshTrack { folder_id, path }) => {
+                    self.refresh_track(folder_id, path)
+                }
                 Ok(Command::Stop) | Err(_) => return,
             }
         }
@@ -362,16 +403,18 @@ impl Indexer {
         let photos = self.db.photo_paths();
         let cache = self.cache.clone();
         let thumbs = self.thumbs.clone();
-        let spawned = std::thread::Builder::new().name("picasso-backfill".into()).spawn(move || {
-            let store = ThumbStore::open(&cache);
-            store.retain(&photos.iter().map(|(id, _)| *id).collect());
-            let cached = store.ids();
-            for (id, path) in photos {
-                if !cached.contains(&id) && thumbs.send(ThumbJob::Cache { id, path }).is_err() {
-                    return;
+        let spawned = std::thread::Builder::new()
+            .name("picasso-backfill".into())
+            .spawn(move || {
+                let store = ThumbStore::open(&cache);
+                store.retain(&photos.iter().map(|(id, _)| *id).collect());
+                let cached = store.ids();
+                for (id, path) in photos {
+                    if !cached.contains(&id) && thumbs.send(ThumbJob::Cache { id, path }).is_err() {
+                        return;
+                    }
                 }
-            }
-        });
+            });
         if let Err(err) = spawned {
             eprintln!("picasso backfill: {err}");
         }
@@ -399,8 +442,14 @@ impl Indexer {
     }
 
     fn refresh_track(&self, folder_id: i64, path: String) {
-        let Ok(meta) = std::fs::metadata(&path) else { return };
-        let file = TrackFile { path, bytes: meta.len(), modified_at: image_io::file_mtime(&meta) };
+        let Ok(meta) = std::fs::metadata(&path) else {
+            return;
+        };
+        let file = TrackFile {
+            path,
+            bytes: meta.len(),
+            modified_at: image_io::file_mtime(&meta),
+        };
         if self.read_tracks(folder_id, &[file], &mut Vec::new()) {
             self.send_tracks();
         }
@@ -408,17 +457,30 @@ impl Indexer {
 
     /// Reads the new and changed track files a walk found. Returns true if
     /// the stored tracks changed.
-    fn read_tracks(&self, folder_id: i64, files: &[TrackFile], unreadable: &mut Vec<Unreadable>) -> bool {
+    fn read_tracks(
+        &self,
+        folder_id: i64,
+        files: &[TrackFile],
+        unreadable: &mut Vec<Unreadable>,
+    ) -> bool {
         let mut changed = false;
         for file in files {
             let Some(read) = Track::read_scanned(Path::new(&file.path)) else {
                 changed |= self.db.forget_track(&file.path);
-                self.not_tracks.borrow_mut().insert(file.path.clone(), (file.bytes, file.modified_at));
+                self.not_tracks
+                    .borrow_mut()
+                    .insert(file.path.clone(), (file.bytes, file.modified_at));
                 continue;
             };
             self.not_tracks.borrow_mut().remove(&file.path);
             match read {
-                Ok(track) => match self.db.store_track(folder_id, &file.path, file.bytes, file.modified_at, &track) {
+                Ok(track) => match self.db.store_track(
+                    folder_id,
+                    &file.path,
+                    file.bytes,
+                    file.modified_at,
+                    &track,
+                ) {
                     Ok(()) => changed = true,
                     Err(err) => eprintln!("picasso track: {err}"),
                 },
@@ -471,10 +533,20 @@ impl Indexer {
 
         let snapshot = self.db.folder_snapshot(folder_id, &path);
         let mut known_tracks = self.db.track_snapshot(folder_id, &path);
-        known_tracks.extend(self.not_tracks.borrow().iter().map(|(path, stamp)| (path.clone(), *stamp)));
+        known_tracks.extend(
+            self.not_tracks
+                .borrow()
+                .iter()
+                .map(|(path, stamp)| (path.clone(), *stamp)),
+        );
         let remembered = self.db.unreadable_snapshot(folder_id);
         let remembered_paths: HashSet<String> = remembered.keys().cloned().collect();
-        let excluded: HashSet<PathBuf> = self.db.excluded_dirs().into_iter().map(|(dir, _)| PathBuf::from(dir)).collect();
+        let excluded: HashSet<PathBuf> = self
+            .db
+            .excluded_dirs()
+            .into_iter()
+            .map(|(dir, _)| PathBuf::from(dir))
+            .collect();
         let cancel = Arc::new(AtomicBool::new(false));
         let checked = Arc::new(AtomicUsize::new(0));
         // The walk's files pass through here on their way to the probes, so
@@ -489,7 +561,18 @@ impl Indexer {
             let checked = checked.clone();
             std::thread::Builder::new()
                 .name("picasso-walk".into())
-                .spawn(move || walk_folder(&root, snapshot, known_tracks, remembered, excluded, list_tx, &cancel, &checked))
+                .spawn(move || {
+                    walk_folder(
+                        &root,
+                        snapshot,
+                        known_tracks,
+                        remembered,
+                        excluded,
+                        list_tx,
+                        &cancel,
+                        &checked,
+                    )
+                })
         };
         let walker = match walker {
             Ok(handle) => handle,
@@ -527,7 +610,9 @@ impl Indexer {
                 match self.commands.try_recv() {
                     Ok(Command::Scan(id)) if id == folder_id => again = true,
                     Ok(Command::Scan(id)) => self.queue(id),
-                    Ok(Command::RefreshTrack { folder_id, path }) => self.refresh_track(folder_id, path),
+                    Ok(Command::RefreshTrack { folder_id, path }) => {
+                        self.refresh_track(folder_id, path)
+                    }
                     Ok(Command::Stop) | Err(TryRecvError::Disconnected) => {
                         stopped = true;
                         break;
@@ -546,7 +631,8 @@ impl Indexer {
                 Ok(op) if Some(op.index()) == listing => match op.recv(&list_rx) {
                     Ok(job) => {
                         let moved = if job.existing.is_none() {
-                            self.db.moved_photo(&job.path, job.bytes, job.modified_at, &claimed)
+                            self.db
+                                .moved_photo(&job.path, job.bytes, job.modified_at, &claimed)
                         } else {
                             None
                         };
@@ -566,7 +652,10 @@ impl Indexer {
                         // The listing is done: the probes get no more files,
                         // and deleted files leave the library right away.
                         job_tx = None;
-                        let walked = walker.take().map(|walker| join_walk(walker, &path)).unwrap_or_else(|| failed_walk(&path));
+                        let walked = walker
+                            .take()
+                            .map(|walker| join_walk(walker, &path))
+                            .unwrap_or_else(|| failed_walk(&path));
                         self.apply_moves(&mut moves);
                         if walked.complete && self.db.remove_missing(folder_id, &walked.seen) > 0 {
                             self.notify(UiEvent::Library);
@@ -575,10 +664,12 @@ impl Indexer {
                     }
                 },
                 Ok(op) if op.index() == probed => match op.recv(&done_rx) {
-                    Ok(result) => match self.record(folder_id, result, &mut ini_cache, &mut claimed) {
-                        Ok(record) => batch.push(record),
-                        Err(item) => unreadable.push(item),
-                    },
+                    Ok(result) => {
+                        match self.record(folder_id, result, &mut ini_cache, &mut claimed) {
+                            Ok(record) => batch.push(record),
+                            Err(item) => unreadable.push(item),
+                        }
+                    }
                     Err(_) => finished = true,
                 },
                 _ => {}
@@ -610,14 +701,22 @@ impl Indexer {
             return Outcome::Stopped;
         }
 
-        let summary = summary.unwrap_or_else(|| walker.map(|walker| join_walk(walker, &path)).unwrap_or_else(|| failed_walk(&path)));
+        let summary = summary.unwrap_or_else(|| {
+            walker
+                .map(|walker| join_walk(walker, &path))
+                .unwrap_or_else(|| failed_walk(&path))
+        });
         let mut tracks_changed = self.read_tracks(folder_id, &summary.tracks, &mut unreadable);
         unreadable.extend(summary.unreadable);
         unreadable.sort_by(|a, b| a.path.cmp(&b.path));
-        self.db.store_unreadable(folder_id, &unreadable, summary.complete, &remembered_paths);
+        self.db
+            .store_unreadable(folder_id, &unreadable, summary.complete, &remembered_paths);
         if summary.complete {
             self.db.remove_missing(folder_id, &summary.seen);
-            tracks_changed |= self.db.remove_missing_tracks(folder_id, &summary.tracks_seen) > 0;
+            tracks_changed |= self
+                .db
+                .remove_missing_tracks(folder_id, &summary.tracks_seen)
+                > 0;
             self.db.set_scan_pending(folder_id, false);
         }
         if tracks_changed {
@@ -628,7 +727,10 @@ impl Indexer {
         if !restored.is_empty() {
             self.notify(UiEvent::Restored(restored));
         }
-        self.notify(UiEvent::ScanFinished { folder: folder_id, unreadable });
+        self.notify(UiEvent::ScanFinished {
+            folder: folder_id,
+            unreadable,
+        });
         self.notify(UiEvent::Library);
         if again {
             self.pending.push_front(folder_id);
@@ -653,10 +755,20 @@ impl Indexer {
     fn renamed_to(&self, folder_id: i64, root: &Path) -> Option<PathBuf> {
         let sample = self.db.folder_sample(folder_id, 20);
         let parent = root.parent()?;
-        let added: HashSet<PathBuf> = self.db.folders().into_iter().map(|folder| PathBuf::from(folder.path)).collect();
+        let added: HashSet<PathBuf> = self
+            .db
+            .folders()
+            .into_iter()
+            .map(|folder| PathBuf::from(folder.path))
+            .collect();
         let relative: Vec<(PathBuf, u64)> = sample
             .iter()
-            .filter_map(|(path, bytes)| Some((Path::new(path).strip_prefix(root).ok()?.to_path_buf(), *bytes)))
+            .filter_map(|(path, bytes)| {
+                Some((
+                    Path::new(path).strip_prefix(root).ok()?.to_path_buf(),
+                    *bytes,
+                ))
+            })
             .collect();
         if relative.is_empty() {
             return None;
@@ -667,7 +779,9 @@ impl Indexer {
             .map(|entry| entry.path())
             .filter(|dir| dir.is_dir() && !added.contains(dir))
             .filter(|dir| {
-                relative.iter().all(|(rel, bytes)| std::fs::metadata(dir.join(rel)).is_ok_and(|meta| meta.len() == *bytes))
+                relative.iter().all(|(rel, bytes)| {
+                    std::fs::metadata(dir.join(rel)).is_ok_and(|meta| meta.len() == *bytes)
+                })
             });
         let first = found.next()?;
         found.next().is_none().then_some(first)
@@ -683,7 +797,9 @@ impl Indexer {
         let ProbeResult { mut job, probe } = result;
         // A renamed or moved file keeps the row it had.
         if job.existing.is_none() {
-            job.existing = self.db.moved_photo(&job.path, job.bytes, job.modified_at, claimed);
+            job.existing = self
+                .db
+                .moved_photo(&job.path, job.bytes, job.modified_at, claimed);
             claimed.extend(job.existing);
         }
         let probe = probe.map_err(|reason| Unreadable {
@@ -695,12 +811,18 @@ impl Indexer {
         })?;
         let (star, caption, rotation, pin) = if job.existing.is_none() {
             let parent = job.path.parent().unwrap_or(&job.path).to_path_buf();
-            let (ini, geotags) = ini_cache.entry(parent.clone()).or_insert_with(|| (PicasaIni::load(&parent), Sidecar::load(&parent)));
+            let (ini, geotags) = ini_cache
+                .entry(parent.clone())
+                .or_insert_with(|| (PicasaIni::load(&parent), Sidecar::load(&parent)));
             let (star, caption, rotation) = ini
                 .get(&job.filename)
                 .map(|meta| (meta.star, meta.caption.clone(), meta.rotation))
                 .unwrap_or((None, None, None));
-            let pin = if probe.gps_lat.is_none() { geotags.place(&job.filename) } else { None };
+            let pin = if probe.gps_lat.is_none() {
+                geotags.place(&job.filename)
+            } else {
+                None
+            };
             (star, caption, rotation, pin)
         } else {
             (None, None, None, None)
@@ -713,7 +835,11 @@ impl Indexer {
                 width: probe.width,
                 height: probe.height,
                 bytes: job.bytes,
-                taken_at: if probe.taken_at == 0 { unix_now() } else { probe.taken_at },
+                taken_at: if probe.taken_at == 0 {
+                    unix_now()
+                } else {
+                    probe.taken_at
+                },
                 modified_at: job.modified_at,
                 camera: probe.camera,
                 lens: probe.lens,
@@ -751,7 +877,12 @@ impl Indexer {
             // again; new photos only need their disk thumbnail.
             let job = if record.existing.is_some() {
                 self.thumb_store.remove(id);
-                ThumbJob::Thumb { id, path, edit: Settings::default(), edge: THUMB_EDGE }
+                ThumbJob::Thumb {
+                    id,
+                    path,
+                    edit: Settings::default(),
+                    edge: THUMB_EDGE,
+                }
             } else {
                 ThumbJob::Cache { id, path }
             };
@@ -840,13 +971,19 @@ fn known_under<'a>(known: impl Iterator<Item = &'a String>, unreadable: &[PathBu
         .iter()
         .map(|path| {
             let exact = path.to_string_lossy().into_owned();
-            let mut under = exact.trim_end_matches(std::path::MAIN_SEPARATOR).to_string();
+            let mut under = exact
+                .trim_end_matches(std::path::MAIN_SEPARATOR)
+                .to_string();
             under.push(std::path::MAIN_SEPARATOR);
             (exact, under)
         })
         .collect();
     known
-        .filter(|path| prefixes.iter().any(|(exact, under)| *path == exact || path.starts_with(under.as_str())))
+        .filter(|path| {
+            prefixes
+                .iter()
+                .any(|(exact, under)| *path == exact || path.starts_with(under.as_str()))
+        })
         .cloned()
         .collect()
 }
@@ -891,7 +1028,10 @@ fn walk_folder(
     let complete = walk.complete.load(Ordering::Relaxed) && !cancel.load(Ordering::Relaxed);
     let unreadable = walk.unreadable.into_inner().unwrap_or_default();
     let mut seen = walk.seen.into_inner().unwrap_or_default();
-    let paths: Vec<PathBuf> = unreadable.iter().map(|item| PathBuf::from(&item.path)).collect();
+    let paths: Vec<PathBuf> = unreadable
+        .iter()
+        .map(|item| PathBuf::from(&item.path))
+        .collect();
     seen.extend(known_under(walk.snapshot.keys(), &paths));
     let mut tracks_seen = walk.tracks_seen.into_inner().unwrap_or_default();
     tracks_seen.extend(known_under(walk.known_tracks.keys(), &paths));
@@ -905,7 +1045,10 @@ fn walk_folder(
 }
 
 fn walk_threads() -> usize {
-    std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).clamp(2, 4)
+    std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4)
+        .clamp(2, 4)
 }
 
 fn walk_dir<'s>(scope: &rayon::Scope<'s>, dir: PathBuf, root: bool, walk: &'s Walk<'s>) {
@@ -955,7 +1098,11 @@ fn walk_dir<'s>(scope: &rayon::Scope<'s>, dir: PathBuf, root: bool, walk: &'s Wa
             continue;
         }
         // A link's own entry describes the link, so follow it to the file.
-        let meta = if file_type.is_symlink() { std::fs::metadata(&path) } else { entry.metadata() };
+        let meta = if file_type.is_symlink() {
+            std::fs::metadata(&path)
+        } else {
+            entry.metadata()
+        };
         let meta = match meta {
             Ok(meta) if meta.is_file() => meta,
             Ok(_) => continue,
@@ -968,7 +1115,11 @@ fn walk_dir<'s>(scope: &rayon::Scope<'s>, dir: PathBuf, root: bool, walk: &'s Wa
         let path_text = path.to_string_lossy().into_owned();
         let modified_at = image_io::file_mtime(&meta);
         let bytes = meta.len();
-        let known = if track { None } else { walk.snapshot.get(&path_text).copied() };
+        let known = if track {
+            None
+        } else {
+            walk.snapshot.get(&path_text).copied()
+        };
         let current = if track {
             tracks_seen.push(path_text.clone());
             walk.known_tracks.get(&path_text) == Some(&(bytes, modified_at))
@@ -980,12 +1131,18 @@ fn walk_dir<'s>(scope: &rayon::Scope<'s>, dir: PathBuf, root: bool, walk: &'s Wa
             continue;
         }
         let failed = walk.remembered.get(&path_text);
-        if let Some(item) = failed.filter(|item| item.bytes == bytes && item.modified_at == modified_at) {
+        if let Some(item) =
+            failed.filter(|item| item.bytes == bytes && item.modified_at == modified_at)
+        {
             walk.push(item.clone());
             continue;
         }
         if track {
-            tracks.push(TrackFile { path: path_text, bytes, modified_at });
+            tracks.push(TrackFile {
+                path: path_text,
+                bytes,
+                modified_at,
+            });
             continue;
         }
         jobs.push(ProbeJob {
@@ -1046,9 +1203,9 @@ static WINDOW_LAST: Mutex<Option<Instant>> = Mutex::new(None);
 /// Claims a slot for one background job, unless the window asked for
 /// something lately or every slot is taken.
 fn take_background_slot() -> bool {
-    let quiet = WINDOW_LAST
-        .lock()
-        .map_or(true, |last| last.is_none_or(|at| at.elapsed() >= WINDOW_QUIET));
+    let quiet = WINDOW_LAST.lock().map_or(true, |last| {
+        last.is_none_or(|at| at.elapsed() >= WINDOW_QUIET)
+    });
     if !quiet {
         return false;
     }
@@ -1141,7 +1298,10 @@ fn unwanted_thumb(job: &ThumbJob, wanted: &ThumbWanted) -> Option<i64> {
 }
 
 /// Next job, preferring the window's. The flag is true for those.
-fn recv_thumb(urgent: &Receiver<ThumbJob>, normal: &Receiver<ThumbJob>) -> Option<(ThumbJob, bool)> {
+fn recv_thumb(
+    urgent: &Receiver<ThumbJob>,
+    normal: &Receiver<ThumbJob>,
+) -> Option<(ThumbJob, bool)> {
     let from_window = |job| (job, true);
     let background = |job| (job, false);
     match urgent.try_recv() {
@@ -1156,9 +1316,17 @@ fn recv_thumb(urgent: &Receiver<ThumbJob>, normal: &Receiver<ThumbJob>) -> Optio
                 let n = select.recv(normal);
                 let ready = select.select();
                 if ready.index() == u {
-                    ready.recv(urgent).ok().map(from_window).or_else(|| normal.recv().ok().map(background))
+                    ready
+                        .recv(urgent)
+                        .ok()
+                        .map(from_window)
+                        .or_else(|| normal.recv().ok().map(background))
                 } else if ready.index() == n {
-                    ready.recv(normal).ok().map(background).or_else(|| urgent.recv().ok().map(from_window))
+                    ready
+                        .recv(normal)
+                        .ok()
+                        .map(background)
+                        .or_else(|| urgent.recv().ok().map(from_window))
                 } else {
                     None
                 }
@@ -1177,13 +1345,24 @@ fn run_thumb(store: &ThumbStore, gate: &DisplayGate, job: ThumbJob) -> Option<Ui
             }
             None
         }
-        ThumbJob::Thumb { id, path, edit, edge } => {
+        ThumbJob::Thumb {
+            id,
+            path,
+            edit,
+            edge,
+        } => {
             let file = Path::new(&path);
             if edge > THUMB_EDGE {
                 // The cached thumbnail is already shown; a failure leaves it.
                 let rgba = sharp_thumb(file, &edit, edge)?;
                 let (w, h, rgba) = raw_rgba(&rgba);
-                return Some(UiEvent::Thumb { id, w, h, rgba, edit });
+                return Some(UiEvent::Thumb {
+                    id,
+                    w,
+                    h,
+                    rgba,
+                    edit,
+                });
             }
             let rgba = if edit.is_identity() {
                 store.remove_edited(id);
@@ -1193,7 +1372,10 @@ fn run_thumb(store: &ThumbStore, gate: &DisplayGate, job: ThumbJob) -> Option<Ui
                 }
             } else {
                 let key = edit_key(&edit);
-                match store.get_edited(id, &key).and_then(|jpeg| decode_jpeg(&jpeg)) {
+                match store
+                    .get_edited(id, &key)
+                    .and_then(|jpeg| decode_jpeg(&jpeg))
+                {
                     Some(rgba) => rgba,
                     None => {
                         let Some(rgba) = edited_thumb(store, id, file, &edit) else {
@@ -1207,14 +1389,27 @@ fn run_thumb(store: &ThumbStore, gate: &DisplayGate, job: ThumbJob) -> Option<Ui
                 }
             };
             let (w, h, rgba) = raw_rgba(&rgba);
-            Some(UiEvent::Thumb { id, w, h, rgba, edit })
+            Some(UiEvent::Thumb {
+                id,
+                w,
+                h,
+                rgba,
+                edit,
+            })
         }
-        ThumbJob::Display { id, path, nonce, edit, edge } => {
+        ThumbJob::Display {
+            id,
+            path,
+            nonce,
+            edit,
+            edge,
+        } => {
             let file = Path::new(&path);
             let decoded = if is_video_path(file) {
                 video::poster(file, DISPLAY_EDGE).map(|(rgba, info)| (rgba, video::rows(&info)))
             } else {
-                image_io::load_at_least(file, edge).map(|image| (image_io::limit_rgba(image, edge), Vec::new()))
+                image_io::load_at_least(file, edge)
+                    .map(|image| (image_io::limit_rgba(image, edge), Vec::new()))
             };
             if stale_display(id, nonce, gate) {
                 return None;
@@ -1226,7 +1421,11 @@ fn run_thumb(store: &ThumbStore, gate: &DisplayGate, job: ThumbJob) -> Option<Ui
                 edit::apply(&mut rgba, &edit);
             }
             let histogram = Box::new(Histogram::from_rgba(rgba.as_raw()));
-            let exif = if is_video_path(file) { rows } else { photo_info::exif_rows(file) };
+            let exif = if is_video_path(file) {
+                rows
+            } else {
+                photo_info::exif_rows(file)
+            };
             let (w, h, rgba) = raw_rgba(&rgba);
             Some(UiEvent::Display {
                 id,
@@ -1249,7 +1448,9 @@ fn run_thumb(store: &ThumbStore, gate: &DisplayGate, job: ThumbJob) -> Option<Ui
 /// Decodes a photo or video poster at thumbnail size.
 fn make_thumb(path: &Path) -> Result<RgbaImage, String> {
     if is_video_path(path) {
-        return video::poster(path, 2 * THUMB_EDGE).map(|(rgba, _)| image_io::thumbnail_rgba(&DynamicImage::ImageRgba8(rgba), THUMB_EDGE));
+        return video::poster(path, 2 * THUMB_EDGE).map(|(rgba, _)| {
+            image_io::thumbnail_rgba(&DynamicImage::ImageRgba8(rgba), THUMB_EDGE)
+        });
     }
     std::panic::catch_unwind(|| image_io::load_for_tile(path, THUMB_EDGE))
         .unwrap_or_else(|_| Err("decoder fault".into()))
@@ -1269,7 +1470,10 @@ pub(crate) fn plain_thumb(store: &ThumbStore, id: i64, file: &Path) -> Option<Rg
 /// The thumbnail with `edit` applied.
 fn edited_thumb(store: &ThumbStore, id: i64, file: &Path, edit: &Settings) -> Option<RgbaImage> {
     let reframed = !is_video_path(file) && !Geometry::from_settings(edit).is_identity();
-    if let Some(rgba) = reframed.then(|| reframed_thumb(file, edit, THUMB_EDGE)).flatten() {
+    if let Some(rgba) = reframed
+        .then(|| reframed_thumb(file, edit, THUMB_EDGE))
+        .flatten()
+    {
         return Some(rgba);
     }
     let mut rgba = plain_thumb(store, id, file)?;
@@ -1282,12 +1486,17 @@ fn edited_thumb(store: &ThumbStore, id: i64, file: &Path, edit: &Settings) -> Op
 fn sharp_thumb(file: &Path, edit: &Settings, edge: u32) -> Option<RgbaImage> {
     if is_video_path(file) {
         let (rgba, _) = video::poster(file, 2 * edge).ok()?;
-        return Some(image_io::thumbnail_rgba(&DynamicImage::ImageRgba8(rgba), edge));
+        return Some(image_io::thumbnail_rgba(
+            &DynamicImage::ImageRgba8(rgba),
+            edge,
+        ));
     }
     if !Geometry::from_settings(edit).is_identity() {
         return reframed_thumb(file, edit, edge);
     }
-    let image = std::panic::catch_unwind(|| image_io::load_for_tile(file, edge)).ok()?.ok()?;
+    let image = std::panic::catch_unwind(|| image_io::load_for_tile(file, edge))
+        .ok()?
+        .ok()?;
     let mut rgba = image_io::thumbnail_rgba(&image, edge);
     edit::apply(&mut rgba, edit);
     Some(rgba)
@@ -1309,14 +1518,21 @@ fn reframed_thumb(path: &Path, edit: &Settings, edge: u32) -> Option<RgbaImage> 
     let kept = (right - left).min(bottom - top).clamp(0.05, 1.0);
     let source = ((2 * edge) as f32 / kept).ceil() as u32;
     let source = source.min(REFRAMED_SOURCE_EDGE.max(2 * edge));
-    let image = std::panic::catch_unwind(|| image_io::load_for_tile(path, source)).ok()?.ok()?;
+    let image = std::panic::catch_unwind(|| image_io::load_for_tile(path, source))
+        .ok()?
+        .ok()?;
     let mut rgba = image_io::thumbnail_rgba(&image, source);
     edit::apply(&mut rgba, edit);
-    Some(image_io::thumbnail_rgba(&DynamicImage::ImageRgba8(rgba), edge))
+    Some(image_io::thumbnail_rgba(
+        &DynamicImage::ImageRgba8(rgba),
+        edge,
+    ))
 }
 
 fn decode_jpeg(jpeg: &[u8]) -> Option<RgbaImage> {
-    image::load_from_memory_with_format(jpeg, image::ImageFormat::Jpeg).ok().map(|image| image.to_rgba8())
+    image::load_from_memory_with_format(jpeg, image::ImageFormat::Jpeg)
+        .ok()
+        .map(|image| image.to_rgba8())
 }
 
 fn save_thumb(store: &ThumbStore, id: i64, rgba: &RgbaImage) {
@@ -1326,7 +1542,11 @@ fn save_thumb(store: &ThumbStore, id: i64, rgba: &RgbaImage) {
 }
 
 fn raw_rgba(image: &RgbaImage) -> (usize, usize, Vec<u8>) {
-    (image.width() as usize, image.height() as usize, image.as_raw().clone())
+    (
+        image.width() as usize,
+        image.height() as usize,
+        image.as_raw().clone(),
+    )
 }
 
 #[cfg(test)]
@@ -1364,14 +1584,26 @@ mod tests {
         let snapshot = HashMap::from([(top.to_string_lossy().into_owned(), known)]);
         let old = root.join("a").join("b").join("old.KML");
         let old_meta = std::fs::metadata(&old).unwrap();
-        let known_tracks =
-            HashMap::from([(old.to_string_lossy().into_owned(), (old_meta.len(), image_io::file_mtime(&old_meta)))]);
+        let known_tracks = HashMap::from([(
+            old.to_string_lossy().into_owned(),
+            (old_meta.len(), image_io::file_mtime(&old_meta)),
+        )]);
 
         let (tx, rx) = bounded::<ProbeJob>(4);
-        let drain = std::thread::spawn(move || rx.iter().map(|job| job.filename).collect::<Vec<_>>());
+        let drain =
+            std::thread::spawn(move || rx.iter().map(|job| job.filename).collect::<Vec<_>>());
         let (cancel, checked) = (AtomicBool::new(false), AtomicUsize::new(0));
         let excluded = HashSet::from([root.join("skip")]);
-        let summary = walk_folder(&root, snapshot, known_tracks, HashMap::new(), excluded, tx, &cancel, &checked);
+        let summary = walk_folder(
+            &root,
+            snapshot,
+            known_tracks,
+            HashMap::new(),
+            excluded,
+            tx,
+            &cancel,
+            &checked,
+        );
         let mut probed = drain.join().unwrap();
         probed.sort();
         let _ = std::fs::remove_dir_all(&root);
@@ -1381,8 +1613,19 @@ mod tests {
         assert_eq!(checked.load(Ordering::Relaxed), 5);
         assert_eq!(probed, ["one.png", "two.heic"]);
         assert_eq!(summary.tracks_seen.len(), 2);
-        let tracks: Vec<String> = summary.tracks.iter().map(|file| file.path.clone()).collect();
-        assert_eq!(tracks, [root.join("a").join("ride.gpx").to_string_lossy().into_owned()]);
+        let tracks: Vec<String> = summary
+            .tracks
+            .iter()
+            .map(|file| file.path.clone())
+            .collect();
+        assert_eq!(
+            tracks,
+            [root
+                .join("a")
+                .join("ride.gpx")
+                .to_string_lossy()
+                .into_owned()]
+        );
     }
 
     #[test]
@@ -1396,7 +1639,10 @@ mod tests {
             path(&["root", "file.jpg"]),
             path(&["root", "gone.jpg"]),
         ];
-        let unreadable = [PathBuf::from(path(&["root", "lost"])), PathBuf::from(path(&["root", "file.jpg"]))];
+        let unreadable = [
+            PathBuf::from(path(&["root", "lost"])),
+            PathBuf::from(path(&["root", "file.jpg"])),
+        ];
         let mut kept = known_under(known.iter(), &unreadable);
         kept.sort();
         assert_eq!(kept, [known[3].clone(), known[0].clone(), known[1].clone()]);
@@ -1435,7 +1681,12 @@ mod tests {
                 backfilled: true,
                 not_tracks: RefCell::new(HashMap::new()),
             };
-            Library { dir, indexer, commands: command_tx, events: event_rx }
+            Library {
+                dir,
+                indexer,
+                commands: command_tx,
+                events: event_rx,
+            }
         }
 
         fn add(&self, folder: &str, photos: &[&str]) -> i64 {
@@ -1450,7 +1701,10 @@ mod tests {
         }
 
         fn scan(&mut self, folder: i64) {
-            assert!(matches!(self.indexer.scan_folder(folder), Outcome::Finished));
+            assert!(matches!(
+                self.indexer.scan_folder(folder),
+                Outcome::Finished
+            ));
         }
 
         /// Photo ids by path relative to the library folder.
@@ -1485,12 +1739,15 @@ mod tests {
         lib.indexer.db.set_caption(a, "beach");
 
         std::fs::rename(lib.dir.join("pics/trip"), lib.dir.join("pics/holiday")).unwrap();
-        image::RgbaImage::new(5, 5).save(lib.dir.join("pics/holiday/new.png")).unwrap();
+        image::RgbaImage::new(5, 5)
+            .save(lib.dir.join("pics/holiday/new.png"))
+            .unwrap();
         lib.events.try_iter().for_each(drop);
         lib.scan(folder);
         // The folder tree follows the rename before the new photo is read.
         let first = lib.events.try_iter().find(|event| {
-            matches!(event, UiEvent::Library) || matches!(event, UiEvent::ScanProgress { indexed, .. } if *indexed > 0)
+            matches!(event, UiEvent::Library)
+                || matches!(event, UiEvent::ScanProgress { indexed, .. } if *indexed > 0)
         });
         assert!(matches!(first, Some(UiEvent::Library)));
         let after = lib.photos();
@@ -1504,18 +1761,39 @@ mod tests {
     /// A Trip of `photos` with a Story showing the first; returns both.
     fn trip_with_story(db: &Database, photos: &[i64]) -> (i64, i64) {
         use crate::trip::{Block, MediaUse, StoryBlock, TripDraft};
-        let trip = db.create_trip(&TripDraft::new("Coast", "Europe/Lisbon")).unwrap();
+        let trip = db
+            .create_trip(&TripDraft::new("Coast", "Europe/Lisbon"))
+            .unwrap();
         let refs = db.add_to_trip(trip, photos).unwrap();
         let story = db.create_story(trip, "Coast").unwrap();
-        db.save_story_blocks(story, 1, &[StoryBlock::new(Block::Photo(MediaUse::new(refs[0])))]).unwrap();
+        db.save_story_blocks(
+            story,
+            1,
+            &[StoryBlock::new(Block::Photo(MediaUse::new(refs[0])))],
+        )
+        .unwrap();
         (trip, story)
     }
 
     /// Each member of the Trip with whether its photo is in the library, and the Story's blocks.
-    fn trip_state(db: &Database, trip: i64, story: i64) -> (Vec<(i64, bool)>, Vec<crate::trip::Block>) {
+    fn trip_state(
+        db: &Database,
+        trip: i64,
+        story: i64,
+    ) -> (Vec<(i64, bool)>, Vec<crate::trip::Block>) {
         let members = db.trip_members(trip, &crate::trip::MemberQuery::default(), 0, 100);
-        let blocks = db.story_blocks(story).into_iter().map(|block| block.block).collect();
-        (members.into_iter().map(|member| (member.media_id, member.photo_id.is_some())).collect(), blocks)
+        let blocks = db
+            .story_blocks(story)
+            .into_iter()
+            .map(|block| block.block)
+            .collect();
+        (
+            members
+                .into_iter()
+                .map(|member| (member.media_id, member.photo_id.is_some()))
+                .collect(),
+            blocks,
+        )
     }
 
     #[test]
@@ -1524,7 +1802,10 @@ mod tests {
         let folder = lib.add("drive/pics", &["a.png", "sub/b.png"]);
         lib.scan(folder);
         let before = lib.photos();
-        let (trip, story) = trip_with_story(&lib.indexer.db, &[before["drive/pics/a.png"], before["drive/pics/sub/b.png"]]);
+        let (trip, story) = trip_with_story(
+            &lib.indexer.db,
+            &[before["drive/pics/a.png"], before["drive/pics/sub/b.png"]],
+        );
         let state = trip_state(&lib.indexer.db, trip, story);
         assert!(state.0.iter().all(|(_, there)| *there));
 
@@ -1532,8 +1813,15 @@ mod tests {
         std::fs::rename(lib.dir.join("drive"), lib.dir.join("away")).unwrap();
         lib.scan(folder);
         assert_eq!(lib.photos(), before, "nothing leaves the library");
-        assert!(lib.indexer.db.pending_folders().is_empty(), "its pending flag is left as it was");
-        assert_eq!(trip_state(&lib.indexer.db, trip, story), state, "the Trip and its Story are as they were");
+        assert!(
+            lib.indexer.db.pending_folders().is_empty(),
+            "its pending flag is left as it was"
+        );
+        assert_eq!(
+            trip_state(&lib.indexer.db, trip, story),
+            state,
+            "the Trip and its Story are as they were"
+        );
 
         std::fs::rename(lib.dir.join("away"), lib.dir.join("drive")).unwrap();
         lib.scan(folder);
@@ -1558,7 +1846,10 @@ mod tests {
         let folder = lib.add("pics", &["a.png", "b.png"]);
         lib.scan(folder);
         let before = lib.photos();
-        let (trip, story) = trip_with_story(&lib.indexer.db, &[before["pics/a.png"], before["pics/b.png"]]);
+        let (trip, story) = trip_with_story(
+            &lib.indexer.db,
+            &[before["pics/a.png"], before["pics/b.png"]],
+        );
         let state = trip_state(&lib.indexer.db, trip, story);
 
         // A photo deleted on disk, then Picasso closed as the scan starts.
@@ -1566,8 +1857,16 @@ mod tests {
         lib.indexer.db.set_scan_pending(folder, true);
         lib.commands.send(Command::Stop).unwrap();
         assert!(matches!(lib.indexer.scan_folder(folder), Outcome::Stopped));
-        assert_eq!(lib.photos(), before, "a scan that didn't finish removes nothing");
-        assert_eq!(lib.indexer.db.pending_folders(), [folder], "and continues next time");
+        assert_eq!(
+            lib.photos(),
+            before,
+            "a scan that didn't finish removes nothing"
+        );
+        assert_eq!(
+            lib.indexer.db.pending_folders(),
+            [folder],
+            "and continues next time"
+        );
         assert_eq!(trip_state(&lib.indexer.db, trip, story), state);
 
         // The next whole scan sees the deletion; the Trip keeps the photo as unavailable.
@@ -1575,7 +1874,10 @@ mod tests {
         assert_eq!(lib.photos().into_keys().collect::<Vec<_>>(), ["pics/a.png"]);
         assert!(lib.indexer.db.pending_folders().is_empty());
         let (members, blocks) = trip_state(&lib.indexer.db, trip, story);
-        assert_eq!(members.iter().map(|(_, there)| *there).collect::<Vec<_>>(), [true, false]);
+        assert_eq!(
+            members.iter().map(|(_, there)| *there).collect::<Vec<_>>(),
+            [true, false]
+        );
         assert_eq!(blocks, state.1, "the Story keeps its blocks");
     }
 
@@ -1600,7 +1902,9 @@ mod tests {
         assert_eq!(lib.photos().keys().collect::<Vec<_>>(), ["pics/keep.png"]);
         assert!(lib.indexer.db.folder_path(other).is_none());
         assert!(crate::db::folder_gone(&lib.dir.join("more")));
-        assert!(!crate::db::folder_gone(&lib.dir.join("missing-drive").join("pics")));
+        assert!(!crate::db::folder_gone(
+            &lib.dir.join("missing-drive").join("pics")
+        ));
         assert!(!crate::db::folder_gone(Path::new("/Volumes/Card")));
         assert!(!crate::db::folder_gone(&lib.dir));
     }
@@ -1617,7 +1921,10 @@ mod tests {
         std::fs::rename(lib.dir.join("pics"), lib.dir.join("photos")).unwrap();
         lib.scan(folder);
         let photos = lib.photos();
-        assert_eq!(lib.indexer.db.folder_path(folder), Some(lib.dir.join("photos").to_string_lossy().into_owned()));
+        assert_eq!(
+            lib.indexer.db.folder_path(folder),
+            Some(lib.dir.join("photos").to_string_lossy().into_owned())
+        );
         assert_eq!(photos.len(), 2);
         assert_eq!(photos["photos/a.png"], a);
         assert!(photos.contains_key("photos/sub/b.png"));

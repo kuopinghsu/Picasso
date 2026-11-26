@@ -32,7 +32,9 @@ impl Layout {
     /// resolution. The preview is cropped like the final photo, while the
     /// sensor keeps a few extra pixels at the edges.
     pub fn photo_size(&self) -> Option<(u32, u32)> {
-        let preview = self.preview.filter(|preview| preview.width > 0 && preview.height > 0);
+        let preview = self
+            .preview
+            .filter(|preview| preview.width > 0 && preview.height > 0);
         match (self.sensor, preview) {
             (Some((sw, sh)), Some(preview)) => {
                 let aspect = preview.width as f64 / preview.height as f64;
@@ -61,7 +63,9 @@ pub fn layout(head: &[u8]) -> Option<Layout> {
             continue;
         }
         visited.push(offset);
-        let Some(ifd) = tiff.ifd(offset) else { continue };
+        let Some(ifd) = tiff.ifd(offset) else {
+            continue;
+        };
         pending.extend(ifd.sub_ifds.iter().map(|&sub| sub as usize));
         if ifd.next != 0 {
             pending.push(ifd.next as usize);
@@ -116,7 +120,11 @@ impl Ifd {
     fn preview(&self) -> Option<Preview> {
         let (offset, length) = match (self.jpeg, self.strip) {
             (Some(jpeg), _) => jpeg,
-            (None, Some(strip)) if matches!(self.compression, 6 | 7) && self.photometric != Some(32803) => strip,
+            (None, Some(strip))
+                if matches!(self.compression, 6 | 7) && self.photometric != Some(32803) =>
+            {
+                strip
+            }
             _ => return None,
         };
         (length > 0).then_some(Preview {
@@ -140,12 +148,20 @@ impl<'a> Tiff<'a> {
 
     fn u16_at(&self, at: usize) -> Option<u16> {
         let bytes: [u8; 2] = self.data.get(at..at + 2)?.try_into().ok()?;
-        Some(if self.little { u16::from_le_bytes(bytes) } else { u16::from_be_bytes(bytes) })
+        Some(if self.little {
+            u16::from_le_bytes(bytes)
+        } else {
+            u16::from_be_bytes(bytes)
+        })
     }
 
     fn u32_at(&self, at: usize) -> Option<u32> {
         let bytes: [u8; 4] = self.data.get(at..at + 4)?.try_into().ok()?;
-        Some(if self.little { u32::from_le_bytes(bytes) } else { u32::from_be_bytes(bytes) })
+        Some(if self.little {
+            u32::from_le_bytes(bytes)
+        } else {
+            u32::from_be_bytes(bytes)
+        })
     }
 
     /// The SHORT or LONG values of the entry at `entry`.
@@ -170,7 +186,11 @@ impl<'a> Tiff<'a> {
         (0..count)
             .map_while(|index| {
                 let at = start + index * size;
-                if size == 2 { self.u16_at(at).map(u32::from) } else { self.u32_at(at) }
+                if size == 2 {
+                    self.u16_at(at).map(u32::from)
+                } else {
+                    self.u32_at(at)
+                }
             })
             .collect()
     }
@@ -188,8 +208,12 @@ impl<'a> Tiff<'a> {
                 257 => ifd.height = first.unwrap_or(0),
                 259 => ifd.compression = first.unwrap_or(0),
                 262 => ifd.photometric = first,
-                273 if values.len() == 1 => ifd.strip = Some((values[0], ifd.strip.map_or(0, |strip| strip.1))),
-                279 if values.len() == 1 => ifd.strip = Some((ifd.strip.map_or(0, |strip| strip.0), values[0])),
+                273 if values.len() == 1 => {
+                    ifd.strip = Some((values[0], ifd.strip.map_or(0, |strip| strip.1)))
+                }
+                279 if values.len() == 1 => {
+                    ifd.strip = Some((ifd.strip.map_or(0, |strip| strip.0), values[0]))
+                }
                 330 => ifd.sub_ifds = values,
                 513 => ifd.jpeg = Some((first.unwrap_or(0), ifd.jpeg.map_or(0, |jpeg| jpeg.1))),
                 514 => ifd.jpeg = Some((ifd.jpeg.map_or(0, |jpeg| jpeg.0), first.unwrap_or(0))),
@@ -241,7 +265,13 @@ mod tests {
             0,
         ));
         out.extend(ifd(
-            &[entry(256, 4, 11904), entry(257, 4, 8842), entry(259, 3, 1), entry(262, 3, 32803), entry(273, 4, 400)],
+            &[
+                entry(256, 4, 11904),
+                entry(257, 4, 8842),
+                entry(259, 3, 1),
+                entry(262, 3, 32803),
+                entry(273, 4, 400),
+            ],
             0,
         ));
         out
@@ -251,7 +281,15 @@ mod tests {
     fn finds_the_preview_and_the_sensor() {
         let layout = layout(&hasselblad_like()).unwrap();
         assert_eq!(layout.sensor, Some((11904, 8842)));
-        assert_eq!(layout.preview, Some(Preview { offset: 5_000, length: 1_200, width: 3888, height: 2918 }));
+        assert_eq!(
+            layout.preview,
+            Some(Preview {
+                offset: 5_000,
+                length: 1_200,
+                width: 3888,
+                height: 2918
+            })
+        );
         // The preview's 4:3 shape at the sensor's height.
         assert_eq!(layout.photo_size(), Some((11781, 8842)));
     }

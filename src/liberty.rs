@@ -5,7 +5,9 @@
 //! the window draws on top with its own fonts, so they stay sharp, read in
 //! every script, and don't collide across tiles.
 
-use tiny_skia::{Color, FillRule, LineCap, LineJoin, Paint, PathBuilder, Pixmap, Stroke, StrokeDash, Transform};
+use tiny_skia::{
+    Color, FillRule, LineCap, LineJoin, Paint, PathBuilder, Pixmap, Stroke, StrokeDash, Transform,
+};
 
 use crate::i18n::Lang;
 use crate::mvt::{self, Feature, Kind, Layer};
@@ -61,7 +63,14 @@ impl Part {
     pub fn of(z: u8, x: u32, y: u32) -> ((u8, u32, u32), Part) {
         let depth = z.saturating_sub(DATA_ZOOM);
         let mask = (1u32 << depth) - 1;
-        ((z - depth, x >> depth, y >> depth), Part { depth, x: x & mask, y: y & mask })
+        (
+            (z - depth, x >> depth, y >> depth),
+            Part {
+                depth,
+                x: x & mask,
+                y: y & mask,
+            },
+        )
     }
 }
 
@@ -118,7 +127,10 @@ pub fn draw(data: &[u8], zoom: u8, part: Part, names: &[&str]) -> Option<Drawn> 
     pixmap.fill(rgb(0xF8, 0xF4, 0xF0));
     let z = f32::from(zoom);
     let layer = |name: &str| layers.iter().find(|layer| layer.name == name);
-    let mut canvas = Canvas { pixmap: &mut pixmap, part };
+    let mut canvas = Canvas {
+        pixmap: &mut pixmap,
+        part,
+    };
 
     if let Some(landcover) = layer("landcover") {
         for (class, color) in [
@@ -130,19 +142,43 @@ pub fn draw(data: &[u8], zoom: u8, part: Part, names: &[&str]) -> Option<Drawn> 
             ("ice", rgba(0xFF, 0xFF, 0xFF, 0.8)),
             ("rock", rgba(0xE2, 0xDE, 0xD8, 0.7)),
         ] {
-            canvas.fill(landcover, |feature| landcover.text(feature, "class") == Some(class), color);
+            canvas.fill(
+                landcover,
+                |feature| landcover.text(feature, "class") == Some(class),
+                color,
+            );
         }
     }
     if let Some(landuse) = layer("landuse") {
         for (classes, color) in [
-            (&["residential", "suburb", "neighbourhood"][..], rgba(0xEA, 0xE2, 0xD8, 0.5)),
-            (&["commercial", "retail", "industrial", "railway"][..], rgba(0xF2, 0xDE, 0xDE, 0.45)),
+            (
+                &["residential", "suburb", "neighbourhood"][..],
+                rgba(0xEA, 0xE2, 0xD8, 0.5),
+            ),
+            (
+                &["commercial", "retail", "industrial", "railway"][..],
+                rgba(0xF2, 0xDE, 0xDE, 0.45),
+            ),
             (&["cemetery"][..], rgb(0xE0, 0xE4, 0xDD)),
             (&["hospital"][..], rgb(0xFD, 0xE8, 0xEC)),
-            (&["school", "university", "college", "kindergarten"][..], rgb(0xF0, 0xF0, 0xD8)),
-            (&["stadium", "pitch", "track", "playground"][..], rgb(0xD4, 0xEB, 0xCB)),
+            (
+                &["school", "university", "college", "kindergarten"][..],
+                rgb(0xF0, 0xF0, 0xD8),
+            ),
+            (
+                &["stadium", "pitch", "track", "playground"][..],
+                rgb(0xD4, 0xEB, 0xCB),
+            ),
         ] {
-            canvas.fill(landuse, |feature| landuse.text(feature, "class").is_some_and(|class| classes.contains(&class)), color);
+            canvas.fill(
+                landuse,
+                |feature| {
+                    landuse
+                        .text(feature, "class")
+                        .is_some_and(|class| classes.contains(&class))
+                },
+                color,
+            );
         }
     }
     if let Some(park) = layer("park") {
@@ -154,13 +190,23 @@ pub fn draw(data: &[u8], zoom: u8, part: Part, names: &[&str]) -> Option<Drawn> 
     }
     if let Some(waterway) = layer("waterway") {
         for (classes, stops) in [
-            (&["stream", "drain", "ditch"][..], &[(12.0, 0.3), (14.0, 0.8), (18.0, 3.0)][..]),
-            (&["river", "canal"][..], &[(8.0, 0.5), (12.0, 1.2), (14.0, 2.0), (18.0, 8.0)][..]),
+            (
+                &["stream", "drain", "ditch"][..],
+                &[(12.0, 0.3), (14.0, 0.8), (18.0, 3.0)][..],
+            ),
+            (
+                &["river", "canal"][..],
+                &[(8.0, 0.5), (12.0, 1.2), (14.0, 2.0), (18.0, 8.0)][..],
+            ),
         ] {
             let width = ramp(z, stops);
             canvas.stroke(
                 waterway,
-                |feature| waterway.text(feature, "class").is_some_and(|class| classes.contains(&class)),
+                |feature| {
+                    waterway
+                        .text(feature, "class")
+                        .is_some_and(|class| classes.contains(&class))
+                },
                 water,
                 width,
                 None,
@@ -168,11 +214,20 @@ pub fn draw(data: &[u8], zoom: u8, part: Part, names: &[&str]) -> Option<Drawn> 
         }
     }
     if let Some(aeroway) = layer("aeroway") {
-        canvas.fill(aeroway, |feature| feature.kind == Kind::Polygon, rgba(0xE5, 0xE4, 0xE0, 0.8));
-        for (class, stops) in [("taxiway", &[(12.0, 0.5), (16.0, 6.0)][..]), ("runway", &[(10.0, 1.0), (16.0, 20.0)][..])] {
+        canvas.fill(
+            aeroway,
+            |feature| feature.kind == Kind::Polygon,
+            rgba(0xE5, 0xE4, 0xE0, 0.8),
+        );
+        for (class, stops) in [
+            ("taxiway", &[(12.0, 0.5), (16.0, 6.0)][..]),
+            ("runway", &[(10.0, 1.0), (16.0, 20.0)][..]),
+        ] {
             canvas.stroke(
                 aeroway,
-                |feature| feature.kind == Kind::Line && aeroway.text(feature, "class") == Some(class),
+                |feature| {
+                    feature.kind == Kind::Line && aeroway.text(feature, "class") == Some(class)
+                },
                 rgb(0xFF, 0xFF, 0xFF),
                 ramp(z, stops),
                 None,
@@ -191,7 +246,8 @@ pub fn draw(data: &[u8], zoom: u8, part: Part, names: &[&str]) -> Option<Drawn> 
         draw_roads(&mut canvas, roads, z);
     }
     if let Some(boundary) = layer("boundary") {
-        let on_land = |feature: &Feature| boundary.number(feature, "maritime").unwrap_or(0.0) == 0.0;
+        let on_land =
+            |feature: &Feature| boundary.number(feature, "maritime").unwrap_or(0.0) == 0.0;
         let level = |feature: &Feature| boundary.number(feature, "admin_level").unwrap_or(99.0);
         canvas.stroke(
             boundary,
@@ -215,14 +271,23 @@ pub fn draw(data: &[u8], zoom: u8, part: Part, names: &[&str]) -> Option<Drawn> 
         place_labels(places, frame_of(places), zoom, names, &mut labels);
     }
     if let Some(waters) = layer("water_name") {
-        point_labels(waters, frame_of(waters), names, LabelKind::Water, &mut labels);
+        point_labels(
+            waters,
+            frame_of(waters),
+            names,
+            LabelKind::Water,
+            &mut labels,
+        );
     }
     if zoom >= 13 {
         if let Some(roads) = layer("transportation_name") {
             road_labels(roads, frame_of(roads), names, &mut labels);
         }
     }
-    Some(Drawn { rgba: pixmap.take(), labels })
+    Some(Drawn {
+        rgba: pixmap.take(),
+        labels,
+    })
 }
 
 /// Roads under bridges first and tunnels faded; within each, every
@@ -248,28 +313,55 @@ fn draw_roads(canvas: &mut Canvas, roads: &Layer, z: f32) {
         Road {
             classes: &["minor", "busway", "raceway"],
             from: 11.0,
-            width: &[(11.0, 0.3), (13.0, 1.0), (14.0, 2.5), (16.0, 5.5), (18.0, 12.0)],
+            width: &[
+                (11.0, 0.3),
+                (13.0, 1.0),
+                (14.0, 2.5),
+                (16.0, 5.5),
+                (18.0, 12.0),
+            ],
             fill: rgb(0xFF, 0xFF, 0xFF),
             casing: Some(minor_casing),
         },
         Road {
             classes: &["secondary", "tertiary"],
             from: 8.0,
-            width: &[(8.0, 0.3), (10.0, 0.8), (12.0, 1.5), (14.0, 3.5), (16.0, 7.0), (18.0, 14.0)],
+            width: &[
+                (8.0, 0.3),
+                (10.0, 0.8),
+                (12.0, 1.5),
+                (14.0, 3.5),
+                (16.0, 7.0),
+                (18.0, 14.0),
+            ],
             fill: rgb(0xFF, 0xEE, 0xAA),
             casing: Some(main_casing),
         },
         Road {
             classes: &["trunk", "primary"],
             from: 7.0,
-            width: &[(7.0, 0.3), (8.0, 0.6), (12.0, 2.0), (14.0, 4.5), (16.0, 8.0), (18.0, 16.0)],
+            width: &[
+                (7.0, 0.3),
+                (8.0, 0.6),
+                (12.0, 2.0),
+                (14.0, 4.5),
+                (16.0, 8.0),
+                (18.0, 16.0),
+            ],
             fill: rgb(0xFF, 0xEE, 0xAA),
             casing: Some(main_casing),
         },
         Road {
             classes: &["motorway"],
             from: 4.0,
-            width: &[(4.0, 0.4), (8.0, 1.0), (12.0, 2.5), (14.0, 5.0), (16.0, 9.0), (18.0, 18.0)],
+            width: &[
+                (4.0, 0.4),
+                (8.0, 1.0),
+                (12.0, 2.5),
+                (14.0, 5.0),
+                (16.0, 9.0),
+                (18.0, 18.0),
+            ],
             fill: rgb(0xFF, 0xCC, 0x88),
             casing: Some(main_casing),
         },
@@ -286,7 +378,13 @@ fn draw_roads(canvas: &mut Canvas, roads: &Layer, z: f32) {
                 ("path", rgb(0xC6, 0xB9, 0xA9), Some([2.0, 2.0])),
                 ("track", rgb(0xB8, 0xA8, 0x8E), Some([3.0, 2.0])),
             ] {
-                canvas.stroke(roads, |feature| on_level(feature) && roads.text(feature, "class") == Some(class), color, 1.0, dash);
+                canvas.stroke(
+                    roads,
+                    |feature| on_level(feature) && roads.text(feature, "class") == Some(class),
+                    color,
+                    1.0,
+                    dash,
+                );
             }
         }
         // Ramps (slip roads) are drawn narrower than their class.
@@ -294,11 +392,20 @@ fn draw_roads(canvas: &mut Canvas, roads: &Layer, z: f32) {
         let visible = |style: &Road, ramp_road: bool, feature: &Feature| {
             on_level(feature)
                 && is_ramp(feature) == ramp_road
-                && roads.text(feature, "class").is_some_and(|class| style.classes.contains(&class))
+                && roads
+                    .text(feature, "class")
+                    .is_some_and(|class| style.classes.contains(&class))
         };
-        let width = |style: &Road, ramp_road: bool| ramp(z, style.width) * if ramp_road { 0.6 } else { 1.0 };
+        let width = |style: &Road, ramp_road: bool| {
+            ramp(z, style.width) * if ramp_road { 0.6 } else { 1.0 }
+        };
         let edge = ramp(z, &[(10.0, 0.5), (14.0, 1.0), (18.0, 2.0)]);
-        let shown = || styles.iter().filter(|style| z >= style.from).flat_map(|style| [(style, false), (style, true)]);
+        let shown = || {
+            styles
+                .iter()
+                .filter(|style| z >= style.from)
+                .flat_map(|style| [(style, false), (style, true)])
+        };
         if z >= 10.0 {
             for (style, ramp_road) in shown() {
                 let Some(casing) = style.casing else { continue };
@@ -322,7 +429,11 @@ fn draw_roads(canvas: &mut Canvas, roads: &Layer, z: f32) {
         }
         canvas.stroke(
             roads,
-            |feature| on_level(feature) && z >= 10.0 && matches!(roads.text(feature, "class"), Some("rail" | "transit")),
+            |feature| {
+                on_level(feature)
+                    && z >= 10.0
+                    && matches!(roads.text(feature, "class"), Some("rail" | "transit"))
+            },
             faded(rgb(0xB5, 0xB5, 0xB5), fade),
             ramp(z, &[(10.0, 0.5), (14.0, 1.0), (18.0, 2.5)]),
             None,
@@ -349,7 +460,11 @@ impl Canvas<'_> {
     fn fill(&mut self, layer: &Layer, pick: impl Fn(&Feature) -> bool, color: Color) {
         let frame = Frame::new(layer.extent, self.part);
         let mut path = PathBuilder::new();
-        for feature in layer.features.iter().filter(|feature| feature.kind == Kind::Polygon && pick(feature)) {
+        for feature in layer
+            .features
+            .iter()
+            .filter(|feature| feature.kind == Kind::Polygon && pick(feature))
+        {
             for ring in feature.geometry() {
                 if ring.len() < 3 {
                     continue;
@@ -365,18 +480,35 @@ impl Canvas<'_> {
         }
         let Some(path) = path.finish() else { return };
         // Holes wind the other way, so the nonzero rule leaves them open.
-        self.pixmap.fill_path(&path, &paint(color), FillRule::Winding, Transform::identity(), None);
+        self.pixmap.fill_path(
+            &path,
+            &paint(color),
+            FillRule::Winding,
+            Transform::identity(),
+            None,
+        );
     }
 
     /// Strokes the lines (and polygon outlines) of `layer` that pass `pick`.
     /// `width` and `dash` are in pixels of a 256 px tile.
-    fn stroke(&mut self, layer: &Layer, pick: impl Fn(&Feature) -> bool, color: Color, width: f32, dash: Option<[f32; 2]>) {
+    fn stroke(
+        &mut self,
+        layer: &Layer,
+        pick: impl Fn(&Feature) -> bool,
+        color: Color,
+        width: f32,
+        dash: Option<[f32; 2]>,
+    ) {
         if width <= 0.0 {
             return;
         }
         let frame = Frame::new(layer.extent, self.part);
         let mut path = PathBuilder::new();
-        for feature in layer.features.iter().filter(|feature| feature.kind != Kind::Point && pick(feature)) {
+        for feature in layer
+            .features
+            .iter()
+            .filter(|feature| feature.kind != Kind::Point && pick(feature))
+        {
             for line in feature.geometry() {
                 if line.len() < 2 {
                     continue;
@@ -397,7 +529,8 @@ impl Canvas<'_> {
             dash: dash.and_then(|[on, off]| StrokeDash::new(vec![on * PX, off * PX], 0.0)),
             ..Stroke::default()
         };
-        self.pixmap.stroke_path(&path, &paint(color), &stroke, Transform::identity(), None);
+        self.pixmap
+            .stroke_path(&path, &paint(color), &stroke, Transform::identity(), None);
     }
 }
 
@@ -424,7 +557,9 @@ fn faded(mut color: Color, alpha: f32) -> Color {
 /// Value at zoom `z` along straight lines between `(zoom, value)` stops,
 /// held flat past either end.
 fn ramp(z: f32, stops: &[(f32, f32)]) -> f32 {
-    let Some(&(first_z, first)) = stops.first() else { return 0.0 };
+    let Some(&(first_z, first)) = stops.first() else {
+        return 0.0;
+    };
     if z <= first_z {
         return first;
     }
@@ -441,7 +576,12 @@ fn label_name(layer: &Layer, feature: &Feature, names: &[&str]) -> Option<String
     names
         .iter()
         .chain(&["name"])
-        .find_map(|key| layer.text(feature, key).map(str::trim).filter(|text| !text.is_empty()))
+        .find_map(|key| {
+            layer
+                .text(feature, key)
+                .map(str::trim)
+                .filter(|text| !text.is_empty())
+        })
         .map(str::to_string)
 }
 
@@ -454,7 +594,11 @@ fn inside(frame: Frame, point: [f32; 2]) -> Option<[f32; 2]> {
 }
 
 fn place_labels(layer: &Layer, frame: Frame, zoom: u8, names: &[&str], out: &mut Vec<MapLabel>) {
-    for feature in layer.features.iter().filter(|feature| feature.kind == Kind::Point) {
+    for feature in layer
+        .features
+        .iter()
+        .filter(|feature| feature.kind == Kind::Point)
+    {
         let kind = match layer.text(feature, "class") {
             Some("country") => LabelKind::Country,
             Some("state" | "province") if zoom >= 4 => LabelKind::State,
@@ -465,26 +609,55 @@ fn place_labels(layer: &Layer, frame: Frame, zoom: u8, names: &[&str], out: &mut
             Some("neighbourhood") if zoom >= 14 => LabelKind::Suburb,
             _ => continue,
         };
-        let Some(text) = label_name(layer, feature, names) else { continue };
-        let rank = layer.number(feature, "rank").unwrap_or(30.0).clamp(0.0, 99.0) as u32;
+        let Some(text) = label_name(layer, feature, names) else {
+            continue;
+        };
+        let rank = layer
+            .number(feature, "rank")
+            .unwrap_or(30.0)
+            .clamp(0.0, 99.0) as u32;
         for point in feature.geometry().into_iter().flatten() {
             if let Some(pos) = inside(frame, point) {
-                out.push(MapLabel { text: text.clone(), kind, pos, angle: 0.0, span: 0.0, rank: kind as u32 * 100 + rank });
+                out.push(MapLabel {
+                    text: text.clone(),
+                    kind,
+                    pos,
+                    angle: 0.0,
+                    span: 0.0,
+                    rank: kind as u32 * 100 + rank,
+                });
             }
         }
     }
 }
 
-fn point_labels(layer: &Layer, frame: Frame, names: &[&str], kind: LabelKind, out: &mut Vec<MapLabel>) {
+fn point_labels(
+    layer: &Layer,
+    frame: Frame,
+    names: &[&str],
+    kind: LabelKind,
+    out: &mut Vec<MapLabel>,
+) {
     for feature in &layer.features {
-        let Some(text) = label_name(layer, feature, names) else { continue };
+        let Some(text) = label_name(layer, feature, names) else {
+            continue;
+        };
         let parts = feature.geometry();
         let point = match feature.kind {
             Kind::Point => parts.first().and_then(|part| part.first().copied()),
-            _ => parts.first().and_then(|part| part.get(part.len() / 2).copied()),
+            _ => parts
+                .first()
+                .and_then(|part| part.get(part.len() / 2).copied()),
         };
         if let Some(pos) = point.and_then(|point| inside(frame, point)) {
-            out.push(MapLabel { text, kind, pos, angle: 0.0, span: 0.0, rank: kind as u32 * 100 });
+            out.push(MapLabel {
+                text,
+                kind,
+                pos,
+                angle: 0.0,
+                span: 0.0,
+                rank: kind as u32 * 100,
+            });
         }
     }
 }
@@ -492,8 +665,14 @@ fn point_labels(layer: &Layer, frame: Frame, names: &[&str], kind: LabelKind, ou
 /// One name per road, on its longest straight piece inside the tile.
 fn road_labels(layer: &Layer, frame: Frame, names: &[&str], out: &mut Vec<MapLabel>) {
     let size = TILE_SIZE as f32;
-    for feature in layer.features.iter().filter(|feature| feature.kind == Kind::Line) {
-        let Some(text) = label_name(layer, feature, names) else { continue };
+    for feature in layer
+        .features
+        .iter()
+        .filter(|feature| feature.kind == Kind::Line)
+    {
+        let Some(text) = label_name(layer, feature, names) else {
+            continue;
+        };
         let importance = match layer.text(feature, "class") {
             Some("motorway") => 0,
             Some("trunk" | "primary") => 1,
@@ -539,8 +718,25 @@ mod tests {
     fn deep_zooms_enlarge_a_part_of_the_data_tile() {
         assert_eq!(Part::of(12, 5, 9), ((12, 5, 9), Part::default()));
         assert_eq!(Part::of(14, 5, 9), ((14, 5, 9), Part::default()));
-        assert_eq!(Part::of(16, 13, 6), ((14, 3, 1), Part { depth: 2, x: 1, y: 2 }));
-        let frame = Frame::new(4096, Part { depth: 1, x: 1, y: 0 });
+        assert_eq!(
+            Part::of(16, 13, 6),
+            (
+                (14, 3, 1),
+                Part {
+                    depth: 2,
+                    x: 1,
+                    y: 2
+                }
+            )
+        );
+        let frame = Frame::new(
+            4096,
+            Part {
+                depth: 1,
+                x: 1,
+                y: 0,
+            },
+        );
         assert_eq!(frame.map([2048.0, 1024.0]), [0.0, 256.0]);
     }
 
@@ -554,19 +750,40 @@ mod tests {
 
     #[test]
     fn draws_water_and_names_places_in_the_app_language() {
-        let lake = vec![command(1, 1), zz(0), zz(0), command(2, 3), zz(2048), zz(0), zz(0), zz(2048), zz(-2048), zz(0), command(7, 1)];
+        let lake = vec![
+            command(1, 1),
+            zz(0),
+            zz(0),
+            command(2, 3),
+            zz(2048),
+            zz(0),
+            zz(0),
+            zz(2048),
+            zz(-2048),
+            zz(0),
+            command(7, 1),
+        ];
         let mut data = tile("water", &[], &[], &[(3, vec![], lake)]);
         data.extend(tile(
             "place",
             &["class", "name", "name:en"],
             &["city", "首都", "Capital"],
-            &[(1, vec![0, 0, 1, 1, 2, 2], vec![command(1, 1), zz(1024), zz(3072)])],
+            &[(
+                1,
+                vec![0, 0, 1, 1, 2, 2],
+                vec![command(1, 1), zz(1024), zz(3072)],
+            )],
         ));
         let drawn = draw(&data, 10, Part::default(), &["name:en"]).unwrap();
         assert_eq!(drawn.rgba.len(), (TILE_SIZE * TILE_SIZE * 4) as usize);
         let pixel = |x: u32, y: u32| {
             let at = ((y * TILE_SIZE + x) * 4) as usize;
-            [drawn.rgba[at], drawn.rgba[at + 1], drawn.rgba[at + 2], drawn.rgba[at + 3]]
+            [
+                drawn.rgba[at],
+                drawn.rgba[at + 1],
+                drawn.rgba[at + 2],
+                drawn.rgba[at + 3],
+            ]
         };
         assert_eq!(pixel(100, 100), [0xAA, 0xD4, 0xDB, 255], "water");
         assert_eq!(pixel(400, 400), [0xF8, 0xF4, 0xF0, 255], "land");
@@ -580,12 +797,29 @@ mod tests {
 
     #[test]
     fn road_names_lie_along_the_road_and_stay_upright() {
-        let road = vec![command(1, 1), zz(3000), zz(1000), command(2, 2), zz(-2000), zz(0), zz(-100), zz(100)];
-        let data = tile("transportation_name", &["class", "name"], &["primary", "Zhongshan Rd"], &[(2, vec![0, 0, 1, 1], road)]);
+        let road = vec![
+            command(1, 1),
+            zz(3000),
+            zz(1000),
+            command(2, 2),
+            zz(-2000),
+            zz(0),
+            zz(-100),
+            zz(100),
+        ];
+        let data = tile(
+            "transportation_name",
+            &["class", "name"],
+            &["primary", "Zhongshan Rd"],
+            &[(2, vec![0, 0, 1, 1], road)],
+        );
         let drawn = draw(&data, 14, Part::default(), &[]).unwrap();
         let label = &drawn.labels[0];
         assert_eq!(label.kind, LabelKind::Road);
-        assert!(label.angle.abs() < 1e-6, "drawn right to left, read left to right");
+        assert!(
+            label.angle.abs() < 1e-6,
+            "drawn right to left, read left to right"
+        );
         assert!((label.span - 2000.0 / 4096.0).abs() < 1e-4);
         assert_eq!(label.pos, [2000.0 / 4096.0, 1000.0 / 4096.0]);
     }

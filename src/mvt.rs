@@ -56,7 +56,9 @@ impl Layer {
     /// Property `key` of `feature`.
     pub fn get<'a>(&'a self, feature: &Feature, key: &str) -> Option<&'a Value> {
         feature.tags.as_chunks::<2>().0.iter().find_map(|&[k, v]| {
-            (self.keys.get(k as usize)? == key).then(|| self.values.get(v as usize)).flatten()
+            (self.keys.get(k as usize)? == key)
+                .then(|| self.values.get(v as usize))
+                .flatten()
         })
     }
 
@@ -83,7 +85,9 @@ impl Feature {
             match command {
                 1 | 2 => {
                     for _ in 0..count {
-                        let (Some(&dx), Some(&dy)) = (self.commands.get(at), self.commands.get(at + 1)) else {
+                        let (Some(&dx), Some(&dy)) =
+                            (self.commands.get(at), self.commands.get(at + 1))
+                        else {
                             return parts;
                         };
                         at += 2;
@@ -136,15 +140,26 @@ pub fn decode(data: &[u8]) -> Vec<Layer> {
 }
 
 fn layer(data: &[u8]) -> Layer {
-    let mut layer = Layer { extent: 4096, ..Layer::default() };
+    let mut layer = Layer {
+        extent: 4096,
+        ..Layer::default()
+    };
     let mut reader = Reader::new(data);
     while let Some((field, wire)) = reader.key() {
         let read = match (field, wire) {
-            (1, 2) => reader.bytes().map(|bytes| layer.name = String::from_utf8_lossy(bytes).into_owned()),
-            (2, 2) => reader.bytes().map(|bytes| layer.features.push(feature(bytes))),
-            (3, 2) => reader.bytes().map(|bytes| layer.keys.push(String::from_utf8_lossy(bytes).into_owned())),
+            (1, 2) => reader
+                .bytes()
+                .map(|bytes| layer.name = String::from_utf8_lossy(bytes).into_owned()),
+            (2, 2) => reader
+                .bytes()
+                .map(|bytes| layer.features.push(feature(bytes))),
+            (3, 2) => reader
+                .bytes()
+                .map(|bytes| layer.keys.push(String::from_utf8_lossy(bytes).into_owned())),
             (4, 2) => reader.bytes().map(|bytes| layer.values.push(value(bytes))),
-            (5, 0) => reader.varint().map(|extent| layer.extent = (extent as u32).max(1)),
+            (5, 0) => reader
+                .varint()
+                .map(|extent| layer.extent = (extent as u32).max(1)),
             _ => reader.skip(wire),
         };
         if read.is_none() {
@@ -174,7 +189,9 @@ fn feature(data: &[u8]) -> Feature {
                 }
             }),
             (4, 2) => reader.packed(&mut feature.commands),
-            (4, 0) => reader.varint().map(|command| feature.commands.push(command as u32)),
+            (4, 0) => reader
+                .varint()
+                .map(|command| feature.commands.push(command as u32)),
             _ => reader.skip(wire),
         };
         if read.is_none() {
@@ -189,10 +206,18 @@ fn value(data: &[u8]) -> Value {
     let mut value = Value::Text(String::new());
     while let Some((field, wire)) = reader.key() {
         let read = match (field, wire) {
-            (1, 2) => reader.bytes().map(|bytes| value = Value::Text(String::from_utf8_lossy(bytes).into_owned())),
-            (2, 5) => reader.fixed32().map(|bits| value = Value::Number(f64::from(f32::from_bits(bits)))),
-            (3, 1) => reader.fixed64().map(|bits| value = Value::Number(f64::from_bits(bits))),
-            (4, 0) | (5, 0) => reader.varint().map(|number| value = Value::Number(number as i64 as f64)),
+            (1, 2) => reader
+                .bytes()
+                .map(|bytes| value = Value::Text(String::from_utf8_lossy(bytes).into_owned())),
+            (2, 5) => reader
+                .fixed32()
+                .map(|bits| value = Value::Number(f64::from(f32::from_bits(bits)))),
+            (3, 1) => reader
+                .fixed64()
+                .map(|bits| value = Value::Number(f64::from_bits(bits))),
+            (4, 0) | (5, 0) => reader
+                .varint()
+                .map(|number| value = Value::Number(number as i64 as f64)),
             (6, 0) => reader.varint().map(|number| {
                 let signed = ((number >> 1) as i64) ^ -((number & 1) as i64);
                 value = Value::Number(signed as f64);
@@ -317,7 +342,12 @@ pub mod tests {
 
     /// A one-layer tile with the given features, each a kind, tags and
     /// geometry, plus the layer's keys and string values.
-    pub fn tile(name: &str, keys: &[&str], values: &[&str], features: &[(u32, Vec<u32>, Vec<u32>)]) -> Vec<u8> {
+    pub fn tile(
+        name: &str,
+        keys: &[&str],
+        values: &[&str],
+        features: &[(u32, Vec<u32>, Vec<u32>)],
+    ) -> Vec<u8> {
         let mut layer = Vec::new();
         message(&mut layer, 1, name.as_bytes());
         for (kind, tags, geometry) in features {
@@ -346,11 +376,24 @@ pub mod tests {
     #[test]
     fn reads_layers_tags_and_geometry() {
         let square = vec![
-            command(1, 1), zz(10), zz(20),
-            command(2, 3), zz(100), zz(0), zz(0), zz(100), zz(-100), zz(0),
+            command(1, 1),
+            zz(10),
+            zz(20),
+            command(2, 3),
+            zz(100),
+            zz(0),
+            zz(0),
+            zz(100),
+            zz(-100),
+            zz(0),
             command(7, 1),
         ];
-        let data = tile("water", &["class", "name"], &["lake", "Sun Moon Lake"], &[(3, vec![0, 0, 1, 1], square)]);
+        let data = tile(
+            "water",
+            &["class", "name"],
+            &["lake", "Sun Moon Lake"],
+            &[(3, vec![0, 0, 1, 1], square)],
+        );
         let layers = decode(&data);
         assert_eq!(layers.len(), 1);
         let layer = &layers[0];
@@ -362,13 +405,28 @@ pub mod tests {
         assert_eq!(layer.get(feature, "missing"), None);
         assert_eq!(
             feature.geometry(),
-            vec![vec![[10.0, 20.0], [110.0, 20.0], [110.0, 120.0], [10.0, 120.0], [10.0, 20.0]]]
+            vec![vec![
+                [10.0, 20.0],
+                [110.0, 20.0],
+                [110.0, 120.0],
+                [10.0, 120.0],
+                [10.0, 20.0]
+            ]]
         );
     }
 
     #[test]
     fn damaged_data_stops_without_panicking() {
-        let data = tile("roads", &[], &[], &[(2, vec![], vec![command(1, 1), zz(1), zz(1), command(2, 5), zz(3)])]);
+        let data = tile(
+            "roads",
+            &[],
+            &[],
+            &[(
+                2,
+                vec![],
+                vec![command(1, 1), zz(1), zz(1), command(2, 5), zz(3)],
+            )],
+        );
         let layers = decode(&data);
         assert_eq!(layers[0].features[0].geometry(), vec![vec![[1.0, 1.0]]]);
         for cut in 0..data.len() {

@@ -33,7 +33,10 @@ use crate::types::{Nav, NewPhoto, Sort};
 use crate::worker::{self, Command, UiEvent};
 
 fn size(name: &str, default: usize) -> usize {
-    std::env::var(name).ok().and_then(|value| value.parse().ok()).unwrap_or(default)
+    std::env::var(name)
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(default)
 }
 
 fn scratch(tag: &str) -> PathBuf {
@@ -62,13 +65,27 @@ impl Report {
         let out = run();
         let elapsed = started.elapsed();
         self.add(label, format_duration(elapsed));
-        self.limit(label, elapsed > limit, format!("took {}, the limit is {}", format_duration(elapsed), format_duration(limit)));
+        self.limit(
+            label,
+            elapsed > limit,
+            format!(
+                "took {}, the limit is {}",
+                format_duration(elapsed),
+                format_duration(limit)
+            ),
+        );
         out
     }
 
     /// Runs `run` `runs` times and reports the median and the 95th
     /// percentile, failing a checked run when the 95th is over `limit`.
-    fn spread<T>(&mut self, label: &str, runs: usize, limit: Duration, mut run: impl FnMut() -> T) -> T {
+    fn spread<T>(
+        &mut self,
+        label: &str,
+        runs: usize,
+        limit: Duration,
+        mut run: impl FnMut() -> T,
+    ) -> T {
         let mut times = Vec::with_capacity(runs);
         let mut out = None;
         for _ in 0..runs.max(1) {
@@ -84,20 +101,47 @@ impl Report {
     /// the 95th is over `limit`.
     fn spread_of(&mut self, label: &str, times: &mut [Duration], unit: &str, limit: Duration) {
         let (median, p95) = percentiles(times);
-        self.add(label, format!("median {} · p95 {} ({} {unit})", format_duration(median), format_duration(p95), times.len()));
-        self.limit(label, p95 > limit, format!("p95 {}, the limit is {}", format_duration(p95), format_duration(limit)));
+        self.add(
+            label,
+            format!(
+                "median {} · p95 {} ({} {unit})",
+                format_duration(median),
+                format_duration(p95),
+                times.len()
+            ),
+        );
+        self.limit(
+            label,
+            p95 > limit,
+            format!(
+                "p95 {}, the limit is {}",
+                format_duration(p95),
+                format_duration(limit)
+            ),
+        );
     }
 
     fn rate(&mut self, label: &str, count: usize, elapsed: Duration, at_least: f64) {
         let rate = count as f64 / elapsed.as_secs_f64();
-        self.add(label, format!("{} ({rate:.0} photos/s)", format_duration(elapsed)));
-        self.limit(label, rate < at_least, format!("{rate:.0} photos/s, the limit is {at_least:.0}"));
+        self.add(
+            label,
+            format!("{} ({rate:.0} photos/s)", format_duration(elapsed)),
+        );
+        self.limit(
+            label,
+            rate < at_least,
+            format!("{rate:.0} photos/s, the limit is {at_least:.0}"),
+        );
     }
 
     fn memory(&mut self, label: &str, at_most_mb: f64) {
         if let Some(peak) = peak_memory_mb() {
             self.add(label, format!("{peak:.0} MB"));
-            self.limit(label, peak > at_most_mb, format!("{peak:.0} MB, the limit is {at_most_mb:.0} MB"));
+            self.limit(
+                label,
+                peak > at_most_mb,
+                format!("{peak:.0} MB, the limit is {at_most_mb:.0} MB"),
+            );
         }
     }
 
@@ -123,7 +167,12 @@ fn format_duration(duration: Duration) -> String {
 /// The median and 95th percentile of `times`, nearest rank; zero for none.
 fn percentiles(times: &mut [Duration]) -> (Duration, Duration) {
     times.sort();
-    let at = |share: f64| times.get(((times.len() as f64 * share).ceil() as usize).max(1) - 1).copied().unwrap_or_default();
+    let at = |share: f64| {
+        times
+            .get(((times.len() as f64 * share).ceil() as usize).max(1) - 1)
+            .copied()
+            .unwrap_or_default()
+    };
     (at(0.5), at(0.95))
 }
 
@@ -139,7 +188,11 @@ fn peak_memory_mb() -> Option<f64> {
             }
             usage.assume_init()
         };
-        let bytes = if cfg!(target_os = "macos") { usage.ru_maxrss as f64 } else { usage.ru_maxrss as f64 * 1024.0 };
+        let bytes = if cfg!(target_os = "macos") {
+            usage.ru_maxrss as f64
+        } else {
+            usage.ru_maxrss as f64 * 1024.0
+        };
         Some(bytes / 1_048_576.0)
     }
     #[cfg(not(unix))]
@@ -148,7 +201,9 @@ fn peak_memory_mb() -> Option<f64> {
 
 /// `count` photos spread over folders of 50, as a camera import makes them.
 fn record(folder_id: i64, root: &Path, index: usize) -> ScanRecord {
-    let dir = root.join(format!("{}", 2000 + index / 20_000)).join(format!("{:04}", index / 50));
+    let dir = root
+        .join(format!("{}", 2000 + index / 20_000))
+        .join(format!("{:04}", index / 50));
     let filename = format!("IMG_{index:06}.jpg");
     let words = ["beach", "city", "mountain", "family", "street"];
     ScanRecord {
@@ -164,7 +219,9 @@ fn record(folder_id: i64, root: &Path, index: usize) -> ScanRecord {
             camera: format!("Camera {} {}", index % 7, words[index % words.len()]),
             lens: String::new(),
             focal_mm: 35.0,
-            gps_lat: index.is_multiple_of(3).then_some(25.0 + (index % 1000) as f64 / 1000.0),
+            gps_lat: index
+                .is_multiple_of(3)
+                .then_some(25.0 + (index % 1000) as f64 / 1000.0),
             gps_lon: index.is_multiple_of(3).then_some(121.0),
             duration: 0.0,
         },
@@ -187,28 +244,60 @@ fn catalog(report: &mut Report, count: usize) {
     let root = root.canonicalize().unwrap();
     report.time(&format!("Write {count} catalog rows"), || {
         for start in (0..count).step_by(1000) {
-            let batch: Vec<ScanRecord> = (start..(start + 1000).min(count)).map(|index| record(folder_id, &root, index)).collect();
+            let batch: Vec<ScanRecord> = (start..(start + 1000).min(count))
+                .map(|index| record(folder_id, &root, index))
+                .collect();
             db.write_batch(&batch).unwrap();
         }
     });
     drop(db);
     let second = Duration::from_secs(1);
-    let db = report.time_within("Open the library (startup)", second, || Database::open(&path).unwrap());
+    let db = report.time_within("Open the library (startup)", second, || {
+        Database::open(&path).unwrap()
+    });
     let reader = Database::open_reader(&path).unwrap();
-    let photos = report.time_within("List the library, newest first", second, || reader.photos(&Nav::Library, "", Sort::DateNewest));
+    let photos = report.time_within("List the library, newest first", second, || {
+        reader.photos(&Nav::Library, "", Sort::DateNewest)
+    });
     assert_eq!(photos.len(), count);
-    report.time_within("List the library by name", second, || reader.photos(&Nav::Library, "", Sort::Name));
-    report.time_within("List starred photos", second, || reader.photos(&Nav::Starred, "", Sort::DateNewest));
+    report.time_within("List the library by name", second, || {
+        reader.photos(&Nav::Library, "", Sort::Name)
+    });
+    report.time_within("List starred photos", second, || {
+        reader.photos(&Nav::Starred, "", Sort::DateNewest)
+    });
     report.time_within("Folder tree (photo_dirs)", second, || reader.photo_dirs());
-    let dir_path = root.join("2000").join("0001").to_string_lossy().into_owned();
-    report.time_within("Open one folder of 50", second, || reader.photos(&Nav::Dir(dir_path), "", Sort::DateNewest));
-    report.time_within("Search one word (\"beach\")", second, || reader.photos(&Nav::Library, "beach", Sort::DateNewest));
-    report.time_within("Search a month (\"2001-05\")", second, || reader.photos(&Nav::Library, "2001-05", Sort::DateNewest));
-    report.time_within("Search with no match", second, || reader.photos(&Nav::Library, "zzzz", Sort::DateNewest));
-    report.time_within("Rescan check: known files of the folder", second, || db.folder_snapshot(folder_id, &root.to_string_lossy()));
+    let dir_path = root
+        .join("2000")
+        .join("0001")
+        .to_string_lossy()
+        .into_owned();
+    report.time_within("Open one folder of 50", second, || {
+        reader.photos(&Nav::Dir(dir_path), "", Sort::DateNewest)
+    });
+    report.time_within("Search one word (\"beach\")", second, || {
+        reader.photos(&Nav::Library, "beach", Sort::DateNewest)
+    });
+    report.time_within("Search a month (\"2001-05\")", second, || {
+        reader.photos(&Nav::Library, "2001-05", Sort::DateNewest)
+    });
+    report.time_within("Search with no match", second, || {
+        reader.photos(&Nav::Library, "zzzz", Sort::DateNewest)
+    });
+    report.time_within("Rescan check: known files of the folder", second, || {
+        db.folder_snapshot(folder_id, &root.to_string_lossy())
+    });
     report.time_within("Duplicate candidates", second, || db.duplicate_candidates());
-    let bytes: u64 = ["", "-wal"].iter().map(|suffix| std::fs::metadata(format!("{}{suffix}", path.display())).map_or(0, |m| m.len())).sum();
-    report.add("Library file size", format!("{:.1} MB", bytes as f64 / 1_048_576.0));
+    let bytes: u64 = ["", "-wal"]
+        .iter()
+        .map(|suffix| {
+            std::fs::metadata(format!("{}{suffix}", path.display())).map_or(0, |m| m.len())
+        })
+        .sum();
+    report.add(
+        "Library file size",
+        format!("{:.1} MB", bytes as f64 / 1_048_576.0),
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -236,45 +325,88 @@ fn trip(report: &mut Report, count: usize) {
             .collect();
         db.write_batch(&batch).unwrap();
     }
-    let photos: Vec<i64> = db.photos(&Nav::Library, "", Sort::DateOldest).iter().map(|photo| photo.id).collect();
-    let trip_id = db.create_trip(&TripDraft::new("A year", "Asia/Taipei")).unwrap();
+    let photos: Vec<i64> = db
+        .photos(&Nav::Library, "", Sort::DateOldest)
+        .iter()
+        .map(|photo| photo.id)
+        .collect();
+    let trip_id = db
+        .create_trip(&TripDraft::new("A year", "Asia/Taipei"))
+        .unwrap();
     let second = Duration::from_secs(1);
-    let media = report.time_within(&format!("Add {count} photos to a Trip"), 5 * second, || db.add_to_trip(trip_id, &photos).unwrap());
+    let media = report.time_within(&format!("Add {count} photos to a Trip"), 5 * second, || {
+        db.add_to_trip(trip_id, &photos).unwrap()
+    });
     report.time_within(&format!("Keep {count} capture times"), 10 * second, || {
         for (index, &id) in media.iter().enumerate() {
             let taken = START + index as i64 * step;
-            let clock = chrono::DateTime::from_timestamp(taken + UTC_PLUS_8, 0).unwrap().naive_utc();
+            let clock = chrono::DateTime::from_timestamp(taken + UTC_PLUS_8, 0)
+                .unwrap()
+                .naive_utc();
             // One camera in 50 records no offset; its photos wait for review.
             let offset = (index % 50 != 0).then_some(UTC_PLUS_8 as i32);
             db.store_capture(id, Capture::Clock { clock, offset }, taken);
         }
     });
-    let suggestion = report.time_within("Suggest Days", 10 * second, || db.suggest_days(trip_id).unwrap());
+    let suggestion = report.time_within("Suggest Days", 10 * second, || {
+        db.suggest_days(trip_id).unwrap()
+    });
     assert_eq!(suggestion.new_days, 365, "a Day for each date");
     let days = db.trip_days(trip_id);
-    let filtered = MemberQuery { starred: true, ..MemberQuery::default() };
+    let filtered = MemberQuery {
+        starred: true,
+        ..MemberQuery::default()
+    };
     // The Trips view keeps these until the library changes, which it checks each frame.
     let started = Instant::now();
     for _ in 0..1000 {
         db.change_stamp();
     }
-    report.add("Check the library for changes (each frame)", format!("{:.1} µs", started.elapsed().as_secs_f64() * 1000.0));
-    report.spread(&format!("Trip header: {} Days, counts, review", days.len()), 50, Duration::from_millis(50), || {
-        db.trip_days(trip_id);
-        db.count_trip_members(trip_id, &MemberQuery { day: DayFilter::Unassigned, ..MemberQuery::default() });
-        db.review_counts(trip_id);
-        db.count_trip_members(trip_id, &filtered);
+    report.add(
+        "Check the library for changes (each frame)",
+        format!("{:.1} µs", started.elapsed().as_secs_f64() * 1000.0),
+    );
+    report.spread(
+        &format!("Trip header: {} Days, counts, review", days.len()),
+        50,
+        Duration::from_millis(50),
+        || {
+            db.trip_days(trip_id);
+            db.count_trip_members(
+                trip_id,
+                &MemberQuery {
+                    day: DayFilter::Unassigned,
+                    ..MemberQuery::default()
+                },
+            );
+            db.review_counts(trip_id);
+            db.count_trip_members(trip_id, &filtered);
+        },
+    );
+    let all = report.spread("List the Trip's photos, oldest first", 20, second, || {
+        db.trip_photos(trip_id, &MemberQuery::default(), Sort::DateOldest)
     });
-    let all = report.spread("List the Trip's photos, oldest first", 20, second, || db.trip_photos(trip_id, &MemberQuery::default(), Sort::DateOldest));
     assert_eq!(all.len(), count);
-    let middle = MemberQuery { day: DayFilter::Day(days[days.len() / 2].id), ..MemberQuery::default() };
-    report.spread("Open one Day", 50, Duration::from_millis(100), || db.trip_photos(trip_id, &middle, Sort::DateOldest));
-    report.spread("Starred photos of the Trip", 20, second, || db.trip_photos(trip_id, &filtered, Sort::DateOldest));
-    report.time_within("Suggest Places", 10 * second, || db.suggest_places(trip_id, 300.0, 3 * 3_600).unwrap());
-    report.time_within("A Story from all 365 Days", 5 * second, || {
-        db.create_story_from_days(trip_id, "A year", None, |date| date.to_string()).unwrap()
+    let middle = MemberQuery {
+        day: DayFilter::Day(days[days.len() / 2].id),
+        ..MemberQuery::default()
+    };
+    report.spread("Open one Day", 50, Duration::from_millis(100), || {
+        db.trip_photos(trip_id, &middle, Sort::DateOldest)
     });
-    report.spread("List Trips", 50, Duration::from_millis(100), || db.trips(&TripQuery::default()));
+    report.spread("Starred photos of the Trip", 20, second, || {
+        db.trip_photos(trip_id, &filtered, Sort::DateOldest)
+    });
+    report.time_within("Suggest Places", 10 * second, || {
+        db.suggest_places(trip_id, 300.0, 3 * 3_600).unwrap()
+    });
+    report.time_within("A Story from all 365 Days", 5 * second, || {
+        db.create_story_from_days(trip_id, "A year", None, |date| date.to_string())
+            .unwrap()
+    });
+    report.spread("List Trips", 50, Duration::from_millis(100), || {
+        db.trips(&TripQuery::default())
+    });
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -286,7 +418,9 @@ fn photo_files(count: usize) -> PathBuf {
 /// `count` JPEGs of `width` × `height` in `target/<name>-<count>`, in
 /// folders of 100, made on the first run.
 fn made_photos(name: &str, count: usize, width: u32, height: u32) -> PathBuf {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("target").join(format!("{name}-{count}"));
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("target")
+        .join(format!("{name}-{count}"));
     let done = root.join(".complete");
     if done.exists() {
         return root;
@@ -296,8 +430,14 @@ fn made_photos(name: &str, count: usize, width: u32, height: u32) -> PathBuf {
         let dir = root.join(format!("{:03}", index / 100));
         std::fs::create_dir_all(&dir).unwrap();
         let shade = (index % 200) as u8;
-        let image = RgbaImage::from_fn(width, height, |x, y| Rgba([(x / 7) as u8 ^ shade, (y / 5) as u8, shade, 255]));
-        std::fs::write(dir.join(format!("IMG_{index:05}.jpg")), image_io::encode_jpeg(&image, 85).unwrap()).unwrap();
+        let image = RgbaImage::from_fn(width, height, |x, y| {
+            Rgba([(x / 7) as u8 ^ shade, (y / 5) as u8, shade, 255])
+        });
+        std::fs::write(
+            dir.join(format!("IMG_{index:05}.jpg")),
+            image_io::encode_jpeg(&image, 85).unwrap(),
+        )
+        .unwrap();
     });
     std::fs::write(done, b"").unwrap();
     root
@@ -309,7 +449,10 @@ fn trip_scroll(report: &mut Report, count: usize, frames: usize) {
     use crate::trip::{Capture, TripDraft};
     const START: i64 = 1_735_660_800;
     const UTC_PLUS_8: i64 = 8 * 3_600;
-    let photos = report.time(&format!("Make {count} small Trip photos (first run only)"), || made_photos("bench-trip-photos", count, 480, 320));
+    let photos = report.time(
+        &format!("Make {count} small Trip photos (first run only)"),
+        || made_photos("bench-trip-photos", count, 480, 320),
+    );
     let mut files = walk(&photos);
     files.sort();
     let (library, db) = crate::app::headless::Scratch::new(scratch("frames"));
@@ -335,22 +478,62 @@ fn trip_scroll(report: &mut Report, count: usize, frames: usize) {
             .collect();
         db.write_batch(&batch).unwrap();
     }
-    let ids: Vec<i64> = db.photos(&Nav::Library, "", Sort::DateOldest).iter().map(|photo| photo.id).collect();
-    let trip_id = db.create_trip(&TripDraft::new("A year", "Asia/Taipei")).unwrap();
-    for (index, id) in db.add_to_trip(trip_id, &ids).unwrap().into_iter().enumerate() {
+    let ids: Vec<i64> = db
+        .photos(&Nav::Library, "", Sort::DateOldest)
+        .iter()
+        .map(|photo| photo.id)
+        .collect();
+    let trip_id = db
+        .create_trip(&TripDraft::new("A year", "Asia/Taipei"))
+        .unwrap();
+    for (index, id) in db
+        .add_to_trip(trip_id, &ids)
+        .unwrap()
+        .into_iter()
+        .enumerate()
+    {
         let taken = START + index as i64 * step;
-        let clock = chrono::DateTime::from_timestamp(taken + UTC_PLUS_8, 0).unwrap().naive_utc();
-        db.store_capture(id, Capture::Clock { clock, offset: Some(UTC_PLUS_8 as i32) }, taken);
+        let clock = chrono::DateTime::from_timestamp(taken + UTC_PLUS_8, 0)
+            .unwrap()
+            .naive_utc();
+        db.store_capture(
+            id,
+            Capture::Clock {
+                clock,
+                offset: Some(UTC_PLUS_8 as i32),
+            },
+            taken,
+        );
     }
     db.suggest_days(trip_id).unwrap();
     drop(db);
     let mut scrolled = crate::app::headless::scroll_trip(&library, trip_id, files.len(), frames);
-    assert!(scrolled.reached_end, "the scroll didn't reach the Trip's last photo");
-    assert!(scrolled.thumbs_shown > 0, "no thumbnail was shown while scrolling slowly");
-    for (how, times) in [("fling to the bottom", &mut scrolled.fling), ("back up slowly", &mut scrolled.slow)] {
-        report.spread_of(&format!("Trip of {}, {how}: frame", files.len()), times, "frames", Duration::from_millis(50));
-        let late = times.iter().filter(|time| time.as_secs_f64() > 1.0 / 60.0).count();
-        report.add("  frames over 16.7 ms", format!("{late} of {}", times.len()));
+    assert!(
+        scrolled.reached_end,
+        "the scroll didn't reach the Trip's last photo"
+    );
+    assert!(
+        scrolled.thumbs_shown > 0,
+        "no thumbnail was shown while scrolling slowly"
+    );
+    for (how, times) in [
+        ("fling to the bottom", &mut scrolled.fling),
+        ("back up slowly", &mut scrolled.slow),
+    ] {
+        report.spread_of(
+            &format!("Trip of {}, {how}: frame", files.len()),
+            times,
+            "frames",
+            Duration::from_millis(50),
+        );
+        let late = times
+            .iter()
+            .filter(|time| time.as_secs_f64() > 1.0 / 60.0)
+            .count();
+        report.add(
+            "  frames over 16.7 ms",
+            format!("{late} of {}", times.len()),
+        );
     }
 }
 
@@ -365,26 +548,46 @@ fn wait_for_scan(events: &crossbeam_channel::Receiver<UiEvent>) {
 }
 
 fn scan(report: &mut Report, count: usize) {
-    let photos = report.time(&format!("Make {count} test photos (first run only)"), || photo_files(count));
+    let photos = report.time(
+        &format!("Make {count} test photos (first run only)"),
+        || photo_files(count),
+    );
     let dir = scratch("scan");
     let db_path = dir.join("picasso.db");
     let cache = dir.join("cache");
-    let folder_id = Database::open(&db_path).unwrap().add_folder(&photos).unwrap();
+    let folder_id = Database::open(&db_path)
+        .unwrap()
+        .add_folder(&photos)
+        .unwrap();
     let (commands, command_rx) = crossbeam_channel::unbounded();
     let (thumbs, _thumb_rx) = crossbeam_channel::unbounded();
     let (events_tx, events) = crossbeam_channel::unbounded();
     let ctx = eframe::egui::Context::default();
     let started = Instant::now();
-    let indexer = std::thread::spawn(move || worker::index_loop(db_path, cache, command_rx, thumbs, events_tx, ctx));
+    let indexer = std::thread::spawn(move || {
+        worker::index_loop(db_path, cache, command_rx, thumbs, events_tx, ctx)
+    });
     wait_for_scan(&events);
     let first = started.elapsed();
     let reader = Database::open_reader(&dir.join("picasso.db")).unwrap();
-    assert_eq!(reader.photos(&Nav::Library, "", Sort::DateNewest).len(), count, "the scan missed photos");
-    report.rate(&format!("First scan of {count} photos"), count, first, 200.0);
+    assert_eq!(
+        reader.photos(&Nav::Library, "", Sort::DateNewest).len(),
+        count,
+        "the scan missed photos"
+    );
+    report.rate(
+        &format!("First scan of {count} photos"),
+        count,
+        first,
+        200.0,
+    );
     let started = Instant::now();
     commands.send(Command::Scan(folder_id)).unwrap();
     wait_for_scan(&events);
-    report.add("Rescan with nothing changed", format_duration(started.elapsed()));
+    report.add(
+        "Rescan with nothing changed",
+        format_duration(started.elapsed()),
+    );
     commands.send(Command::Stop).unwrap();
     let _ = indexer.join();
     report.memory("Peak memory after the scan", 400.0);
@@ -398,17 +601,27 @@ fn scan(report: &mut Report, count: usize) {
         for _ in 0..threads {
             scope.spawn(|| {
                 while let Some(path) = files.get(next.fetch_add(1, Ordering::Relaxed)) {
-                    let tile = image_io::thumbnail_rgba(&image_io::load_for_tile(path, worker::THUMB_EDGE).unwrap(), worker::THUMB_EDGE);
+                    let tile = image_io::thumbnail_rgba(
+                        &image_io::load_for_tile(path, worker::THUMB_EDGE).unwrap(),
+                        worker::THUMB_EDGE,
+                    );
                     image_io::encode_jpeg(&tile, 80).unwrap();
                 }
             });
         }
     });
-    report.rate(&format!("Thumbnails for {} photos on {threads} threads", files.len()), files.len(), started.elapsed(), 20.0);
+    report.rate(
+        &format!("Thumbnails for {} photos on {threads} threads", files.len()),
+        files.len(),
+        started.elapsed(),
+        20.0,
+    );
     let one = &files[0];
-    report.time_within("Open one 1600×1200 photo for the viewer", Duration::from_millis(500), || {
-        image_io::load_at_least(one, worker::DISPLAY_EDGE).unwrap()
-    });
+    report.time_within(
+        "Open one 1600×1200 photo for the viewer",
+        Duration::from_millis(500),
+        || image_io::load_at_least(one, worker::DISPLAY_EDGE).unwrap(),
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -421,7 +634,10 @@ struct Site {
 }
 
 impl crate::wordpress::Http for Site {
-    fn send(&self, request: &crate::wordpress::Request) -> Result<crate::wordpress::Reply, crate::wordpress::Failure> {
+    fn send(
+        &self,
+        request: &crate::wordpress::Request,
+    ) -> Result<crate::wordpress::Reply, crate::wordpress::Failure> {
         let body = request.body.unwrap_or_default();
         self.bytes.set(self.bytes.get() + body.len());
         let url = request.url.to_url();
@@ -431,20 +647,33 @@ impl crate::wordpress::Http for Site {
             format!(r#"{{"id":{id},"source_url":"https://example.com/blog/{id}.jpg"}}"#)
         } else if let Some(ids) = url.split("include=").nth(1) {
             // Every upload asked about is still there.
-            let ids = ids.split('&').next().unwrap_or_default().replace("%2C", ",");
-            let found: Vec<String> = ids.split(',').map(|id| format!(r#"{{"id":{id},"source_url":"https://example.com/blog/{id}.jpg"}}"#)).collect();
+            let ids = ids
+                .split('&')
+                .next()
+                .unwrap_or_default()
+                .replace("%2C", ",");
+            let found: Vec<String> = ids
+                .split(',')
+                .map(|id| {
+                    format!(r#"{{"id":{id},"source_url":"https://example.com/blog/{id}.jpg"}}"#)
+                })
+                .collect();
             format!("[{}]", found.join(","))
         } else {
             r#"{"id":7}"#.to_string()
         };
-        Ok(crate::wordpress::Reply { status: 201, headers: Vec::new(), body: reply.into_bytes() })
+        Ok(crate::wordpress::Reply {
+            status: 201,
+            headers: Vec::new(),
+            body: reply.into_bytes(),
+        })
     }
 }
 
 /// A Story of `files` photos exported for the web, then rendered and sent
 /// to a site at Low resolution, as hundreds of photos for one post are.
 fn publication(report: &mut Report, files: &[PathBuf]) {
-    use crate::story_html::{self, Format, Progress, Profile, Words};
+    use crate::story_html::{self, Format, Profile, Progress, Words};
     use crate::trip::{Block, MediaUse, Story, StoryBlock};
     let count = files.len();
     let story = Story {
@@ -466,20 +695,63 @@ fn publication(report: &mut Report, files: &[PathBuf]) {
         updated_at: 0,
     };
     let media: Vec<MediaUse> = (1..=count as i64).map(MediaUse::new).collect();
-    let blocks: Vec<StoryBlock> = media.chunks(20).map(|chunk| StoryBlock::new(Block::Gallery(chunk.to_vec()))).collect();
-    let sources: std::collections::HashMap<i64, story_html::Source> =
-        files.iter().enumerate().map(|(index, path)| (index as i64 + 1, Some((path.clone(), crate::edit::Settings::default(), 0)))).collect();
-    let words = Words { lang: "en", untitled: "Untitled story".into(), unavailable: "Photo unavailable".into(), video_unavailable: "Video unavailable".into(), contents: "Contents".into(), watch: "Watch on YouTube".into() };
-    let page = story_html::Page { story: &story, dates: None, blocks: &blocks, sources: &sources, words: &words, map: None, profiles: &std::collections::HashMap::new(), videos: &story_html::Videos::default() };
+    let blocks: Vec<StoryBlock> = media
+        .chunks(20)
+        .map(|chunk| StoryBlock::new(Block::Gallery(chunk.to_vec())))
+        .collect();
+    let sources: std::collections::HashMap<i64, story_html::Source> = files
+        .iter()
+        .enumerate()
+        .map(|(index, path)| {
+            (
+                index as i64 + 1,
+                Some((path.clone(), crate::edit::Settings::default(), 0)),
+            )
+        })
+        .collect();
+    let words = Words {
+        lang: "en",
+        untitled: "Untitled story".into(),
+        unavailable: "Photo unavailable".into(),
+        video_unavailable: "Video unavailable".into(),
+        contents: "Contents".into(),
+        watch: "Watch on YouTube".into(),
+    };
+    let page = story_html::Page {
+        story: &story,
+        dates: None,
+        blocks: &blocks,
+        sources: &sources,
+        words: &words,
+        map: None,
+        profiles: &std::collections::HashMap::new(),
+        videos: &story_html::Videos::default(),
+    };
     let dir = scratch("publication");
     let started = Instant::now();
-    let (_, outcome) = story_html::export_story(&dir, "A year", Format::Html, Profile::default(), &page, &Progress::default()).unwrap();
+    let (_, outcome) = story_html::export_story(
+        &dir,
+        "A year",
+        Format::Html,
+        Profile::default(),
+        &page,
+        &Progress::default(),
+    )
+    .unwrap();
     assert_eq!(outcome, story_html::Outcome::default());
-    report.rate(&format!("Export a Story of {count} photos"), count, started.elapsed(), 5.0);
+    report.rate(
+        &format!("Export a Story of {count} photos"),
+        count,
+        started.elapsed(),
+        5.0,
+    );
 
     let job = crate::publish::Job {
         api: crate::wordpress::tests::local_api(),
-        credentials: crate::wordpress::Credentials { user: "ana".into(), password: "abcd efgh".into() },
+        credentials: crate::wordpress::Credentials {
+            user: "ana".into(),
+            password: "abcd efgh".into(),
+        },
         policy: crate::wordpress::Policy::default(),
         story: story.clone(),
         dates: None,
@@ -509,20 +781,49 @@ fn publication(report: &mut Report, files: &[PathBuf]) {
     let started = Instant::now();
     let mut uploads = std::collections::HashMap::new();
     let saved = crate::publish::run(&site, &job, &Progress::default(), &mut |event| {
-        if let crate::publish::Event::Uploaded { hash, media_id, url, .. } = event {
+        if let crate::publish::Event::Uploaded {
+            hash,
+            media_id,
+            url,
+            ..
+        } = event
+        {
             uploads.insert(hash, (media_id, url));
         }
     })
     .unwrap();
-    let distinct: std::collections::HashSet<Vec<u8>> = files.iter().map(|path| std::fs::read(path).unwrap()).collect();
-    assert_eq!(saved.uploaded, distinct.len(), "one upload for each different photo; the same bytes go once");
-    report.rate(&format!("Render and send {count} photos at Low resolution"), count, started.elapsed(), 5.0);
-    report.add("Sent to the site", format!("{:.1} MB", site.bytes.get() as f64 / 1_048_576.0));
+    let distinct: std::collections::HashSet<Vec<u8>> = files
+        .iter()
+        .map(|path| std::fs::read(path).unwrap())
+        .collect();
+    assert_eq!(
+        saved.uploaded,
+        distinct.len(),
+        "one upload for each different photo; the same bytes go once"
+    );
+    report.rate(
+        &format!("Render and send {count} photos at Low resolution"),
+        count,
+        started.elapsed(),
+        5.0,
+    );
+    report.add(
+        "Sent to the site",
+        format!("{:.1} MB", site.bytes.get() as f64 / 1_048_576.0),
+    );
 
     // Saved again with nothing changed: the photos the site has aren't rendered again.
     let again = crate::publish::Job { uploads, ..job };
-    let saved = report.time_within("Publish it again with nothing changed", Duration::from_secs(2), || crate::publish::run(&site, &again, &Progress::default(), &mut |_| {}).unwrap());
-    assert_eq!((saved.uploaded, saved.reused), (0, distinct.len()), "nothing sent again");
+    let saved = report.time_within(
+        "Publish it again with nothing changed",
+        Duration::from_secs(2),
+        || crate::publish::run(&site, &again, &Progress::default(), &mut |_| {}).unwrap(),
+    );
+    assert_eq!(
+        (saved.uploaded, saved.reused),
+        (0, distinct.len()),
+        "nothing sent again"
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -542,7 +843,10 @@ fn walk(dir: &Path) -> Vec<PathBuf> {
 #[test]
 #[ignore = "a benchmark: run it with `make bench`"]
 fn bench_large_library() {
-    let mut report = Report { check: std::env::var("PICASSO_BENCH_CHECK").is_ok_and(|value| value == "1"), failures: Vec::new() };
+    let mut report = Report {
+        check: std::env::var("PICASSO_BENCH_CHECK").is_ok_and(|value| value == "1"),
+        failures: Vec::new(),
+    };
     println!(
         "Picasso {} on {} {}, {} cores",
         env!("CARGO_PKG_VERSION"),
@@ -554,7 +858,11 @@ fn bench_large_library() {
     report.memory("Peak memory after the catalog", 400.0);
     trip(&mut report, size("PICASSO_BENCH_TRIP", 10_000));
     report.memory("Peak memory after the Trip", 400.0);
-    trip_scroll(&mut report, size("PICASSO_BENCH_TRIP", 10_000), size("PICASSO_BENCH_FRAMES", 600));
+    trip_scroll(
+        &mut report,
+        size("PICASSO_BENCH_TRIP", 10_000),
+        size("PICASSO_BENCH_FRAMES", 600),
+    );
     report.memory("Peak memory after scrolling the Trip", 400.0);
     scan(&mut report, size("PICASSO_BENCH_FILES", 2_000));
     // Making thumbnails once held on to about 1 MB per photo; this limit
@@ -566,16 +874,30 @@ fn bench_large_library() {
     files.truncate(assets);
     publication(&mut report, &files);
     report.memory("Peak memory after publishing", 400.0);
-    assert!(report.failures.is_empty(), "past the limits:\n{}", report.failures.join("\n"));
+    assert!(
+        report.failures.is_empty(),
+        "past the limits:\n{}",
+        report.failures.join("\n")
+    );
 }
 
 #[test]
 fn the_spread_is_the_median_and_the_95th_percentile_by_nearest_rank() {
     let mut times: Vec<Duration> = (1..=100).rev().map(Duration::from_millis).collect();
-    assert_eq!(percentiles(&mut times), (Duration::from_millis(50), Duration::from_millis(95)));
+    assert_eq!(
+        percentiles(&mut times),
+        (Duration::from_millis(50), Duration::from_millis(95))
+    );
     let mut one = [Duration::from_millis(7)];
-    assert_eq!(percentiles(&mut one), (Duration::from_millis(7), Duration::from_millis(7)));
+    assert_eq!(
+        percentiles(&mut one),
+        (Duration::from_millis(7), Duration::from_millis(7))
+    );
     let mut twenty: Vec<Duration> = (1..=20).map(Duration::from_millis).collect();
-    assert_eq!(percentiles(&mut twenty).1, Duration::from_millis(19), "with 20 runs, the 95th is the second slowest");
+    assert_eq!(
+        percentiles(&mut twenty).1,
+        Duration::from_millis(19),
+        "with 20 runs, the 95th is the second slowest"
+    );
     assert_eq!(percentiles(&mut []), (Duration::ZERO, Duration::ZERO));
 }

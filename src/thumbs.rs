@@ -41,7 +41,9 @@ impl ThumbStore {
     pub fn get(&self, id: i64) -> Option<Vec<u8>> {
         let stored = self
             .conn
-            .query_row("SELECT jpeg FROM thumbs WHERE id=?1", [id], |row| row.get(0))
+            .query_row("SELECT jpeg FROM thumbs WHERE id=?1", [id], |row| {
+                row.get(0)
+            })
             .optional()
             .ok()
             .flatten();
@@ -60,7 +62,10 @@ impl ThumbStore {
     }
 
     pub fn put(&self, id: i64, jpeg: &[u8]) {
-        if let Err(err) = self.conn.execute("INSERT OR REPLACE INTO thumbs(id, jpeg) VALUES(?1, ?2)", params![id, jpeg]) {
+        if let Err(err) = self.conn.execute(
+            "INSERT OR REPLACE INTO thumbs(id, jpeg) VALUES(?1, ?2)",
+            params![id, jpeg],
+        ) {
             eprintln!("picasso thumbs.db: {err}");
         }
     }
@@ -76,7 +81,9 @@ impl ThumbStore {
     /// thumbnail. It goes when the thumbnail does.
     pub fn look(&self, id: i64) -> Option<u64> {
         self.conn
-            .query_row("SELECT look FROM looks WHERE id=?1", [id], |row| row.get::<_, i64>(0))
+            .query_row("SELECT look FROM looks WHERE id=?1", [id], |row| {
+                row.get::<_, i64>(0)
+            })
             .optional()
             .ok()
             .flatten()
@@ -84,7 +91,10 @@ impl ThumbStore {
     }
 
     pub fn put_look(&self, id: i64, look: u64) {
-        if let Err(err) = self.conn.execute("INSERT OR REPLACE INTO looks(id, look) VALUES(?1, ?2)", params![id, look as i64]) {
+        if let Err(err) = self.conn.execute(
+            "INSERT OR REPLACE INTO looks(id, look) VALUES(?1, ?2)",
+            params![id, look as i64],
+        ) {
             eprintln!("picasso thumbs.db: {err}");
         }
     }
@@ -92,7 +102,11 @@ impl ThumbStore {
     /// JPEG bytes of the photo's edited thumbnail, if it was made for `edit`.
     pub fn get_edited(&self, id: i64, edit: &str) -> Option<Vec<u8>> {
         self.conn
-            .query_row("SELECT jpeg FROM edited WHERE id=?1 AND edit=?2", params![id, edit], |row| row.get(0))
+            .query_row(
+                "SELECT jpeg FROM edited WHERE id=?1 AND edit=?2",
+                params![id, edit],
+                |row| row.get(0),
+            )
             .optional()
             .ok()
             .flatten()
@@ -101,10 +115,10 @@ impl ThumbStore {
     /// Stores the thumbnail of the photo with `edit` applied, replacing the
     /// one made for an earlier edit.
     pub fn put_edited(&self, id: i64, edit: &str, jpeg: &[u8]) {
-        if let Err(err) = self
-            .conn
-            .execute("INSERT OR REPLACE INTO edited(id, edit, jpeg) VALUES(?1, ?2, ?3)", params![id, edit, jpeg])
-        {
+        if let Err(err) = self.conn.execute(
+            "INSERT OR REPLACE INTO edited(id, edit, jpeg) VALUES(?1, ?2, ?3)",
+            params![id, edit, jpeg],
+        ) {
             eprintln!("picasso thumbs.db: {err}");
         }
     }
@@ -140,7 +154,10 @@ impl ThumbStore {
         ids.extend(
             self.conn
                 .prepare("SELECT id FROM edited")
-                .and_then(|mut stmt| stmt.query_map([], |row| row.get::<_, i64>(0))?.collect::<Result<Vec<_>, _>>())
+                .and_then(|mut stmt| {
+                    stmt.query_map([], |row| row.get::<_, i64>(0))?
+                        .collect::<Result<Vec<_>, _>>()
+                })
                 .unwrap_or_default(),
         );
         let stale: Vec<i64> = ids.into_iter().filter(|id| !photos.contains(id)).collect();
@@ -188,7 +205,8 @@ impl ThumbStore {
 
 /// `edited` holds one thumbnail per edited photo, with the edit it shows,
 /// so a different edit misses it.
-const SCHEMA: &str = "CREATE TABLE IF NOT EXISTS thumbs (id INTEGER PRIMARY KEY, jpeg BLOB NOT NULL);
+const SCHEMA: &str =
+    "CREATE TABLE IF NOT EXISTS thumbs (id INTEGER PRIMARY KEY, jpeg BLOB NOT NULL);
 CREATE TABLE IF NOT EXISTS edited (id INTEGER PRIMARY KEY, edit TEXT NOT NULL, jpeg BLOB NOT NULL);
 CREATE TABLE IF NOT EXISTS looks (id INTEGER PRIMARY KEY, look INTEGER NOT NULL);";
 
@@ -202,7 +220,8 @@ fn open_file(path: &Path) -> Result<Connection, String> {
         std::fs::create_dir_all(parent).map_err(|err| err.to_string())?;
     }
     let conn = Connection::open(path).map_err(|err| err.to_string())?;
-    conn.busy_timeout(std::time::Duration::from_secs(8)).map_err(|err| err.to_string())?;
+    conn.busy_timeout(std::time::Duration::from_secs(8))
+        .map_err(|err| err.to_string())?;
     // A thumbnail is about 30 KB, so larger pages keep each in fewer of them.
     // The page size only takes effect while the file is still empty.
     conn.execute_batch(&format!(
@@ -212,7 +231,9 @@ fn open_file(path: &Path) -> Result<Connection, String> {
          {SCHEMA}"
     ))
     .map_err(|err| err.to_string())?;
-    let version: i32 = conn.query_row("PRAGMA user_version", [], |row| row.get(0)).map_err(|err| err.to_string())?;
+    let version: i32 = conn
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .map_err(|err| err.to_string())?;
     if version < VERSION {
         conn.execute_batch(&format!("DELETE FROM thumbs; DELETE FROM edited; DELETE FROM looks; PRAGMA user_version={VERSION};"))
             .map_err(|err| err.to_string())?;
@@ -225,7 +246,14 @@ fn file_ids(dir: &Path) -> impl Iterator<Item = i64> {
         .into_iter()
         .flatten()
         .flatten()
-        .filter_map(|entry| entry.file_name().to_str()?.strip_suffix(".jpg")?.parse().ok())
+        .filter_map(|entry| {
+            entry
+                .file_name()
+                .to_str()?
+                .strip_suffix(".jpg")?
+                .parse()
+                .ok()
+        })
 }
 
 /// Moves every thumbnail an older build left in `cache/thumbs` into
@@ -245,7 +273,13 @@ pub fn migrate_files(cache: &Path) {
             let Ok(jpeg) = std::fs::read(store.file(id)) else {
                 continue;
             };
-            if tx.execute("INSERT OR IGNORE INTO thumbs(id, jpeg) VALUES(?1, ?2)", params![id, jpeg]).is_ok() {
+            if tx
+                .execute(
+                    "INSERT OR IGNORE INTO thumbs(id, jpeg) VALUES(?1, ?2)",
+                    params![id, jpeg],
+                )
+                .is_ok()
+            {
                 moved.push(id);
             }
         }
@@ -267,7 +301,8 @@ mod tests {
     use super::*;
 
     fn temp_cache(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("picasso-thumbs-{name}-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("picasso-thumbs-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
@@ -302,8 +337,15 @@ mod tests {
         store.put(1, b"small");
         store.put_edited(1, "exposure 1", b"small edited");
         drop(store);
-        assert_eq!(ThumbStore::open(&cache).get(1).as_deref(), Some(&b"small"[..]), "kept while the version matches");
-        Connection::open(cache.join("thumbs.db")).unwrap().execute_batch("PRAGMA user_version=1;").unwrap();
+        assert_eq!(
+            ThumbStore::open(&cache).get(1).as_deref(),
+            Some(&b"small"[..]),
+            "kept while the version matches"
+        );
+        Connection::open(cache.join("thumbs.db"))
+            .unwrap()
+            .execute_batch("PRAGMA user_version=1;")
+            .unwrap();
         let store = ThumbStore::open(&cache);
         assert_eq!(store.get(1), None);
         assert_eq!(store.get_edited(1, "exposure 1"), None);
@@ -317,13 +359,28 @@ mod tests {
         let store = ThumbStore::open(&cache);
         store.put(5, b"plain");
         store.put_edited(5, "exposure 1", b"brighter");
-        assert_eq!(store.get_edited(5, "exposure 1").as_deref(), Some(&b"brighter"[..]));
-        assert_eq!(store.get_edited(5, "exposure 2"), None, "another edit misses");
+        assert_eq!(
+            store.get_edited(5, "exposure 1").as_deref(),
+            Some(&b"brighter"[..])
+        );
+        assert_eq!(
+            store.get_edited(5, "exposure 2"),
+            None,
+            "another edit misses"
+        );
         store.put_edited(5, "exposure 2", b"brightest");
-        assert_eq!(store.get_edited(5, "exposure 1"), None, "replaced by the newer edit");
+        assert_eq!(
+            store.get_edited(5, "exposure 1"),
+            None,
+            "replaced by the newer edit"
+        );
         store.remove_edited(5);
         assert_eq!(store.get_edited(5, "exposure 2"), None);
-        assert_eq!(store.get(5).as_deref(), Some(&b"plain"[..]), "the plain thumbnail stays");
+        assert_eq!(
+            store.get(5).as_deref(),
+            Some(&b"plain"[..]),
+            "the plain thumbnail stays"
+        );
         store.put_edited(5, "exposure 1", b"brighter");
         store.put_edited(6, "exposure 1", b"other");
         store.remove(5);

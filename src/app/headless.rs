@@ -5,7 +5,9 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use eframe::egui::{self, Event, Modifiers, MouseWheelSource, MouseWheelUnit, Pos2, Rect, TouchPhase, Vec2};
+use eframe::egui::{
+    self, Event, Modifiers, MouseWheelSource, MouseWheelUnit, Pos2, Rect, TouchPhase, Vec2,
+};
 use eframe::App;
 
 use super::PicassoApp;
@@ -30,7 +32,12 @@ impl Scratch {
     /// in use, so the app doesn't add the Pictures folder.
     pub(crate) fn new(dir: PathBuf) -> (Self, Database) {
         let _ = std::fs::remove_dir_all(&dir);
-        let scratch = Scratch { data: dir.join("data"), cache: dir.join("cache"), config: dir.join("config"), dir };
+        let scratch = Scratch {
+            data: dir.join("data"),
+            cache: dir.join("cache"),
+            config: dir.join("config"),
+            dir,
+        };
         for folder in [&scratch.data, &scratch.cache, &scratch.config] {
             std::fs::create_dir_all(folder).unwrap();
         }
@@ -43,10 +50,28 @@ impl Scratch {
     /// due.
     pub(crate) fn open(&self) -> Headless {
         crate::backup::create(&self.data).unwrap();
-        std::fs::write(self.config.join("settings.json"), r#"{"check_updates": false, "language": "en"}"#).unwrap();
+        std::fs::write(
+            self.config.join("settings.json"),
+            r#"{"check_updates": false, "language": "en"}"#,
+        )
+        .unwrap();
         let ctx = egui::Context::default();
-        let app = PicassoApp::open(&ctx, Vec::new(), (self.data.clone(), self.cache.clone()), &self.config).expect("open the library");
-        Headless { ctx, app, window: eframe::Frame::_new_kittest(), started: Instant::now(), size: WINDOW, pixels_per_point: 1.0, access: None }
+        let app = PicassoApp::open(
+            &ctx,
+            Vec::new(),
+            (self.data.clone(), self.cache.clone()),
+            &self.config,
+        )
+        .expect("open the library");
+        Headless {
+            ctx,
+            app,
+            window: eframe::Frame::_new_kittest(),
+            started: Instant::now(),
+            size: WINDOW,
+            pixels_per_point: 1.0,
+            access: None,
+        }
     }
 }
 
@@ -81,14 +106,21 @@ impl Headless {
             events,
             ..Default::default()
         };
-        input.viewports.insert(egui::ViewportId::ROOT, egui::ViewportInfo { native_pixels_per_point: Some(self.pixels_per_point), ..Default::default() });
+        input.viewports.insert(
+            egui::ViewportId::ROOT,
+            egui::ViewportInfo {
+                native_pixels_per_point: Some(self.pixels_per_point),
+                ..Default::default()
+            },
+        );
         let (app, window) = (&mut self.app, &mut self.window);
         let begun = Instant::now();
         let mut output = self.ctx.run_ui(input, |ui| {
             app.logic(ui.ctx(), window);
             app.ui(ui, window);
         });
-        self.ctx.tessellate(std::mem::take(&mut output.shapes), output.pixels_per_point);
+        self.ctx
+            .tessellate(std::mem::take(&mut output.shapes), output.pixels_per_point);
         // The headless window has no renderer to apply texture updates.
         output.textures_delta.clear();
         let time = begun.elapsed();
@@ -97,7 +129,12 @@ impl Headless {
     }
 
     /// Draws a frame each refresh until `done`, failing after `limit`.
-    pub(crate) fn draw_until(&mut self, what: &str, limit: Duration, mut done: impl FnMut(&PicassoApp) -> bool) {
+    pub(crate) fn draw_until(
+        &mut self,
+        what: &str,
+        limit: Duration,
+        mut done: impl FnMut(&PicassoApp) -> bool,
+    ) {
         let begun = Instant::now();
         loop {
             self.draw(Vec::new());
@@ -116,7 +153,10 @@ impl Headless {
         let mut scanned = false;
         self.draw_until(&format!("listing {photos} photos"), limit, |app| {
             scanned |= app.scans > 0;
-            let listed = app.photos.len() == photos && !app.loading && app.layout.is_some() && app.scans == 0;
+            let listed = app.photos.len() == photos
+                && !app.loading
+                && app.layout.is_some()
+                && app.scans == 0;
             listed && (scanned || begun.elapsed() > Duration::from_secs(3))
         });
     }
@@ -145,12 +185,21 @@ pub(crate) struct Scrolled {
 /// `photos` photos, as a trackpad would: to the bottom in a fling of `frames`
 /// frames, then back up for as many, slowly enough for the thumbnails to be
 /// decoded and shown.
-pub(crate) fn scroll_trip(scratch: &Scratch, trip_id: i64, photos: usize, frames: usize) -> Scrolled {
+pub(crate) fn scroll_trip(
+    scratch: &Scratch,
+    trip_id: i64,
+    photos: usize,
+    frames: usize,
+) -> Scrolled {
     let mut window = scratch.open();
     window.app.set_nav(Nav::Trip(trip_id));
     window.settle(photos, Duration::from_secs(300));
 
-    let height = window.app.layout.as_ref().map_or(0.0, |layout| layout.layout.height);
+    let height = window
+        .app
+        .layout
+        .as_ref()
+        .map_or(0.0, |layout| layout.layout.height);
     let step = height / frames.max(1) as f32 * 1.1;
     let pointer = Pos2::new(WINDOW.x / 2.0, WINDOW.y / 2.0);
     let wheel = |phase: TouchPhase, dy: f32| Event::MouseWheel {
@@ -161,14 +210,25 @@ pub(crate) fn scroll_trip(scratch: &Scratch, trip_id: i64, photos: usize, frames
         modifiers: Modifiers::NONE,
     };
     let scroll = |window: &mut Headless, dy: f32, shown: &mut usize| {
-        window.draw(vec![Event::PointerMoved(pointer), wheel(TouchPhase::Start, 0.0)]);
+        window.draw(vec![
+            Event::PointerMoved(pointer),
+            wheel(TouchPhase::Start, 0.0),
+        ]);
         let mut times = Vec::with_capacity(frames);
         let mut next = Instant::now();
         for _ in 0..frames {
             next += REFRESH;
-            times.push(window.draw(vec![Event::PointerMoved(pointer), wheel(TouchPhase::Move, dy)]));
+            times.push(window.draw(vec![
+                Event::PointerMoved(pointer),
+                wheel(TouchPhase::Move, dy),
+            ]));
             let app = &window.app;
-            *shown += app.thumb_wanted.lock().map_or(0, |drawn| drawn.iter().filter(|id| app.thumbs.map.contains_key(id)).count());
+            *shown += app.thumb_wanted.lock().map_or(0, |drawn| {
+                drawn
+                    .iter()
+                    .filter(|id| app.thumbs.map.contains_key(id))
+                    .count()
+            });
             std::thread::sleep(next.saturating_duration_since(Instant::now()));
         }
         window.draw(vec![wheel(TouchPhase::End, 0.0)]);
@@ -176,10 +236,21 @@ pub(crate) fn scroll_trip(scratch: &Scratch, trip_id: i64, photos: usize, frames
     };
     let fling = scroll(&mut window, -step, &mut 0);
     let last = window.app.photos.last().map(|photo| photo.id);
-    let reached_end = last.is_some_and(|id| window.app.thumb_wanted.lock().is_ok_and(|drawn| drawn.contains(&id)));
+    let reached_end = last.is_some_and(|id| {
+        window
+            .app
+            .thumb_wanted
+            .lock()
+            .is_ok_and(|drawn| drawn.contains(&id))
+    });
     let mut thumbs_shown = 0;
     let slow = scroll(&mut window, WINDOW.y / 60.0, &mut thumbs_shown);
-    Scrolled { fling, slow, reached_end, thumbs_shown }
+    Scrolled {
+        fling,
+        slow,
+        reached_end,
+        thumbs_shown,
+    }
 }
 
 /// Makes a named pipe at `path`. Opening it to read waits until something
@@ -198,7 +269,10 @@ mod tests {
     fn stale_tile_failure_cannot_consume_a_requeued_tile() {
         use crate::geo::{TileDone, TileImage};
 
-        let dir = std::env::temp_dir().join(format!("picasso-headless-tile-reset-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!(
+            "picasso-headless-tile-reset-{}",
+            std::process::id()
+        ));
         let (scratch, _db) = super::Scratch::new(dir);
         let mut window = scratch.open();
         let app = &mut window.app;
@@ -208,15 +282,33 @@ mod tests {
         app.reset_tiles();
         let key = (2, 1, 1);
         app.tile_wait.insert(key, true);
-        tx.send(TileDone { source: app.map_source, generation: old_generation, z: 2, x: 1, y: 1, image: None }).unwrap();
+        tx.send(TileDone {
+            source: app.map_source,
+            generation: old_generation,
+            z: 2,
+            x: 1,
+            y: 1,
+            image: None,
+        })
+        .unwrap();
         app.pump_tiles(&window.ctx);
         assert_eq!(app.tile_wait.get(&key), Some(&true));
         assert!(!app.tile_fail.contains(&key));
 
         tx.send(TileDone {
-            source: app.map_source, generation: app.tile_generation, z: 2, x: 1, y: 1,
-            image: Some(TileImage { w: 1, h: 1, rgba: vec![255; 4], labels: Vec::new() }),
-        }).unwrap();
+            source: app.map_source,
+            generation: app.tile_generation,
+            z: 2,
+            x: 1,
+            y: 1,
+            image: Some(TileImage {
+                w: 1,
+                h: 1,
+                rgba: vec![255; 4],
+                labels: Vec::new(),
+            }),
+        })
+        .unwrap();
         app.pump_tiles(&window.ctx);
         assert!(app.tiles.contains_key(&key));
         assert!(!app.tile_wait.contains_key(&key));
@@ -236,8 +328,15 @@ mod tests {
     }
 
     fn name(node: &Node) -> Option<&str> {
-        let text = if node.role() == Role::Label { node.value() } else { None };
-        [node.label(), node.placeholder(), text].into_iter().flatten().find(|text| !text.trim().is_empty())
+        let text = if node.role() == Role::Label {
+            node.value()
+        } else {
+            None
+        };
+        [node.label(), node.placeholder(), text]
+            .into_iter()
+            .flatten()
+            .find(|text| !text.trim().is_empty())
     }
 
     /// Controls of the last frame, those that can be clicked or take the
@@ -246,26 +345,45 @@ mod tests {
     fn problems(update: &TreeUpdate, width: f32) -> Vec<String> {
         let mut found = Vec::new();
         for (_, node) in &update.nodes {
-            let control = node.supports_action(Action::Click) || node.supports_action(Action::Focus);
-            if !control || node.is_disabled() || matches!(node.role(), Role::ScrollBar | Role::Splitter) {
+            let control =
+                node.supports_action(Action::Click) || node.supports_action(Action::Focus);
+            if !control
+                || node.is_disabled()
+                || matches!(node.role(), Role::ScrollBar | Role::Splitter)
+            {
                 continue;
             }
             let bounds = node.bounds();
             if !named(node) {
                 found.push(format!("a {:?} at {bounds:?} has no name", node.role()));
             }
-            if node.label().is_some_and(|label| label.chars().count() > 80 && node.description() == Some(label)) {
-                found.push(format!("a {:?} at {bounds:?} is named by its whole tooltip", node.role()));
+            if node.label().is_some_and(|label| {
+                label.chars().count() > 80 && node.description() == Some(label)
+            }) {
+                found.push(format!(
+                    "a {:?} at {bounds:?} is named by its whole tooltip",
+                    node.role()
+                ));
             }
             if bounds.is_some_and(|rect| rect.x1 > f64::from(width) + 1.0) {
-                found.push(format!("{:?} {:?} reaches past the edge, to {bounds:?}", node.role(), node.label()));
+                found.push(format!(
+                    "{:?} {:?} reaches past the edge, to {bounds:?}",
+                    node.role(),
+                    node.label()
+                ));
             }
         }
         found
     }
 
     fn key(key: egui::Key, modifiers: Modifiers) -> Event {
-        Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers }
+        Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers,
+        }
     }
 
     fn tab() -> Event {
@@ -321,11 +439,16 @@ mod tests {
     /// temporary folder named after `name`, once its first scan has listed
     /// them.
     fn library(name: &str, photos: usize) -> (Scratch, Headless) {
-        let dir = std::env::temp_dir().join(format!("picasso-headless-{name}-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("picasso-headless-{name}-{}", std::process::id()));
         let (scratch, db) = Scratch::new(dir.clone());
         let pics = dir.join("pics");
         std::fs::create_dir_all(&pics).unwrap();
-        let jpeg = crate::image_io::encode_jpeg(&image::RgbaImage::from_pixel(64, 48, image::Rgba([90, 120, 160, 255])), 80).unwrap();
+        let jpeg = crate::image_io::encode_jpeg(
+            &image::RgbaImage::from_pixel(64, 48, image::Rgba([90, 120, 160, 255])),
+            80,
+        )
+        .unwrap();
         for index in 0..photos {
             std::fs::write(pics.join(format!("IMG_{index:03}.jpg")), &jpeg).unwrap();
         }
@@ -342,17 +465,28 @@ mod tests {
     fn a_thumbnail_arriving_for_a_photo_off_screen_takes_the_one_it_would_replace_with_it() {
         let (_scratch, mut window) = library("off-screen", 3);
         let id = window.app.photos[0].id;
-        window.draw_until("the thumbnail", Duration::from_secs(30), |app| app.thumbs.map.contains_key(&id));
+        window.draw_until("the thumbnail", Duration::from_secs(30), |app| {
+            app.thumbs.map.contains_key(&id)
+        });
 
         // The photo leaves the screen; then a scan finds its file changed and sends a new thumbnail.
         window.app.set_nav(Nav::Trips);
         for _ in 0..3 {
             window.draw(Vec::new());
         }
-        let thumb = UiEvent::Thumb { id, w: 1, h: 1, rgba: vec![0; 4], edit: crate::edit::Settings::default() };
+        let thumb = UiEvent::Thumb {
+            id,
+            w: 1,
+            h: 1,
+            rgba: vec![0; 4],
+            edit: crate::edit::Settings::default(),
+        };
         window.app.events_tx.send(thumb).unwrap();
         window.draw(Vec::new());
-        assert!(!window.app.thumbs.map.contains_key(&id), "the old thumbnail is gone, to be asked for again when drawn");
+        assert!(
+            !window.app.thumbs.map.contains_key(&id),
+            "the old thumbnail is gone, to be asked for again when drawn"
+        );
         assert!(!window.app.thumb_waiting.contains(&id));
     }
 
@@ -360,39 +494,88 @@ mod tests {
     fn a_publishing_job_whose_thread_ends_without_a_word_stops_counting() {
         let (_scratch, mut window) = library("publishing", 1);
         let alive = std::sync::Arc::new(());
-        window.app.publishing.insert((1, 2), std::sync::Arc::downgrade(&alive));
+        window
+            .app
+            .publishing
+            .insert((1, 2), std::sync::Arc::downgrade(&alive));
         assert!(window.app.is_publishing(1, 2));
         // Its thread stops before it can say how the job ended, taking what it held.
         std::thread::spawn(move || drop(alive)).join().unwrap();
-        assert!(!window.app.is_publishing(1, 2), "the Story can be published again");
+        assert!(
+            !window.app.is_publishing(1, 2),
+            "the Story can be published again"
+        );
         assert!(!window.app.is_publishing(1, 3));
     }
 
     #[test]
     fn uploads_saves_left_unused_are_asked_about_one_site_at_a_time_once_nothing_else_is_open() {
         let (_scratch, mut window) = library("leftovers", 1);
-        let escape = || vec![Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE }];
+        let escape = || {
+            vec![Event::Key {
+                key: egui::Key::Escape,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: Modifiers::NONE,
+            }]
+        };
         let db = &window.app.db;
-        db.record_upload(7, "a", "standard", 41, "https://example.com/wp-content/uploads/temple-tea-c9d0e1f2.jpg", r#"{"mime":"image/jpeg"}"#).unwrap();
-        db.record_upload(7, "b", "standard", 42, "https://example.com/wp-content/uploads/a.jpg", r#"{"mime":"image/jpeg"}"#).unwrap();
-        db.record_upload(8, "c", "standard", 51, "https://example.com/wp-content/uploads/temple-walk-0a1b2c3d.mp4", r#"{"mime":"video/mp4"}"#).unwrap();
+        db.record_upload(
+            7,
+            "a",
+            "standard",
+            41,
+            "https://example.com/wp-content/uploads/temple-tea-c9d0e1f2.jpg",
+            r#"{"mime":"image/jpeg"}"#,
+        )
+        .unwrap();
+        db.record_upload(
+            7,
+            "b",
+            "standard",
+            42,
+            "https://example.com/wp-content/uploads/a.jpg",
+            r#"{"mime":"image/jpeg"}"#,
+        )
+        .unwrap();
+        db.record_upload(
+            8,
+            "c",
+            "standard",
+            51,
+            "https://example.com/wp-content/uploads/temple-walk-0a1b2c3d.mp4",
+            r#"{"mime":"video/mp4"}"#,
+        )
+        .unwrap();
 
         window.app.queue_leftovers(7, "Travel blog", vec![42], None);
-        assert!(window.app.publish_leftovers.is_empty(), "a name too short to look for on the site is never deleted, so never offered");
+        assert!(
+            window.app.publish_leftovers.is_empty(),
+            "a name too short to look for on the site is never deleted, so never offered"
+        );
 
         // Two saves finish while another window is open.
         window.app.modal = Modal::About;
-        window.app.queue_leftovers(7, "Travel blog", vec![41, 42], None);
+        window
+            .app
+            .queue_leftovers(7, "Travel blog", vec![41, 42], None);
         window.app.queue_leftovers(8, "Food blog", vec![51], None);
         window.draw(Vec::new());
-        assert!(matches!(window.app.modal, Modal::About), "it waits for the window open");
+        assert!(
+            matches!(window.app.modal, Modal::About),
+            "it waits for the window open"
+        );
         window.app.modal = Modal::None;
         window.draw(Vec::new());
         assert!(matches!(window.app.modal, Modal::DeleteUploads));
 
         // Closing it keeps them, and the other site's are asked about next.
         window.draw(escape());
-        assert!(window.app.db.uploads(7).contains_key("a"), "nothing deleted");
+        assert!(
+            window.app.db.uploads(7).contains_key("a"),
+            "nothing deleted"
+        );
         assert_eq!(window.app.publish_leftovers.len(), 1);
         window.draw(Vec::new());
         assert!(matches!(window.app.modal, Modal::DeleteUploads));
@@ -402,11 +585,22 @@ mod tests {
 
         // Deleting from the site stops partway: those not reached are asked about again, once no deletion runs there.
         let alive = std::sync::Arc::new(());
-        window.app.deleting_uploads.insert(8, std::sync::Arc::downgrade(&alive));
-        let stopped = crate::publish::Deleted { gone: Vec::new(), in_use: 0, failure: Some(crate::wordpress::Failure::Forbidden), left: vec![51] };
+        window
+            .app
+            .deleting_uploads
+            .insert(8, std::sync::Arc::downgrade(&alive));
+        let stopped = crate::publish::Deleted {
+            gone: Vec::new(),
+            in_use: 0,
+            failure: Some(crate::wordpress::Failure::Forbidden),
+            left: vec![51],
+        };
         window.app.on_uploads_deleted(8, "Food blog", stopped);
         window.draw(Vec::new());
-        assert!(matches!(window.app.modal, Modal::None), "not while uploads are still being deleted from the site");
+        assert!(
+            matches!(window.app.modal, Modal::None),
+            "not while uploads are still being deleted from the site"
+        );
         drop(alive);
         window.draw(Vec::new());
         assert!(matches!(window.app.modal, Modal::DeleteUploads));
@@ -420,15 +614,29 @@ mod tests {
         let (_scratch, mut window) = library("screens", PHOTOS);
         let long = "A long walk from the western coast across the high plains to the eastern sea at the old port, with every village between";
         let db = &window.app.db;
-        let trip = db.create_trip(&TripDraft::new(long, "Europe/Madrid")).unwrap();
+        let trip = db
+            .create_trip(&TripDraft::new(long, "Europe/Madrid"))
+            .unwrap();
         let ids: Vec<i64> = window.app.photos.iter().map(|photo| photo.id).collect();
         let media = db.add_to_trip(trip, &ids).unwrap();
         for (index, id) in media.iter().enumerate() {
-            let clock = chrono::NaiveDate::from_ymd_opt(2025, 7, 1 + index as u32 / 4).unwrap().and_hms_opt(10, 0, 0).unwrap();
-            db.store_capture(*id, Capture::Clock { clock, offset: Some(7200) }, clock.and_utc().timestamp() - 7200);
+            let clock = chrono::NaiveDate::from_ymd_opt(2025, 7, 1 + index as u32 / 4)
+                .unwrap()
+                .and_hms_opt(10, 0, 0)
+                .unwrap();
+            db.store_capture(
+                *id,
+                Capture::Clock {
+                    clock,
+                    offset: Some(7200),
+                },
+                clock.and_utc().timestamp() - 7200,
+            );
         }
         db.suggest_days(trip).unwrap();
-        let (story, _) = db.create_story_from_days(trip, long, None, |date| date.to_string()).unwrap();
+        let (story, _) = db
+            .create_story_from_days(trip, long, None, |date| date.to_string())
+            .unwrap();
         let mut blocks = db.story_blocks(story);
         let mut table = Block::table(3, 2);
         if let Block::Table { rows, widths, .. } = &mut table {
@@ -436,8 +644,12 @@ mod tests {
             *widths = vec![50, 25, 25];
         }
         blocks.push(StoryBlock::new(table));
-        blocks.push(StoryBlock::new(Block::YouTube { url: "https://youtu.be/abc-DEF_123?t=90".into(), caption: "The ferry leaving".into() }));
-        db.save_story_blocks(story, db.story(story).unwrap().revision, &blocks).unwrap();
+        blocks.push(StoryBlock::new(Block::YouTube {
+            url: "https://youtu.be/abc-DEF_123?t=90".into(),
+            caption: "The ferry leaving".into(),
+        }));
+        db.save_story_blocks(story, db.story(story).unwrap().revision, &blocks)
+            .unwrap();
         // Two Places, a track beside the photos linked to the Trip, and a site whose posts show the Places.
         db.set_pins(&ids[..6], 42.88, -8.54);
         db.set_pins(&ids[6..], 41.38, 2.17);
@@ -446,10 +658,26 @@ mod tests {
         let gpx = Path::new(&photo.path).with_file_name("camino.gpx");
         std::fs::write(&gpx, r#"<gpx><trk><name>Camino</name><trkseg><trkpt lat="42.88" lon="-8.54"><time>2025-07-01T08:00:00Z</time></trkpt><trkpt lat="42.9" lon="-8.5"><time>2025-07-01T09:00:00Z</time></trkpt></trkseg></trk></gpx>"#).unwrap();
         let gpx_path = gpx.to_string_lossy().into_owned();
-        db.store_track(photo.folder_id, &gpx_path, 1, 0, &crate::track::Track::read(&gpx).unwrap()).unwrap();
-        let track = db.tracks().into_iter().find(|(.., path, _)| *path == gpx_path).unwrap().0;
+        db.store_track(
+            photo.folder_id,
+            &gpx_path,
+            1,
+            0,
+            &crate::track::Track::read(&gpx).unwrap(),
+        )
+        .unwrap();
+        let track = db
+            .tracks()
+            .into_iter()
+            .find(|(.., path, _)| *path == gpx_path)
+            .unwrap()
+            .0;
         db.link_trip_track(trip, track, None).unwrap();
-        let folder = Path::new(&photo.path).parent().unwrap().to_string_lossy().into_owned();
+        let folder = Path::new(&photo.path)
+            .parent()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
         let site = crate::db::Site {
             label: "Travel blog".into(),
             site_url: "https://example.com".into(),
@@ -464,7 +692,12 @@ mod tests {
             ..crate::db::Site::default()
         };
         let site = db.save_site(&site).unwrap();
-        let shown = crate::db::PlaceChoice { places: true, rough: true, left_out: Vec::new(), journey: true };
+        let shown = crate::db::PlaceChoice {
+            places: true,
+            rough: true,
+            left_out: Vec::new(),
+            journey: true,
+        };
         db.save_place_choice(story, site, &shown).unwrap();
         window.app.library_dirty = true;
         window.app.selection.extend(ids.iter().take(2));
@@ -473,7 +706,16 @@ mod tests {
         // Each screen as it is now, with what was found on it.
         let walk = |window: &mut Headless, how: &str| {
             let mut found = Vec::new();
-            let screens = ["the library", "the Trips page", "a Trip", "a Story", "Geotag", "a Trip's Geotag", "Publish to WordPress", "New story"];
+            let screens = [
+                "the library",
+                "the Trips page",
+                "a Trip",
+                "a Story",
+                "Geotag",
+                "a Trip's Geotag",
+                "Publish to WordPress",
+                "New story",
+            ];
             for screen in screens {
                 match screen {
                     "the library" => window.app.set_nav(Nav::Library),
@@ -504,7 +746,11 @@ mod tests {
                     std::thread::sleep(REFRESH);
                 }
                 let tree = window.access.as_ref().expect("the tree");
-                found.extend(problems(tree, window.size.x).into_iter().map(|problem| format!("{screen}, {how}: {problem}")));
+                found.extend(
+                    problems(tree, window.size.x)
+                        .into_iter()
+                        .map(|problem| format!("{screen}, {how}: {problem}")),
+                );
                 if screens[4..].contains(&screen) {
                     let opened = match &window.app.modal {
                         Modal::Geotag(_) => "Geotag",
@@ -514,13 +760,27 @@ mod tests {
                     };
                     assert!(screen.contains(opened), "{screen}, {how}: {opened} open");
                     let wanted = match screen {
-                        "Publish to WordPress" => [tr("Show places on the post's map"), tr("About 1 km"), tr("Link to the trip's Journey")],
-                        "New story" => [tr("First day"), tr("Last day"), tr("Start with their photos")],
+                        "Publish to WordPress" => [
+                            tr("Show places on the post's map"),
+                            tr("About 1 km"),
+                            tr("Link to the trip's Journey"),
+                        ],
+                        "New story" => [
+                            tr("First day"),
+                            tr("Last day"),
+                            tr("Start with their photos"),
+                        ],
                         _ => [tr("Photos that have GPS"), tr("Add tracks…"), tr("Check")],
                     };
                     let geotag = screen.contains("Geotag");
-                    for wanted in wanted.iter().chain([&"camino.gpx"].into_iter().filter(|_| geotag)) {
-                        let drawn = tree.nodes.iter().any(|(_, node)| name(node).is_some_and(|name| name.contains(wanted)));
+                    for wanted in wanted
+                        .iter()
+                        .chain([&"camino.gpx"].into_iter().filter(|_| geotag))
+                    {
+                        let drawn = tree
+                            .nodes
+                            .iter()
+                            .any(|(_, node)| name(node).is_some_and(|name| name.contains(wanted)));
                         assert!(drawn, "{screen}, {how}: {wanted} is not drawn");
                     }
                     window.app.modal = Modal::None;
@@ -541,9 +801,15 @@ mod tests {
                     window.pixels_per_point = pixels_per_point;
                     let ctx = window.ctx.clone();
                     window.app.set_theme_mode(&ctx, theme);
-                    found.extend(walk(&mut window, &format!("{}×{} at {pixels_per_point}×, {theme:?}", size.x, size.y)));
+                    found.extend(walk(
+                        &mut window,
+                        &format!("{}×{} at {pixels_per_point}×, {theme:?}", size.x, size.y),
+                    ));
                     assert_eq!(window.ctx.pixels_per_point(), pixels_per_point);
-                    assert_eq!(window.ctx.global_style().visuals.dark_mode, theme == ThemeMode::Dark);
+                    assert_eq!(
+                        window.ctx.global_style().visuals.dark_mode,
+                        theme == ThemeMode::Dark
+                    );
                 }
             }
         }
@@ -552,14 +818,22 @@ mod tests {
         // other letters, in the smallest window.
         window.size = Vec2::new(880.0, 560.0);
         window.pixels_per_point = 1.0;
-        for lang in [crate::i18n::Lang::German, crate::i18n::Lang::TraditionalChinese] {
+        for lang in [
+            crate::i18n::Lang::German,
+            crate::i18n::Lang::TraditionalChinese,
+        ] {
             crate::i18n::set_for_thread(Some(lang));
             window.app.reload();
             found.extend(walk(&mut window, &format!("smallest window, {lang:?}")));
             let tree = window.access.as_ref().expect("the tree");
             let settings = crate::i18n::tr("Settings");
             assert_ne!(settings, "Settings");
-            assert!(tree.nodes.iter().any(|(_, node)| name(node) == Some(settings)), "drawn in {lang:?}");
+            assert!(
+                tree.nodes
+                    .iter()
+                    .any(|(_, node)| name(node) == Some(settings)),
+                "drawn in {lang:?}"
+            );
         }
         crate::i18n::set_for_thread(None);
         window.app.reload();
@@ -568,7 +842,9 @@ mod tests {
         // Tab goes from the search field through the controls, each with a name.
         window.size = WINDOW;
         window.app.set_nav(Nav::Library);
-        window.draw_until("the library", Duration::from_secs(10), |app| app.nav == Nav::Library && app.layout.is_some());
+        window.draw_until("the library", Duration::from_secs(10), |app| {
+            app.nav == Nav::Library && app.layout.is_some()
+        });
         // From the top of the grid, wherever the screens above left it, so
         // Tab meets the first photo whatever the runner's timing.
         window.app.jump_to = Some(0.0);
@@ -576,16 +852,32 @@ mod tests {
         window.draw(Vec::new());
         window.draw(Vec::new());
         let (reached, unnamed) = tab_through(&mut window, 30);
-        assert!(unnamed.is_empty(), "Tab reached controls with no name: {unnamed:?}");
-        for name in ["Search photos", "Settings", "Thumbnail size", "Library", "pics, 12", "Sort by Date", "IMG_000.jpg"] {
-            assert!(reached.iter().any(|reached| reached == name), "Tab never reached {name}: {reached:?}");
+        assert!(
+            unnamed.is_empty(),
+            "Tab reached controls with no name: {unnamed:?}"
+        );
+        for name in [
+            "Search photos",
+            "Settings",
+            "Thumbnail size",
+            "Library",
+            "pics, 12",
+            "Sort by Date",
+            "IMG_000.jpg",
+        ] {
+            assert!(
+                reached.iter().any(|reached| reached == name),
+                "Tab never reached {name}: {reached:?}"
+            );
         }
     }
 
     #[test]
     fn back_to_photo_returns_from_places_to_the_photo_shown() {
         let (_scratch, mut window) = library("back", 6);
-        window.draw_until("the library", Duration::from_secs(10), |app| app.layout.is_some());
+        window.draw_until("the library", Duration::from_secs(10), |app| {
+            app.layout.is_some()
+        });
         // From the viewer: the same photo open again, not the first.
         window.app.open_at(3);
         let id = window.app.photos[3].id;
@@ -593,16 +885,32 @@ mod tests {
         window.draw(Vec::new());
         assert_eq!(window.app.nav, Nav::Places);
         window.app.return_from_places();
-        window.draw_until("the photo again", Duration::from_secs(10), |app| app.mode == Mode::View);
-        assert_eq!((window.app.nav.clone(), window.app.photos[window.app.viewer_index].id), (Nav::Library, id));
+        window.draw_until("the photo again", Duration::from_secs(10), |app| {
+            app.mode == Mode::View
+        });
+        assert_eq!(
+            (
+                window.app.nav.clone(),
+                window.app.photos[window.app.viewer_index].id
+            ),
+            (Nav::Library, id)
+        );
         // From the grid: the photo selected and scrolled to.
         window.app.close_viewer();
         let other = window.app.photos[1].id;
         window.app.show_on_map(other);
         window.draw(Vec::new());
         window.app.return_from_places();
-        window.draw_until("the library again", Duration::from_secs(10), |app| app.nav == Nav::Library && app.returning.is_none() && !app.loading);
-        assert_eq!((window.app.mode, window.app.selection.iter().copied().collect::<Vec<_>>()), (Mode::Browse, vec![other]));
+        window.draw_until("the library again", Duration::from_secs(10), |app| {
+            app.nav == Nav::Library && app.returning.is_none() && !app.loading
+        });
+        assert_eq!(
+            (
+                window.app.mode,
+                window.app.selection.iter().copied().collect::<Vec<_>>()
+            ),
+            (Mode::Browse, vec![other])
+        );
         assert!(window.app.places_return.is_none(), "used once");
     }
 
@@ -612,14 +920,18 @@ mod tests {
         use egui::Key;
         let (_scratch, mut window) = library("keys", 6);
         let db = &window.app.db;
-        let trip = db.create_trip(&TripDraft::new("Coast", "Europe/Madrid")).unwrap();
+        let trip = db
+            .create_trip(&TripDraft::new("Coast", "Europe/Madrid"))
+            .unwrap();
         let ids: Vec<i64> = window.app.photos.iter().map(|photo| photo.id).collect();
         db.add_to_trip(trip, &ids).unwrap();
         let day = db.add_trip_day(trip, None, "Arrival").unwrap();
         db.create_story(trip, "Coast story").unwrap();
         window.app.library_dirty = true;
         window.ctx.enable_accesskit();
-        window.draw_until("the library", Duration::from_secs(10), |app| app.layout.is_some());
+        window.draw_until("the library", Duration::from_secs(10), |app| {
+            app.layout.is_some()
+        });
         let file = |window: &Headless, index: usize| window.app.photos[index].filename.clone();
 
         // With nothing focused the arrows choose a photo, S stars it, Enter
@@ -630,7 +942,10 @@ mod tests {
         press(&mut window, Key::S, Modifiers::NONE);
         assert!(window.app.photos[chosen].starred);
         press(&mut window, Key::Enter, Modifiers::NONE);
-        assert_eq!((window.app.mode, window.app.viewer_index), (Mode::View, chosen));
+        assert_eq!(
+            (window.app.mode, window.app.viewer_index),
+            (Mode::View, chosen)
+        );
         press(&mut window, Key::ArrowRight, Modifiers::NONE);
         assert_eq!(window.app.viewer_index, chosen + 1);
         press(&mut window, Key::Escape, Modifiers::NONE);
@@ -644,10 +959,17 @@ mod tests {
         // A photo reached with Tab: the arrows move the selection and the
         // focus together, and the shortcuts still work.
         let first = file(&window, 0);
-        assert!(tab_to(&mut window, 40, |name| name == first), "Tab reaches the first photo");
+        assert!(
+            tab_to(&mut window, 40, |name| name == first),
+            "Tab reaches the first photo"
+        );
         press(&mut window, Key::ArrowRight, Modifiers::NONE);
         assert_eq!(window.app.primary_index(), Some(1));
-        assert_eq!(focused(&window), Some(file(&window, 1)), "the focus follows");
+        assert_eq!(
+            focused(&window),
+            Some(file(&window, 1)),
+            "the focus follows"
+        );
         press(&mut window, Key::ArrowLeft, Modifiers::NONE);
         assert_eq!(focused(&window), Some(file(&window, 0)));
         press(&mut window, Key::ArrowRight, Modifiers::NONE);
@@ -656,11 +978,18 @@ mod tests {
         press(&mut window, Key::S, Modifiers::NONE);
         assert_ne!(window.app.photos[1].starred, starred);
         press(&mut window, Key::Enter, Modifiers::NONE);
-        assert_eq!((window.app.mode, window.app.viewer_index), (Mode::View, 1), "Enter opens the focused photo");
+        assert_eq!(
+            (window.app.mode, window.app.viewer_index),
+            (Mode::View, 1),
+            "Enter opens the focused photo"
+        );
         press(&mut window, Key::Escape, Modifiers::NONE);
 
         // A button reached with Tab takes Enter, and F1 still opens Help.
-        assert!(tab_to(&mut window, 40, |name| name.starts_with(tr("All trips"))), "Tab reaches All trips");
+        assert!(
+            tab_to(&mut window, 40, |name| name.starts_with(tr("All trips"))),
+            "Tab reaches All trips"
+        );
         press(&mut window, Key::F1, Modifiers::NONE);
         assert!(matches!(window.app.modal, Modal::Help));
         press(&mut window, Key::Escape, Modifiers::NONE);
@@ -668,38 +997,64 @@ mod tests {
         assert!(tab_to(&mut window, 40, |name| name.starts_with(tr("All trips"))));
         press(&mut window, Key::Enter, Modifiers::NONE);
         assert_eq!(window.app.nav, Nav::Trips);
-        assert!(tab_to(&mut window, 40, |name| name == "Coast"), "Tab reaches the Trip's card");
+        assert!(
+            tab_to(&mut window, 40, |name| name == "Coast"),
+            "Tab reaches the Trip's card"
+        );
         press(&mut window, Key::Enter, Modifiers::NONE);
         assert_eq!(window.app.nav, Nav::Trip(trip));
 
         // In the Trip, Space chooses the focused photo, Alt+1 puts it in the
         // first Day, and the Story opens and closes from its buttons.
-        window.draw_until("the Trip's photos", Duration::from_secs(10), |app| app.photos.len() == 6);
+        window.draw_until("the Trip's photos", Duration::from_secs(10), |app| {
+            app.photos.len() == 6
+        });
         let first = file(&window, 0);
-        assert!(tab_to(&mut window, 60, |name| name == first), "Tab reaches the Trip's first photo");
+        assert!(
+            tab_to(&mut window, 60, |name| name == first),
+            "Tab reaches the Trip's first photo"
+        );
         press(&mut window, Key::Space, Modifiers::NONE);
         assert_eq!(window.app.primary_index(), Some(0));
         press(&mut window, Key::Num1, Modifiers::ALT);
-        let members = window.app.db.trip_members(trip, &MemberQuery::default(), 0, usize::MAX);
+        let members = window
+            .app
+            .db
+            .trip_members(trip, &MemberQuery::default(), 0, usize::MAX);
         let photo = window.app.photos[0].id;
-        assert_eq!(members.iter().find(|member| member.photo_id == Some(photo)).and_then(|member| member.day_id), Some(day));
+        assert_eq!(
+            members
+                .iter()
+                .find(|member| member.photo_id == Some(photo))
+                .and_then(|member| member.day_id),
+            Some(day)
+        );
         let open = crate::i18n::trf("Continue “{}”", &[&"Coast story"]);
-        assert!(tab_to(&mut window, 80, |name| name == open), "Tab reaches the Story");
+        assert!(
+            tab_to(&mut window, 80, |name| name == open),
+            "Tab reaches the Story"
+        );
         press(&mut window, Key::Enter, Modifiers::NONE);
         assert!(window.app.story_shown());
-        assert!(tab_to(&mut window, 40, |name| name.ends_with("Coast")), "Tab reaches the way back");
+        assert!(
+            tab_to(&mut window, 40, |name| name.ends_with("Coast")),
+            "Tab reaches the way back"
+        );
         press(&mut window, Key::Enter, Modifiers::NONE);
         assert!(!window.app.story_shown());
     }
 
     #[test]
-    fn a_selection_becomes_a_trip_its_photos_go_into_days_and_the_editor_gives_back_where_you_were() {
+    fn a_selection_becomes_a_trip_its_photos_go_into_days_and_the_editor_gives_back_where_you_were()
+    {
         use crate::trip::{DayFilter, MemberQuery};
         use egui::Key;
         use std::collections::HashSet;
         let (_scratch, mut window) = library("flows", 8);
         window.ctx.enable_accesskit();
-        window.draw_until("the library", Duration::from_secs(10), |app| app.layout.is_some());
+        window.draw_until("the library", Duration::from_secs(10), |app| {
+            app.layout.is_some()
+        });
 
         // Three photos, a click and a Shift-click, then Add to Trip ▸ New trip…
         window.app.select_click(0, Modifiers::NONE);
@@ -711,13 +1066,27 @@ mod tests {
         window.draw(vec![Event::Text("Coast".into())]);
         press(&mut window, Key::Tab, Modifiers::NONE);
         window.draw(vec![Event::Text("+02:00".into())]);
-        assert!(tab_to(&mut window, 20, |name| name == tr("Create")), "Tab reaches Create");
+        assert!(
+            tab_to(&mut window, 20, |name| name == tr("Create")),
+            "Tab reaches Create"
+        );
         press(&mut window, Key::Enter, Modifiers::NONE);
-        let Nav::Trip(trip) = window.app.nav else { panic!("the new Trip opens, not {:?}", window.app.nav) };
-        assert_eq!(window.app.db.trip(trip).map(|trip| (trip.title, trip.zone)), Some(("Coast".into(), "+02:00".into())));
-        window.draw_until("the Trip's photos", Duration::from_secs(10), |app| app.photos.len() == 3);
+        let Nav::Trip(trip) = window.app.nav else {
+            panic!("the new Trip opens, not {:?}", window.app.nav)
+        };
+        assert_eq!(
+            window.app.db.trip(trip).map(|trip| (trip.title, trip.zone)),
+            Some(("Coast".into(), "+02:00".into()))
+        );
+        window.draw_until("the Trip's photos", Duration::from_secs(10), |app| {
+            app.photos.len() == 3
+        });
         let ids: Vec<i64> = window.app.photos.iter().map(|photo| photo.id).collect();
-        assert_eq!(ids.iter().copied().collect::<HashSet<_>>(), chosen.iter().copied().collect(), "exactly the photos chosen");
+        assert_eq!(
+            ids.iter().copied().collect::<HashSet<_>>(),
+            chosen.iter().copied().collect(),
+            "exactly the photos chosen"
+        );
 
         // All three into the first Day at once, one of them into the second, and back.
         let arrival = window.app.db.add_trip_day(trip, None, "Arrival").unwrap();
@@ -725,8 +1094,14 @@ mod tests {
         window.app.reload();
         window.draw(Vec::new());
         let day_of = |window: &Headless, photo: i64| {
-            let members = window.app.db.trip_members(trip, &MemberQuery::default(), 0, usize::MAX);
-            members.iter().find(|member| member.photo_id == Some(photo)).and_then(|member| member.day_id)
+            let members = window
+                .app
+                .db
+                .trip_members(trip, &MemberQuery::default(), 0, usize::MAX);
+            members
+                .iter()
+                .find(|member| member.photo_id == Some(photo))
+                .and_then(|member| member.day_id)
         };
         press(&mut window, Key::A, Modifiers::COMMAND);
         press(&mut window, Key::Num1, Modifiers::ALT);
@@ -748,8 +1123,18 @@ mod tests {
         assert!(window.app.editing && window.app.mode == Mode::View);
         press(&mut window, Key::Escape, Modifiers::NONE);
         press(&mut window, Key::Escape, Modifiers::NONE);
-        assert_eq!((window.app.mode, window.app.nav.clone(), window.app.trip_filter.day), (Mode::Browse, Nav::Trip(trip), DayFilter::Day(arrival)));
-        assert_eq!(window.app.selection.iter().copied().collect::<Vec<_>>(), [photo]);
+        assert_eq!(
+            (
+                window.app.mode,
+                window.app.nav.clone(),
+                window.app.trip_filter.day
+            ),
+            (Mode::Browse, Nav::Trip(trip), DayFilter::Day(arrival))
+        );
+        assert_eq!(
+            window.app.selection.iter().copied().collect::<Vec<_>>(),
+            [photo]
+        );
 
         // To the Library and back: the Trip still shows the first Day.
         window.app.set_nav(Nav::Library);
@@ -773,16 +1158,21 @@ mod tests {
         let members = db.add_to_trip(trip, &ids).unwrap();
         let arrival = db.add_trip_day(trip, None, "Arrival").unwrap();
         let harbor = db.add_trip_day(trip, None, "Harbor").unwrap();
-        db.move_to_day(trip, Some(arrival), &members[..1], DaySource::User).unwrap();
-        db.move_to_day(trip, Some(harbor), &members[1..], DaySource::User).unwrap();
-        let (story, _) = db.create_story_from_days(trip, "Coast story", None, |day| day.to_string()).unwrap();
+        db.move_to_day(trip, Some(arrival), &members[..1], DaySource::User)
+            .unwrap();
+        db.move_to_day(trip, Some(harbor), &members[1..], DaySource::User)
+            .unwrap();
+        let (story, _) = db
+            .create_story_from_days(trip, "Coast story", None, |day| day.to_string())
+            .unwrap();
         let mut blocks = db.story_blocks(story);
         for block in &mut blocks {
             if let Block::Photo(media) = &mut block.block {
                 media.alt = "Sea".into();
             }
         }
-        db.save_story_blocks(story, db.story(story).unwrap().revision, &blocks).unwrap();
+        db.save_story_blocks(story, db.story(story).unwrap().revision, &blocks)
+            .unwrap();
 
         // What the Export button does once the Story is open, without opening the folder afterwards.
         let out = scratch.dir.join("out");
@@ -793,15 +1183,33 @@ mod tests {
             window.app.open_story(story);
             let mut job = window.app.story_job().expect("the Story opens");
             let check = story_html::preflight(&job.page());
-            assert_eq!(check.blocked(skip_missing), check.missing > 0 && !skip_missing);
+            assert_eq!(
+                check.blocked(skip_missing),
+                check.missing > 0 && !skip_missing
+            );
             job.read_profiles();
-            let (folder, outcome) = story_html::export_story(&out, "Coast story", Format::Html, Profile::default(), &job.page(), &Progress::default()).unwrap();
+            let (folder, outcome) = story_html::export_story(
+                &out,
+                "Coast story",
+                Format::Html,
+                Profile::default(),
+                &job.page(),
+                &Progress::default(),
+            )
+            .unwrap();
             assert!(window.app.close_story());
-            (check, std::fs::read_to_string(folder.join("index.html")).unwrap(), outcome.missing)
+            (
+                check,
+                std::fs::read_to_string(folder.join("index.html")).unwrap(),
+                outcome.missing,
+            )
         };
         let shown = |html: &str| html.matches("alt=\"Sea\"").count();
         let (check, html, missing) = export(&mut window, false);
-        assert_eq!((check.missing, check.no_alt, missing, shown(&html)), (0, 0, 0, 4));
+        assert_eq!(
+            (check.missing, check.no_alt, missing, shown(&html)),
+            (0, 0, 0, 4)
+        );
         let (arrival_at, harbor_at) = (html.find("Arrival").unwrap(), html.find("Harbor").unwrap());
         assert!(arrival_at < harbor_at, "the Days in their order");
 
@@ -823,18 +1231,31 @@ mod tests {
         assert!(html.contains("Photo unavailable"));
         std::fs::write(&gone, &bytes).unwrap();
         let (check, html, _) = export(&mut window, false);
-        assert_eq!((check.missing, shown(&html)), (0, 4), "whole again once the file is back");
+        assert_eq!(
+            (check.missing, shown(&html)),
+            (0, 4),
+            "whole again once the file is back"
+        );
 
         // A backup restored into an empty library brings back the Trip, its Days and the Story.
         let backup = crate::backup::create(&scratch.data).unwrap();
         drop(window);
-        let (restored, fresh) = Scratch::new(std::env::temp_dir().join(format!("picasso-headless-offline-restored-{}", std::process::id())));
+        let (restored, fresh) = Scratch::new(std::env::temp_dir().join(format!(
+            "picasso-headless-offline-restored-{}",
+            std::process::id()
+        )));
         drop(fresh);
         crate::backup::stage_restore(&restored.data, &backup).unwrap();
         let mut window = restored.open();
         window.app.watcher = None;
         window.settle(4, Duration::from_secs(60));
-        let days: Vec<String> = window.app.db.trip_days(trip).into_iter().map(|day| day.title).collect();
+        let days: Vec<String> = window
+            .app
+            .db
+            .trip_days(trip)
+            .into_iter()
+            .map(|day| day.title)
+            .collect();
         assert_eq!(days, ["Arrival", "Harbor"]);
         assert_eq!(window.app.db.story_blocks(story), blocks);
         let (check, restored_html, _) = export(&mut window, false);
@@ -847,7 +1268,12 @@ mod tests {
     #[cfg(unix)]
     fn answer(path: &Path) {
         use std::os::unix::fs::OpenOptionsExt;
-        drop(std::fs::OpenOptions::new().write(true).custom_flags(libc::O_NONBLOCK).open(path));
+        drop(
+            std::fs::OpenOptions::new()
+                .write(true)
+                .custom_flags(libc::O_NONBLOCK)
+                .open(path),
+        );
     }
 
     #[cfg(unix)]
@@ -863,21 +1289,33 @@ mod tests {
         std::fs::remove_file(&stuck.path).unwrap();
         named_pipe(Path::new(&stuck.path));
         window.app.open_at(last);
-        window.draw_until("the photo beside it", Duration::from_secs(30), |app| app.displays.iter().any(|item| item.id == beside));
+        window.draw_until("the photo beside it", Duration::from_secs(30), |app| {
+            app.displays.iter().any(|item| item.id == beside)
+        });
         let mut slowest = Duration::ZERO;
         for _ in 0..60 {
             slowest = slowest.max(window.draw(Vec::new()));
             std::thread::sleep(REFRESH);
         }
-        assert!(slowest < Duration::from_millis(500), "a frame took {slowest:?} while a decoder waited");
-        assert!(window.app.display_inflight.contains_key(&stuck.id), "its decoder is still waiting");
+        assert!(
+            slowest < Duration::from_millis(500),
+            "a frame took {slowest:?} while a decoder waited"
+        );
+        assert!(
+            window.app.display_inflight.contains_key(&stuck.id),
+            "its decoder is still waiting"
+        );
         assert!(!window.app.display_failed.contains(&stuck.id));
 
         // The file answers with nothing, each time it is opened: the photo shows as one that can't be read.
-        window.draw_until("the photo shown as unreadable", Duration::from_secs(30), |app| {
-            answer(Path::new(&stuck.path));
-            !app.display_inflight.contains_key(&stuck.id)
-        });
+        window.draw_until(
+            "the photo shown as unreadable",
+            Duration::from_secs(30),
+            |app| {
+                answer(Path::new(&stuck.path));
+                !app.display_inflight.contains_key(&stuck.id)
+            },
+        );
         assert!(window.app.display_failed.contains(&stuck.id));
     }
 }

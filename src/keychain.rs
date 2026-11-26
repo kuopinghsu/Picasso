@@ -46,7 +46,9 @@ impl System {
 
 impl Store for System {
     fn save(&self, reference: &str, secret: &str) -> Result<(), StoreError> {
-        System::entry(reference)?.set_password(secret).map_err(store_error)
+        System::entry(reference)?
+            .set_password(secret)
+            .map_err(store_error)
     }
 
     fn load(&self, reference: &str) -> Result<Option<String>, StoreError> {
@@ -67,7 +69,9 @@ impl Store for System {
 
 fn store_error(err: keyring::Error) -> StoreError {
     match err {
-        keyring::Error::NoStorageAccess(_) | keyring::Error::PlatformFailure(_) => StoreError::Unavailable,
+        keyring::Error::NoStorageAccess(_) | keyring::Error::PlatformFailure(_) => {
+            StoreError::Unavailable
+        }
         // The store's message names the problem, never the secret.
         other => StoreError::Failed(other.to_string()),
     }
@@ -81,16 +85,27 @@ pub struct Session {
 
 impl Store for Session {
     fn save(&self, reference: &str, secret: &str) -> Result<(), StoreError> {
-        self.secrets.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).insert(reference.to_string(), secret.to_string());
+        self.secrets
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert(reference.to_string(), secret.to_string());
         Ok(())
     }
 
     fn load(&self, reference: &str) -> Result<Option<String>, StoreError> {
-        Ok(self.secrets.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).get(reference).cloned())
+        Ok(self
+            .secrets
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(reference)
+            .cloned())
     }
 
     fn delete(&self, reference: &str) -> Result<(), StoreError> {
-        self.secrets.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).remove(reference);
+        self.secrets
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(reference);
         Ok(())
     }
 }
@@ -120,7 +135,10 @@ impl Default for Vault {
 
 impl Vault {
     pub fn new(system: Box<dyn Store>) -> Self {
-        Vault { system, session: Session::default() }
+        Vault {
+            system,
+            session: Session::default(),
+        }
     }
 
     /// Keeps `secret` in the system's store, or for this session when the
@@ -228,10 +246,18 @@ mod tests {
         for _ in 0..3 {
             assert_eq!(vault.load("site"), Ok(Some("abcd efgh".to_string())));
         }
-        assert_eq!(reads.load(std::sync::atomic::Ordering::Relaxed), 1, "macOS asks to unlock it once");
+        assert_eq!(
+            reads.load(std::sync::atomic::Ordering::Relaxed),
+            1,
+            "macOS asks to unlock it once"
+        );
         assert_eq!(vault.save("other", "ijkl"), Ok(Kept::System));
         assert_eq!(vault.load("other"), Ok(Some("ijkl".to_string())));
-        assert_eq!(reads.load(std::sync::atomic::Ordering::Relaxed), 1, "a secret just saved isn't read back");
+        assert_eq!(
+            reads.load(std::sync::atomic::Ordering::Relaxed),
+            1,
+            "a secret just saved isn't read back"
+        );
     }
 
     #[test]
@@ -246,19 +272,33 @@ mod tests {
     #[test]
     fn a_store_that_refuses_is_an_error_not_a_fallback() {
         let vault = Vault::new(Box::new(Broken(StoreError::Failed("denied".into()))));
-        assert_eq!(vault.save("site", "abcd efgh"), Err(StoreError::Failed("denied".into())));
+        assert_eq!(
+            vault.save("site", "abcd efgh"),
+            Err(StoreError::Failed("denied".into()))
+        );
         assert_eq!(vault.load("site"), Err(StoreError::Failed("denied".into())));
     }
 
     #[test]
     fn the_reference_names_the_account_and_site_only() {
-        assert_eq!(wordpress_reference("https://example.com", "ana"), "wordpress ana@https://example.com");
+        assert_eq!(
+            wordpress_reference("https://example.com", "ana"),
+            "wordpress ana@https://example.com"
+        );
     }
 
     #[test]
     fn store_errors_never_fall_back_for_a_bad_entry() {
-        assert_eq!(store_error(keyring::Error::NoStorageAccess(Box::new(std::io::Error::other("locked")))), StoreError::Unavailable);
-        assert!(matches!(store_error(keyring::Error::TooLong("user".into(), 10)), StoreError::Failed(_)));
+        assert_eq!(
+            store_error(keyring::Error::NoStorageAccess(Box::new(
+                std::io::Error::other("locked")
+            ))),
+            StoreError::Unavailable
+        );
+        assert!(matches!(
+            store_error(keyring::Error::TooLong("user".into(), 10)),
+            StoreError::Failed(_)
+        ));
         let _ = System::entry("site");
     }
 }

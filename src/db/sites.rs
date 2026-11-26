@@ -120,11 +120,17 @@ CREATE TABLE IF NOT EXISTS publish_journeys (
 ";
 
 pub(super) fn upgrade(db: &Database) -> Result<(), String> {
-    db.conn.execute_batch(TABLES).map_err(|err| err.to_string())?;
+    db.conn
+        .execute_batch(TABLES)
+        .map_err(|err| err.to_string())?;
     // What Picasso wrote in the post as the site kept it, and whether it was
     // found edited there since.
     db.ensure_column("publications", "fingerprint", "TEXT NOT NULL DEFAULT ''")?;
-    db.ensure_column("publications", "changed_on_site", "INTEGER NOT NULL DEFAULT 0")?;
+    db.ensure_column(
+        "publications",
+        "changed_on_site",
+        "INTEGER NOT NULL DEFAULT 0",
+    )?;
     // What the site made of an upload: its size, type and the smaller sizes it made.
     db.ensure_column("publish_media", "details", "TEXT NOT NULL DEFAULT ''")?;
     // Where WordPress and its pages say they are; empty until the site is
@@ -206,25 +212,46 @@ fn read_site(row: &Row) -> rusqlite::Result<Site> {
 impl Database {
     /// The connected sites, by label.
     pub fn sites(&self) -> Vec<Site> {
-        let Ok(mut statement) = self.conn.prepare(&format!("SELECT {COLS} FROM publish_sites ORDER BY label COLLATE NOCASE, id")) else {
+        let Ok(mut statement) = self.conn.prepare(&format!(
+            "SELECT {COLS} FROM publish_sites ORDER BY label COLLATE NOCASE, id"
+        )) else {
             return Vec::new();
         };
-        statement.query_map([], read_site).map(|rows| rows.filter_map(Result::ok).collect()).unwrap_or_default()
+        statement
+            .query_map([], read_site)
+            .map(|rows| rows.filter_map(Result::ok).collect())
+            .unwrap_or_default()
     }
 
     pub fn site(&self, id: i64) -> Option<Site> {
-        self.conn.query_row(&format!("SELECT {COLS} FROM publish_sites WHERE id = ?1"), [id], read_site).optional().ok().flatten()
+        self.conn
+            .query_row(
+                &format!("SELECT {COLS} FROM publish_sites WHERE id = ?1"),
+                [id],
+                read_site,
+            )
+            .optional()
+            .ok()
+            .flatten()
     }
 
     /// Adds `site`, or updates the row for the same site and user, and
     /// returns its id. Checking it again is what sets `checked_at`.
     pub fn save_site(&self, site: &Site) -> Result<i64, String> {
-        let label = if site.label.trim().is_empty() { site.site_url.as_str() } else { site.label.trim() };
+        let label = if site.label.trim().is_empty() {
+            site.site_url.as_str()
+        } else {
+            site.label.trim()
+        };
         let existing: Option<i64> = if site.id > 0 {
             Some(site.id)
         } else {
             self.conn
-                .query_row("SELECT id FROM publish_sites WHERE site_url = ?1 AND user = ?2", params![site.site_url, site.user], |row| row.get(0))
+                .query_row(
+                    "SELECT id FROM publish_sites WHERE site_url = ?1 AND user = ?2",
+                    params![site.site_url, site.user],
+                    |row| row.get(0),
+                )
                 .optional()
                 .map_err(|err| err.to_string())?
         };
@@ -273,13 +300,19 @@ impl Database {
     /// Forgets the site. Its password is removed from the credential store
     /// by the caller, which knows the store.
     pub fn delete_site(&self, id: i64) -> Result<(), String> {
-        self.conn.execute("DELETE FROM publish_sites WHERE id = ?1", [id]).map(|_| ()).map_err(|err| err.to_string())
+        self.conn
+            .execute("DELETE FROM publish_sites WHERE id = ?1", [id])
+            .map(|_| ())
+            .map_err(|err| err.to_string())
     }
 
     /// Keeps where WordPress and its pages say site `id` is, as read while publishing.
     pub fn set_wordpress_urls(&self, id: i64, url: &str, home: &str) -> Result<(), String> {
         self.conn
-            .execute("UPDATE publish_sites SET wordpress_url = ?1, home_url = ?2 WHERE id = ?3", params![url, home, id])
+            .execute(
+                "UPDATE publish_sites SET wordpress_url = ?1, home_url = ?2 WHERE id = ?3",
+                params![url, home, id],
+            )
             .map(|_| ())
             .map_err(|err| err.to_string())
     }
@@ -342,17 +375,30 @@ impl Database {
     /// The confirmed uploads of site `site_id`, by the hash of their bytes:
     /// (media id, address).
     pub fn uploads(&self, site_id: i64) -> std::collections::HashMap<String, (i64, String)> {
-        let Ok(mut statement) = self.conn.prepare("SELECT hash, media_id, url FROM publish_media WHERE site_id = ?1") else {
+        let Ok(mut statement) = self
+            .conn
+            .prepare("SELECT hash, media_id, url FROM publish_media WHERE site_id = ?1")
+        else {
             return Default::default();
         };
         statement
-            .query_map([site_id], |row| Ok((row.get::<_, String>(0)?, (row.get(1)?, row.get(2)?))))
+            .query_map([site_id], |row| {
+                Ok((row.get::<_, String>(0)?, (row.get(1)?, row.get(2)?)))
+            })
             .map(|rows| rows.filter_map(Result::ok).collect())
             .unwrap_or_default()
     }
 
     /// Records an upload the site confirmed, the moment it did.
-    pub fn record_upload(&self, site_id: i64, hash: &str, size: &str, media_id: i64, url: &str, details: &str) -> Result<(), String> {
+    pub fn record_upload(
+        &self,
+        site_id: i64,
+        hash: &str,
+        size: &str,
+        media_id: i64,
+        url: &str,
+        details: &str,
+    ) -> Result<(), String> {
         self.conn
             .execute(
                 "INSERT OR REPLACE INTO publish_media(site_id, hash, size, media_id, url, uploaded_at, details) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
@@ -364,7 +410,13 @@ impl Database {
 
     /// Forgets an upload the site no longer has.
     pub fn forget_upload(&self, site_id: i64, hash: &str) -> Result<(), String> {
-        self.conn.execute("DELETE FROM publish_media WHERE site_id = ?1 AND hash = ?2", params![site_id, hash]).map(|_| ()).map_err(|err| err.to_string())
+        self.conn
+            .execute(
+                "DELETE FROM publish_media WHERE site_id = ?1 AND hash = ?2",
+                params![site_id, hash],
+            )
+            .map(|_| ())
+            .map_err(|err| err.to_string())
     }
 
     /// Of the site's media `media`, those Picasso uploaded there that no
@@ -398,7 +450,13 @@ impl Database {
     /// Forgets every upload to the site that became media `media_id`, once
     /// it was deleted there.
     pub fn forget_media(&self, site_id: i64, media_id: i64) -> Result<(), String> {
-        self.conn.execute("DELETE FROM publish_media WHERE site_id = ?1 AND media_id = ?2", params![site_id, media_id]).map(|_| ()).map_err(|err| err.to_string())
+        self.conn
+            .execute(
+                "DELETE FROM publish_media WHERE site_id = ?1 AND media_id = ?2",
+                params![site_id, media_id],
+            )
+            .map(|_| ())
+            .map_err(|err| err.to_string())
     }
 
     /// Story `story_id`'s main post on site `site_id`, if one was made.
@@ -450,9 +508,21 @@ impl Database {
     }
 
     /// Replaces the media the Story's post uses, after a confirmed save.
-    pub fn save_publication_media(&self, story_id: i64, site_id: i64, media: &[i64]) -> Result<(), String> {
-        let tx = self.conn.unchecked_transaction().map_err(|err| err.to_string())?;
-        tx.execute("DELETE FROM publication_media WHERE story_id = ?1 AND site_id = ?2", params![story_id, site_id]).map_err(|err| err.to_string())?;
+    pub fn save_publication_media(
+        &self,
+        story_id: i64,
+        site_id: i64,
+        media: &[i64],
+    ) -> Result<(), String> {
+        let tx = self
+            .conn
+            .unchecked_transaction()
+            .map_err(|err| err.to_string())?;
+        tx.execute(
+            "DELETE FROM publication_media WHERE story_id = ?1 AND site_id = ?2",
+            params![story_id, site_id],
+        )
+        .map_err(|err| err.to_string())?;
         for id in media {
             tx.execute("INSERT OR IGNORE INTO publication_media(story_id, site_id, media_id) VALUES (?1, ?2, ?3)", params![story_id, site_id, id]).map_err(|err| err.to_string())?;
         }
@@ -463,7 +533,10 @@ impl Database {
     /// A job is kept as it starts, as `publish::RUNNING`, so one cut short by
     /// a crash or a power cut stays in the log. Returns its row.
     pub fn record_publish_job(&self, job: &PublishJob) -> Result<i64, String> {
-        let tx = self.conn.unchecked_transaction().map_err(|err| err.to_string())?;
+        let tx = self
+            .conn
+            .unchecked_transaction()
+            .map_err(|err| err.to_string())?;
         tx.execute(
             "INSERT INTO publish_log(story_id, site_id, started_at, ended_at, outcome, post_id, uploaded, reused, size, revision)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
@@ -471,7 +544,11 @@ impl Database {
         )
         .map_err(|err| err.to_string())?;
         let id = tx.last_insert_rowid();
-        tx.execute("DELETE FROM publish_log WHERE id <= (SELECT MAX(id) FROM publish_log) - ?1", [PUBLISH_LOG_KEPT]).map_err(|err| err.to_string())?;
+        tx.execute(
+            "DELETE FROM publish_log WHERE id <= (SELECT MAX(id) FROM publish_log) - ?1",
+            [PUBLISH_LOG_KEPT],
+        )
+        .map_err(|err| err.to_string())?;
         tx.commit().map_err(|err| err.to_string())?;
         Ok(id)
     }
@@ -479,7 +556,10 @@ impl Database {
     /// Counts an upload of job `id` the moment the site confirms it.
     pub fn count_publish_upload(&self, id: i64) -> Result<(), String> {
         self.conn
-            .execute("UPDATE publish_log SET uploaded = uploaded + 1, ended_at = ?2 WHERE id = ?1", params![id, unix_now()])
+            .execute(
+                "UPDATE publish_log SET uploaded = uploaded + 1, ended_at = ?2 WHERE id = ?1",
+                params![id, unix_now()],
+            )
             .map(|_| ())
             .map_err(|err| err.to_string())
     }
@@ -524,7 +604,11 @@ impl Database {
     /// the site confirming it.
     pub fn pending_draft(&self, story_id: i64, site_id: i64) -> Option<i64> {
         self.conn
-            .query_row("SELECT since FROM publish_pending WHERE story_id = ?1 AND site_id = ?2", params![story_id, site_id], |row| row.get(0))
+            .query_row(
+                "SELECT since FROM publish_pending WHERE story_id = ?1 AND site_id = ?2",
+                params![story_id, site_id],
+                |row| row.get(0),
+            )
             .optional()
             .ok()
             .flatten()
@@ -545,7 +629,13 @@ impl Database {
 
     /// Forgets it once the site confirmed the draft.
     pub fn clear_pending_draft(&self, story_id: i64, site_id: i64) -> Result<(), String> {
-        self.conn.execute("DELETE FROM publish_pending WHERE story_id = ?1 AND site_id = ?2", params![story_id, site_id]).map(|_| ()).map_err(|err| err.to_string())
+        self.conn
+            .execute(
+                "DELETE FROM publish_pending WHERE story_id = ?1 AND site_id = ?2",
+                params![story_id, site_id],
+            )
+            .map(|_| ())
+            .map_err(|err| err.to_string())
     }
 
     /// The categories and tags chosen for the Story's post on the site.
@@ -556,7 +646,13 @@ impl Database {
         ) else {
             return terms;
         };
-        let rows = statement.query_map(params![story_id, site_id], |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?, row.get::<_, String>(2)?)));
+        let rows = statement.query_map(params![story_id, site_id], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        });
         for (taxonomy, id, name) in rows.into_iter().flatten().flatten() {
             match taxonomy.as_str() {
                 CATEGORY => terms.categories.push((id, name)),
@@ -568,9 +664,21 @@ impl Database {
     }
 
     /// Replaces the categories and tags chosen for the Story's post on the site.
-    pub fn save_post_terms(&self, story_id: i64, site_id: i64, terms: &PostTerms) -> Result<(), String> {
-        let tx = self.conn.unchecked_transaction().map_err(|err| err.to_string())?;
-        tx.execute("DELETE FROM publication_terms WHERE story_id = ?1 AND site_id = ?2", params![story_id, site_id]).map_err(|err| err.to_string())?;
+    pub fn save_post_terms(
+        &self,
+        story_id: i64,
+        site_id: i64,
+        terms: &PostTerms,
+    ) -> Result<(), String> {
+        let tx = self
+            .conn
+            .unchecked_transaction()
+            .map_err(|err| err.to_string())?;
+        tx.execute(
+            "DELETE FROM publication_terms WHERE story_id = ?1 AND site_id = ?2",
+            params![story_id, site_id],
+        )
+        .map_err(|err| err.to_string())?;
         for (taxonomy, list) in [(CATEGORY, &terms.categories), (TAG, &terms.tags)] {
             for (id, name) in list {
                 tx.execute(
@@ -605,8 +713,18 @@ impl Database {
             .unwrap_or_default()
     }
 
-    pub fn save_place_choice(&self, story_id: i64, site_id: i64, choice: &PlaceChoice) -> Result<(), String> {
-        let left_out = choice.left_out.iter().map(i64::to_string).collect::<Vec<_>>().join(",");
+    pub fn save_place_choice(
+        &self,
+        story_id: i64,
+        site_id: i64,
+        choice: &PlaceChoice,
+    ) -> Result<(), String> {
+        let left_out = choice
+            .left_out
+            .iter()
+            .map(i64::to_string)
+            .collect::<Vec<_>>()
+            .join(",");
         self.conn
             .execute(
                 "INSERT OR REPLACE INTO publication_places(story_id, site_id, places, rough, left_out, journey) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
@@ -619,7 +737,11 @@ impl Database {
     /// The post of the Trip's Journey on the site, once made.
     pub fn journey_post(&self, trip_id: i64, site_id: i64) -> Option<i64> {
         self.conn
-            .query_row("SELECT post_id FROM publish_journeys WHERE trip_id = ?1 AND site_id = ?2", params![trip_id, site_id], |row| row.get(0))
+            .query_row(
+                "SELECT post_id FROM publish_journeys WHERE trip_id = ?1 AND site_id = ?2",
+                params![trip_id, site_id],
+                |row| row.get(0),
+            )
             .optional()
             .ok()
             .flatten()
@@ -720,7 +842,10 @@ mod tests {
         let (db, _, _) = library("sites");
         let id = db.save_site(&site("https://example.com", "ana")).unwrap();
         let saved = db.site(id).unwrap();
-        assert_eq!((saved.label.as_str(), saved.can_upload, saved.can_publish), ("Travel blog", true, false));
+        assert_eq!(
+            (saved.label.as_str(), saved.can_upload, saved.can_publish),
+            ("Travel blog", true, false)
+        );
         let columns: Vec<String> = db
             .conn
             .prepare("SELECT name FROM pragma_table_info('publish_sites')")
@@ -729,63 +854,124 @@ mod tests {
             .unwrap()
             .map(Result::unwrap)
             .collect();
-        assert!(!columns.iter().any(|name| name.contains("password")), "{columns:?}");
+        assert!(
+            !columns.iter().any(|name| name.contains("password")),
+            "{columns:?}"
+        );
 
         // Connecting the same account again updates its row.
-        let again = Site { label: "Blog".into(), can_publish: true, wordpress_url: "https://www.example.com/".into(), ..site("https://example.com", "ana") };
+        let again = Site {
+            label: "Blog".into(),
+            can_publish: true,
+            wordpress_url: "https://www.example.com/".into(),
+            ..site("https://example.com", "ana")
+        };
         assert_eq!(db.save_site(&again).unwrap(), id);
         assert_eq!(db.sites().len(), 1);
         assert!(db.site(id).unwrap().can_publish);
-        assert_eq!(db.site(id).unwrap().wordpress_url, "https://www.example.com/");
-        db.set_wordpress_urls(id, "https://example.com/wp", "https://example.com").unwrap();
+        assert_eq!(
+            db.site(id).unwrap().wordpress_url,
+            "https://www.example.com/"
+        );
+        db.set_wordpress_urls(id, "https://example.com/wp", "https://example.com")
+            .unwrap();
         let saved = db.site(id).unwrap();
-        assert_eq!((saved.wordpress_url.as_str(), saved.home_url.as_str()), ("https://example.com/wp", "https://example.com"));
+        assert_eq!(
+            (saved.wordpress_url.as_str(), saved.home_url.as_str()),
+            ("https://example.com/wp", "https://example.com")
+        );
 
         // Another account on the same site is another row; an empty label is the address.
-        let other = db.save_site(&Site { label: " ".into(), ..site("https://example.com", "ben") }).unwrap();
+        let other = db
+            .save_site(&Site {
+                label: " ".into(),
+                ..site("https://example.com", "ben")
+            })
+            .unwrap();
         assert_eq!(db.site(other).unwrap().label, "https://example.com");
         let labels: Vec<String> = db.sites().into_iter().map(|site| site.label).collect();
         assert_eq!(labels, ["Blog", "https://example.com"]);
 
         db.delete_site(id).unwrap();
         assert_eq!(db.site(id), None);
-        assert!(db.save_site(&Site { id, ..site("https://example.com", "ana") }).is_err(), "a removed site isn't saved by its old id");
+        assert!(
+            db.save_site(&Site {
+                id,
+                ..site("https://example.com", "ana")
+            })
+            .is_err(),
+            "a removed site isn't saved by its old id"
+        );
     }
 
     #[test]
     fn what_a_storys_posts_show_of_where_it_went_is_kept_per_site() {
         let (db, _, _) = library("place-choice");
-        assert_eq!(db.place_choice(3, 1), PlaceChoice::default(), "nothing is shown until chosen");
-        let choice = PlaceChoice { places: true, rough: true, left_out: vec![4, 9], journey: true };
+        assert_eq!(
+            db.place_choice(3, 1),
+            PlaceChoice::default(),
+            "nothing is shown until chosen"
+        );
+        let choice = PlaceChoice {
+            places: true,
+            rough: true,
+            left_out: vec![4, 9],
+            journey: true,
+        };
         db.save_place_choice(3, 1, &choice).unwrap();
         assert_eq!(db.place_choice(3, 1), choice);
-        assert_eq!(db.place_choice(3, 2), PlaceChoice::default(), "another site starts afresh");
+        assert_eq!(
+            db.place_choice(3, 2),
+            PlaceChoice::default(),
+            "another site starts afresh"
+        );
         db.save_place_choice(3, 1, &PlaceChoice::default()).unwrap();
         assert_eq!(db.place_choice(3, 1), PlaceChoice::default());
 
         assert_eq!(db.journey_post(5, 1), None);
         db.set_journey_post(5, 1, 90).unwrap();
         db.set_journey_post(5, 1, 91).unwrap();
-        assert_eq!((db.journey_post(5, 1), db.journey_post(5, 2)), (Some(91), None));
+        assert_eq!(
+            (db.journey_post(5, 1), db.journey_post(5, 2)),
+            (Some(91), None)
+        );
     }
 
     #[test]
     fn a_posts_record_outlives_its_story_and_never_passes_to_another() {
         let (db, _, _) = library("publication-identity");
         let site_id = db.save_site(&site("https://example.com", "ana")).unwrap();
-        let trip = db.create_trip(&crate::trip::TripDraft::new("Coast", "Europe/Madrid")).unwrap();
+        let trip = db
+            .create_trip(&crate::trip::TripDraft::new("Coast", "Europe/Madrid"))
+            .unwrap();
         let story = db.create_story(trip, "Hilltop").unwrap();
-        let publication = Publication { story_id: story, site_id, post_id: 7, remote_status: "publish".into(), size: "standard".into(), revision: 1, synced_at: 1, fingerprint: String::new(), changed_on_site: false };
+        let publication = Publication {
+            story_id: story,
+            site_id,
+            post_id: 7,
+            remote_status: "publish".into(),
+            size: "standard".into(),
+            revision: 1,
+            synced_at: 1,
+            fingerprint: String::new(),
+            changed_on_site: false,
+        };
         db.save_publication(&publication).unwrap();
         db.save_publication_media(story, site_id, &[41]).unwrap();
 
         // Archived: still the same post.
         db.set_story_archived(story, true);
-        assert_eq!(db.publication(story, site_id).map(|found| found.post_id), Some(7));
+        assert_eq!(
+            db.publication(story, site_id).map(|found| found.post_id),
+            Some(7)
+        );
         // Deleted: the record stays, as the post stays on the site, and a
         // new Story never takes it up, as Story ids aren't reused.
         db.delete_story(story).unwrap();
-        assert_eq!(db.publication(story, site_id).map(|found| found.post_id), Some(7));
+        assert_eq!(
+            db.publication(story, site_id).map(|found| found.post_id),
+            Some(7)
+        );
         let next = db.create_story(trip, "Hilltop").unwrap();
         assert_ne!(next, story);
         assert_eq!(db.publication(next, site_id), None);
@@ -796,10 +982,26 @@ mod tests {
     fn a_new_draft_and_each_day_post_keep_their_own_post() {
         let (db, _, _) = library("publication-outputs");
         let site_id = db.save_site(&site("https://example.com", "ana")).unwrap();
-        let trip = db.create_trip(&crate::trip::TripDraft::new("Coast", "Europe/Madrid")).unwrap();
+        let trip = db
+            .create_trip(&crate::trip::TripDraft::new("Coast", "Europe/Madrid"))
+            .unwrap();
         let story = db.create_story(trip, "Hilltop").unwrap();
-        let post = |post_id: i64, revision: i64| Publication { story_id: story, site_id, post_id, remote_status: "draft".into(), size: "low".into(), revision, synced_at: revision, fingerprint: String::new(), changed_on_site: false };
-        db.save_publication(&Publication { changed_on_site: true, ..post(7, 1) }).unwrap();
+        let post = |post_id: i64, revision: i64| Publication {
+            story_id: story,
+            site_id,
+            post_id,
+            remote_status: "draft".into(),
+            size: "low".into(),
+            revision,
+            synced_at: revision,
+            fingerprint: String::new(),
+            changed_on_site: false,
+        };
+        db.save_publication(&Publication {
+            changed_on_site: true,
+            ..post(7, 1)
+        })
+        .unwrap();
         // Saved as a new draft beside the post edited on the site: the new one
         // is the Story's post from now on; post 7 is never changed again.
         db.save_publication(&post(9, 2)).unwrap();
@@ -813,8 +1015,14 @@ mod tests {
         db.save_day_post("day:a1", &post(21, 4)).unwrap();
         let mut days = db.day_posts(story, site_id);
         days.sort_by(|a, b| a.0.cmp(&b.0));
-        let ids: Vec<(&str, i64, i64)> = days.iter().map(|(key, found)| (key.as_str(), found.post_id, found.revision)).collect();
-        assert_eq!(ids, [("day:a1", 21, 4), ("day:b2", 22, 3), ("index", 20, 3)]);
+        let ids: Vec<(&str, i64, i64)> = days
+            .iter()
+            .map(|(key, found)| (key.as_str(), found.post_id, found.revision))
+            .collect();
+        assert_eq!(
+            ids,
+            [("day:a1", 21, 4), ("day:b2", 22, 3), ("index", 20, 3)]
+        );
         assert_eq!(db.publication(story, site_id), Some(post(9, 2)));
     }
 
@@ -822,15 +1030,46 @@ mod tests {
     fn uploads_and_posts_are_remembered_per_site() {
         let (db, _, _) = library("publications");
         let site_id = db.save_site(&site("https://example.com", "ana")).unwrap();
-        db.record_upload(site_id, "abc", "low", 41, "https://example.com/a.jpg", r#"{"width":1280}"#).unwrap();
-        let details: String = db.conn.query_row("SELECT details FROM publish_media WHERE hash = 'abc'", [], |row| row.get(0)).unwrap();
+        db.record_upload(
+            site_id,
+            "abc",
+            "low",
+            41,
+            "https://example.com/a.jpg",
+            r#"{"width":1280}"#,
+        )
+        .unwrap();
+        let details: String = db
+            .conn
+            .query_row(
+                "SELECT details FROM publish_media WHERE hash = 'abc'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
         assert_eq!(details, r#"{"width":1280}"#);
-        assert_eq!(db.uploads(site_id).get("abc"), Some(&(41, "https://example.com/a.jpg".to_string())));
-        assert!(db.uploads(site_id + 1).is_empty(), "another site has its own uploads");
+        assert_eq!(
+            db.uploads(site_id).get("abc"),
+            Some(&(41, "https://example.com/a.jpg".to_string()))
+        );
+        assert!(
+            db.uploads(site_id + 1).is_empty(),
+            "another site has its own uploads"
+        );
         db.forget_upload(site_id, "abc").unwrap();
         assert!(db.uploads(site_id).is_empty());
 
-        let mut publication = Publication { story_id: 3, site_id, post_id: 7, remote_status: "draft".into(), size: "standard".into(), revision: 4, synced_at: 100, fingerprint: "ab".into(), changed_on_site: false };
+        let mut publication = Publication {
+            story_id: 3,
+            site_id,
+            post_id: 7,
+            remote_status: "draft".into(),
+            size: "standard".into(),
+            revision: 4,
+            synced_at: 100,
+            fingerprint: "ab".into(),
+            changed_on_site: false,
+        };
         db.save_publication(&publication).unwrap();
         publication.revision = 5;
         publication.changed_on_site = true;
@@ -838,7 +1077,12 @@ mod tests {
         assert_eq!(db.publication(3, site_id), Some(publication.clone()));
         assert_eq!(db.publication(3, site_id + 1), None);
         // Another Story can't claim the same post.
-        assert!(db.save_publication(&Publication { story_id: 4, ..publication }).is_err());
+        assert!(db
+            .save_publication(&Publication {
+                story_id: 4,
+                ..publication
+            })
+            .is_err());
 
         // The media the post uses, replaced as a whole.
         db.save_publication_media(3, site_id, &[41, 9]).unwrap();
@@ -846,27 +1090,78 @@ mod tests {
         assert_eq!(db.publication_media(3, site_id), [12, 41]);
 
         // Each job is kept as it ended, newest first.
-        let job = PublishJob { story_id: 3, site_id, started_at: 10, ended_at: 20, outcome: "cancelled".into(), post_id: None, uploaded: 2, reused: 0, size: "low".into(), revision: 4 };
+        let job = PublishJob {
+            story_id: 3,
+            site_id,
+            started_at: 10,
+            ended_at: 20,
+            outcome: "cancelled".into(),
+            post_id: None,
+            uploaded: 2,
+            reused: 0,
+            size: "low".into(),
+            revision: 4,
+        };
         db.record_publish_job(&job).unwrap();
-        db.record_publish_job(&PublishJob { outcome: "saved".into(), post_id: Some(7), ..job.clone() }).unwrap();
+        db.record_publish_job(&PublishJob {
+            outcome: "saved".into(),
+            post_id: Some(7),
+            ..job.clone()
+        })
+        .unwrap();
         let jobs = db.publish_jobs(3, site_id);
-        assert_eq!((jobs.len(), jobs[0].outcome.as_str(), jobs[1].clone()), (2, "saved", job.clone()));
+        assert_eq!(
+            (jobs.len(), jobs[0].outcome.as_str(), jobs[1].clone()),
+            (2, "saved", job.clone())
+        );
 
         // Kept as it starts, each upload counted as it lands: one cut short
         // still says what reached the site, and one that ends says how.
-        let running = PublishJob { outcome: crate::publish::RUNNING.into(), uploaded: 0, ended_at: 10, ..job.clone() };
+        let running = PublishJob {
+            outcome: crate::publish::RUNNING.into(),
+            uploaded: 0,
+            ended_at: 10,
+            ..job.clone()
+        };
         let cut = db.record_publish_job(&running).unwrap();
         db.count_publish_upload(cut).unwrap();
         db.count_publish_upload(cut).unwrap();
         let newest = db.publish_jobs(3, site_id).remove(0);
-        assert_eq!((newest.outcome.as_str(), newest.uploaded, newest.started_at), (crate::publish::RUNNING, 2, 10));
+        assert_eq!(
+            (newest.outcome.as_str(), newest.uploaded, newest.started_at),
+            (crate::publish::RUNNING, 2, 10)
+        );
         assert!(newest.ended_at >= 10, "when the last upload landed");
         let ended = db.record_publish_job(&running).unwrap();
         db.count_publish_upload(ended).unwrap();
-        db.finish_publish_job(ended, &PublishJob { outcome: "saved".into(), post_id: Some(7), uploaded: 1, reused: 3, ended_at: 30, ..running.clone() }).unwrap();
+        db.finish_publish_job(
+            ended,
+            &PublishJob {
+                outcome: "saved".into(),
+                post_id: Some(7),
+                uploaded: 1,
+                reused: 3,
+                ended_at: 30,
+                ..running.clone()
+            },
+        )
+        .unwrap();
         let jobs = db.publish_jobs(3, site_id);
-        assert_eq!((jobs[0].outcome.as_str(), jobs[0].post_id, jobs[0].uploaded, jobs[0].reused, jobs[0].ended_at), ("saved", Some(7), 1, 3, 30));
-        assert_eq!((jobs[1].outcome.as_str(), jobs[1].uploaded), (crate::publish::RUNNING, 2), "the one cut short stays as it was");
+        assert_eq!(
+            (
+                jobs[0].outcome.as_str(),
+                jobs[0].post_id,
+                jobs[0].uploaded,
+                jobs[0].reused,
+                jobs[0].ended_at
+            ),
+            ("saved", Some(7), 1, 3, 30)
+        );
+        assert_eq!(
+            (jobs[1].outcome.as_str(), jobs[1].uploaded),
+            (crate::publish::RUNNING, 2),
+            "the one cut short stays as it was"
+        );
 
         // A draft about to be made, kept from its earliest moment until confirmed.
         assert_eq!(db.pending_draft(3, site_id), None);
@@ -878,13 +1173,28 @@ mod tests {
 
         // Its categories and tags, kept per Story and site and replaced as a whole.
         assert_eq!(db.post_terms(3, site_id), PostTerms::default());
-        let terms = PostTerms { categories: vec![(5, "Seaside".into()), (2, "Region".into())], tags: vec![(9, "Castle".into())] };
+        let terms = PostTerms {
+            categories: vec![(5, "Seaside".into()), (2, "Region".into())],
+            tags: vec![(9, "Castle".into())],
+        };
         db.save_post_terms(3, site_id, &terms).unwrap();
         let read = db.post_terms(3, site_id);
-        assert_eq!(read.categories, [(2, "Region".to_string()), (5, "Seaside".to_string())], "by name");
+        assert_eq!(
+            read.categories,
+            [(2, "Region".to_string()), (5, "Seaside".to_string())],
+            "by name"
+        );
         assert_eq!(read.tags, terms.tags);
         assert_eq!(db.post_terms(4, site_id), PostTerms::default());
-        db.save_post_terms(3, site_id, &PostTerms { categories: vec![(2, "Region".into())], tags: Vec::new() }).unwrap();
+        db.save_post_terms(
+            3,
+            site_id,
+            &PostTerms {
+                categories: vec![(2, "Region".into())],
+                tags: Vec::new(),
+            },
+        )
+        .unwrap();
         assert_eq!(db.post_terms(3, site_id).tags, []);
 
         // Disconnecting the site keeps what is known to be on it.
@@ -896,22 +1206,71 @@ mod tests {
     fn uploads_no_post_uses_are_told_apart_and_forgotten_once_deleted() {
         let (db, _, _) = library("unused-uploads");
         let site_id = db.save_site(&site("https://example.com", "ana")).unwrap();
-        db.record_upload(site_id, "a", "standard", 41, "https://example.com/a.jpg", r#"{"mime":"image/jpeg"}"#).unwrap();
+        db.record_upload(
+            site_id,
+            "a",
+            "standard",
+            41,
+            "https://example.com/a.jpg",
+            r#"{"mime":"image/jpeg"}"#,
+        )
+        .unwrap();
         // The same upload reached by two sizes' bytes.
-        db.record_upload(site_id, "b", "standard", 42, "https://example.com/b.mp4", r#"{"mime":"video/mp4"}"#).unwrap();
-        db.record_upload(site_id, "c", "low", 42, "https://example.com/b.mp4", r#"{"mime":"video/mp4"}"#).unwrap();
-        db.record_upload(site_id, "d", "standard", 43, "https://example.com/d.jpg", "").unwrap();
+        db.record_upload(
+            site_id,
+            "b",
+            "standard",
+            42,
+            "https://example.com/b.mp4",
+            r#"{"mime":"video/mp4"}"#,
+        )
+        .unwrap();
+        db.record_upload(
+            site_id,
+            "c",
+            "low",
+            42,
+            "https://example.com/b.mp4",
+            r#"{"mime":"video/mp4"}"#,
+        )
+        .unwrap();
+        db.record_upload(
+            site_id,
+            "d",
+            "standard",
+            43,
+            "https://example.com/d.jpg",
+            "",
+        )
+        .unwrap();
         // 43 is still in another Story's post; 50 was never Picasso's upload.
         db.save_publication_media(4, site_id, &[43]).unwrap();
         let unused = db.unused_uploads(site_id, &[42, 41, 43, 50, 42]);
         assert_eq!(
             unused,
-            [Upload { media_id: 41, url: "https://example.com/a.jpg".into(), video: false }, Upload { media_id: 42, url: "https://example.com/b.mp4".into(), video: true }]
+            [
+                Upload {
+                    media_id: 41,
+                    url: "https://example.com/a.jpg".into(),
+                    video: false
+                },
+                Upload {
+                    media_id: 42,
+                    url: "https://example.com/b.mp4".into(),
+                    video: true
+                }
+            ]
         );
-        assert!(db.unused_uploads(site_id + 1, &[41]).is_empty(), "another site's uploads are its own");
+        assert!(
+            db.unused_uploads(site_id + 1, &[41]).is_empty(),
+            "another site's uploads are its own"
+        );
 
         db.forget_media(site_id, 42).unwrap();
         let left = db.uploads(site_id);
-        assert!(left.contains_key("a") && !left.contains_key("b") && !left.contains_key("c"), "deleted, so sent again if used again");
+        assert!(
+            left.contains_key("a") && !left.contains_key("b") && !left.contains_key("c"),
+            "deleted, so sent again if used again"
+        );
     }
 }

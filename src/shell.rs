@@ -27,12 +27,19 @@ pub fn reveal(path: &str) {
 fn reveal_selected(path: &str) -> std::io::Result<()> {
     use std::os::windows::process::CommandExt;
     // Explorer parses its own command line, so the quotes must reach it as typed.
-    std::process::Command::new("explorer").raw_arg(format!("/select,\"{path}\"")).spawn().map(drop)
+    std::process::Command::new("explorer")
+        .raw_arg(format!("/select,\"{path}\""))
+        .spawn()
+        .map(drop)
 }
 
 #[cfg(target_os = "macos")]
 fn reveal_selected(path: &str) -> std::io::Result<()> {
-    std::process::Command::new("open").arg("-R").arg(path).spawn().map(drop)
+    std::process::Command::new("open")
+        .arg("-R")
+        .arg(path)
+        .spawn()
+        .map(drop)
 }
 
 #[cfg(all(unix, not(target_os = "macos")))]
@@ -80,30 +87,48 @@ fn file_uri(path: &str) -> String {
 /// True where files can be put back from the trash.
 pub const CAN_RESTORE: bool = cfg!(any(
     target_os = "windows",
-    all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))
+    all(
+        unix,
+        not(target_os = "macos"),
+        not(target_os = "ios"),
+        not(target_os = "android")
+    )
 ));
 
 /// Puts the newest trashed copy of each of `paths` back where it was.
 /// Returns how many files came back.
 #[cfg(any(
     target_os = "windows",
-    all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))
+    all(
+        unix,
+        not(target_os = "macos"),
+        not(target_os = "ios"),
+        not(target_os = "android")
+    )
 ))]
 pub fn restore(paths: &[String]) -> Result<usize, String> {
     use std::collections::HashMap;
 
     let key = |path: &Path| {
         let text = plain_path(&path.to_string_lossy());
-        if cfg!(windows) { text.to_lowercase() } else { text }
+        if cfg!(windows) {
+            text.to_lowercase()
+        } else {
+            text
+        }
     };
-    let wanted: std::collections::HashSet<String> = paths.iter().map(|path| key(Path::new(path))).collect();
+    let wanted: std::collections::HashSet<String> =
+        paths.iter().map(|path| key(Path::new(path))).collect();
     let mut newest: HashMap<String, trash::TrashItem> = HashMap::new();
     for item in trash::os_limited::list().map_err(|err| err.to_string())? {
         let path = key(&item.original_path());
         if !wanted.contains(&path) {
             continue;
         }
-        if newest.get(&path).is_none_or(|kept| kept.time_deleted < item.time_deleted) {
+        if newest
+            .get(&path)
+            .is_none_or(|kept| kept.time_deleted < item.time_deleted)
+        {
             newest.insert(path, item);
         }
     }
@@ -117,7 +142,12 @@ pub fn restore(paths: &[String]) -> Result<usize, String> {
 
 #[cfg(not(any(
     target_os = "windows",
-    all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))
+    all(
+        unix,
+        not(target_os = "macos"),
+        not(target_os = "ios"),
+        not(target_os = "android")
+    )
 )))]
 pub fn restore(_paths: &[String]) -> Result<usize, String> {
     Ok(0)
@@ -136,6 +166,9 @@ mod tests {
 
     #[test]
     fn file_uris_escape_spaces_and_commas() {
-        assert_eq!(file_uri("/home/me/My Photos/a,b.jpg"), "file:///home/me/My%20Photos/a%2Cb.jpg");
+        assert_eq!(
+            file_uri("/home/me/My Photos/a,b.jpg"),
+            "file:///home/me/My%20Photos/a%2Cb.jpg"
+        );
     }
 }

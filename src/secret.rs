@@ -53,7 +53,11 @@ fn seal_for(machine: &str, plain: &str) -> Option<String> {
     SystemRandom::new().fill(&mut nonce).ok()?;
     let mut data = plain.as_bytes().to_vec();
     key(machine)
-        .seal_in_place_append_tag(Nonce::assume_unique_for_key(nonce), Aad::from(PREFIX), &mut data)
+        .seal_in_place_append_tag(
+            Nonce::assume_unique_for_key(nonce),
+            Aad::from(PREFIX),
+            &mut data,
+        )
         .ok()?;
     let mut bytes = nonce.to_vec();
     bytes.extend(data);
@@ -68,7 +72,9 @@ fn open_for(machine: &str, sealed: &str) -> Option<String> {
     let (nonce, data) = bytes.split_at(NONCE_LEN);
     let nonce = Nonce::try_assume_unique_for_key(nonce).ok()?;
     let mut data = data.to_vec();
-    let plain = key(machine).open_in_place(nonce, Aad::from(PREFIX), &mut data).ok()?;
+    let plain = key(machine)
+        .open_in_place(nonce, Aad::from(PREFIX), &mut data)
+        .ok()?;
     String::from_utf8(plain.to_vec()).ok()
 }
 
@@ -83,18 +89,27 @@ mod tests {
         assert!(!sealed.contains("abc123"));
         assert_eq!(open_for("machine-a", &sealed).as_deref(), Some("abc123"));
         assert_eq!(open_for("machine-b", &sealed), None);
-        assert_ne!(seal_for("machine-a", "abc123").unwrap(), sealed, "each seal uses a fresh nonce");
+        assert_ne!(
+            seal_for("machine-a", "abc123").unwrap(),
+            sealed,
+            "each seal uses a fresh nonce"
+        );
     }
 
     #[test]
     fn rejects_changed_or_plain_text() {
         let sealed = seal_for("machine-a", "abc123").unwrap();
-        let mut bytes = STANDARD.decode(sealed.strip_prefix(PREFIX).unwrap()).unwrap();
+        let mut bytes = STANDARD
+            .decode(sealed.strip_prefix(PREFIX).unwrap())
+            .unwrap();
         bytes[NONCE_LEN] ^= 1;
         let changed = format!("{PREFIX}{}", STANDARD.encode(bytes));
         assert_eq!(open_for("machine-a", &changed), None);
         assert_eq!(open_for("machine-a", "abc123"), None);
         assert!(!is_sealed("abc123"));
-        assert_eq!(open(&seal("on this machine").unwrap()).as_deref(), Some("on this machine"));
+        assert_eq!(
+            open(&seal("on this machine").unwrap()).as_deref(),
+            Some("on this machine")
+        );
     }
 }

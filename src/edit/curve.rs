@@ -55,7 +55,10 @@ pub fn sample(points: &[[f32; 2]], size: usize) -> Vec<f32> {
             if x >= points[n - 1][0] {
                 return points[n - 1][1];
             }
-            let k = points.partition_point(|point| point[0] <= x).saturating_sub(1).min(n - 2);
+            let k = points
+                .partition_point(|point| point[0] <= x)
+                .saturating_sub(1)
+                .min(n - 2);
             let [x0, y0] = points[k];
             let [x1, y1] = points[k + 1];
             let h = x1 - x0;

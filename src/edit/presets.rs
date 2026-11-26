@@ -16,7 +16,11 @@ pub struct Preset {
 
 impl Preset {
     pub fn patch(&self) -> Map<String, Value> {
-        let mut patch: Map<String, Value> = self.values.iter().map(|(key, value)| ((*key).to_string(), json!(value))).collect();
+        let mut patch: Map<String, Value> = self
+            .values
+            .iter()
+            .map(|(key, value)| ((*key).to_string(), json!(value)))
+            .collect();
         if let Some(points) = self.curve {
             patch.insert("curve.points.rgb".into(), json!(points));
         }
@@ -28,7 +32,11 @@ pub const GROUPS: [&str; 6] = ["Color", "B&W", "Film", "Landscape", "Portrait", 
 
 const FADE: &[[f32; 2]] = &[[0.0, 0.1], [0.25, 0.27], [0.75, 0.77], [1.0, 0.95]];
 
-const fn preset(name: &'static str, group: &'static str, values: &'static [(&'static str, f32)]) -> Preset {
+const fn preset(
+    name: &'static str,
+    group: &'static str,
+    values: &'static [(&'static str, f32)],
+) -> Preset {
     Preset {
         name,
         group,
@@ -37,7 +45,11 @@ const fn preset(name: &'static str, group: &'static str, values: &'static [(&'st
     }
 }
 
-const fn faded(name: &'static str, group: &'static str, values: &'static [(&'static str, f32)]) -> Preset {
+const fn faded(
+    name: &'static str,
+    group: &'static str,
+    values: &'static [(&'static str, f32)],
+) -> Preset {
     Preset {
         name,
         group,
@@ -50,7 +62,12 @@ pub const BUILTIN: &[Preset] = &[
     preset(
         "Vivid Pop",
         "Color",
-        &[("presence.vibrance", 35.0), ("presence.saturation", 10.0), ("light.contrast", 15.0), ("presence.clarity", 10.0)],
+        &[
+            ("presence.vibrance", 35.0),
+            ("presence.saturation", 10.0),
+            ("light.contrast", 15.0),
+            ("presence.clarity", 10.0),
+        ],
     ),
     preset(
         "Golden Hour",
@@ -104,7 +121,15 @@ pub const BUILTIN: &[Preset] = &[
             ("presence.vibrance", 10.0),
         ],
     ),
-    preset("Classic B&W", "B&W", &[("bw.enabled", 1.0), ("light.contrast", 20.0), ("presence.clarity", 10.0)]),
+    preset(
+        "Classic B&W",
+        "B&W",
+        &[
+            ("bw.enabled", 1.0),
+            ("light.contrast", 20.0),
+            ("presence.clarity", 10.0),
+        ],
+    ),
     preset(
         "High Contrast B&W",
         "B&W",
@@ -133,7 +158,12 @@ pub const BUILTIN: &[Preset] = &[
     preset(
         "Sepia",
         "B&W",
-        &[("bw.enabled", 1.0), ("light.contrast", -5.0), ("grade.global.hue", 38.0), ("grade.global.saturation", 30.0)],
+        &[
+            ("bw.enabled", 1.0),
+            ("light.contrast", -5.0),
+            ("grade.global.hue", 38.0),
+            ("grade.global.saturation", 30.0),
+        ],
     ),
     preset(
         "Infrared",
@@ -151,7 +181,11 @@ pub const BUILTIN: &[Preset] = &[
     faded(
         "Faded Matte",
         "Film",
-        &[("light.contrast", -10.0), ("presence.saturation", -10.0), ("grain.amount", 15.0)],
+        &[
+            ("light.contrast", -10.0),
+            ("presence.saturation", -10.0),
+            ("grain.amount", 15.0),
+        ],
     ),
     preset(
         "Portra Film",
@@ -322,7 +356,12 @@ pub const BUILTIN: &[Preset] = &[
     preset(
         "HDR Natural",
         "Style",
-        &[("hdr.method", 1.0), ("hdr.strength", 70.0), ("hdr.detail", 60.0), ("presence.vibrance", 10.0)],
+        &[
+            ("hdr.method", 1.0),
+            ("hdr.strength", 70.0),
+            ("hdr.detail", 60.0),
+            ("presence.vibrance", 10.0),
+        ],
     ),
     preset(
         "HDR Dramatic",
@@ -369,7 +408,13 @@ pub fn apply(base: &Settings, patch: &Map<String, Value>, amount: f32) -> Settin
     }
     for (index, curve) in target.curves.iter().enumerate() {
         if *curve != super::settings::Curve::default() {
-            out.curves[index] = super::settings::Curve(curve.0.iter().map(|[x, y]| [*x, x + (y - x) * amount.min(1.5)]).collect());
+            out.curves[index] = super::settings::Curve(
+                curve
+                    .0
+                    .iter()
+                    .map(|[x, y]| [*x, x + (y - x) * amount.min(1.5)])
+                    .collect(),
+            );
         }
     }
     if patch.contains_key("masks") && amount > 0.0 {
@@ -382,7 +427,11 @@ pub fn apply(base: &Settings, patch: &Map<String, Value>, amount: f32) -> Settin
 pub fn profile_offsets(profile: usize) -> Vec<(Control, f32)> {
     match profile {
         1 => vec![(Control::CONTRAST, -10.0), (Control::VIBRANCE, -10.0)],
-        2 => vec![(Control::CONTRAST, 10.0), (Control::VIBRANCE, 25.0), (Control::SATURATION, 5.0)],
+        2 => vec![
+            (Control::CONTRAST, 10.0),
+            (Control::VIBRANCE, 25.0),
+            (Control::SATURATION, 5.0),
+        ],
         3 => vec![
             (Control::VIBRANCE, 15.0),
             (Control::CLARITY, 10.0),
@@ -430,7 +479,9 @@ impl UserPreset {
     pub fn new(name: String, settings: &Settings) -> UserPreset {
         UserPreset {
             name,
-            patch: settings.without_geometry().changed_from(&Settings::default()),
+            patch: settings
+                .without_geometry()
+                .changed_from(&Settings::default()),
         }
     }
 }
@@ -451,7 +502,13 @@ pub fn user_presets_from_json(text: &str) -> Vec<UserPreset> {
 }
 
 pub fn user_presets_to_json(presets: &[UserPreset]) -> String {
-    Value::Array(presets.iter().map(|preset| json!({ "name": preset.name, "patch": preset.patch })).collect()).to_string()
+    Value::Array(
+        presets
+            .iter()
+            .map(|preset| json!({ "name": preset.name, "patch": preset.patch }))
+            .collect(),
+    )
+    .to_string()
 }
 
 #[cfg(test)]

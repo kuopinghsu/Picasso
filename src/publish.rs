@@ -19,7 +19,10 @@ use crate::gutenberg::{self, RouteMap, Unsupported, Uploaded, UploadedVideo};
 use crate::story_html::{MapTiles, Progress, Source, Videos};
 use crate::trip::{Block, MediaUse, Story, StoryBlock};
 use crate::upload::{self, UploadSize};
-use crate::wordpress::{edit_link, post_link, DraftPost, Api, Client, Credentials, Failure, Http, Media, Policy, SiteUrl, TravelSupport};
+use crate::wordpress::{
+    edit_link, post_link, Api, Client, Credentials, DraftPost, Failure, Http, Media, Policy,
+    SiteUrl, TravelSupport,
+};
 
 /// The furthest Journey day the VoyageLight reader accepts (`VL_GEO_DAY_MAX`).
 const JOURNEY_DAY_MAX: i64 = 9999;
@@ -122,7 +125,9 @@ impl MapPlaces {
                 }
             }
         }
-        seen.into_iter().filter_map(|index| self.places.get(index)).collect()
+        seen.into_iter()
+            .filter_map(|index| self.places.get(index))
+            .collect()
     }
 }
 
@@ -142,7 +147,10 @@ const JOURNEYS: &str = "/wp/v2/vl_trip";
 
 /// `text` as one field of a line the theme splits at `|`.
 fn line_field(text: &str) -> String {
-    text.replace('|', "/").split_whitespace().collect::<Vec<_>>().join(" ")
+    text.replace('|', "/")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// What a post's map shows, as the VoyageLight theme reads it: the first
@@ -151,10 +159,33 @@ fn line_field(text: &str) -> String {
 fn map_meta(places: &[&MapPlace]) -> serde_json::Map<String, serde_json::Value> {
     let mut meta = serde_json::Map::new();
     let first = places.first();
-    meta.insert("_vl_lat".into(), first.map_or(serde_json::Value::Null, |place| place.lat.into()));
-    meta.insert("_vl_lon".into(), first.map_or(serde_json::Value::Null, |place| place.lon.into()));
-    let stops: Vec<String> = places.iter().map(|place| format!("{} | {} | {}", line_field(&place.name), place.lat, place.lon)).collect();
-    meta.insert("_vl_stops".into(), if stops.is_empty() { serde_json::Value::Null } else { stops.join("\n").into() });
+    meta.insert(
+        "_vl_lat".into(),
+        first.map_or(serde_json::Value::Null, |place| place.lat.into()),
+    );
+    meta.insert(
+        "_vl_lon".into(),
+        first.map_or(serde_json::Value::Null, |place| place.lon.into()),
+    );
+    let stops: Vec<String> = places
+        .iter()
+        .map(|place| {
+            format!(
+                "{} | {} | {}",
+                line_field(&place.name),
+                place.lat,
+                place.lon
+            )
+        })
+        .collect();
+    meta.insert(
+        "_vl_stops".into(),
+        if stops.is_empty() {
+            serde_json::Value::Null
+        } else {
+            stops.join("\n").into()
+        },
+    );
     meta
 }
 
@@ -165,7 +196,11 @@ fn is_coord_field(text: &str) -> bool {
     let mut parts = rest.split('.');
     let whole = parts.next().unwrap_or("");
     let frac = parts.next();
-    !whole.is_empty() && whole.bytes().all(|byte| byte.is_ascii_digit()) && frac.is_none_or(|frac| !frac.is_empty() && frac.bytes().all(|byte| byte.is_ascii_digit())) && parts.next().is_none()
+    !whole.is_empty()
+        && whole.bytes().all(|byte| byte.is_ascii_digit())
+        && frac
+            .is_none_or(|frac| !frac.is_empty() && frac.bytes().all(|byte| byte.is_ascii_digit()))
+        && parts.next().is_none()
 }
 
 /// The post id in a Journey line's post-id column, as the theme reads it:
@@ -173,17 +208,34 @@ fn is_coord_field(text: &str) -> bool {
 /// the fifth. A note that is only a number is not that column.
 fn line_post_id(line: &str) -> Option<i64> {
     let cols: Vec<&str> = line.split('|').map(str::trim).collect();
-    let start = if cols.len() >= 4 && is_coord_field(cols[2]) && is_coord_field(cols[3]) { 4 } else { 3 };
+    let start = if cols.len() >= 4 && is_coord_field(cols[2]) && is_coord_field(cols[3]) {
+        4
+    } else {
+        3
+    };
     // A note can hold a `|`, so the post id is the last column after it, as the site reads it.
     let rest = cols.get(start..).unwrap_or_default();
     let post = rest.last().copied().filter(|_| rest.len() >= 2)?;
-    (post.bytes().all(|byte| byte.is_ascii_digit()) && !post.is_empty()).then(|| post.parse().ok()).flatten().filter(|id| *id > 0)
+    (post.bytes().all(|byte| byte.is_ascii_digit()) && !post.is_empty())
+        .then(|| post.parse().ok())
+        .flatten()
+        .filter(|id| *id > 0)
 }
 
 /// The fields Picasso sets on a post of `blocks`: their Places when chosen
 /// and the site keeps them, and the Journey.
-fn post_meta(job: &Job, blocks: &[StoryBlock], journey: Option<i64>, support: TravelSupport) -> Option<serde_json::Value> {
-    let mut meta = job.places.as_ref().filter(|_| support.places).map(|places| map_meta(&places.of(blocks))).unwrap_or_default();
+fn post_meta(
+    job: &Job,
+    blocks: &[StoryBlock],
+    journey: Option<i64>,
+    support: TravelSupport,
+) -> Option<serde_json::Value> {
+    let mut meta = job
+        .places
+        .as_ref()
+        .filter(|_| support.places)
+        .map(|places| map_meta(&places.of(blocks)))
+        .unwrap_or_default();
     if let Some(id) = journey {
         meta.insert("_vl_trip_id".into(), id.into());
     }
@@ -191,8 +243,16 @@ fn post_meta(job: &Job, blocks: &[StoryBlock], journey: Option<i64>, support: Tr
 }
 
 /// The Places a post of `blocks` shows in itself, as the site doesn't keep them.
-fn shown_in_post<'a>(job: &'a Job, blocks: &[StoryBlock], support: TravelSupport) -> Vec<&'a MapPlace> {
-    job.places.as_ref().filter(|_| !support.places).map(|places| places.of(blocks)).unwrap_or_default()
+fn shown_in_post<'a>(
+    job: &'a Job,
+    blocks: &[StoryBlock],
+    support: TravelSupport,
+) -> Vec<&'a MapPlace> {
+    job.places
+        .as_ref()
+        .filter(|_| !support.places)
+        .map(|places| places.of(blocks))
+        .unwrap_or_default()
 }
 
 /// What the site keeps of a trip, read only when the job sends Places or a
@@ -202,18 +262,35 @@ fn travel(client: &Client, job: &Job) -> TravelSupport {
     if job.places.is_none() && job.journey.is_none() {
         return TravelSupport::default();
     }
-    client.travel_support(&job.api).unwrap_or(TravelSupport { places: true, journeys: true })
+    client.travel_support(&job.api).unwrap_or(TravelSupport {
+        places: true,
+        journeys: true,
+    })
 }
 
 /// The Journey's post, made as a draft if there is none yet, before any
 /// Story post is saved, so each can link to it. `None` without one, or
 /// when the site has no Journeys.
-fn start_journey(client: &Client, job: &Job, support: TravelSupport, report: &mut dyn FnMut(Event)) -> Result<Option<i64>, Stopped> {
-    let Some(journey) = job.journey.as_ref().filter(|_| support.journeys) else { return Ok(None) };
-    let site = |failure: Failure| Stopped::Site { failure, uploaded: 0 };
+fn start_journey(
+    client: &Client,
+    job: &Job,
+    support: TravelSupport,
+    report: &mut dyn FnMut(Event),
+) -> Result<Option<i64>, Stopped> {
+    let Some(journey) = job.journey.as_ref().filter(|_| support.journeys) else {
+        return Ok(None);
+    };
+    let site = |failure: Failure| Stopped::Site {
+        failure,
+        uploaded: 0,
+    };
     if let Some(id) = journey.post_id {
-        let found = client.read_item(&job.api, &job.credentials, &format!("{JOURNEYS}/{id}")).map_err(site)?;
-        if found.is_some_and(|item| item.get("status").and_then(serde_json::Value::as_str) != Some("trash")) {
+        let found = client
+            .read_item(&job.api, &job.credentials, &format!("{JOURNEYS}/{id}"))
+            .map_err(site)?;
+        if found.is_some_and(|item| {
+            item.get("status").and_then(serde_json::Value::as_str) != Some("trash")
+        }) {
             return Ok(Some(id));
         }
     }
@@ -221,24 +298,44 @@ fn start_journey(client: &Client, job: &Job, support: TravelSupport, report: &mu
     let body = serde_json::json!({ "title": title, "content": journey.description.trim(), "status": "draft" });
     let since = crate::types::unix_now() - CLOCK_SLACK;
     let id = match client.write_item(&job.api, &job.credentials, JOURNEYS, &body) {
-        Ok(made) => made.get("id").and_then(serde_json::Value::as_i64).ok_or(site(Failure::BadReply))?,
+        Ok(made) => made
+            .get("id")
+            .and_then(serde_json::Value::as_i64)
+            .ok_or(site(Failure::BadReply))?,
         Err(Failure::NotWordPress) => return Ok(None),
         // Made but not answered: found by its title, as a post is, never
         // made twice. An untitled one can't be told from another.
         // Only drafts made since: another Trip's Journey with the same title,
         // changed meanwhile or published, is never taken for this one.
         Err(failure) if failure.outcome_unknown() && !title.is_empty() => match client
-            .find_titled(&job.api, &job.credentials, JOURNEYS, title, since, crate::wordpress::Titled { made_drafts: true, first: false })
+            .find_titled(
+                &job.api,
+                &job.credentials,
+                JOURNEYS,
+                title,
+                since,
+                crate::wordpress::Titled {
+                    made_drafts: true,
+                    first: false,
+                },
+            )
             .map_err(site)?
             .as_slice()
         {
             [id] => *id,
             [] => return Err(site(failure)),
-            found => return Err(Stopped::Uncertain { drafts: found.len() }),
+            found => {
+                return Err(Stopped::Uncertain {
+                    drafts: found.len(),
+                })
+            }
         },
         Err(failure) => return Err(site(failure)),
     };
-    report(Event::Journey { trip_id: job.story.trip_id, post_id: id });
+    report(Event::Journey {
+        trip_id: job.story.trip_id,
+        post_id: id,
+    });
     Ok(Some(id))
 }
 
@@ -248,21 +345,44 @@ fn start_journey(client: &Client, job: &Job, support: TravelSupport, report: &mu
 /// on the site. Without places chosen, the posts' lines are taken off. A
 /// draft or scheduled Journey is published or scheduled with the Story; one
 /// already public is left as it is.
-fn finish_journey(client: &Client, job: &Job, id: i64, posts: &[(i64, Vec<&MapPlace>)]) -> Result<(), Failure> {
+fn finish_journey(
+    client: &Client,
+    job: &Job,
+    id: i64,
+    posts: &[(i64, Vec<&MapPlace>)],
+) -> Result<(), Failure> {
     let route = format!("{JOURNEYS}/{id}");
-    let found = client.read_item(&job.api, &job.credentials, &route)?.ok_or(Failure::NotWordPress)?;
-    let text = found.pointer("/meta/_vl_trip_days").and_then(serde_json::Value::as_str).unwrap_or_default();
+    let found = client
+        .read_item(&job.api, &job.credentials, &route)?
+        .ok_or(Failure::NotWordPress)?;
+    let text = found
+        .pointer("/meta/_vl_trip_days")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
     let ours: Vec<i64> = posts.iter().map(|(post_id, _)| *post_id).collect();
     let mut lines: Vec<(i64, String)> = text
         .lines()
         .filter(|line| !line.trim().is_empty())
         .filter(|line| !line_post_id(line).is_some_and(|post| ours.contains(&post)))
-        .map(|line| (line.split('|').next().and_then(|day| day.trim().parse().ok()).unwrap_or(0), line.trim().to_string()))
+        .map(|line| {
+            (
+                line.split('|')
+                    .next()
+                    .and_then(|day| day.trim().parse().ok())
+                    .unwrap_or(0),
+                line.trim().to_string(),
+            )
+        })
         .collect();
     for (post_id, places) in posts.iter().filter(|_| job.places.is_some()) {
         for place in places {
             let day = journey_day(place.day);
-            let line = format!("{day} | {} | {} | {} |  | {post_id}", line_field(&place.name), place.lat, place.lon);
+            let line = format!(
+                "{day} | {} | {} | {} |  | {post_id}",
+                line_field(&place.name),
+                place.lat,
+                place.lon
+            );
             lines.push((day, line));
         }
     }
@@ -283,7 +403,9 @@ fn finish_journey(client: &Client, job: &Job, id: i64, posts: &[(i64, Vec<&MapPl
             body["status"] = "publish".into();
         }
     }
-    client.write_item(&job.api, &job.credentials, &route, &body).map(|_| ())
+    client
+        .write_item(&job.api, &job.credentials, &route, &body)
+        .map(|_| ())
 }
 
 /// What photos rendered to in this session, by [`render_key`]: the hash and
@@ -312,10 +434,26 @@ impl Renders {
 
 /// What a photo's upload is made from: its file as it is now, its edit and
 /// turn, and how it is sent. `None` when the file can't be looked at.
-fn render_key(path: &Path, settings: &crate::edit::Settings, rotation: i32, size: UploadSize, exif: bool, crop: Option<crate::trip::CoverCrop>) -> Option<String> {
+fn render_key(
+    path: &Path,
+    settings: &crate::edit::Settings,
+    rotation: i32,
+    size: UploadSize,
+    exif: bool,
+    crop: Option<crate::trip::CoverCrop>,
+) -> Option<String> {
     let meta = std::fs::metadata(path).ok()?;
-    let modified = meta.modified().ok()?.duration_since(std::time::UNIX_EPOCH).ok()?.as_nanos();
-    let what = format!("{}\n{}\n{modified}\n{settings:?}\n{rotation}\n{size:?}\n{exif}\n{crop:?}", path.display(), meta.len());
+    let modified = meta
+        .modified()
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_nanos();
+    let what = format!(
+        "{}\n{}\n{modified}\n{settings:?}\n{rotation}\n{size:?}\n{exif}\n{crop:?}",
+        path.display(),
+        meta.len()
+    );
     Some(upload::hash(what.as_bytes()))
 }
 
@@ -323,7 +461,13 @@ fn render_key(path: &Path, settings: &crate::edit::Settings, rotation: i32, size
 #[derive(Clone, Debug, PartialEq)]
 pub enum Event {
     /// The site confirmed an upload of these bytes.
-    Uploaded { hash: String, size: UploadSize, media_id: i64, url: String, details: String },
+    Uploaded {
+        hash: String,
+        size: UploadSize,
+        media_id: i64,
+        url: String,
+        details: String,
+    },
     /// An upload recorded before is no longer on the site.
     Gone { hash: String },
     /// Every photo is rendered, or known: this many different ones, of these bytes in
@@ -334,7 +478,12 @@ pub enum Event {
     Creating { story_id: i64, since: i64 },
     /// A post of a Story published by Day, as the site has it now: made
     /// (still empty), saved, or found edited there or no longer a draft.
-    Part { story_id: i64, revision: i64, key: String, post: DayPost },
+    Part {
+        story_id: i64,
+        revision: i64,
+        key: String,
+        post: DayPost,
+    },
     /// The post of a Day no longer in the Story is gone from the site, or
     /// in its trash, and is forgotten.
     PartGone { story_id: i64, key: String },
@@ -379,11 +528,23 @@ pub struct DayPart {
 }
 
 pub fn split_days(blocks: &[StoryBlock]) -> Vec<DayPart> {
-    let mut parts = vec![DayPart { key: INDEX.into(), heading: String::new(), blocks: Vec::new() }];
+    let mut parts = vec![DayPart {
+        key: INDEX.into(),
+        heading: String::new(),
+        blocks: Vec::new(),
+    }];
     for block in blocks {
         match &block.block {
-            Block::Heading(text) => parts.push(DayPart { key: day_key(&block.uid), heading: crate::inline::plain(text.trim()).trim().to_string(), blocks: Vec::new() }),
-            _ => parts.last_mut().expect("the index is first").blocks.push(block.clone()),
+            Block::Heading(text) => parts.push(DayPart {
+                key: day_key(&block.uid),
+                heading: crate::inline::plain(text.trim()).trim().to_string(),
+                blocks: Vec::new(),
+            }),
+            _ => parts
+                .last_mut()
+                .expect("the index is first")
+                .blocks
+                .push(block.clone()),
         }
     }
     parts
@@ -431,15 +592,30 @@ pub struct Saved {
 /// the site before it stopped; they stay there.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Stopped {
-    Cancelled { uploaded: usize },
+    Cancelled {
+        uploaded: usize,
+    },
     /// The site refused or couldn't be reached.
-    Site { failure: Failure, uploaded: usize },
+    Site {
+        failure: Failure,
+        uploaded: usize,
+    },
     /// A photo is unavailable or can't be read; nothing is left out.
-    Photo { media_id: i64, uploaded: usize },
+    Photo {
+        media_id: i64,
+        uploaded: usize,
+    },
     /// A video is unavailable, or its part couldn't be made for the web.
-    Video { media_id: i64, uploaded: usize },
+    Video {
+        media_id: i64,
+        uploaded: usize,
+    },
     /// The site refused a video's part, `bytes` long, as larger than it accepts.
-    VideoTooLarge { media_id: i64, bytes: u64, uploaded: usize },
+    VideoTooLarge {
+        media_id: i64,
+        bytes: u64,
+        uploaded: usize,
+    },
     /// A block from a newer Picasso has no form WordPress takes.
     Unsupported(Unsupported),
     /// The earlier post isn't a draft any more, with the status the site
@@ -452,11 +628,15 @@ pub enum Stopped {
     ChangedOnSite,
     /// The site may have made a draft whose answer was lost, and more than
     /// one draft could be it, so none is chosen and no other is made.
-    Uncertain { drafts: usize },
+    Uncertain {
+        drafts: usize,
+    },
     /// The library has no post for the Story on the site, but the site has
     /// one with its title, as after restoring an older library: which to
     /// do wasn't chosen, so nothing was sent.
-    TitleOnSite { post_id: i64 },
+    TitleOnSite {
+        post_id: i64,
+    },
     /// The time chosen to publish at is past, or too close, on the site's
     /// clock; nothing was sent.
     TooSoon,
@@ -499,7 +679,11 @@ pub enum SyncState {
     Unconfirmed,
 }
 
-pub fn sync_state(publication: Option<&crate::db::Publication>, revision: i64, pending: bool) -> SyncState {
+pub fn sync_state(
+    publication: Option<&crate::db::Publication>,
+    revision: i64,
+    pending: bool,
+) -> SyncState {
     match publication {
         None if pending => SyncState::Unconfirmed,
         None => SyncState::New,
@@ -518,7 +702,9 @@ pub const RUNNING: &str = "running";
 pub fn outcome_code(outcome: &Result<Saved, Stopped>) -> String {
     match outcome {
         Ok(saved) if saved.published && saved.status == "future" => "scheduled".into(),
-        Ok(saved) if saved.days > 0 && saved.published => format!("published: {} posts", saved.days + 1),
+        Ok(saved) if saved.days > 0 && saved.published => {
+            format!("published: {} posts", saved.days + 1)
+        }
         Ok(saved) if saved.days > 0 => format!("saved: {} posts", saved.days + 1),
         Ok(saved) if saved.published => "published".into(),
         Ok(saved) if saved.status == "draft" => "saved".into(),
@@ -542,7 +728,13 @@ pub fn outcome_code(outcome: &Result<Saved, Stopped>) -> String {
 pub fn counts(outcome: &Result<Saved, Stopped>) -> (usize, usize) {
     match outcome {
         Ok(saved) => (saved.uploaded, saved.reused),
-        Err(Stopped::Cancelled { uploaded } | Stopped::Site { uploaded, .. } | Stopped::Photo { uploaded, .. } | Stopped::Video { uploaded, .. } | Stopped::VideoTooLarge { uploaded, .. }) => (*uploaded, 0),
+        Err(
+            Stopped::Cancelled { uploaded }
+            | Stopped::Site { uploaded, .. }
+            | Stopped::Photo { uploaded, .. }
+            | Stopped::Video { uploaded, .. }
+            | Stopped::VideoTooLarge { uploaded, .. },
+        ) => (*uploaded, 0),
         Err(_) => (0, 0),
     }
 }
@@ -551,21 +743,47 @@ pub fn counts(outcome: &Result<Saved, Stopped>) -> (usize, usize) {
 /// that moved since it was checked opens and links where it is. An index
 /// that can't be read leaves the addresses kept; a site that can't be
 /// reached stops the job here.
-fn located(client: &Client, job: &Job, progress: &Progress, report: &mut dyn FnMut(Event)) -> Result<Job, Stopped> {
+fn located(
+    client: &Client,
+    job: &Job,
+    progress: &Progress,
+    report: &mut dyn FnMut(Event),
+) -> Result<Job, Stopped> {
     let found = match client.reread(&job.api) {
         Ok(found) => found,
-        Err(_) if progress.cancel.load(Ordering::Relaxed) => return Err(Stopped::Cancelled { uploaded: 0 }),
-        Err(failure @ (Failure::Timeout | Failure::Unreachable | Failure::Tls)) => return Err(Stopped::Site { failure, uploaded: 0 }),
+        Err(_) if progress.cancel.load(Ordering::Relaxed) => {
+            return Err(Stopped::Cancelled { uploaded: 0 })
+        }
+        Err(failure @ (Failure::Timeout | Failure::Unreachable | Failure::Tls)) => {
+            return Err(Stopped::Site {
+                failure,
+                uploaded: 0,
+            })
+        }
         Err(_) => None,
     };
-    let Some(found) = found else { return Ok(job.clone()) };
-    let api = Api { wordpress: found.wordpress.or_else(|| job.api.wordpress.clone()), home: found.home.or_else(|| job.api.home.clone()), ..job.api.clone() };
+    let Some(found) = found else {
+        return Ok(job.clone());
+    };
+    let api = Api {
+        wordpress: found.wordpress.or_else(|| job.api.wordpress.clone()),
+        home: found.home.or_else(|| job.api.home.clone()),
+        ..job.api.clone()
+    };
     let url = |address: &Option<SiteUrl>| address.as_ref().map(SiteUrl::to_url).unwrap_or_default();
-    report(Event::WordPress { url: url(&api.wordpress), home: url(&api.home) });
+    report(Event::WordPress {
+        url: url(&api.wordpress),
+        home: url(&api.home),
+    });
     Ok(Job { api, ..job.clone() })
 }
 
-pub fn run(http: &dyn Http, job: &Job, progress: &Progress, report: &mut dyn FnMut(Event)) -> Result<Saved, Stopped> {
+pub fn run(
+    http: &dyn Http,
+    job: &Job,
+    progress: &Progress,
+    report: &mut dyn FnMut(Event),
+) -> Result<Saved, Stopped> {
     let client = Client::new(http, job.policy).cancelled_by(&progress.cancel);
     let job = &located(&client, job, progress, report)?;
     // Every reason to stop is found before the Journey or anything else is sent.
@@ -573,7 +791,13 @@ pub fn run(http: &dyn Http, job: &Job, progress: &Progress, report: &mut dyn FnM
     // its place, published as chosen, rather than asking for another try.
     let (job, status, remade) = match check_post(&client, job) {
         Err(Stopped::PostGone) => {
-            let fresh = Job { post_id: None, fingerprint: String::new(), pending_since: None, allow_new: true, ..job.clone() };
+            let fresh = Job {
+                post_id: None,
+                fingerprint: String::new(),
+                pending_since: None,
+                allow_new: true,
+                ..job.clone()
+            };
             let status = check_post(&client, &fresh)?;
             (fresh, status, true)
         }
@@ -583,11 +807,24 @@ pub fn run(http: &dyn Http, job: &Job, progress: &Progress, report: &mut dyn FnM
     let support = travel(&client, job);
     let journey = start_journey(&client, job, support, report)?;
     let shown = shown_in_post(job, &job.blocks, support);
-    let mut saved = save_one(http, job, status, post_meta(job, &job.blocks, journey, support), &shown, &mut KnownMedia::default(), progress, report)?;
+    let mut saved = save_one(
+        http,
+        job,
+        status,
+        post_meta(job, &job.blocks, journey, support),
+        &shown,
+        &mut KnownMedia::default(),
+        progress,
+        report,
+    )?;
     saved.journey_skipped = job.journey.is_some() && journey.is_none();
     saved.remade = remade;
     if let Some(id) = journey {
-        let places = job.places.as_ref().map(|places| places.of(&job.blocks)).unwrap_or_default();
+        let places = job
+            .places
+            .as_ref()
+            .map(|places| places.of(&job.blocks))
+            .unwrap_or_default();
         saved.journey_error = finish_journey(&client, job, id, &[(saved.post_id, places)]).err();
     }
     Ok(saved)
@@ -615,10 +852,16 @@ const MEDIA_FRESH: std::time::Duration = std::time::Duration::from_secs(60);
 /// conditional write, so an edit in the moments between this check and the
 /// save can still be replaced.
 fn check_post(client: &Client, job: &Job) -> Result<String, Stopped> {
-    let site = |failure: Failure| Stopped::Site { failure, uploaded: 0 };
+    let site = |failure: Failure| Stopped::Site {
+        failure,
+        uploaded: 0,
+    };
     let mut status = "draft".to_string();
     if let Some(id) = job.post_id {
-        let Some(found) = client.post_state(&job.api, &job.credentials, id).map_err(site)? else {
+        let Some(found) = client
+            .post_state(&job.api, &job.credentials, id)
+            .map_err(site)?
+        else {
             return Err(Stopped::PostGone);
         };
         // A post in the site's trash, as WordPress's Delete leaves it, is
@@ -642,7 +885,10 @@ fn check_post(client: &Client, job: &Job) -> Result<String, Stopped> {
     // none is taken for it.
     let title = job.story.title.trim();
     if job.post_id.is_none() && job.pending_since.is_none() && !job.allow_new && !title.is_empty() {
-        if let Some(post_id) = client.find_titled_post(&job.api, &job.credentials, title).map_err(site)? {
+        if let Some(post_id) = client
+            .find_titled_post(&job.api, &job.credentials, title)
+            .map_err(site)?
+        {
             return Err(Stopped::TitleOnSite { post_id });
         }
     }
@@ -653,7 +899,10 @@ fn check_post(client: &Client, job: &Job) -> Result<String, Stopped> {
 /// checked against the site's own clock before anything is sent.
 fn check_schedule(client: &Client, job: &Job) -> Result<(), Stopped> {
     if let Some(at) = job.schedule.filter(|_| job.publish) {
-        let now = client.site_now(&job.api).map_err(|failure| Stopped::Site { failure, uploaded: 0 })?;
+        let now = client.site_now(&job.api).map_err(|failure| Stopped::Site {
+            failure,
+            uploaded: 0,
+        })?;
         if at < now + chrono::Duration::minutes(SCHEDULE_AHEAD) {
             return Err(Stopped::TooSoon);
         }
@@ -665,7 +914,16 @@ fn check_schedule(client: &Client, job: &Job) -> Result<(), Stopped> {
 /// its own at its end. `status` is the post's status on the site, from
 /// [`check_post`], which must have passed.
 #[allow(clippy::too_many_arguments)]
-fn save_one(http: &dyn Http, job: &Job, mut status: String, meta: Option<serde_json::Value>, shown: &[&MapPlace], cache: &mut KnownMedia, progress: &Progress, report: &mut dyn FnMut(Event)) -> Result<Saved, Stopped> {
+fn save_one(
+    http: &dyn Http,
+    job: &Job,
+    mut status: String,
+    meta: Option<serde_json::Value>,
+    shown: &[&MapPlace],
+    cache: &mut KnownMedia,
+    progress: &Progress,
+    report: &mut dyn FnMut(Event),
+) -> Result<Saved, Stopped> {
     let client = Client::new(http, job.policy).cancelled_by(&progress.cancel);
     let mut uploaded = 0;
     let mut reused = 0;
@@ -708,10 +966,15 @@ fn save_one(http: &dyn Http, job: &Job, mut status: String, meta: Option<serde_j
         sizes.insert(hash.clone(), bytes);
         rendered.push((media_id, hash));
     }
-    report(Event::Prepared { photos: sizes.len(), bytes: sizes.values().sum() });
+    report(Event::Prepared {
+        photos: sizes.len(),
+        bytes: sizes.values().sum(),
+    });
     // Each photo, each video's poster and part, and the post itself.
     progress.done.store(0, Ordering::Relaxed);
-    progress.total.store(rendered.len() + parts.len() * 2 + 1, Ordering::Relaxed);
+    progress
+        .total
+        .store(rendered.len() + parts.len() * 2 + 1, Ordering::Relaxed);
     progress.uploading.store(true, Ordering::Relaxed);
     // Each photo's first description in the Story goes with its upload.
     let mut alts: HashMap<i64, &str> = HashMap::new();
@@ -723,8 +986,17 @@ fn save_one(http: &dyn Http, job: &Job, mut status: String, meta: Option<serde_j
     // Uploads already on the site are checked together, a hundred to a
     // request; one the answer leaves out, or a failed read, is checked alone.
     // Only those not asked about by an earlier post of the same job.
-    let fresh = |id: &i64| cache.asked.get(id).is_some_and(|at| at.elapsed() < MEDIA_FRESH);
-    let mut ids: Vec<i64> = rendered.iter().filter_map(|(_, hash)| job.uploads.get(hash).map(|(id, _)| *id)).filter(|id| !fresh(id)).collect();
+    let fresh = |id: &i64| {
+        cache
+            .asked
+            .get(id)
+            .is_some_and(|at| at.elapsed() < MEDIA_FRESH)
+    };
+    let mut ids: Vec<i64> = rendered
+        .iter()
+        .filter_map(|(_, hash)| job.uploads.get(hash).map(|(id, _)| *id))
+        .filter(|id| !fresh(id))
+        .collect();
     ids.sort_unstable();
     ids.dedup();
     if !ids.is_empty() {
@@ -761,16 +1033,38 @@ fn save_one(http: &dyn Http, job: &Job, mut status: String, meta: Option<serde_j
                 return Ok(bytes);
             }
             // Not rendered, as the site had these bytes; rendered now that it may not.
-            let failed = Stopped::Photo { media_id: media_id.abs(), uploaded: so_far };
+            let failed = Stopped::Photo {
+                media_id: media_id.abs(),
+                uploaded: so_far,
+            };
             match render_photo(job, media_id, &staging, so_far)? {
                 (now, _) if now == hash => std::fs::read(staging.path(&hash)).map_err(|_| failed),
                 _ => Err(failed),
             }
         };
         let alt = alts.get(&media_id).copied().unwrap_or_default();
-        let file = job.sources.get(&media_id).cloned().flatten().and_then(|(path, ..)| path.file_stem().map(|stem| stem.to_string_lossy().into_owned()));
+        let file = job
+            .sources
+            .get(&media_id)
+            .cloned()
+            .flatten()
+            .and_then(|(path, ..)| {
+                path.file_stem()
+                    .map(|stem| stem.to_string_lossy().into_owned())
+            });
         let stem = upload_name(&job.story.title, file.as_deref().unwrap_or_default(), &hash);
-        let item = place(&client, job, &mut bytes, &hash, &stem, alt, known, &mut uploaded, &mut reused, report)?;
+        let item = place(
+            &client,
+            job,
+            &mut bytes,
+            &hash,
+            &stem,
+            alt,
+            known,
+            &mut uploaded,
+            &mut reused,
+            report,
+        )?;
         by_hash.insert(hash, item.clone());
         media.insert(media_id, item);
         progress.done.fetch_add(1, Ordering::Relaxed);
@@ -779,13 +1073,32 @@ fn save_one(http: &dyn Http, job: &Job, mut status: String, meta: Option<serde_j
     let mut sent_parts: HashMap<(i64, u32, u32), UploadedVideo> = HashMap::new();
     let mut videos: HashMap<String, UploadedVideo> = HashMap::new();
     for block in &job.blocks {
-        let Block::Video { media: item, start, end } = &block.block else { continue };
+        let Block::Video {
+            media: item,
+            start,
+            end,
+        } = &block.block
+        else {
+            continue;
+        };
         let part = (item.media_id, *start, *end);
         if let std::collections::hash_map::Entry::Vacant(slot) = sent_parts.entry(part) {
             if progress.cancel.load(Ordering::Relaxed) {
                 return Err(Stopped::Cancelled { uploaded });
             }
-            slot.insert(place_video(&client, job, item, (*start, *end), &staging, known, &mut by_hash, progress, &mut uploaded, &mut reused, report)?);
+            slot.insert(place_video(
+                &client,
+                job,
+                item,
+                (*start, *end),
+                &staging,
+                known,
+                &mut by_hash,
+                progress,
+                &mut uploaded,
+                &mut reused,
+                report,
+            )?);
         }
         videos.insert(block.uid.clone(), sent_parts[&part].clone());
     }
@@ -794,19 +1107,46 @@ fn save_one(http: &dyn Http, job: &Job, mut status: String, meta: Option<serde_j
     let mut maps: HashMap<String, RouteMap> = HashMap::new();
     if let Some(tiles) = &job.map {
         for block in &job.blocks {
-            let Block::Route { route, .. } = &block.block else { continue };
+            let Block::Route { route, .. } = &block.block else {
+                continue;
+            };
             if progress.cancel.load(Ordering::Relaxed) {
                 return Err(Stopped::Cancelled { uploaded });
             }
-            let Some(rgba) = crate::story_html::route_map(route, tiles, job.profiles.get(&block.uid).map(Vec::as_slice)) else { continue };
-            let Ok(bytes) = crate::image_io::encode_jpeg(&rgba, job.size.quality()) else { continue };
+            let Some(rgba) = crate::story_html::route_map(
+                route,
+                tiles,
+                job.profiles.get(&block.uid).map(Vec::as_slice),
+            ) else {
+                continue;
+            };
+            let Ok(bytes) = crate::image_io::encode_jpeg(&rgba, job.size.quality()) else {
+                continue;
+            };
             let hash = upload::hash(&bytes);
             let item = match by_hash.get(&hash) {
                 Some(same) => same.clone(),
-                None => place(&client, job, &mut || Ok(bytes.clone()), &hash, &upload_name(&job.story.title, "route", &hash), "", known, &mut uploaded, &mut reused, report)?,
+                None => place(
+                    &client,
+                    job,
+                    &mut || Ok(bytes.clone()),
+                    &hash,
+                    &upload_name(&job.story.title, "route", &hash),
+                    "",
+                    known,
+                    &mut uploaded,
+                    &mut reused,
+                    report,
+                )?,
             };
             by_hash.insert(hash, item.clone());
-            maps.insert(block.uid.clone(), RouteMap { uploaded: item, credit: tiles.source.attribution() });
+            maps.insert(
+                block.uid.clone(),
+                RouteMap {
+                    uploaded: item,
+                    credit: tiles.source.attribution(),
+                },
+            );
         }
     }
     // The Places shown in the post, as numbered pins on a map like a route's.
@@ -816,36 +1156,75 @@ fn save_one(http: &dyn Http, job: &Job, mut status: String, meta: Option<serde_j
             return Err(Stopped::Cancelled { uploaded });
         }
         let points: Vec<(f64, f64)> = shown.iter().map(|place| (place.lat, place.lon)).collect();
-        let bytes = crate::story_html::places_map(&points, tiles).and_then(|rgba| crate::image_io::encode_jpeg(&rgba, job.size.quality()).ok());
+        let bytes = crate::story_html::places_map(&points, tiles)
+            .and_then(|rgba| crate::image_io::encode_jpeg(&rgba, job.size.quality()).ok());
         if let Some(bytes) = bytes {
             let hash = upload::hash(&bytes);
             let item = match by_hash.get(&hash) {
                 Some(same) => same.clone(),
-                None => place(&client, job, &mut || Ok(bytes.clone()), &hash, &upload_name(&job.story.title, "places", &hash), "", known, &mut uploaded, &mut reused, report)?,
+                None => place(
+                    &client,
+                    job,
+                    &mut || Ok(bytes.clone()),
+                    &hash,
+                    &upload_name(&job.story.title, "places", &hash),
+                    "",
+                    known,
+                    &mut uploaded,
+                    &mut reused,
+                    report,
+                )?,
             };
             by_hash.insert(hash, item.clone());
-            places_map = Some(RouteMap { uploaded: item, credit: tiles.source.attribution() });
+            places_map = Some(RouteMap {
+                uploaded: item,
+                credit: tiles.source.attribution(),
+            });
         }
     }
     if progress.cancel.load(Ordering::Relaxed) {
         return Err(Stopped::Cancelled { uploaded });
     }
-    let mut post = gutenberg::post(&job.story, &job.blocks, &|id| media.get(&id).cloned(), &|uid| maps.get(uid).cloned(), &|uid| videos.get(uid).cloned()).map_err(Stopped::Unsupported)?;
+    let mut post = gutenberg::post(
+        &job.story,
+        &job.blocks,
+        &|id| media.get(&id).cloned(),
+        &|uid| maps.get(uid).cloned(),
+        &|uid| videos.get(uid).cloned(),
+    )
+    .map_err(Stopped::Unsupported)?;
     if let Some(dates) = job.dates.as_deref().filter(|_| job.story.show_date) {
         post.prepend_dates(dates);
     }
     if let Some(words) = job.places.as_ref().filter(|_| !shown.is_empty()) {
         post.content.push_str("\n\n");
-        post.content.push_str(&gutenberg::places(&words.heading, &words.map_alt, shown, places_map.as_ref()));
+        post.content.push_str(&gutenberg::places(
+            &words.heading,
+            &words.map_alt,
+            shown,
+            places_map.as_ref(),
+        ));
     }
-    let places_sent = meta.as_ref().is_some_and(|meta| meta.get("_vl_lat").is_some());
+    let places_sent = meta
+        .as_ref()
+        .is_some_and(|meta| meta.get("_vl_lat").is_some());
     // A post already scheduled keeps its future date unless this replaces it.
     let date = if job.publish && job.schedule.is_none() && status == "future" {
-        Some(client.site_now(&job.api).map_err(|failure| site(failure, uploaded))?)
+        Some(
+            client
+                .site_now(&job.api)
+                .map_err(|failure| site(failure, uploaded))?,
+        )
     } else {
         None
     };
-    let draft = DraftPost { publish: job.publish, schedule: job.schedule.filter(|_| job.publish), date, meta, ..draft_post(post, &job.terms) };
+    let draft = DraftPost {
+        publish: job.publish,
+        schedule: job.schedule.filter(|_| job.publish),
+        date,
+        meta,
+        ..draft_post(post, &job.terms)
+    };
     // A draft made before whose answer was lost is changed instead of made again.
     let mut post_id = job.post_id;
     if let (None, Some(since)) = (post_id, job.pending_since) {
@@ -853,7 +1232,10 @@ fn save_one(http: &dyn Http, job: &Job, mut status: String, meta: Option<serde_j
     }
     if post_id.is_none() {
         let since = crate::types::unix_now() - CLOCK_SLACK;
-        report(Event::Creating { story_id: job.story.id, since });
+        report(Event::Creating {
+            story_id: job.story.id,
+            since,
+        });
     }
     // A Story without a title makes a post WordPress shows as "(no title)".
     let saved = match client.save_draft(&job.api, &job.credentials, post_id, &draft) {
@@ -861,16 +1243,31 @@ fn save_one(http: &dyn Http, job: &Job, mut status: String, meta: Option<serde_j
         // Made but not answered: found by its title, never sent again.
         Err(failure) if failure.outcome_unknown() && post_id.is_none() => {
             let since = crate::types::unix_now() - CLOCK_SLACK;
-            let Some(id) = lost_draft(&client, job, &draft.title, since, uploaded)? else { return Err(site(failure, uploaded)) };
-            let found = client.post_state(&job.api, &job.credentials, id).map_err(|failure| site(failure, uploaded))?;
-            let (fingerprint, status) = found.map(|found| (found.fingerprint, found.status)).unwrap_or_default();
-            crate::wordpress::PostSaved { id, fingerprint, status, meta_kept: true }
+            let Some(id) = lost_draft(&client, job, &draft.title, since, uploaded)? else {
+                return Err(site(failure, uploaded));
+            };
+            let found = client
+                .post_state(&job.api, &job.credentials, id)
+                .map_err(|failure| site(failure, uploaded))?;
+            let (fingerprint, status) = found
+                .map(|found| (found.fingerprint, found.status))
+                .unwrap_or_default();
+            crate::wordpress::PostSaved {
+                id,
+                fingerprint,
+                status,
+                meta_kept: true,
+            }
         }
         Err(failure) => return Err(site(failure, uploaded)),
     };
     progress.done.fetch_add(1, Ordering::Relaxed);
     if job.publish {
-        status = if saved.status.is_empty() { "publish".to_string() } else { saved.status.clone() };
+        status = if saved.status.is_empty() {
+            "publish".to_string()
+        } else {
+            saved.status.clone()
+        };
     }
     Ok(Saved {
         post_id: saved.id,
@@ -899,26 +1296,49 @@ fn save_one(http: &dyn Http, job: &Job, mut status: String, meta: Option<serde_j
 /// id to link to; the index lists the Days, and each Day links to the
 /// index and its neighbours. Each part is then saved as one post is, and
 /// reported as it is, so a job that stops resumes where it was.
-pub fn run_days(http: &dyn Http, job: &Job, progress: &Progress, report: &mut dyn FnMut(Event)) -> Result<Saved, Stopped> {
+pub fn run_days(
+    http: &dyn Http,
+    job: &Job,
+    progress: &Progress,
+    report: &mut dyn FnMut(Event),
+) -> Result<Saved, Stopped> {
     let client = Client::new(http, job.policy).cancelled_by(&progress.cancel);
     let job = &located(&client, job, progress, report)?;
-    let site = |failure: Failure| Stopped::Site { failure, uploaded: 0 };
+    let site = |failure: Failure| Stopped::Site {
+        failure,
+        uploaded: 0,
+    };
     let parts = split_days(&job.blocks);
     let mut posts = job.days.clone().unwrap_or_default();
     for part in &parts {
-        let Some(known) = posts.get(&part.key).cloned() else { continue };
+        let Some(known) = posts.get(&part.key).cloned() else {
+            continue;
+        };
         // Gone, or in the site's trash, which is never changed: made again below.
-        let found = match client.post_state(&job.api, &job.credentials, known.post_id).map_err(site)? {
+        let found = match client
+            .post_state(&job.api, &job.credentials, known.post_id)
+            .map_err(site)?
+        {
             Some(found) if found.status != "trash" => found,
             _ => {
                 posts.remove(&part.key);
                 continue;
             }
         };
-        let changed = known.fingerprint.starts_with(crate::wordpress::FINGERPRINT) && found.fingerprint != known.fingerprint;
-        let post = DayPost { status: found.status.clone(), changed_on_site: changed, ..known };
+        let changed = known.fingerprint.starts_with(crate::wordpress::FINGERPRINT)
+            && found.fingerprint != known.fingerprint;
+        let post = DayPost {
+            status: found.status.clone(),
+            changed_on_site: changed,
+            ..known
+        };
         // Kept at the revision it was last saved from: only checked, not saved yet.
-        report(Event::Part { story_id: job.story.id, revision: post.revision, key: part.key.clone(), post: post.clone() });
+        report(Event::Part {
+            story_id: job.story.id,
+            revision: post.revision,
+            key: part.key.clone(),
+            post: post.clone(),
+        });
         if changed && !job.overwrite {
             return Err(Stopped::ChangedOnSite);
         }
@@ -935,11 +1355,20 @@ pub fn run_days(http: &dyn Http, job: &Job, progress: &Progress, report: &mut dy
     // again; one that can't be checked now is named, to be checked next time.
     let mut orphaned = Vec::new();
     let mut off_map = Vec::new();
-    for (key, post) in posts.iter().filter(|(key, _)| !parts.iter().any(|part| &part.key == *key)) {
+    for (key, post) in posts
+        .iter()
+        .filter(|(key, _)| !parts.iter().any(|part| &part.key == *key))
+    {
         off_map.push(post.post_id);
         match client.post_state(&job.api, &job.credentials, post.post_id) {
-            Ok(None) => report(Event::PartGone { story_id: job.story.id, key: key.clone() }),
-            Ok(Some(found)) if found.status == "trash" => report(Event::PartGone { story_id: job.story.id, key: key.clone() }),
+            Ok(None) => report(Event::PartGone {
+                story_id: job.story.id,
+                key: key.clone(),
+            }),
+            Ok(Some(found)) if found.status == "trash" => report(Event::PartGone {
+                story_id: job.story.id,
+                key: key.clone(),
+            }),
             _ => orphaned.push(post.post_id),
         }
     }
@@ -955,22 +1384,44 @@ pub fn run_days(http: &dyn Http, job: &Job, progress: &Progress, report: &mut dy
             continue;
         }
         let since = crate::types::unix_now() - CLOCK_SLACK;
-        let empty = DraftPost { title: title(part), ..DraftPost::default() };
+        let empty = DraftPost {
+            title: title(part),
+            ..DraftPost::default()
+        };
         let made = match client.save_draft(&job.api, &job.credentials, None, &empty) {
             Ok(made) => made.id,
             // Made but not answered: found by its title, never made twice.
             // An untitled one can't be told from someone else's, so none is taken.
-            Err(failure) if failure.outcome_unknown() && empty.title.trim().is_empty() => return Err(site(failure)),
-            Err(failure) if failure.outcome_unknown() => match client.find_drafts(&job.api, &job.credentials, &empty.title, since).map_err(site)?.as_slice() {
+            Err(failure) if failure.outcome_unknown() && empty.title.trim().is_empty() => {
+                return Err(site(failure))
+            }
+            Err(failure) if failure.outcome_unknown() => match client
+                .find_drafts(&job.api, &job.credentials, &empty.title, since)
+                .map_err(site)?
+                .as_slice()
+            {
                 [id] => *id,
                 [] => return Err(site(failure)),
-                found => return Err(Stopped::Uncertain { drafts: found.len() }),
+                found => {
+                    return Err(Stopped::Uncertain {
+                        drafts: found.len(),
+                    })
+                }
             },
             Err(failure) => return Err(site(failure)),
         };
         // Empty until saved below: no revision of the Story is in it yet.
-        let post = DayPost { post_id: made, status: "draft".into(), ..DayPost::default() };
-        report(Event::Part { story_id: job.story.id, revision: post.revision, key: part.key.clone(), post: post.clone() });
+        let post = DayPost {
+            post_id: made,
+            status: "draft".into(),
+            ..DayPost::default()
+        };
+        report(Event::Part {
+            story_id: job.story.id,
+            revision: post.revision,
+            key: part.key.clone(),
+            post: post.clone(),
+        });
         posts.insert(part.key.clone(), post);
     }
     let link = |key: &str| post_link(&job.api, posts[key].post_id);
@@ -978,35 +1429,78 @@ pub fn run_days(http: &dyn Http, job: &Job, progress: &Progress, report: &mut dy
     let (mut uploaded, mut reused) = (0, 0);
     let mut index = None;
     let (mut places_dropped, mut places_in_post) = (false, false);
-    let mut on_journey: Vec<(i64, Vec<&MapPlace>)> = off_map.iter().map(|&id| (id, Vec::new())).collect();
+    let mut on_journey: Vec<(i64, Vec<&MapPlace>)> =
+        off_map.iter().map(|&id| (id, Vec::new())).collect();
     let mut media = Vec::new();
     let mut cache = KnownMedia::default();
     for (at, part) in parts.iter().enumerate() {
         // The index shows all the Story's Places; a Day, its own.
-        let of = if part.key == INDEX { &job.blocks } else { &part.blocks };
+        let of = if part.key == INDEX {
+            &job.blocks
+        } else {
+            &part.blocks
+        };
         let meta = post_meta(job, of, journey, support);
         let shown = shown_in_post(job, of, support);
         let mut blocks = part.blocks.clone();
         let mut story = job.story.clone();
         if part.key == INDEX {
-            let days: Vec<String> = parts[1..].iter().map(|day| format!("[{}]({})", escape_marks(&day.heading), link(&day.key))).collect();
+            let days: Vec<String> = parts[1..]
+                .iter()
+                .map(|day| format!("[{}]({})", escape_marks(&day.heading), link(&day.key)))
+                .collect();
             if !days.is_empty() {
-                blocks.push(StoryBlock::new(Block::List { ordered: false, items: days }));
+                blocks.push(StoryBlock::new(Block::List {
+                    ordered: false,
+                    items: days,
+                }));
             }
         } else {
-            story = Story { title: title(part), subtitle: String::new(), introduction: String::new(), conclusion: String::new(), cover: None, ..story };
-            let mut links = vec![format!("[{}]({})", escape_marks(job.story.title.trim()), link(INDEX))];
+            story = Story {
+                title: title(part),
+                subtitle: String::new(),
+                introduction: String::new(),
+                conclusion: String::new(),
+                cover: None,
+                ..story
+            };
+            let mut links = vec![format!(
+                "[{}]({})",
+                escape_marks(job.story.title.trim()),
+                link(INDEX)
+            )];
             if at > 1 {
-                links.insert(0, format!("← [{}]({})", escape_marks(&parts[at - 1].heading), link(&parts[at - 1].key)));
+                links.insert(
+                    0,
+                    format!(
+                        "← [{}]({})",
+                        escape_marks(&parts[at - 1].heading),
+                        link(&parts[at - 1].key)
+                    ),
+                );
             }
             if let Some(next) = parts.get(at + 1) {
-                links.push(format!("[{}]({}) →", escape_marks(&next.heading), link(&next.key)));
+                links.push(format!(
+                    "[{}]({}) →",
+                    escape_marks(&next.heading),
+                    link(&next.key)
+                ));
             }
             blocks.push(StoryBlock::new(Block::Separator));
             blocks.push(StoryBlock::new(Block::Paragraph(links.join(" · "))));
         }
-        let wanted: std::collections::HashSet<i64> = blocks.iter().flat_map(|block| block.block.media()).map(|item| item.media_id).chain(story.cover).collect();
-        let sources = job.sources.iter().filter(|(id, _)| wanted.contains(id)).map(|(id, source)| (*id, source.clone())).collect();
+        let wanted: std::collections::HashSet<i64> = blocks
+            .iter()
+            .flat_map(|block| block.block.media())
+            .map(|item| item.media_id)
+            .chain(story.cover)
+            .collect();
+        let sources = job
+            .sources
+            .iter()
+            .filter(|(id, _)| wanted.contains(id))
+            .map(|(id, source)| (*id, source.clone()))
+            .collect();
         let post = &posts[&part.key];
         let one = Job {
             story,
@@ -1025,18 +1519,61 @@ pub fn run_days(http: &dyn Http, job: &Job, progress: &Progress, report: &mut dy
         };
         // Checked above, for every post at once.
         let status = post.status.clone();
-        let saved = save_one(http, &one, status, meta, &shown, &mut cache, progress, &mut |event| {
-            if let Event::Uploaded { hash, media_id, url, .. } = &event {
-                uploads.insert(hash.clone(), (*media_id, url.clone()));
-            }
-            report(event);
-        })
+        let saved = save_one(
+            http,
+            &one,
+            status,
+            meta,
+            &shown,
+            &mut cache,
+            progress,
+            &mut |event| {
+                if let Event::Uploaded {
+                    hash,
+                    media_id,
+                    url,
+                    ..
+                } = &event
+                {
+                    uploads.insert(hash.clone(), (*media_id, url.clone()));
+                }
+                report(event);
+            },
+        )
         .map_err(|stopped| match stopped {
-            Stopped::Cancelled { uploaded: now } => Stopped::Cancelled { uploaded: uploaded + now },
-            Stopped::Site { failure, uploaded: now } => Stopped::Site { failure, uploaded: uploaded + now },
-            Stopped::Photo { media_id, uploaded: now } => Stopped::Photo { media_id, uploaded: uploaded + now },
-            Stopped::Video { media_id, uploaded: now } => Stopped::Video { media_id, uploaded: uploaded + now },
-            Stopped::VideoTooLarge { media_id, bytes, uploaded: now } => Stopped::VideoTooLarge { media_id, bytes, uploaded: uploaded + now },
+            Stopped::Cancelled { uploaded: now } => Stopped::Cancelled {
+                uploaded: uploaded + now,
+            },
+            Stopped::Site {
+                failure,
+                uploaded: now,
+            } => Stopped::Site {
+                failure,
+                uploaded: uploaded + now,
+            },
+            Stopped::Photo {
+                media_id,
+                uploaded: now,
+            } => Stopped::Photo {
+                media_id,
+                uploaded: uploaded + now,
+            },
+            Stopped::Video {
+                media_id,
+                uploaded: now,
+            } => Stopped::Video {
+                media_id,
+                uploaded: uploaded + now,
+            },
+            Stopped::VideoTooLarge {
+                media_id,
+                bytes,
+                uploaded: now,
+            } => Stopped::VideoTooLarge {
+                media_id,
+                bytes,
+                uploaded: uploaded + now,
+            },
             other => other,
         })?;
         uploaded += saved.uploaded;
@@ -1045,9 +1582,26 @@ pub fn run_days(http: &dyn Http, job: &Job, progress: &Progress, report: &mut dy
         places_dropped |= saved.places_dropped;
         places_in_post |= saved.places_in_post;
         if part.key != INDEX {
-            on_journey.push((saved.post_id, job.places.as_ref().map(|places| places.of(&part.blocks)).unwrap_or_default()));
+            on_journey.push((
+                saved.post_id,
+                job.places
+                    .as_ref()
+                    .map(|places| places.of(&part.blocks))
+                    .unwrap_or_default(),
+            ));
         }
-        report(Event::Part { story_id: job.story.id, revision: job.story.revision, key: part.key.clone(), post: DayPost { post_id: saved.post_id, status: saved.status.clone(), fingerprint: saved.fingerprint.clone(), changed_on_site: false, revision: job.story.revision } });
+        report(Event::Part {
+            story_id: job.story.id,
+            revision: job.story.revision,
+            key: part.key.clone(),
+            post: DayPost {
+                post_id: saved.post_id,
+                status: saved.status.clone(),
+                fingerprint: saved.fingerprint.clone(),
+                changed_on_site: false,
+                revision: job.story.revision,
+            },
+        });
         if part.key == INDEX {
             index = Some(saved);
         }
@@ -1057,7 +1611,18 @@ pub fn run_days(http: &dyn Http, job: &Job, progress: &Progress, report: &mut dy
     let journey_skipped = job.journey.is_some() && journey.is_none();
     media.sort_unstable();
     media.dedup();
-    Ok(Saved { uploaded, reused, days: parts.len() - 1, media, places_dropped, places_in_post, journey_skipped, journey_error, orphaned, ..index })
+    Ok(Saved {
+        uploaded,
+        reused,
+        days: parts.len() - 1,
+        media,
+        places_dropped,
+        places_in_post,
+        journey_skipped,
+        journey_error,
+        orphaned,
+        ..index
+    })
 }
 
 /// What deleting uploads a post stopped using came to.
@@ -1076,7 +1641,13 @@ pub struct Deleted {
 /// Deletes `uploads`, each (media id, address), from the site's media
 /// library, each only once no post or page there is found to show it.
 /// One whose file name is too short to look for is kept.
-pub fn delete_unused(http: &dyn Http, api: &Api, credentials: &Credentials, policy: Policy, uploads: &[(i64, String)]) -> Deleted {
+pub fn delete_unused(
+    http: &dyn Http,
+    api: &Api,
+    credentials: &Credentials,
+    policy: Policy,
+    uploads: &[(i64, String)],
+) -> Deleted {
     let client = Client::new(http, policy);
     let mut deleted = Deleted::default();
     if !uploads.iter().any(|(_, url)| upload_stem(url).is_some()) {
@@ -1096,7 +1667,13 @@ pub fn delete_unused(http: &dyn Http, api: &Api, credentials: &Credentials, poli
             Some(stem) if !referenced.contains(id) => client.media_in_use(api, credentials, &stem),
             _ => Ok(true),
         };
-        let result = result.and_then(|used| if used { Ok(None) } else { client.delete_media(api, credentials, *id).map(Some) });
+        let result = result.and_then(|used| {
+            if used {
+                Ok(None)
+            } else {
+                client.delete_media(api, credentials, *id).map(Some)
+            }
+        });
         match result {
             Ok(Some(_)) => deleted.gone.push(*id),
             Ok(None) => deleted.in_use += 1,
@@ -1147,7 +1724,10 @@ impl Staging {
         static JOBS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let job = JOBS.fetch_add(1, Ordering::Relaxed);
         Staging::remove_abandoned(&std::env::temp_dir());
-        let dir = std::env::temp_dir().join(format!("picasso-publish-{}-{story_id}-{job}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!(
+            "picasso-publish-{}-{story_id}-{job}",
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::create_dir_all(&dir);
         Staging(dir)
@@ -1160,11 +1740,19 @@ impl Staging {
     /// Removes the folders in `temp` of jobs cut short by a crash or a power
     /// cut; those of another running Picasso are left alone.
     fn remove_abandoned(temp: &Path) {
-        let Ok(entries) = std::fs::read_dir(temp) else { return };
+        let Ok(entries) = std::fs::read_dir(temp) else {
+            return;
+        };
         for entry in entries.flatten() {
             let name = entry.file_name();
-            let pid = name.to_str().and_then(|name| name.strip_prefix("picasso-publish-")).and_then(|rest| rest.split('-').next()).and_then(|pid| pid.parse::<u32>().ok());
-            if pid.is_some_and(|pid| pid != std::process::id() && crate::story_html::abandoned(pid, &entry.path())) {
+            let pid = name
+                .to_str()
+                .and_then(|name| name.strip_prefix("picasso-publish-"))
+                .and_then(|rest| rest.split('-').next())
+                .and_then(|pid| pid.parse::<u32>().ok());
+            if pid.is_some_and(|pid| {
+                pid != std::process::id() && crate::story_html::abandoned(pid, &entry.path())
+            }) {
                 let _ = std::fs::remove_dir_all(entry.path());
             }
         }
@@ -1191,23 +1779,46 @@ const CLOCK_SLACK: i64 = 15 * 60;
 
 /// The draft titled `title` made since `since` whose answer was lost, if
 /// the site has exactly one; with more, it stops rather than guess.
-fn lost_draft(client: &Client, job: &Job, title: &str, since: i64, uploaded: usize) -> Result<Option<i64>, Stopped> {
+fn lost_draft(
+    client: &Client,
+    job: &Job,
+    title: &str,
+    since: i64,
+    uploaded: usize,
+) -> Result<Option<i64>, Stopped> {
     // An untitled draft can't be told from someone else's, so none is taken.
     if title.trim().is_empty() {
         return Ok(None);
     }
-    let found = client.find_drafts(&job.api, &job.credentials, title, since).map_err(|failure| Stopped::Site { failure, uploaded })?;
+    let found = client
+        .find_drafts(&job.api, &job.credentials, title, since)
+        .map_err(|failure| Stopped::Site { failure, uploaded })?;
     match found.as_slice() {
         [] => Ok(None),
         [id] => Ok(Some(*id)),
-        _ => Err(Stopped::Uncertain { drafts: found.len() }),
+        _ => Err(Stopped::Uncertain {
+            drafts: found.len(),
+        }),
     }
 }
 
 /// The post as WordPress takes it, with the chosen terms.
 fn draft_post(post: gutenberg::Post, terms: &crate::db::PostTerms) -> DraftPost {
-    let ids = |list: &[(i64, String)]| (!list.is_empty()).then(|| list.iter().map(|(id, _)| *id).collect());
-    DraftPost { title: post.title, excerpt: post.excerpt, content: post.content, featured: post.featured, categories: ids(&terms.categories), tags: ids(&terms.tags), publish: false, schedule: None, date: None, meta: None }
+    let ids = |list: &[(i64, String)]| {
+        (!list.is_empty()).then(|| list.iter().map(|(id, _)| *id).collect())
+    };
+    DraftPost {
+        title: post.title,
+        excerpt: post.excerpt,
+        content: post.content,
+        featured: post.featured,
+        categories: ids(&terms.categories),
+        tags: ids(&terms.tags),
+        publish: false,
+        schedule: None,
+        date: None,
+        meta: None,
+    }
 }
 
 /// The post a save goes to, as the publishing dialog settled it.
@@ -1227,18 +1838,42 @@ pub struct Target {
 /// beside it, which then takes its place in the library and never changes
 /// it. `found` is a post with the Story's title the library has no record
 /// of, and `adopt` the answer to taking it up.
-pub fn target(story_id: i64, site_id: i64, size: UploadSize, earlier: Option<crate::db::Publication>, update: Option<bool>, found: Option<i64>, adopt: Option<bool>) -> Target {
+pub fn target(
+    story_id: i64,
+    site_id: i64,
+    size: UploadSize,
+    earlier: Option<crate::db::Publication>,
+    update: Option<bool>,
+    found: Option<i64>,
+    adopt: Option<bool>,
+) -> Target {
     let update = update == Some(true);
-    let earlier = earlier.filter(|publication| (publication.remote_status == "draft" && !publication.changed_on_site) || update);
+    let earlier = earlier.filter(|publication| {
+        (publication.remote_status == "draft" && !publication.changed_on_site) || update
+    });
     let allow_new = found.is_none() || adopt == Some(false);
     match found.filter(|_| adopt == Some(true)) {
         // Taken up: changed in place, keeping its status.
         Some(post_id) => Target {
-            earlier: Some(crate::db::Publication { story_id, site_id, post_id, remote_status: "publish".into(), size: size.code().into(), revision: 0, synced_at: 0, fingerprint: String::new(), changed_on_site: false }),
+            earlier: Some(crate::db::Publication {
+                story_id,
+                site_id,
+                post_id,
+                remote_status: "publish".into(),
+                size: size.code().into(),
+                revision: 0,
+                synced_at: 0,
+                fingerprint: String::new(),
+                changed_on_site: false,
+            }),
             update: true,
             allow_new,
         },
-        None => Target { earlier, update, allow_new },
+        None => Target {
+            earlier,
+            update,
+            allow_new,
+        },
     }
 }
 
@@ -1263,10 +1898,17 @@ pub fn upload_name(title: &str, file: &str, hash: &str) -> String {
         }
         // Cut between words where one ends in time, so none is left half.
         let cut = &whole[..most];
-        let cut = if whole.as_bytes()[most] == b'-' { cut } else { cut.rsplit_once('-').map_or(cut, |(kept, _)| kept) };
+        let cut = if whole.as_bytes()[most] == b'-' {
+            cut
+        } else {
+            cut.rsplit_once('-').map_or(cut, |(kept, _)| kept)
+        };
         cut.trim_end_matches('-').to_string()
     };
-    let mut parts: Vec<String> = [words(title, 24), words(file, 20)].into_iter().filter(|part| !part.is_empty()).collect();
+    let mut parts: Vec<String> = [words(title, 24), words(file, 20)]
+        .into_iter()
+        .filter(|part| !part.is_empty())
+        .collect();
     if parts.is_empty() {
         parts.push("picasso".into());
     }
@@ -1280,19 +1922,39 @@ fn rendered_before(job: &Job, media_id: i64) -> Option<(String, u64)> {
     let (path, settings, rotation) = job.sources.get(&media_id.abs()).cloned().flatten()?;
     let crop = (media_id < 0).then_some(job.story.cover_crop);
     let key = render_key(&path, &settings, rotation, job.size, job.exif, crop)?;
-    job.renders.get(&key).filter(|(hash, _)| job.uploads.contains_key(hash))
+    job.renders
+        .get(&key)
+        .filter(|(hash, _)| job.uploads.contains_key(hash))
 }
 
 /// Renders photo `media_id` into `staging` under the hash of its bytes, and
 /// keeps what it became in the job's [`Renders`]. Returns the hash and length.
-fn render_photo(job: &Job, media_id: i64, staging: &Staging, uploaded: usize) -> Result<(String, u64), Stopped> {
-    let failed = || Stopped::Photo { media_id: media_id.abs(), uploaded };
-    let (path, settings, rotation) = job.sources.get(&media_id.abs()).cloned().flatten().ok_or_else(failed)?;
+fn render_photo(
+    job: &Job,
+    media_id: i64,
+    staging: &Staging,
+    uploaded: usize,
+) -> Result<(String, u64), Stopped> {
+    let failed = || Stopped::Photo {
+        media_id: media_id.abs(),
+        uploaded,
+    };
+    let (path, settings, rotation) = job
+        .sources
+        .get(&media_id.abs())
+        .cloned()
+        .flatten()
+        .ok_or_else(failed)?;
     let crop = (media_id < 0).then_some(job.story.cover_crop);
     let key = render_key(&path, &settings, rotation, job.size, job.exif, crop);
-    let photo = upload::render(&path, &settings, rotation, job.size, job.exif, crop).map_err(|_| failed())?;
+    let photo = upload::render(&path, &settings, rotation, job.size, job.exif, crop)
+        .map_err(|_| failed())?;
     // The same bytes from two photos are written by whichever comes first.
-    match std::fs::OpenOptions::new().write(true).create_new(true).open(staging.path(&photo.hash)) {
+    match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(staging.path(&photo.hash))
+    {
         Ok(mut file) => std::io::Write::write_all(&mut file, &photo.bytes).map_err(|_| failed())?,
         Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {}
         Err(_) => return Err(failed()),
@@ -1310,7 +1972,18 @@ fn render_photo(job: &Job, media_id: i64, staging: &Staging, uploaded: usize) ->
 /// it, and must be the same for the same bytes, as a lost upload is found by it.
 /// `bytes` is asked for only when they are sent.
 #[allow(clippy::too_many_arguments)]
-fn place(client: &Client, job: &Job, bytes: &mut dyn FnMut() -> Result<Vec<u8>, Stopped>, hash: &str, stem: &str, alt: &str, known: &HashMap<i64, Media>, uploaded: &mut usize, reused: &mut usize, report: &mut dyn FnMut(Event)) -> Result<Uploaded, Stopped> {
+fn place(
+    client: &Client,
+    job: &Job,
+    bytes: &mut dyn FnMut() -> Result<Vec<u8>, Stopped>,
+    hash: &str,
+    stem: &str,
+    alt: &str,
+    known: &HashMap<i64, Media>,
+    uploaded: &mut usize,
+    reused: &mut usize,
+    report: &mut dyn FnMut(Event),
+) -> Result<Uploaded, Stopped> {
     if let Some(found) = reuse(client, job, hash, known, *uploaded, reused, report)? {
         return Ok(found);
     }
@@ -1320,37 +1993,77 @@ fn place(client: &Client, job: &Job, bytes: &mut dyn FnMut() -> Result<Vec<u8>, 
 }
 
 /// A confirmed upload of `hash` that is still on the site.
-fn reuse(client: &Client, job: &Job, hash: &str, known: &HashMap<i64, Media>, uploaded: usize, reused: &mut usize, report: &mut dyn FnMut(Event)) -> Result<Option<Uploaded>, Stopped> {
-    let Some((id, url)) = job.uploads.get(hash) else { return Ok(None) };
+fn reuse(
+    client: &Client,
+    job: &Job,
+    hash: &str,
+    known: &HashMap<i64, Media>,
+    uploaded: usize,
+    reused: &mut usize,
+    report: &mut dyn FnMut(Event),
+) -> Result<Option<Uploaded>, Stopped> {
+    let Some((id, url)) = job.uploads.get(hash) else {
+        return Ok(None);
+    };
     let now = match known.get(id) {
         Some(now) => Some(Some(now.clone())),
-        None => client.media_now(&job.api, &job.credentials, *id).map_err(|failure| Stopped::Site { failure, uploaded })?,
+        None => client
+            .media_now(&job.api, &job.credentials, *id)
+            .map_err(|failure| Stopped::Site { failure, uploaded })?,
     };
     let Some(now) = now else {
-        report(Event::Gone { hash: hash.to_string() });
+        report(Event::Gone {
+            hash: hash.to_string(),
+        });
         return Ok(None);
     };
     *reused += 1;
     // An address the site has changed since, as after a move, is the one used and kept.
     if let Some(now) = now.filter(|now| now.url != *url) {
-        report(Event::Uploaded { hash: hash.to_string(), size: job.size, media_id: now.id, url: now.url.clone(), details: now.details });
-        return Ok(Some(Uploaded { id: now.id, url: now.url }));
+        report(Event::Uploaded {
+            hash: hash.to_string(),
+            size: job.size,
+            media_id: now.id,
+            url: now.url.clone(),
+            details: now.details,
+        });
+        return Ok(Some(Uploaded {
+            id: now.id,
+            url: now.url,
+        }));
     }
-    Ok(Some(Uploaded { id: *id, url: url.clone() }))
+    Ok(Some(Uploaded {
+        id: *id,
+        url: url.clone(),
+    }))
 }
 
 /// What an upload of `hash`, named `stem`, came to, reported once the site
 /// confirmed it.
 #[allow(clippy::too_many_arguments)]
-fn confirmed(client: &Client, job: &Job, sent: Result<Media, Failure>, hash: &str, stem: &str, alt: &str, uploaded: &mut usize, report: &mut dyn FnMut(Event)) -> Result<Uploaded, Stopped> {
+fn confirmed(
+    client: &Client,
+    job: &Job,
+    sent: Result<Media, Failure>,
+    hash: &str,
+    stem: &str,
+    alt: &str,
+    uploaded: &mut usize,
+    report: &mut dyn FnMut(Event),
+) -> Result<Uploaded, Stopped> {
     let site = |failure: Failure, uploaded: usize| Stopped::Site { failure, uploaded };
     let sent = match sent {
         Ok(sent) => sent,
         // Sent but not answered: the upload is found by its name, as the same
         // bytes are always named the same; any of them is these bytes.
         Err(failure) if failure.outcome_unknown() => {
-            let found = client.find_media(&job.api, &job.credentials, stem).map_err(|failure| site(failure, *uploaded))?;
-            found.into_iter().next().ok_or_else(|| site(failure, *uploaded))?
+            let found = client
+                .find_media(&job.api, &job.credentials, stem)
+                .map_err(|failure| site(failure, *uploaded))?;
+            found
+                .into_iter()
+                .next()
+                .ok_or_else(|| site(failure, *uploaded))?
         }
         Err(failure) => return Err(site(failure, *uploaded)),
     };
@@ -1359,8 +2072,17 @@ fn confirmed(client: &Client, job: &Job, sent: Result<Media, Failure>, hash: &st
     if !alt.is_empty() {
         let _ = client.set_media_alt(&job.api, &job.credentials, sent.id, alt);
     }
-    report(Event::Uploaded { hash: hash.to_string(), size: job.size, media_id: sent.id, url: sent.url.clone(), details: sent.details.clone() });
-    Ok(Uploaded { id: sent.id, url: sent.url })
+    report(Event::Uploaded {
+        hash: hash.to_string(),
+        size: job.size,
+        media_id: sent.id,
+        url: sent.url.clone(),
+        details: sent.details.clone(),
+    });
+    Ok(Uploaded {
+        id: sent.id,
+        url: sent.url,
+    })
 }
 
 /// The part of video `item` from `start` to `end` milliseconds on the site,
@@ -1382,16 +2104,41 @@ fn place_video(
     reused: &mut usize,
     report: &mut dyn FnMut(Event),
 ) -> Result<UploadedVideo, Stopped> {
-    let failed = |uploaded: usize| Stopped::Video { media_id: item.media_id, uploaded };
-    let (path, duration) = job.videos.sources.get(&item.media_id).cloned().flatten().ok_or_else(|| failed(*uploaded))?;
-    let file = path.file_stem().map(|stem| stem.to_string_lossy().into_owned()).unwrap_or_default();
+    let failed = |uploaded: usize| Stopped::Video {
+        media_id: item.media_id,
+        uploaded,
+    };
+    let (path, duration) = job
+        .videos
+        .sources
+        .get(&item.media_id)
+        .cloned()
+        .flatten()
+        .ok_or_else(|| failed(*uploaded))?;
+    let file = path
+        .file_stem()
+        .map(|stem| stem.to_string_lossy().into_owned())
+        .unwrap_or_default();
     let (from, _) = crate::trip::clip_range(start, end, duration);
-    let rgba = crate::video::frame_at(&path, from, job.size.edge()).map_err(|_| failed(*uploaded))?;
-    let bytes = crate::image_io::encode_jpeg(&rgba, job.size.quality()).map_err(|_| failed(*uploaded))?;
+    let rgba =
+        crate::video::frame_at(&path, from, job.size.edge()).map_err(|_| failed(*uploaded))?;
+    let bytes =
+        crate::image_io::encode_jpeg(&rgba, job.size.quality()).map_err(|_| failed(*uploaded))?;
     let hash = upload::hash(&bytes);
     let poster = match by_hash.get(&hash) {
         Some(same) => same.clone(),
-        None => place(client, job, &mut || Ok(bytes.clone()), &hash, &upload_name(&job.story.title, &file, &hash), "", known, uploaded, reused, report)?,
+        None => place(
+            client,
+            job,
+            &mut || Ok(bytes.clone()),
+            &hash,
+            &upload_name(&job.story.title, &file, &hash),
+            "",
+            known,
+            uploaded,
+            reused,
+            report,
+        )?,
     };
     by_hash.insert(hash, poster.clone());
     progress.done.fetch_add(1, Ordering::Relaxed);
@@ -1399,24 +2146,67 @@ fn place_video(
     let video = match reuse(client, job, &hash, known, *uploaded, reused, report)? {
         Some(found) => found,
         None => {
-            let cache = job.videos.cache.clone().unwrap_or_else(|| staging.0.clone());
+            let cache = job
+                .videos
+                .cache
+                .clone()
+                .unwrap_or_else(|| staging.0.clone());
             progress.converting.store(1, Ordering::Relaxed);
-            let done = |part: f64| progress.converting.store(1 + (part * 100.0) as usize, Ordering::Relaxed);
-            let made = crate::story_html::clip_file(&cache, &path, (start, end, duration), &progress.cancel, &done);
+            let done = |part: f64| {
+                progress
+                    .converting
+                    .store(1 + (part * 100.0) as usize, Ordering::Relaxed)
+            };
+            let made = crate::story_html::clip_file(
+                &cache,
+                &path,
+                (start, end, duration),
+                &progress.cancel,
+                &done,
+            );
             progress.converting.store(0, Ordering::Relaxed);
             if progress.cancel.load(Ordering::Relaxed) {
-                return Err(Stopped::Cancelled { uploaded: *uploaded });
+                return Err(Stopped::Cancelled {
+                    uploaded: *uploaded,
+                });
             }
             let made = made.map_err(|_| failed(*uploaded))?;
-            let bytes = std::fs::metadata(&made).map(|meta| meta.len()).unwrap_or_default();
+            let bytes = std::fs::metadata(&made)
+                .map(|meta| meta.len())
+                .unwrap_or_default();
             let stem = upload_name(&job.story.title, &file, &hash);
             progress.sending.store(true, Ordering::Relaxed);
-            let sent = client.upload_file(&job.api, &job.credentials, &made, "video/mp4", &format!("{stem}.mp4"));
+            let sent = client.upload_file(
+                &job.api,
+                &job.credentials,
+                &made,
+                "video/mp4",
+                &format!("{stem}.mp4"),
+            );
             progress.sending.store(false, Ordering::Relaxed);
             match sent {
-                Err(_) if progress.cancel.load(Ordering::Relaxed) => return Err(Stopped::Cancelled { uploaded: *uploaded }),
-                Err(Failure::TooLarge) => return Err(Stopped::VideoTooLarge { media_id: item.media_id, bytes, uploaded: *uploaded }),
-                sent => confirmed(client, job, sent, &hash, &stem, item.alt.trim(), uploaded, report)?,
+                Err(_) if progress.cancel.load(Ordering::Relaxed) => {
+                    return Err(Stopped::Cancelled {
+                        uploaded: *uploaded,
+                    })
+                }
+                Err(Failure::TooLarge) => {
+                    return Err(Stopped::VideoTooLarge {
+                        media_id: item.media_id,
+                        bytes,
+                        uploaded: *uploaded,
+                    })
+                }
+                sent => confirmed(
+                    client,
+                    job,
+                    sent,
+                    &hash,
+                    &stem,
+                    item.alt.trim(),
+                    uploaded,
+                    report,
+                )?,
             }
         }
     };
@@ -1440,15 +2230,22 @@ mod tests {
     use image::{Rgba, RgbaImage};
 
     fn temp_dir(tag: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!("picasso-publish-{tag}-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("picasso-publish-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }
 
-    fn job(dir: &std::path::Path, post_id: Option<i64>, uploads: HashMap<String, (i64, String)>) -> Job {
+    fn job(
+        dir: &std::path::Path,
+        post_id: Option<i64>,
+        uploads: HashMap<String, (i64, String)>,
+    ) -> Job {
         let path = dir.join("a.png");
-        RgbaImage::from_fn(300, 200, |x, y| Rgba([x as u8, y as u8, 90, 255])).save(&path).unwrap();
+        RgbaImage::from_fn(300, 200, |x, y| Rgba([x as u8, y as u8, 90, 255]))
+            .save(&path)
+            .unwrap();
         let story = Story {
             id: 3,
             trip_id: 1,
@@ -1467,11 +2264,17 @@ mod tests {
             revision: 1,
             updated_at: 0,
         };
-        let blocks = vec![StoryBlock::new(Block::Photo(MediaUse::new(11))), StoryBlock::new(Block::Paragraph("Hola".into()))];
+        let blocks = vec![
+            StoryBlock::new(Block::Photo(MediaUse::new(11))),
+            StoryBlock::new(Block::Paragraph("Hola".into())),
+        ];
         let sources = HashMap::from([(11, Some((path, Settings::default(), 0)))]);
         Job {
             api: local_api(),
-            credentials: Credentials { user: "ana".into(), password: "abcd efgh".into() },
+            credentials: Credentials {
+                user: "ana".into(),
+                password: "abcd efgh".into(),
+            },
             policy: Policy::default(),
             story,
             dates: None,
@@ -1509,36 +2312,77 @@ mod tests {
         job.story.show_date = true;
         job.dates = Some("Nov 3 – Nov 8".into());
         let fake = Fake::default()
-            .answer_to("POST", MEDIA, 201, &[], r#"{"id":41,"source_url":"https://example.com/blog/a.jpg"}"#)
+            .answer_to(
+                "POST",
+                MEDIA,
+                201,
+                &[],
+                r#"{"id":41,"source_url":"https://example.com/blog/a.jpg"}"#,
+            )
             .answer_to("POST", POSTS, 201, &[], r#"{"id":7}"#);
         let mut events = Vec::new();
-        let saved = run(&fake, &job, &Progress::default(), &mut |event| events.push(event)).unwrap();
-        assert_eq!((saved.post_id, saved.uploaded, saved.reused), (7, 1, 0), "the cover and the photo are one upload");
+        let saved = run(&fake, &job, &Progress::default(), &mut |event| {
+            events.push(event)
+        })
+        .unwrap();
+        assert_eq!(
+            (saved.post_id, saved.uploaded, saved.reused),
+            (7, 1, 0),
+            "the cover and the photo are one upload"
+        );
         assert_eq!(saved.media, [41], "the post's media is kept with it");
-        assert_eq!(saved.edit_link, "https://example.com/blog/wp-admin/post.php?post=7&action=edit");
-        assert!(matches!(&events[..], [Event::Prepared { photos: 1, bytes }, Event::Uploaded { media_id: 41, size: UploadSize::Low, .. }, Event::Creating { story_id: 3, .. }] if *bytes > 0), "the bytes are known before any is sent: {events:?}");
+        assert_eq!(
+            saved.edit_link,
+            "https://example.com/blog/wp-admin/post.php?post=7&action=edit"
+        );
+        assert!(
+            matches!(&events[..], [Event::Prepared { photos: 1, bytes }, Event::Uploaded { media_id: 41, size: UploadSize::Low, .. }, Event::Creating { story_id: 3, .. }] if *bytes > 0),
+            "the bytes are known before any is sent: {events:?}"
+        );
         let bodies = fake.bodies.borrow();
         let post: serde_json::Value = serde_json::from_slice(&bodies.last().unwrap().1).unwrap();
         assert_eq!(post["status"], "draft");
-        assert_eq!(post["excerpt"], "", "the subtitle is the excerpt, sent even when empty");
+        assert_eq!(
+            post["excerpt"], "",
+            "the subtitle is the excerpt, sent even when empty"
+        );
         assert_eq!(post["featured_media"], 41);
         let content = post["content"].as_str().unwrap();
         assert!(content.starts_with("<!-- wp:paragraph {\"className\":\"picasso-story-dates\"} -->\n<p class=\"picasso-story-dates\">Nov 3 – Nov 8</p>"));
         assert!(content.contains("wp-image-41"));
-        assert!(post.get("categories").is_none() && post.get("tags").is_none(), "none chosen, none sent");
+        assert!(
+            post.get("categories").is_none() && post.get("tags").is_none(),
+            "none chosen, none sent"
+        );
         drop(bodies);
 
         // Chosen categories go with the post; tags left unchosen aren't sent.
         job.story.show_date = false;
-        let chosen = Job { terms: crate::db::PostTerms { categories: vec![(5, "Coast".into())], tags: Vec::new() }, ..job };
+        let chosen = Job {
+            terms: crate::db::PostTerms {
+                categories: vec![(5, "Coast".into())],
+                tags: Vec::new(),
+            },
+            ..job
+        };
         let fake = Fake::default()
-            .answer_to("POST", MEDIA, 201, &[], r#"{"id":41,"source_url":"https://example.com/blog/a.jpg"}"#)
+            .answer_to(
+                "POST",
+                MEDIA,
+                201,
+                &[],
+                r#"{"id":41,"source_url":"https://example.com/blog/a.jpg"}"#,
+            )
             .answer_to("POST", POSTS, 201, &[], r#"{"id":8}"#);
         run(&fake, &chosen, &Progress::default(), &mut |_| {}).unwrap();
-        let post: serde_json::Value = serde_json::from_slice(&fake.bodies.borrow().last().unwrap().1).unwrap();
+        let post: serde_json::Value =
+            serde_json::from_slice(&fake.bodies.borrow().last().unwrap().1).unwrap();
         assert_eq!(post["categories"], serde_json::json!([5]));
         assert!(post.get("tags").is_none());
-        assert!(!post["content"].as_str().unwrap().contains("picasso-story-dates"));
+        assert!(!post["content"]
+            .as_str()
+            .unwrap()
+            .contains("picasso-story-dates"));
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -1550,34 +2394,82 @@ mod tests {
             return;
         }
         let mut job = job(&dir, None, HashMap::new());
-        let part = || Block::Video { media: MediaUse { caption: "Waves".into(), ..MediaUse::new(21) }, start: 500, end: 1_500 };
-        job.blocks.extend([StoryBlock::new(part()), StoryBlock::new(part())]);
+        let part = || Block::Video {
+            media: MediaUse {
+                caption: "Waves".into(),
+                ..MediaUse::new(21)
+            },
+            start: 500,
+            end: 1_500,
+        };
+        job.blocks
+            .extend([StoryBlock::new(part()), StoryBlock::new(part())]);
         let cache = dir.join("cache");
-        job.videos = Videos { sources: HashMap::from([(21, Some((clip.clone(), 3.0)))]), cache: Some(cache.clone()) };
+        job.videos = Videos {
+            sources: HashMap::from([(21, Some((clip.clone(), 3.0)))]),
+            cache: Some(cache.clone()),
+        };
         let fake = Fake::default()
-            .answer_to("POST", MEDIA, 201, &[], r#"{"id":41,"source_url":"https://example.com/blog/a.jpg"}"#)
+            .answer_to(
+                "POST",
+                MEDIA,
+                201,
+                &[],
+                r#"{"id":41,"source_url":"https://example.com/blog/a.jpg"}"#,
+            )
             .answer_to("POST", POSTS, 201, &[], r#"{"id":7}"#);
         let mut events = Vec::new();
         let progress = Progress::default();
         let saved = run(&fake, &job, &progress, &mut |event| events.push(event)).unwrap();
-        assert_eq!((saved.uploaded, saved.reused), (3, 0), "the photo, the poster, and the part once though shown twice");
-        assert_eq!(progress.done.load(Ordering::Relaxed), progress.total.load(Ordering::Relaxed));
+        assert_eq!(
+            (saved.uploaded, saved.reused),
+            (3, 0),
+            "the photo, the poster, and the part once though shown twice"
+        );
+        assert_eq!(
+            progress.done.load(Ordering::Relaxed),
+            progress.total.load(Ordering::Relaxed)
+        );
         let bodies = fake.bodies.borrow();
-        let videos: Vec<&Vec<u8>> = bodies.iter().filter(|(key, body)| key.ends_with("/media") && body.get(4..8) == Some(b"ftyp")).map(|(_, body)| body).collect();
+        let videos: Vec<&Vec<u8>> = bodies
+            .iter()
+            .filter(|(key, body)| key.ends_with("/media") && body.get(4..8) == Some(b"ftyp"))
+            .map(|(_, body)| body)
+            .collect();
         assert_eq!(videos.len(), 1);
-        assert_eq!(std::fs::read_dir(&cache).unwrap().count(), 1, "the part is kept for the next export or post");
+        assert_eq!(
+            std::fs::read_dir(&cache).unwrap().count(),
+            1,
+            "the part is kept for the next export or post"
+        );
         let post: serde_json::Value = serde_json::from_slice(&bodies.last().unwrap().1).unwrap();
         let content = post["content"].as_str().unwrap();
-        assert_eq!(content.matches("<!-- wp:video {\"id\":41} -->").count(), 2, "{content}");
-        assert!(content.contains("<figcaption class=\"wp-element-caption\">Waves</figcaption>"), "{content}");
+        assert_eq!(
+            content.matches("<!-- wp:video {\"id\":41} -->").count(),
+            2,
+            "{content}"
+        );
+        assert!(
+            content.contains("<figcaption class=\"wp-element-caption\">Waves</figcaption>"),
+            "{content}"
+        );
         drop(bodies);
 
         // Confirmed before: nothing is made or sent again.
         let uploads = events.iter().filter_map(|event| match event {
-            Event::Uploaded { hash, media_id, url, .. } => Some((hash.clone(), (*media_id, url.clone()))),
+            Event::Uploaded {
+                hash,
+                media_id,
+                url,
+                ..
+            } => Some((hash.clone(), (*media_id, url.clone()))),
             _ => None,
         });
-        let again = Job { uploads: uploads.collect(), post_id: Some(7), ..job };
+        let again = Job {
+            uploads: uploads.collect(),
+            post_id: Some(7),
+            ..job
+        };
         std::fs::remove_dir_all(&cache).unwrap();
         let fake = Fake::default()
             .answer(&format!("{POSTS}/7?context=edit"), 200, &[], r#"{"status":"draft"}"#)
@@ -1594,20 +2486,52 @@ mod tests {
             .answer(&format!("{POSTS}/7?context=edit"), 200, &[], r#"{"status":"draft"}"#)
             .answer(&format!("{MEDIA}?include=41&per_page=100&context=edit&_fields=id,source_url,mime_type,media_details"), 200, &[], r#"[{"id":41,"source_url":"https://example.com/blog/a.jpg"}]"#)
             .answer_to("POST", MEDIA, 413, &[], "");
-        let stopped = run(&refused, &Job { uploads: known, ..again }, &Progress::default(), &mut |_| {});
-        assert!(matches!(stopped, Err(Stopped::VideoTooLarge { media_id: 21, bytes, uploaded: 0 }) if bytes > 0), "{stopped:?}");
+        let stopped = run(
+            &refused,
+            &Job {
+                uploads: known,
+                ..again
+            },
+            &Progress::default(),
+            &mut |_| {},
+        );
+        assert!(
+            matches!(stopped, Err(Stopped::VideoTooLarge { media_id: 21, bytes, uploaded: 0 }) if bytes > 0),
+            "{stopped:?}"
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
     fn a_story_splits_at_its_headings_into_an_index_and_days() {
-        let blocks = [Block::Paragraph("Why".into()), Block::Heading(" Hilltop ".into()), Block::Photo(MediaUse::new(11)), Block::Subheading("Evening".into()), Block::Heading("{red}**Riverside**{/red}".into())];
+        let blocks = [
+            Block::Paragraph("Why".into()),
+            Block::Heading(" Hilltop ".into()),
+            Block::Photo(MediaUse::new(11)),
+            Block::Subheading("Evening".into()),
+            Block::Heading("{red}**Riverside**{/red}".into()),
+        ];
         let blocks: Vec<StoryBlock> = blocks.into_iter().map(StoryBlock::new).collect();
         let parts = split_days(&blocks);
-        let shape: Vec<(&str, usize)> = parts.iter().map(|part| (part.heading.as_str(), part.blocks.len())).collect();
-        assert_eq!(shape, [("", 1), ("Hilltop", 2), ("Riverside", 0)], "a subheading stays in its Day; a title has no styles");
-        assert_eq!(escape_marks("{red}a*b{/red} [c]"), r"\{red}a\*b\{/red} (c)", "words of a link are only words");
-        assert_eq!((parts[0].key.as_str(), parts[1].key.clone()), (INDEX, day_key(&blocks[1].uid)), "a Day is keyed by its heading, not its place");
+        let shape: Vec<(&str, usize)> = parts
+            .iter()
+            .map(|part| (part.heading.as_str(), part.blocks.len()))
+            .collect();
+        assert_eq!(
+            shape,
+            [("", 1), ("Hilltop", 2), ("Riverside", 0)],
+            "a subheading stays in its Day; a title has no styles"
+        );
+        assert_eq!(
+            escape_marks("{red}a*b{/red} [c]"),
+            r"\{red}a\*b\{/red} (c)",
+            "words of a link are only words"
+        );
+        assert_eq!(
+            (parts[0].key.as_str(), parts[1].key.clone()),
+            (INDEX, day_key(&blocks[1].uid)),
+            "a Day is keyed by its heading, not its place"
+        );
     }
 
     #[test]
@@ -1621,11 +2545,35 @@ mod tests {
             StoryBlock::new(Block::Paragraph("Rain".into())),
         ];
         // A Day whose heading was taken out of the Story since: its post stays on the site.
-        let gone = DayPost { post_id: 30, status: "publish".into(), ..DayPost::default() };
+        let gone = DayPost {
+            post_id: 30,
+            status: "publish".into(),
+            ..DayPost::default()
+        };
         // And one deleted on the site since: forgotten, not named.
-        let deleted = DayPost { post_id: 31, status: "draft".into(), ..DayPost::default() };
-        let known = HashMap::from([(INDEX.to_string(), DayPost { post_id: 5, status: "draft".into(), ..DayPost::default() }), (day_key("removed"), gone), (day_key("deleted"), deleted)]);
-        let mut job = Job { blocks, days: Some(known), dates: Some("Nov 3 – Nov 8".into()), ..job(&dir, None, HashMap::new()) };
+        let deleted = DayPost {
+            post_id: 31,
+            status: "draft".into(),
+            ..DayPost::default()
+        };
+        let known = HashMap::from([
+            (
+                INDEX.to_string(),
+                DayPost {
+                    post_id: 5,
+                    status: "draft".into(),
+                    ..DayPost::default()
+                },
+            ),
+            (day_key("removed"), gone),
+            (day_key("deleted"), deleted),
+        ]);
+        let mut job = Job {
+            blocks,
+            days: Some(known),
+            dates: Some("Nov 3 – Nov 8".into()),
+            ..job(&dir, None, HashMap::new())
+        };
         job.story.show_date = true;
         let fake = Fake::default()
             .answer("https://example.com/blog/wp-json/", 200, &[], r#"{"url":"https://example.com/blog","home":"https://www.example.com/travel","namespaces":["wp/v2"]}"#)
@@ -1639,27 +2587,98 @@ mod tests {
             .answer_to("POST", &format!("{POSTS}/5"), 200, &[], r#"{"id":5,"status":"draft"}"#)
             .answer_to("GET", &format!("{MEDIA}/41*"), 200, &[], r#"{"id":41}"#);
         let mut events = Vec::new();
-        let saved = run_days(&fake, &job, &Progress::default(), &mut |event| events.push(event)).unwrap();
-        assert_eq!((saved.post_id, saved.days, saved.uploaded, saved.reused), (5, 2, 1, 1), "the index is the post named; the cover, also in a Day, is sent once");
+        let saved = run_days(&fake, &job, &Progress::default(), &mut |event| {
+            events.push(event)
+        })
+        .unwrap();
+        assert_eq!(
+            (saved.post_id, saved.days, saved.uploaded, saved.reused),
+            (5, 2, 1, 1),
+            "the index is the post named; the cover, also in a Day, is sent once"
+        );
         let bodies = fake.bodies.borrow();
-        let made: Vec<serde_json::Value> = bodies.iter().filter(|(key, _)| *key == format!("POST {POSTS}")).map(|(_, body)| serde_json::from_slice(body).unwrap()).collect();
-        let titles: Vec<&str> = made.iter().map(|post| post["title"].as_str().unwrap()).collect();
-        assert_eq!(titles, ["Coast – Hilltop [old]", "Coast – Riverside"], "only the Days without a post get one, empty");
-        assert_eq!(saved.orphaned, [30], "a Day post no longer in the Story is named, not changed");
-        assert!(bodies.iter().all(|(key, _)| !key.contains("/posts/30") && !key.contains("/posts/31")));
-        assert!(events.contains(&Event::PartGone { story_id: 3, key: day_key("deleted") }), "one gone from the site is forgotten");
-        let index: serde_json::Value = serde_json::from_slice(&bodies.iter().find(|(key, _)| *key == format!("POST {POSTS}/5")).unwrap().1).unwrap();
+        let made: Vec<serde_json::Value> = bodies
+            .iter()
+            .filter(|(key, _)| *key == format!("POST {POSTS}"))
+            .map(|(_, body)| serde_json::from_slice(body).unwrap())
+            .collect();
+        let titles: Vec<&str> = made
+            .iter()
+            .map(|post| post["title"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            titles,
+            ["Coast – Hilltop [old]", "Coast – Riverside"],
+            "only the Days without a post get one, empty"
+        );
+        assert_eq!(
+            saved.orphaned,
+            [30],
+            "a Day post no longer in the Story is named, not changed"
+        );
+        assert!(bodies
+            .iter()
+            .all(|(key, _)| !key.contains("/posts/30") && !key.contains("/posts/31")));
+        assert!(
+            events.contains(&Event::PartGone {
+                story_id: 3,
+                key: day_key("deleted")
+            }),
+            "one gone from the site is forgotten"
+        );
+        let index: serde_json::Value = serde_json::from_slice(
+            &bodies
+                .iter()
+                .find(|(key, _)| *key == format!("POST {POSTS}/5"))
+                .unwrap()
+                .1,
+        )
+        .unwrap();
         let content = index["content"].as_str().unwrap();
-        assert!(content.contains("Why we went") && content.contains(r#"<a href="https://www.example.com/travel/?p=8">Hilltop (old)</a>"#), "posts link where the site's pages are: {content}");
+        assert!(
+            content.contains("Why we went")
+                && content
+                    .contains(r#"<a href="https://www.example.com/travel/?p=8">Hilltop (old)</a>"#),
+            "posts link where the site's pages are: {content}"
+        );
         assert!(content.contains("Nov 3 – Nov 8"));
-        let day: serde_json::Value = serde_json::from_slice(&bodies.iter().find(|(key, _)| *key == format!("POST {POSTS}/8")).unwrap().1).unwrap();
-        assert!(day["content"].as_str().unwrap().contains(r#"<a href="https://www.example.com/travel/?p=5">Coast</a>"#), "a Day links back to the index");
-        assert_eq!(saved.edit_link, "https://example.com/blog/wp-admin/post.php?post=5&action=edit");
-        assert!(events.contains(&Event::WordPress { url: "https://example.com/blog".into(), home: "https://www.example.com/travel".into() }), "kept for next time");
+        let day: serde_json::Value = serde_json::from_slice(
+            &bodies
+                .iter()
+                .find(|(key, _)| *key == format!("POST {POSTS}/8"))
+                .unwrap()
+                .1,
+        )
+        .unwrap();
+        assert!(
+            day["content"]
+                .as_str()
+                .unwrap()
+                .contains(r#"<a href="https://www.example.com/travel/?p=5">Coast</a>"#),
+            "a Day links back to the index"
+        );
+        assert_eq!(
+            saved.edit_link,
+            "https://example.com/blog/wp-admin/post.php?post=5&action=edit"
+        );
+        assert!(
+            events.contains(&Event::WordPress {
+                url: "https://example.com/blog".into(),
+                home: "https://www.example.com/travel".into()
+            }),
+            "kept for next time"
+        );
         assert!(day["content"].as_str().unwrap().contains("Nov 3 – Nov 8"));
         drop(bodies);
-        let parts = events.iter().filter(|event| matches!(event, Event::Part { .. })).count();
-        assert_eq!(parts, 1 + 2 + 3, "the index checked, two posts made, three saved: each kept as it happens");
+        let parts = events
+            .iter()
+            .filter(|event| matches!(event, Event::Part { .. }))
+            .count();
+        assert_eq!(
+            parts,
+            1 + 2 + 3,
+            "the index checked, two posts made, three saved: each kept as it happens"
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -1667,45 +2686,126 @@ mod tests {
     fn a_job_reads_where_the_site_is_keeps_what_it_knew_and_stops_when_it_cant_be_reached() {
         struct Down;
         impl Http for Down {
-            fn send(&self, _: &crate::wordpress::Request) -> Result<crate::wordpress::Reply, Failure> {
+            fn send(
+                &self,
+                _: &crate::wordpress::Request,
+            ) -> Result<crate::wordpress::Reply, Failure> {
                 Err(Failure::Unreachable)
             }
         }
         let dir = temp_dir("located");
         let known = SiteUrl::parse("http://localhost:10005").unwrap();
-        let job = Job { api: Api { wordpress: Some(known.clone()), home: Some(known.clone()), ..job(&dir, None, HashMap::new()).api }, ..job(&dir, None, HashMap::new()) };
+        let job = Job {
+            api: Api {
+                wordpress: Some(known.clone()),
+                home: Some(known.clone()),
+                ..job(&dir, None, HashMap::new()).api
+            },
+            ..job(&dir, None, HashMap::new())
+        };
         let progress = Progress::default();
         let mut events = Vec::new();
 
-        let silent = Fake::default().answer("https://example.com/blog/wp-json/", 200, &[], r#"{"namespaces":["wp/v2"]}"#);
-        let found = located(&Client::new(&silent, job.policy), &job, &progress, &mut |event| events.push(event)).unwrap();
-        assert_eq!((found.api.wordpress.as_ref(), found.api.home.as_ref()), (Some(&known), Some(&known)), "an index that doesn't say leaves them as they were");
-        assert_eq!(events, [Event::WordPress { url: "http://localhost:10005/".into(), home: "http://localhost:10005/".into() }]);
+        let silent = Fake::default().answer(
+            "https://example.com/blog/wp-json/",
+            200,
+            &[],
+            r#"{"namespaces":["wp/v2"]}"#,
+        );
+        let found = located(
+            &Client::new(&silent, job.policy),
+            &job,
+            &progress,
+            &mut |event| events.push(event),
+        )
+        .unwrap();
+        assert_eq!(
+            (found.api.wordpress.as_ref(), found.api.home.as_ref()),
+            (Some(&known), Some(&known)),
+            "an index that doesn't say leaves them as they were"
+        );
+        assert_eq!(
+            events,
+            [Event::WordPress {
+                url: "http://localhost:10005/".into(),
+                home: "http://localhost:10005/".into()
+            }]
+        );
 
         let blocked = Fake::default();
-        assert_eq!(located(&Client::new(&blocked, job.policy), &job, &progress, &mut |_| {}).unwrap().api, job.api, "an index that can't be read changes nothing");
+        assert_eq!(
+            located(
+                &Client::new(&blocked, job.policy),
+                &job,
+                &progress,
+                &mut |_| {}
+            )
+            .unwrap()
+            .api,
+            job.api,
+            "an index that can't be read changes nothing"
+        );
 
-        let stopped = located(&Client::new(&Down, job.policy), &job, &progress, &mut |_| {});
-        assert_eq!(stopped.err(), Some(Stopped::Site { failure: Failure::Unreachable, uploaded: 0 }), "stops before anything else is tried");
+        let stopped = located(
+            &Client::new(&Down, job.policy),
+            &job,
+            &progress,
+            &mut |_| {},
+        );
+        assert_eq!(
+            stopped.err(),
+            Some(Stopped::Site {
+                failure: Failure::Unreachable,
+                uploaded: 0
+            }),
+            "stops before anything else is tried"
+        );
         let cancelled = Progress::default();
         cancelled.cancel.store(true, Ordering::Relaxed);
-        assert_eq!(located(&Client::new(&Down, job.policy).cancelled_by(&cancelled.cancel), &job, &cancelled, &mut |_| {}).err(), Some(Stopped::Cancelled { uploaded: 0 }));
+        assert_eq!(
+            located(
+                &Client::new(&Down, job.policy).cancelled_by(&cancelled.cancel),
+                &job,
+                &cancelled,
+                &mut |_| {}
+            )
+            .err(),
+            Some(Stopped::Cancelled { uploaded: 0 })
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 
     const JOURNEYS_URL: &str = "https://example.com/blog/wp-json/wp/v2/vl_trip";
 
     fn place(name: &str, lat: f64, lon: f64, day: i64) -> MapPlace {
-        MapPlace { name: name.into(), lat, lon, day }
+        MapPlace {
+            name: name.into(),
+            lat,
+            lon,
+            day,
+        }
     }
 
     #[test]
     fn a_storys_places_go_on_its_map_and_its_journey() {
         let dir = temp_dir("places");
-        let places = MapPlaces { places: vec![place("Hilltop | Quarter", 37.18, -3.6, 2)], at: HashMap::from([(11, 0)]), ..MapPlaces::default() };
-        let journey = Journey { post_id: None, title: "Coast".into(), description: "Two weeks".into() };
-        let job = Job { places: Some(places), journey: Some(journey), ..job(&dir, None, HashMap::new()) };
-        let days = "1 | Midtown | 40.4 | -3.7 |  |\n1 | Cafe | 41.1, 2.2 | 7\n3 | Old | 1 | 2 |  | 7";
+        let places = MapPlaces {
+            places: vec![place("Hilltop | Quarter", 37.18, -3.6, 2)],
+            at: HashMap::from([(11, 0)]),
+            ..MapPlaces::default()
+        };
+        let journey = Journey {
+            post_id: None,
+            title: "Coast".into(),
+            description: "Two weeks".into(),
+        };
+        let job = Job {
+            places: Some(places),
+            journey: Some(journey),
+            ..job(&dir, None, HashMap::new())
+        };
+        let days =
+            "1 | Midtown | 40.4 | -3.7 |  |\n1 | Cafe | 41.1, 2.2 | 7\n3 | Old | 1 | 2 |  | 7";
         let fake = Fake::default()
             .answer_to("OPTIONS", POSTS, 200, &[], &schema(r#""_vl_lat":{},"_vl_lon":{},"_vl_stops":{},"_vl_trip_id":{}"#))
             .answer_to("POST", JOURNEYS_URL, 201, &[], r#"{"id":90,"status":"draft"}"#)
@@ -1714,29 +2814,72 @@ mod tests {
             .answer_to("GET", &format!("{JOURNEYS_URL}/90*"), 200, &[], &serde_json::json!({ "id": 90, "status": "draft", "meta": { "_vl_trip_days": days } }).to_string())
             .answer_to("POST", &format!("{JOURNEYS_URL}/90"), 200, &[], r#"{"id":90}"#);
         let mut events = Vec::new();
-        let saved = run(&fake, &job, &Progress::default(), &mut |event| events.push(event)).unwrap();
-        assert!(!saved.places_dropped && !saved.places_in_post && !saved.journey_skipped && saved.journey_error.is_none(), "{saved:?}");
-        assert!(events.contains(&Event::Journey { trip_id: 1, post_id: 90 }), "the Journey is kept the moment it is made");
+        let saved = run(&fake, &job, &Progress::default(), &mut |event| {
+            events.push(event)
+        })
+        .unwrap();
+        assert!(
+            !saved.places_dropped
+                && !saved.places_in_post
+                && !saved.journey_skipped
+                && saved.journey_error.is_none(),
+            "{saved:?}"
+        );
+        assert!(
+            events.contains(&Event::Journey {
+                trip_id: 1,
+                post_id: 90
+            }),
+            "the Journey is kept the moment it is made"
+        );
         let bodies = fake.bodies.borrow();
-        let body = |key: &str| -> serde_json::Value { serde_json::from_slice(&bodies.iter().find(|(sent, _)| sent == key).unwrap().1).unwrap() };
+        let body = |key: &str| -> serde_json::Value {
+            serde_json::from_slice(&bodies.iter().find(|(sent, _)| sent == key).unwrap().1).unwrap()
+        };
         let made = body(&format!("POST {JOURNEYS_URL}"));
-        assert_eq!((made["title"].as_str(), made["status"].as_str()), (Some("Coast"), Some("draft")));
+        assert_eq!(
+            (made["title"].as_str(), made["status"].as_str()),
+            (Some("Coast"), Some("draft"))
+        );
         let post = body(&format!("POST {POSTS}"));
-        assert_eq!(post["meta"], serde_json::json!({ "_vl_lat": 37.18, "_vl_lon": -3.6, "_vl_stops": "Hilltop / Quarter | 37.18 | -3.6", "_vl_trip_id": 90 }), "one place keeps its name");
+        assert_eq!(
+            post["meta"],
+            serde_json::json!({ "_vl_lat": 37.18, "_vl_lon": -3.6, "_vl_stops": "Hilltop / Quarter | 37.18 | -3.6", "_vl_trip_id": 90 }),
+            "one place keeps its name"
+        );
         // The post's old line goes. A note that is only that post's id stays. The rest, by Day.
         let journey = body(&format!("POST {JOURNEYS_URL}/90"));
         assert_eq!(journey["meta"]["_vl_trip_days"], "1 | Midtown | 40.4 | -3.7 |  |\n1 | Cafe | 41.1, 2.2 | 7\n2 | Hilltop / Quarter | 37.18 | -3.6 |  | 7");
-        assert!(journey.get("status").is_none(), "a draft stays a draft until a story is published");
+        assert!(
+            journey.get("status").is_none(),
+            "a draft stays a draft until a story is published"
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
     fn a_scheduled_story_schedules_its_journey() {
         let dir = temp_dir("scheduled-journey");
-        let at = chrono::NaiveDate::from_ymd_opt(2026, 11, 2).unwrap().and_hms_opt(9, 0, 0).unwrap();
-        let places = MapPlaces { places: vec![place("Hilltop", 37.18, -3.6, 1)], at: HashMap::from([(11, 0)]), ..MapPlaces::default() };
-        let journey = Journey { post_id: Some(90), ..Journey::default() };
-        let job = Job { publish: true, schedule: Some(at), places: Some(places), journey: Some(journey), ..job(&dir, None, HashMap::new()) };
+        let at = chrono::NaiveDate::from_ymd_opt(2026, 11, 2)
+            .unwrap()
+            .and_hms_opt(9, 0, 0)
+            .unwrap();
+        let places = MapPlaces {
+            places: vec![place("Hilltop", 37.18, -3.6, 1)],
+            at: HashMap::from([(11, 0)]),
+            ..MapPlaces::default()
+        };
+        let journey = Journey {
+            post_id: Some(90),
+            ..Journey::default()
+        };
+        let job = Job {
+            publish: true,
+            schedule: Some(at),
+            places: Some(places),
+            journey: Some(journey),
+            ..job(&dir, None, HashMap::new())
+        };
         let fake = Fake::default()
             .answer("https://example.com/blog/wp-json/", 200, &[("date", "Sun, 01 Nov 2026 08:00:00 GMT")], r#"{"gmt_offset":0}"#)
             .answer_to("OPTIONS", POSTS, 200, &[], &schema(r#""_vl_lat":{},"_vl_lon":{},"_vl_stops":{},"_vl_trip_id":{}"#))
@@ -1745,32 +2888,93 @@ mod tests {
             .answer_to("POST", POSTS, 201, &[], r#"{"id":7,"status":"future","meta":{"_vl_lat":37.18,"_vl_lon":-3.6,"_vl_stops":"Hilltop | 37.18 | -3.6","_vl_trip_id":90}}"#)
             .answer_to("POST", &format!("{JOURNEYS_URL}/90"), 200, &[], r#"{"id":90,"status":"future"}"#);
         let saved = run(&fake, &job, &Progress::default(), &mut |_| {}).unwrap();
-        assert!(saved.scheduled && saved.journey_error.is_none() && !saved.places_dropped, "{saved:?}");
+        assert!(
+            saved.scheduled && saved.journey_error.is_none() && !saved.places_dropped,
+            "{saved:?}"
+        );
         let bodies = fake.bodies.borrow();
-        let journey: serde_json::Value = serde_json::from_slice(&bodies.iter().find(|(sent, _)| sent == &format!("POST {JOURNEYS_URL}/90")).unwrap().1).unwrap();
-        assert_eq!((journey["status"].as_str(), journey["date"].as_str()), (Some("future"), Some("2026-11-02T09:00:00")));
+        let journey: serde_json::Value = serde_json::from_slice(
+            &bodies
+                .iter()
+                .find(|(sent, _)| sent == &format!("POST {JOURNEYS_URL}/90"))
+                .unwrap()
+                .1,
+        )
+        .unwrap();
+        assert_eq!(
+            (journey["status"].as_str(), journey["date"].as_str()),
+            (Some("future"), Some("2026-11-02T09:00:00"))
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
     fn publishing_now_replaces_a_scheduled_date() {
         let dir = temp_dir("unschedule");
-        let clock = Fake::default().answer("https://example.com/blog/wp-json/", 200, &[("date", "Sun, 01 Nov 2026 08:00:00 GMT")], r#"{"gmt_offset":0}"#);
-        let post = Job { publish: true, update_published: true, ..job(&dir, Some(7), HashMap::new()) };
+        let clock = Fake::default().answer(
+            "https://example.com/blog/wp-json/",
+            200,
+            &[("date", "Sun, 01 Nov 2026 08:00:00 GMT")],
+            r#"{"gmt_offset":0}"#,
+        );
+        let post = Job {
+            publish: true,
+            update_published: true,
+            ..job(&dir, Some(7), HashMap::new())
+        };
         let fake = clock
-            .answer(&format!("{POSTS}/7?context=edit"), 200, &[], r#"{"status":"future"}"#)
-            .answer_to("POST", MEDIA, 201, &[], r#"{"id":41,"source_url":"https://example.com/blog/a.jpg"}"#)
-            .answer_to("POST", &format!("{POSTS}/7"), 200, &[], r#"{"id":7,"status":"publish"}"#);
+            .answer(
+                &format!("{POSTS}/7?context=edit"),
+                200,
+                &[],
+                r#"{"status":"future"}"#,
+            )
+            .answer_to(
+                "POST",
+                MEDIA,
+                201,
+                &[],
+                r#"{"id":41,"source_url":"https://example.com/blog/a.jpg"}"#,
+            )
+            .answer_to(
+                "POST",
+                &format!("{POSTS}/7"),
+                200,
+                &[],
+                r#"{"id":7,"status":"publish"}"#,
+            );
         let saved = run(&fake, &post, &Progress::default(), &mut |_| {}).unwrap();
         assert_eq!(saved.status, "publish");
         let bodies = fake.bodies.borrow();
-        let sent: serde_json::Value = serde_json::from_slice(&bodies.iter().find(|(key, _)| key == &format!("POST {POSTS}/7")).unwrap().1).unwrap();
-        assert_eq!((sent["status"].as_str(), sent["date"].as_str()), (Some("publish"), Some("2026-11-01T08:00:00")));
+        let sent: serde_json::Value = serde_json::from_slice(
+            &bodies
+                .iter()
+                .find(|(key, _)| key == &format!("POST {POSTS}/7"))
+                .unwrap()
+                .1,
+        )
+        .unwrap();
+        assert_eq!(
+            (sent["status"].as_str(), sent["date"].as_str()),
+            (Some("publish"), Some("2026-11-01T08:00:00"))
+        );
         drop(bodies);
 
-        let places = MapPlaces { places: vec![place("Hilltop", 37.18, -3.6, 1)], at: HashMap::from([(11, 0)]), ..MapPlaces::default() };
-        let journey = Journey { post_id: Some(90), ..Journey::default() };
-        let job = Job { publish: true, places: Some(places), journey: Some(journey), ..job(&dir, None, HashMap::new()) };
+        let places = MapPlaces {
+            places: vec![place("Hilltop", 37.18, -3.6, 1)],
+            at: HashMap::from([(11, 0)]),
+            ..MapPlaces::default()
+        };
+        let journey = Journey {
+            post_id: Some(90),
+            ..Journey::default()
+        };
+        let job = Job {
+            publish: true,
+            places: Some(places),
+            journey: Some(journey),
+            ..job(&dir, None, HashMap::new())
+        };
         let fake = Fake::default()
             .answer("https://example.com/blog/wp-json/", 200, &[("date", "Sun, 01 Nov 2026 08:00:00 GMT")], r#"{"gmt_offset":0}"#)
             .answer_to("OPTIONS", POSTS, 200, &[], &schema(r#""_vl_lat":{},"_vl_lon":{},"_vl_stops":{},"_vl_trip_id":{}"#))
@@ -1780,32 +2984,86 @@ mod tests {
             .answer_to("POST", &format!("{JOURNEYS_URL}/90"), 200, &[], r#"{"id":90,"status":"publish"}"#);
         run(&fake, &job, &Progress::default(), &mut |_| {}).unwrap();
         let bodies = fake.bodies.borrow();
-        let sent: serde_json::Value = serde_json::from_slice(&bodies.iter().find(|(key, _)| key == &format!("POST {JOURNEYS_URL}/90")).unwrap().1).unwrap();
-        assert_eq!((sent["status"].as_str(), sent["date"].as_str()), (Some("publish"), Some("2026-11-01T08:00:00")), "a scheduled Journey is dated now");
+        let sent: serde_json::Value = serde_json::from_slice(
+            &bodies
+                .iter()
+                .find(|(key, _)| key == &format!("POST {JOURNEYS_URL}/90"))
+                .unwrap()
+                .1,
+        )
+        .unwrap();
+        assert_eq!(
+            (sent["status"].as_str(), sent["date"].as_str()),
+            (Some("publish"), Some("2026-11-01T08:00:00")),
+            "a scheduled Journey is dated now"
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
     fn several_places_are_stops_and_none_takes_them_off() {
         let one = map_meta(&[&place("Hilltop", 37.18, -3.6, 1)]);
-        assert_eq!(serde_json::Value::Object(one), serde_json::json!({ "_vl_lat": 37.18, "_vl_lon": -3.6, "_vl_stops": "Hilltop | 37.18 | -3.6" }), "one place is named");
-        let two = [place("Hilltop", 37.18, -3.6, 1), place("Riverside", 39.86, -4.03, 3)];
+        assert_eq!(
+            serde_json::Value::Object(one),
+            serde_json::json!({ "_vl_lat": 37.18, "_vl_lon": -3.6, "_vl_stops": "Hilltop | 37.18 | -3.6" }),
+            "one place is named"
+        );
+        let two = [
+            place("Hilltop", 37.18, -3.6, 1),
+            place("Riverside", 39.86, -4.03, 3),
+        ];
         let meta = map_meta(&two.iter().collect::<Vec<_>>());
-        assert_eq!(serde_json::Value::Object(meta), serde_json::json!({ "_vl_lat": 37.18, "_vl_lon": -3.6, "_vl_stops": "Hilltop | 37.18 | -3.6\nRiverside | 39.86 | -4.03" }));
+        assert_eq!(
+            serde_json::Value::Object(meta),
+            serde_json::json!({ "_vl_lat": 37.18, "_vl_lon": -3.6, "_vl_stops": "Hilltop | 37.18 | -3.6\nRiverside | 39.86 | -4.03" })
+        );
         assert_eq!(line_post_id("1 | Midtown | 40.4 | -3.7 |  | 7"), Some(7));
         assert_eq!(line_post_id("2 | Harbor | 41.2, -8.6 | note | 9"), Some(9));
-        assert_eq!(line_post_id("1 | Cafe | 41.1, 2.2 | 12"), None, "a note that is a number is not a post id");
+        assert_eq!(
+            line_post_id("1 | Cafe | 41.1, 2.2 | 12"),
+            None,
+            "a note that is a number is not a post id"
+        );
         assert_eq!(line_post_id("1 | Lighthouse | 69.2 | -51.1 | 12"), None);
-        assert_eq!(line_post_id("1 | Riverside | 39.8, -4.0 | tapas | wine | 42"), Some(42), "a note with a | in it");
-        assert_eq!(line_post_id("1 | Riverside | 39.8 | -4.0 | tapas | wine | 42"), Some(42));
-        assert_eq!(line_post_id("1 | Riverside | 39.8, -4.0 | tapas | wine"), None);
-        assert_eq!((journey_day(0), journey_day(40), journey_day(10_000)), (1, 40, 9999));
+        assert_eq!(
+            line_post_id("1 | Riverside | 39.8, -4.0 | tapas | wine | 42"),
+            Some(42),
+            "a note with a | in it"
+        );
+        assert_eq!(
+            line_post_id("1 | Riverside | 39.8 | -4.0 | tapas | wine | 42"),
+            Some(42)
+        );
+        assert_eq!(
+            line_post_id("1 | Riverside | 39.8, -4.0 | tapas | wine"),
+            None
+        );
+        assert_eq!(
+            (journey_day(0), journey_day(40), journey_day(10_000)),
+            (1, 40, 9999)
+        );
         let none = map_meta(&[]);
         assert!(none.values().all(serde_json::Value::is_null), "{none:?}");
-        let places = MapPlaces { places: two.to_vec(), at: HashMap::from([(11, 1), (12, 0)]), ..MapPlaces::default() };
-        let blocks = [StoryBlock::new(Block::Photo(MediaUse::new(11))), StoryBlock::new(Block::Photo(MediaUse::new(12))), StoryBlock::new(Block::Photo(MediaUse::new(11)))];
-        let names: Vec<&str> = places.of(&blocks).iter().map(|place| place.name.as_str()).collect();
-        assert_eq!(names, ["Riverside", "Hilltop"], "in the order the story reaches them");
+        let places = MapPlaces {
+            places: two.to_vec(),
+            at: HashMap::from([(11, 1), (12, 0)]),
+            ..MapPlaces::default()
+        };
+        let blocks = [
+            StoryBlock::new(Block::Photo(MediaUse::new(11))),
+            StoryBlock::new(Block::Photo(MediaUse::new(12))),
+            StoryBlock::new(Block::Photo(MediaUse::new(11))),
+        ];
+        let names: Vec<&str> = places
+            .of(&blocks)
+            .iter()
+            .map(|place| place.name.as_str())
+            .collect();
+        assert_eq!(
+            names,
+            ["Riverside", "Hilltop"],
+            "in the order the story reaches them"
+        );
     }
 
     /// The schema WordPress answers OPTIONS on posts with, its posts taking the fields `keys`.
@@ -1816,43 +3074,112 @@ mod tests {
     #[test]
     fn a_site_without_the_theme_shows_places_in_the_post_and_is_saved_without_a_journey() {
         let dir = temp_dir("plain");
-        let places = MapPlaces { places: vec![place("Hilltop <Quarter>", 37.18, -3.6, 1)], at: HashMap::from([(11, 0)]), heading: "Places".into(), map_alt: "A map".into() };
-        let job = Job { places: Some(places), journey: Some(Journey::default()), ..job(&dir, None, HashMap::new()) };
+        let places = MapPlaces {
+            places: vec![place("Hilltop <Quarter>", 37.18, -3.6, 1)],
+            at: HashMap::from([(11, 0)]),
+            heading: "Places".into(),
+            map_alt: "A map".into(),
+        };
+        let job = Job {
+            places: Some(places),
+            journey: Some(Journey::default()),
+            ..job(&dir, None, HashMap::new())
+        };
         let fake = Fake::default()
             .answer_to("OPTIONS", POSTS, 200, &[], &schema(r#""footnotes":{}"#))
-            .answer_to("POST", MEDIA, 201, &[], r#"{"id":41,"source_url":"https://example.com/blog/a.jpg"}"#)
-            .answer_to("POST", POSTS, 201, &[], r#"{"id":7,"meta":{"footnotes":""}}"#);
+            .answer_to(
+                "POST",
+                MEDIA,
+                201,
+                &[],
+                r#"{"id":41,"source_url":"https://example.com/blog/a.jpg"}"#,
+            )
+            .answer_to(
+                "POST",
+                POSTS,
+                201,
+                &[],
+                r#"{"id":7,"meta":{"footnotes":""}}"#,
+            );
         let saved = run(&fake, &job, &Progress::default(), &mut |_| {}).unwrap();
-        assert!(saved.places_in_post && saved.journey_skipped && !saved.places_dropped, "{saved:?}");
+        assert!(
+            saved.places_in_post && saved.journey_skipped && !saved.places_dropped,
+            "{saved:?}"
+        );
         let bodies = fake.bodies.borrow();
-        assert!(bodies.iter().all(|(sent, _)| !sent.contains("vl_trip")), "no Journey is asked for");
-        let post: serde_json::Value = serde_json::from_slice(&bodies.iter().find(|(sent, _)| *sent == format!("POST {POSTS}")).unwrap().1).unwrap();
-        assert!(post.get("meta").is_none(), "no fields the site would drop: {post}");
+        assert!(
+            bodies.iter().all(|(sent, _)| !sent.contains("vl_trip")),
+            "no Journey is asked for"
+        );
+        let post: serde_json::Value = serde_json::from_slice(
+            &bodies
+                .iter()
+                .find(|(sent, _)| *sent == format!("POST {POSTS}"))
+                .unwrap()
+                .1,
+        )
+        .unwrap();
+        assert!(
+            post.get("meta").is_none(),
+            "no fields the site would drop: {post}"
+        );
         let content = post["content"].as_str().unwrap();
-        let section = &content[content.find("<!-- wp:group {\"className\":\"picasso-places\"").expect("a section of places at the end")..];
-        assert!(section.contains("<h2 class=\"wp-block-heading\">Places</h2>"), "{section}");
+        let section = &content[content
+            .find("<!-- wp:group {\"className\":\"picasso-places\"")
+            .expect("a section of places at the end")..];
+        assert!(
+            section.contains("<h2 class=\"wp-block-heading\">Places</h2>"),
+            "{section}"
+        );
         assert!(section.contains(r#"<li><a href="https://www.openstreetmap.org/?mlat=37.18000&amp;mlon=-3.60000#map=15/37.18000/-3.60000">Hilltop &lt;Quarter&gt;</a></li>"#), "{section}");
-        assert!(!section.contains("wp:image"), "without map tiles, the list alone");
+        assert!(
+            !section.contains("wp:image"),
+            "without map tiles, the list alone"
+        );
         assert!(content.trim_end().ends_with("<!-- /wp:group -->"));
         drop(bodies);
 
         // A site that won't say what it keeps is sent the fields, and the reply tells.
         let fake = Fake::default()
-            .answer_to("POST", MEDIA, 201, &[], r#"{"id":41,"source_url":"https://example.com/blog/a.jpg"}"#)
+            .answer_to(
+                "POST",
+                MEDIA,
+                201,
+                &[],
+                r#"{"id":41,"source_url":"https://example.com/blog/a.jpg"}"#,
+            )
             .answer_to("POST", POSTS, 201, &[], r#"{"id":7,"meta":[]}"#);
         let saved = run(&fake, &job, &Progress::default(), &mut |_| {}).unwrap();
-        assert!(saved.places_dropped && !saved.places_in_post && saved.journey_skipped, "{saved:?}");
+        assert!(
+            saved.places_dropped && !saved.places_in_post && saved.journey_skipped,
+            "{saved:?}"
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
     fn a_time_already_past_on_the_sites_clock_sends_nothing() {
         let dir = temp_dir("soon");
-        let at = chrono::NaiveDate::from_ymd_opt(2026, 11, 1).unwrap().and_hms_opt(9, 3, 0).unwrap();
-        let job = Job { publish: true, schedule: Some(at), ..job(&dir, None, HashMap::new()) };
+        let at = chrono::NaiveDate::from_ymd_opt(2026, 11, 1)
+            .unwrap()
+            .and_hms_opt(9, 3, 0)
+            .unwrap();
+        let job = Job {
+            publish: true,
+            schedule: Some(at),
+            ..job(&dir, None, HashMap::new())
+        };
         // 08:00 UTC is 09:00 on a site an hour ahead: 09:03 is too close.
-        let fake = Fake::default().answer("https://example.com/blog/wp-json/", 200, &[("date", "Sun, 01 Nov 2026 08:00:00 GMT")], r#"{"gmt_offset":1}"#);
-        assert_eq!(run(&fake, &job, &Progress::default(), &mut |_| {}).err(), Some(Stopped::TooSoon));
+        let fake = Fake::default().answer(
+            "https://example.com/blog/wp-json/",
+            200,
+            &[("date", "Sun, 01 Nov 2026 08:00:00 GMT")],
+            r#"{"gmt_offset":1}"#,
+        );
+        assert_eq!(
+            run(&fake, &job, &Progress::default(), &mut |_| {}).err(),
+            Some(Stopped::TooSoon)
+        );
         assert!(fake.bodies.borrow().is_empty(), "nothing was sent");
         let _ = std::fs::remove_dir_all(dir);
     }
@@ -1860,39 +3187,95 @@ mod tests {
     #[test]
     fn an_upload_is_named_by_its_story_and_file() {
         let hash = "3fa2b1c94d07a1b2c3d4";
-        assert_eq!(upload_name("Coast – 2025-07-01", "IMG_1234", hash), "coast-2025-07-01-img-1234-3fa2b1c9");
-        assert_eq!(upload_name("Coast – 2025-07-01", "2026.10.17-08h52m37s", hash), "coast-2025-07-01-2026-10-17-08h52m37s-3fa2b1c9");
-        assert_eq!(upload_name("古都", "DSC 0001 (2)", hash), "dsc-0001-2-3fa2b1c9", "letters WordPress might change are left out");
+        assert_eq!(
+            upload_name("Coast – 2025-07-01", "IMG_1234", hash),
+            "coast-2025-07-01-img-1234-3fa2b1c9"
+        );
+        assert_eq!(
+            upload_name("Coast – 2025-07-01", "2026.10.17-08h52m37s", hash),
+            "coast-2025-07-01-2026-10-17-08h52m37s-3fa2b1c9"
+        );
+        assert_eq!(
+            upload_name("古都", "DSC 0001 (2)", hash),
+            "dsc-0001-2-3fa2b1c9",
+            "letters WordPress might change are left out"
+        );
         assert_eq!(upload_name("", "", hash), "picasso-3fa2b1c9");
-        assert_eq!(upload_name("A long walk from Hilltop to the sea", "a-very-long-file-name-from-a-phone", hash), "a-long-walk-from-hilltop-a-very-long-file-3fa2b1c9", "each part is kept short, cut between words");
+        assert_eq!(
+            upload_name(
+                "A long walk from Hilltop to the sea",
+                "a-very-long-file-name-from-a-phone",
+                hash
+            ),
+            "a-long-walk-from-hilltop-a-very-long-file-3fa2b1c9",
+            "each part is kept short, cut between words"
+        );
     }
 
     #[test]
     fn a_new_upload_carries_the_photo_description_and_a_reused_one_is_left_alone() {
         let dir = temp_dir("alt");
-        let photo = MediaUse { alt: "  A red gate ".into(), ..MediaUse::new(11) };
-        let first = Job { blocks: vec![StoryBlock::new(Block::Photo(photo))], ..job(&dir, None, HashMap::new()) };
+        let photo = MediaUse {
+            alt: "  A red gate ".into(),
+            ..MediaUse::new(11)
+        };
+        let first = Job {
+            blocks: vec![StoryBlock::new(Block::Photo(photo))],
+            ..job(&dir, None, HashMap::new())
+        };
         let alt = format!("POST {MEDIA}/41");
         let fake = Fake::default()
-            .answer_to("POST", MEDIA, 201, &[], r#"{"id":41,"source_url":"https://example.com/blog/a.jpg"}"#)
+            .answer_to(
+                "POST",
+                MEDIA,
+                201,
+                &[],
+                r#"{"id":41,"source_url":"https://example.com/blog/a.jpg"}"#,
+            )
             .answer_to("POST", &format!("{MEDIA}/41"), 200, &[], r#"{"id":41}"#)
             .answer_to("POST", POSTS, 201, &[], r#"{"id":7}"#);
         let mut events = Vec::new();
-        run(&fake, &first, &Progress::default(), &mut |event| events.push(event)).unwrap();
+        run(&fake, &first, &Progress::default(), &mut |event| {
+            events.push(event)
+        })
+        .unwrap();
         let bodies = fake.bodies.borrow();
-        let (_, sent) = bodies.iter().find(|(key, _)| *key == alt).expect("the description is set on the upload");
-        assert_eq!(serde_json::from_slice::<serde_json::Value>(sent).unwrap(), serde_json::json!({ "alt_text": "A red gate" }));
+        let (_, sent) = bodies
+            .iter()
+            .find(|(key, _)| *key == alt)
+            .expect("the description is set on the upload");
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(sent).unwrap(),
+            serde_json::json!({ "alt_text": "A red gate" })
+        );
         drop(bodies);
 
-        let Some(Event::Uploaded { hash, .. }) = events.into_iter().find(|event| matches!(event, Event::Uploaded { .. })) else { panic!() };
+        let Some(Event::Uploaded { hash, .. }) = events
+            .into_iter()
+            .find(|event| matches!(event, Event::Uploaded { .. }))
+        else {
+            panic!()
+        };
         let known = HashMap::from([(hash, (41, "https://example.com/blog/a.jpg".to_string()))]);
-        let again = Job { blocks: first.blocks.clone(), ..job(&dir, Some(7), known) };
+        let again = Job {
+            blocks: first.blocks.clone(),
+            ..job(&dir, Some(7), known)
+        };
         let fake = Fake::default()
             .answer_to("GET", &format!("{MEDIA}/41*"), 200, &[], r#"{"id":41}"#)
-            .answer_to("GET", &format!("{POSTS}/7*"), 200, &[], r#"{"id":7,"status":"draft"}"#)
+            .answer_to(
+                "GET",
+                &format!("{POSTS}/7*"),
+                200,
+                &[],
+                r#"{"id":7,"status":"draft"}"#,
+            )
             .answer_to("POST", &format!("{POSTS}/7"), 200, &[], r#"{"id":7}"#);
         run(&fake, &again, &Progress::default(), &mut |_| {}).unwrap();
-        assert!(!fake.bodies.borrow().iter().any(|(key, _)| *key == alt), "an upload already on the site may be in other posts");
+        assert!(
+            !fake.bodies.borrow().iter().any(|(key, _)| *key == alt),
+            "an upload already on the site may be in other posts"
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -1903,7 +3286,10 @@ mod tests {
         let mut ended = std::process::Command::new("true").spawn().unwrap();
         ended.wait().unwrap();
         let crashed = temp.join(format!("picasso-publish-{}-3-0", ended.id()));
-        let running = temp.join(format!("picasso-publish-{}-3-0", std::os::unix::process::parent_id()));
+        let running = temp.join(format!(
+            "picasso-publish-{}-3-0",
+            std::os::unix::process::parent_id()
+        ));
         let other = temp.join("picasso-publish-notes");
         for dir in [&crashed, &running, &other] {
             std::fs::create_dir_all(dir).unwrap();
@@ -1911,7 +3297,10 @@ mod tests {
         }
         Staging::remove_abandoned(&temp);
         assert!(!crashed.exists(), "a stopped job's photos are cleared");
-        assert!(running.join("a.jpg").is_file(), "a running Picasso's are left alone");
+        assert!(
+            running.join("a.jpg").is_file(),
+            "a running Picasso's are left alone"
+        );
         assert!(other.join("a.jpg").is_file(), "anything else is left alone");
         let _ = std::fs::remove_dir_all(temp);
     }
@@ -1921,13 +3310,35 @@ mod tests {
         let dir = temp_dir("renders");
         let first = job(&dir, None, HashMap::new());
         let fake = Fake::default()
-            .answer_to("POST", MEDIA, 201, &[], r#"{"id":41,"source_url":"https://example.com/blog/a.jpg"}"#)
+            .answer_to(
+                "POST",
+                MEDIA,
+                201,
+                &[],
+                r#"{"id":41,"source_url":"https://example.com/blog/a.jpg"}"#,
+            )
             .answer_to("POST", POSTS, 201, &[], r#"{"id":7}"#);
         let mut events = Vec::new();
-        run(&fake, &first, &Progress::default(), &mut |event| events.push(event)).unwrap();
-        let Some(Event::Uploaded { hash, .. }) = events.iter().find(|event| matches!(event, Event::Uploaded { .. })).cloned() else { panic!("{events:?}") };
-        let known = HashMap::from([(hash.clone(), (41, "https://example.com/blog/a.jpg".to_string()))]);
-        let again = Job { uploads: known, post_id: Some(7), ..first.clone() };
+        run(&fake, &first, &Progress::default(), &mut |event| {
+            events.push(event)
+        })
+        .unwrap();
+        let Some(Event::Uploaded { hash, .. }) = events
+            .iter()
+            .find(|event| matches!(event, Event::Uploaded { .. }))
+            .cloned()
+        else {
+            panic!("{events:?}")
+        };
+        let known = HashMap::from([(
+            hash.clone(),
+            (41, "https://example.com/blog/a.jpg".to_string()),
+        )]);
+        let again = Job {
+            uploads: known,
+            post_id: Some(7),
+            ..first.clone()
+        };
 
         // The file can no longer be read as a photo, though it looks the same:
         // publishing again works only because it isn't rendered.
@@ -1936,7 +3347,12 @@ mod tests {
         let modified = std::fs::metadata(&path).unwrap().modified().unwrap();
         let keep_looks = |bytes: &[u8]| {
             std::fs::write(&path, bytes).unwrap();
-            std::fs::File::options().write(true).open(&path).unwrap().set_modified(modified).unwrap();
+            std::fs::File::options()
+                .write(true)
+                .open(&path)
+                .unwrap()
+                .set_modified(modified)
+                .unwrap();
         };
         keep_looks(&vec![0; original.len()]);
         let still_there = || {
@@ -1946,26 +3362,58 @@ mod tests {
                 .answer_to("POST", &format!("{POSTS}/7"), 200, &[], r#"{"id":7}"#)
         };
         let mut events = Vec::new();
-        let saved = run(&still_there(), &again, &Progress::default(), &mut |event| events.push(event)).unwrap();
-        assert_eq!((saved.uploaded, saved.reused, saved.media.clone()), (0, 1, vec![41]));
-        assert!(matches!(&events[..], [Event::Prepared { photos: 1, bytes }] if *bytes > 0), "its size is still known: {events:?}");
+        let saved = run(&still_there(), &again, &Progress::default(), &mut |event| {
+            events.push(event)
+        })
+        .unwrap();
+        assert_eq!(
+            (saved.uploaded, saved.reused, saved.media.clone()),
+            (0, 1, vec![41])
+        );
+        assert!(
+            matches!(&events[..], [Event::Prepared { photos: 1, bytes }] if *bytes > 0),
+            "its size is still known: {events:?}"
+        );
 
         // Another edit is another picture, which must be rendered.
         let mut edited = again.clone();
         let mut brighter = Settings::default();
-        brighter.set(crate::edit::Control::from_key("light.exposure").unwrap(), 0.5);
+        brighter.set(
+            crate::edit::Control::from_key("light.exposure").unwrap(),
+            0.5,
+        );
         edited.sources.insert(11, Some((path.clone(), brighter, 0)));
-        assert!(matches!(run(&still_there(), &edited, &Progress::default(), &mut |_| {}), Err(Stopped::Photo { media_id: 11, .. })));
+        assert!(matches!(
+            run(&still_there(), &edited, &Progress::default(), &mut |_| {}),
+            Err(Stopped::Photo { media_id: 11, .. })
+        ));
 
         // Gone from the site: rendered now, the same bytes as before, and sent.
         keep_looks(&original);
         let lost = Fake::default()
-            .answer(&format!("{POSTS}/7?context=edit"), 200, &[], r#"{"status":"draft"}"#)
-            .answer_to("POST", MEDIA, 201, &[], r#"{"id":52,"source_url":"https://example.com/blog/b.jpg"}"#)
+            .answer(
+                &format!("{POSTS}/7?context=edit"),
+                200,
+                &[],
+                r#"{"status":"draft"}"#,
+            )
+            .answer_to(
+                "POST",
+                MEDIA,
+                201,
+                &[],
+                r#"{"id":52,"source_url":"https://example.com/blog/b.jpg"}"#,
+            )
             .answer_to("POST", &format!("{POSTS}/7"), 200, &[], r#"{"id":7}"#);
         let mut events = Vec::new();
-        let saved = run(&lost, &again, &Progress::default(), &mut |event| events.push(event)).unwrap();
-        assert_eq!((saved.uploaded, saved.reused, saved.media.clone()), (1, 0, vec![52]));
+        let saved = run(&lost, &again, &Progress::default(), &mut |event| {
+            events.push(event)
+        })
+        .unwrap();
+        assert_eq!(
+            (saved.uploaded, saved.reused, saved.media.clone()),
+            (1, 0, vec![52])
+        );
         assert!(events.iter().any(|event| matches!(event, Event::Uploaded { hash: sent, media_id: 52, .. } if *sent == hash)), "{events:?}");
         let _ = std::fs::remove_dir_all(dir);
     }
@@ -1975,33 +3423,83 @@ mod tests {
         let dir = temp_dir("reuse");
         let first = job(&dir, None, HashMap::new());
         let fake = Fake::default()
-            .answer_to("POST", MEDIA, 201, &[], r#"{"id":41,"source_url":"https://example.com/blog/a.jpg"}"#)
+            .answer_to(
+                "POST",
+                MEDIA,
+                201,
+                &[],
+                r#"{"id":41,"source_url":"https://example.com/blog/a.jpg"}"#,
+            )
             .answer_to("POST", POSTS, 201, &[], r#"{"id":7}"#);
         let mut events = Vec::new();
-        run(&fake, &first, &Progress::default(), &mut |event| events.push(event)).unwrap();
-        let Some(Event::Uploaded { hash, .. }) = events.iter().find(|event| matches!(event, Event::Uploaded { .. })).cloned() else { panic!("{events:?}") };
+        run(&fake, &first, &Progress::default(), &mut |event| {
+            events.push(event)
+        })
+        .unwrap();
+        let Some(Event::Uploaded { hash, .. }) = events
+            .iter()
+            .find(|event| matches!(event, Event::Uploaded { .. }))
+            .cloned()
+        else {
+            panic!("{events:?}")
+        };
 
         // Still on the site: nothing is sent again, and the draft is changed in place.
-        let known = HashMap::from([(hash.clone(), (41, "https://example.com/blog/a.jpg".to_string()))]);
+        let known = HashMap::from([(
+            hash.clone(),
+            (41, "https://example.com/blog/a.jpg".to_string()),
+        )]);
         let again = job(&dir, Some(7), known.clone());
         let fake = Fake::default()
-            .answer(&format!("{POSTS}/7?context=edit"), 200, &[], r#"{"status":"draft"}"#)
-            .answer(&format!("{MEDIA}/41?context=edit&_fields=id,source_url,mime_type,media_details"), 200, &[], r#"{"id":41}"#)
+            .answer(
+                &format!("{POSTS}/7?context=edit"),
+                200,
+                &[],
+                r#"{"status":"draft"}"#,
+            )
+            .answer(
+                &format!("{MEDIA}/41?context=edit&_fields=id,source_url,mime_type,media_details"),
+                200,
+                &[],
+                r#"{"id":41}"#,
+            )
             .answer_to("POST", &format!("{POSTS}/7"), 200, &[], r#"{"id":7}"#);
         let saved = run(&fake, &again, &Progress::default(), &mut |_| {}).unwrap();
         assert_eq!((saved.post_id, saved.uploaded, saved.reused), (7, 0, 1));
-        assert!(!fake.bodies.borrow().iter().any(|(key, _)| key.starts_with("POST") && key.ends_with("/media")));
+        assert!(!fake
+            .bodies
+            .borrow()
+            .iter()
+            .any(|(key, _)| key.starts_with("POST") && key.ends_with("/media")));
 
         // Moved on the site meanwhile: its address today is used and kept.
         let fake = Fake::default()
-            .answer(&format!("{POSTS}/7?context=edit"), 200, &[], r#"{"status":"draft"}"#)
-            .answer(&format!("{MEDIA}/41?context=edit&_fields=id,source_url,mime_type,media_details"), 200, &[], r#"{"id":41,"source_url":"https://new.example.com/a.jpg"}"#)
+            .answer(
+                &format!("{POSTS}/7?context=edit"),
+                200,
+                &[],
+                r#"{"status":"draft"}"#,
+            )
+            .answer(
+                &format!("{MEDIA}/41?context=edit&_fields=id,source_url,mime_type,media_details"),
+                200,
+                &[],
+                r#"{"id":41,"source_url":"https://new.example.com/a.jpg"}"#,
+            )
             .answer_to("POST", &format!("{POSTS}/7"), 200, &[], r#"{"id":7}"#);
         let mut events = Vec::new();
-        let saved = run(&fake, &again, &Progress::default(), &mut |event| events.push(event)).unwrap();
+        let saved = run(&fake, &again, &Progress::default(), &mut |event| {
+            events.push(event)
+        })
+        .unwrap();
         assert_eq!((saved.uploaded, saved.reused), (0, 1));
         assert!(events.iter().any(|event| matches!(event, Event::Uploaded { url, .. } if url == "https://new.example.com/a.jpg")), "{events:?}");
-        assert!(fake.bodies.borrow().iter().any(|(key, body)| key.starts_with("POST") && String::from_utf8_lossy(body).contains("new.example.com/a.jpg")));
+        assert!(fake
+            .bodies
+            .borrow()
+            .iter()
+            .any(|(key, body)| key.starts_with("POST")
+                && String::from_utf8_lossy(body).contains("new.example.com/a.jpg")));
 
         // Checked with the others in one read, with no read of its own.
         let fake = Fake::default()
@@ -2010,15 +3508,36 @@ mod tests {
             .answer_to("POST", &format!("{POSTS}/7"), 200, &[], r#"{"id":7}"#);
         let saved = run(&fake, &again, &Progress::default(), &mut |_| {}).unwrap();
         assert_eq!((saved.uploaded, saved.reused), (0, 1));
-        assert!(!fake.asked.borrow().iter().any(|(url, _)| url.contains("/media/41")));
+        assert!(!fake
+            .asked
+            .borrow()
+            .iter()
+            .any(|(url, _)| url.contains("/media/41")));
 
         // Removed from the site meanwhile: forgotten and sent again.
         let fake = Fake::default()
-            .answer(&format!("{POSTS}/7?context=edit"), 200, &[], r#"{"status":"draft"}"#)
-            .answer_to("POST", MEDIA, 201, &[], r#"{"id":52,"source_url":"https://example.com/blog/b.jpg"}"#)
+            .answer(
+                &format!("{POSTS}/7?context=edit"),
+                200,
+                &[],
+                r#"{"status":"draft"}"#,
+            )
+            .answer_to(
+                "POST",
+                MEDIA,
+                201,
+                &[],
+                r#"{"id":52,"source_url":"https://example.com/blog/b.jpg"}"#,
+            )
             .answer_to("POST", &format!("{POSTS}/7"), 200, &[], r#"{"id":7}"#);
         let mut events = Vec::new();
-        let saved = run(&fake, &job(&dir, Some(7), known), &Progress::default(), &mut |event| events.push(event)).unwrap();
+        let saved = run(
+            &fake,
+            &job(&dir, Some(7), known),
+            &Progress::default(),
+            &mut |event| events.push(event),
+        )
+        .unwrap();
         assert_eq!(saved.uploaded, 1);
         assert!(events.contains(&Event::Gone { hash }), "{events:?}");
         let _ = std::fs::remove_dir_all(dir);
@@ -2028,39 +3547,97 @@ mod tests {
     fn a_published_post_is_updated_when_chosen_and_keeps_its_status() {
         let dir = temp_dir("update");
         let fake = Fake::default()
-            .answer(&format!("{POSTS}/7?context=edit"), 200, &[], r#"{"status":"publish"}"#)
-            .answer_to("POST", MEDIA, 201, &[], r#"{"id":41,"source_url":"https://example.com/blog/a.jpg"}"#)
+            .answer(
+                &format!("{POSTS}/7?context=edit"),
+                200,
+                &[],
+                r#"{"status":"publish"}"#,
+            )
+            .answer_to(
+                "POST",
+                MEDIA,
+                201,
+                &[],
+                r#"{"id":41,"source_url":"https://example.com/blog/a.jpg"}"#,
+            )
             .answer_to("POST", &format!("{POSTS}/7"), 200, &[], r#"{"id":7}"#);
         let mut chosen = job(&dir, Some(7), HashMap::new());
         chosen.update_published = true;
         let saved = run(&fake, &chosen, &Progress::default(), &mut |_| {}).unwrap();
         assert_eq!((saved.post_id, saved.status.as_str()), (7, "publish"));
         let sent = fake.bodies.borrow().last().cloned().unwrap();
-        assert!(!String::from_utf8_lossy(&sent.1).contains("\"status\""), "the post's status is not changed");
+        assert!(
+            !String::from_utf8_lossy(&sent.1).contains("\"status\""),
+            "the post's status is not changed"
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
     fn a_post_that_is_no_longer_a_draft_is_left_alone() {
         let dir = temp_dir("published");
-        let fake = Fake::default().answer(&format!("{POSTS}/7?context=edit"), 200, &[], r#"{"status":"publish"}"#);
-        let result = run(&fake, &job(&dir, Some(7), HashMap::new()), &Progress::default(), &mut |_| {});
+        let fake = Fake::default().answer(
+            &format!("{POSTS}/7?context=edit"),
+            200,
+            &[],
+            r#"{"status":"publish"}"#,
+        );
+        let result = run(
+            &fake,
+            &job(&dir, Some(7), HashMap::new()),
+            &Progress::default(),
+            &mut |_| {},
+        );
         assert_eq!(result, Err(Stopped::NotDraft("publish".into())));
         assert!(fake.bodies.borrow().is_empty(), "nothing was sent");
         // Deleted on the site, to its trash or for good: never changed, and a
         // new post is made in its place, published as chosen.
         for status in [Some("trash"), None] {
             let mut fake = Fake::default()
-                .answer_to("POST", MEDIA, 201, &[], r#"{"id":41,"source_url":"https://example.com/blog/a.jpg"}"#)
+                .answer_to(
+                    "POST",
+                    MEDIA,
+                    201,
+                    &[],
+                    r#"{"id":41,"source_url":"https://example.com/blog/a.jpg"}"#,
+                )
                 .answer_to("POST", POSTS, 201, &[], r#"{"id":8,"status":"publish"}"#);
             if let Some(status) = status {
-                fake = fake.answer(&format!("{POSTS}/7?context=edit"), 200, &[], &format!(r#"{{"status":"{status}"}}"#));
+                fake = fake.answer(
+                    &format!("{POSTS}/7?context=edit"),
+                    200,
+                    &[],
+                    &format!(r#"{{"status":"{status}"}}"#),
+                );
             }
-            let chosen = Job { publish: true, update_published: true, ..job(&dir, Some(7), HashMap::new()) };
+            let chosen = Job {
+                publish: true,
+                update_published: true,
+                ..job(&dir, Some(7), HashMap::new())
+            };
             let saved = run(&fake, &chosen, &Progress::default(), &mut |_| {}).unwrap();
-            assert_eq!((saved.post_id, saved.remade, saved.published), (8, true, true), "{status:?}");
-            assert!(fake.bodies.borrow().iter().all(|(key, _)| !key.ends_with("/posts/7")), "the deleted post is left alone");
-            let made: serde_json::Value = serde_json::from_slice(&fake.bodies.borrow().iter().find(|(key, _)| *key == format!("POST {POSTS}")).unwrap().1).unwrap();
+            assert_eq!(
+                (saved.post_id, saved.remade, saved.published),
+                (8, true, true),
+                "{status:?}"
+            );
+            assert!(
+                fake.bodies
+                    .borrow()
+                    .iter()
+                    .all(|(key, _)| !key.ends_with("/posts/7")),
+                "the deleted post is left alone"
+            );
+            let made: serde_json::Value = serde_json::from_slice(
+                &fake
+                    .bodies
+                    .borrow()
+                    .iter()
+                    .find(|(key, _)| *key == format!("POST {POSTS}"))
+                    .unwrap()
+                    .1,
+            )
+            .unwrap();
             assert_eq!(made["status"], "publish", "published as chosen");
         }
         let _ = std::fs::remove_dir_all(dir);
@@ -2069,68 +3646,144 @@ mod tests {
     #[test]
     fn a_post_edited_on_the_site_is_left_alone_unless_replacing_was_chosen() {
         let dir = temp_dir("edited");
-        let saved = r#"{"id":7,"status":"draft","title":{"raw":"Coast"},"content":{"raw":"<p>ours</p>"}}"#;
+        let saved =
+            r#"{"id":7,"status":"draft","title":{"raw":"Coast"},"content":{"raw":"<p>ours</p>"}}"#;
         let edited = r#"{"id":7,"status":"draft","title":{"raw":"Coast"},"content":{"raw":"<p>theirs</p>"}}"#;
         let fake = Fake::default()
             .answer_to("POST", &format!("{POSTS}/7"), 200, &[], saved)
-            .answer_to("POST", MEDIA, 201, &[], r#"{"id":41,"source_url":"https://example.com/blog/a.jpg"}"#)
+            .answer_to(
+                "POST",
+                MEDIA,
+                201,
+                &[],
+                r#"{"id":41,"source_url":"https://example.com/blog/a.jpg"}"#,
+            )
             .answer(&format!("{POSTS}/7?context=edit"), 200, &[], saved);
-        let first = run(&fake, &job(&dir, Some(7), HashMap::new()), &Progress::default(), &mut |_| {}).unwrap();
+        let first = run(
+            &fake,
+            &job(&dir, Some(7), HashMap::new()),
+            &Progress::default(),
+            &mut |_| {},
+        )
+        .unwrap();
         let mut again = job(&dir, Some(7), HashMap::new());
         again.fingerprint = first.fingerprint.clone();
-        assert!(run(&fake, &again, &Progress::default(), &mut |_| {}).is_ok(), "unchanged since: saved again");
+        assert!(
+            run(&fake, &again, &Progress::default(), &mut |_| {}).is_ok(),
+            "unchanged since: saved again"
+        );
 
         let mut older = job(&dir, Some(7), HashMap::new());
         older.fingerprint = "a digest from an earlier Picasso".into();
         let edited_since = Fake::default()
             .answer(&format!("{POSTS}/7?context=edit"), 200, &[], edited)
-            .answer_to("POST", MEDIA, 201, &[], r#"{"id":41,"source_url":"https://example.com/blog/a.jpg"}"#)
+            .answer_to(
+                "POST",
+                MEDIA,
+                201,
+                &[],
+                r#"{"id":41,"source_url":"https://example.com/blog/a.jpg"}"#,
+            )
             .answer_to("POST", &format!("{POSTS}/7"), 200, &[], saved);
-        assert!(run(&edited_since, &older, &Progress::default(), &mut |_| {}).is_ok(), "one made otherwise can't be compared");
+        assert!(
+            run(&edited_since, &older, &Progress::default(), &mut |_| {}).is_ok(),
+            "one made otherwise can't be compared"
+        );
 
         let changed = Fake::default().answer(&format!("{POSTS}/7?context=edit"), 200, &[], edited);
-        assert_eq!(run(&changed, &again, &Progress::default(), &mut |_| {}), Err(Stopped::ChangedOnSite));
+        assert_eq!(
+            run(&changed, &again, &Progress::default(), &mut |_| {}),
+            Err(Stopped::ChangedOnSite)
+        );
         assert!(changed.bodies.borrow().is_empty(), "nothing was sent");
         let replacing = changed
-            .answer_to("POST", MEDIA, 201, &[], r#"{"id":41,"source_url":"https://example.com/blog/a.jpg"}"#)
+            .answer_to(
+                "POST",
+                MEDIA,
+                201,
+                &[],
+                r#"{"id":41,"source_url":"https://example.com/blog/a.jpg"}"#,
+            )
             .answer_to("POST", &format!("{POSTS}/7"), 200, &[], saved);
         again.overwrite = true;
-        assert_eq!(run(&replacing, &again, &Progress::default(), &mut |_| {}).unwrap().fingerprint, first.fingerprint);
+        assert_eq!(
+            run(&replacing, &again, &Progress::default(), &mut |_| {})
+                .unwrap()
+                .fingerprint,
+            first.fingerprint
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
     fn a_post_the_library_lost_track_of_is_found_before_another_is_made() {
         let dir = temp_dir("restored");
-        let fake = Fake::default().answer(&format!("{POSTS}?search=Coast&status=draft,publish*"), 200, &[], r#"[{"id":9,"title":{"raw":"Coast"}}]"#);
+        let fake = Fake::default().answer(
+            &format!("{POSTS}?search=Coast&status=draft,publish*"),
+            200,
+            &[],
+            r#"[{"id":9,"title":{"raw":"Coast"}}]"#,
+        );
         let mut restored = job(&dir, None, HashMap::new());
         restored.allow_new = false;
-        assert_eq!(run(&fake, &restored, &Progress::default(), &mut |_| {}), Err(Stopped::TitleOnSite { post_id: 9 }));
+        assert_eq!(
+            run(&fake, &restored, &Progress::default(), &mut |_| {}),
+            Err(Stopped::TitleOnSite { post_id: 9 })
+        );
         assert!(fake.bodies.borrow().is_empty(), "nothing was sent");
         let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
     fn a_posts_sync_state_comes_from_the_librarys_record() {
-        let mut publication = crate::db::Publication { story_id: 3, site_id: 1, post_id: 7, remote_status: "publish".into(), size: "low".into(), revision: 4, synced_at: 1, fingerprint: String::new(), changed_on_site: false };
+        let mut publication = crate::db::Publication {
+            story_id: 3,
+            site_id: 1,
+            post_id: 7,
+            remote_status: "publish".into(),
+            size: "low".into(),
+            revision: 4,
+            synced_at: 1,
+            fingerprint: String::new(),
+            changed_on_site: false,
+        };
         assert_eq!(sync_state(None, 4, false), SyncState::New);
         assert_eq!(sync_state(None, 4, true), SyncState::Unconfirmed);
         assert_eq!(sync_state(Some(&publication), 4, false), SyncState::Clean);
-        assert_eq!(sync_state(Some(&publication), 5, false), SyncState::ChangedHere);
+        assert_eq!(
+            sync_state(Some(&publication), 5, false),
+            SyncState::ChangedHere
+        );
         publication.changed_on_site = true;
-        assert_eq!(sync_state(Some(&publication), 4, false), SyncState::Conflict, "the site's edit comes first");
+        assert_eq!(
+            sync_state(Some(&publication), 4, false),
+            SyncState::Conflict,
+            "the site's edit comes first"
+        );
     }
 
     #[test]
     fn a_post_is_made_public_only_when_that_was_confirmed() {
         let dir = temp_dir("publish");
         let fake = Fake::default()
-            .answer_to("POST", MEDIA, 201, &[], r#"{"id":41,"source_url":"https://example.com/blog/a.jpg"}"#)
+            .answer_to(
+                "POST",
+                MEDIA,
+                201,
+                &[],
+                r#"{"id":41,"source_url":"https://example.com/blog/a.jpg"}"#,
+            )
             .answer_to("POST", POSTS, 201, &[], r#"{"id":7}"#);
         let mut chosen = job(&dir, None, HashMap::new());
         chosen.publish = true;
-        assert_eq!(run(&fake, &chosen, &Progress::default(), &mut |_| {}).unwrap().status, "publish");
-        let sent: serde_json::Value = serde_json::from_slice(&fake.bodies.borrow().last().unwrap().1).unwrap();
+        assert_eq!(
+            run(&fake, &chosen, &Progress::default(), &mut |_| {})
+                .unwrap()
+                .status,
+            "publish"
+        );
+        let sent: serde_json::Value =
+            serde_json::from_slice(&fake.bodies.borrow().last().unwrap().1).unwrap();
         assert_eq!(sent["status"], "publish");
         let _ = std::fs::remove_dir_all(dir);
     }
@@ -2140,30 +3793,100 @@ mod tests {
         let dir = temp_dir("lost");
         let found = r#"[{"id":9,"title":{"raw":"Coast"}}]"#;
         let fake = Fake::default()
-            .answer_to("POST", MEDIA, 201, &[], r#"{"id":41,"source_url":"https://example.com/blog/a.jpg"}"#)
+            .answer_to(
+                "POST",
+                MEDIA,
+                201,
+                &[],
+                r#"{"id":41,"source_url":"https://example.com/blog/a.jpg"}"#,
+            )
             .answer_to("POST", POSTS, 504, &[], "")
-            .answer(&format!("{POSTS}?search=Coast&status=draft,publish*"), 200, &[], found)
-            .answer(&format!("{POSTS}/9?context=edit"), 200, &[], r#"{"id":9,"status":"draft"}"#);
+            .answer(
+                &format!("{POSTS}?search=Coast&status=draft,publish*"),
+                200,
+                &[],
+                found,
+            )
+            .answer(
+                &format!("{POSTS}/9?context=edit"),
+                200,
+                &[],
+                r#"{"id":9,"status":"draft"}"#,
+            );
         let mut events = Vec::new();
-        let saved = run(&fake, &job(&dir, None, HashMap::new()), &Progress::default(), &mut |event| events.push(event)).unwrap();
+        let saved = run(
+            &fake,
+            &job(&dir, None, HashMap::new()),
+            &Progress::default(),
+            &mut |event| events.push(event),
+        )
+        .unwrap();
         assert_eq!(saved.post_id, 9);
-        assert!(matches!(events.last(), Some(Event::Creating { story_id: 3, .. })), "the intent is kept before the draft is made");
-        assert_eq!(fake.bodies.borrow().iter().filter(|(key, _)| key == &format!("POST {POSTS}")).count(), 1, "never made twice");
+        assert!(
+            matches!(events.last(), Some(Event::Creating { story_id: 3, .. })),
+            "the intent is kept before the draft is made"
+        );
+        assert_eq!(
+            fake.bodies
+                .borrow()
+                .iter()
+                .filter(|(key, _)| key == &format!("POST {POSTS}"))
+                .count(),
+            1,
+            "never made twice"
+        );
 
         // After a restart, a draft made before is changed instead of another made.
         let restarted = Fake::default()
-            .answer_to("POST", MEDIA, 201, &[], r#"{"id":41,"source_url":"https://example.com/blog/a.jpg"}"#)
-            .answer(&format!("{POSTS}?search=Coast&status=draft,publish*"), 200, &[], found)
+            .answer_to(
+                "POST",
+                MEDIA,
+                201,
+                &[],
+                r#"{"id":41,"source_url":"https://example.com/blog/a.jpg"}"#,
+            )
+            .answer(
+                &format!("{POSTS}?search=Coast&status=draft,publish*"),
+                200,
+                &[],
+                found,
+            )
             .answer_to("POST", &format!("{POSTS}/9"), 200, &[], r#"{"id":9}"#);
         let mut again = job(&dir, None, HashMap::new());
         again.pending_since = Some(1_000);
-        assert_eq!(run(&restarted, &again, &Progress::default(), &mut |_| {}).unwrap().post_id, 9);
+        assert_eq!(
+            run(&restarted, &again, &Progress::default(), &mut |_| {})
+                .unwrap()
+                .post_id,
+            9
+        );
 
         let two = Fake::default()
-            .answer_to("POST", MEDIA, 201, &[], r#"{"id":41,"source_url":"https://example.com/blog/a.jpg"}"#)
-            .answer(&format!("{POSTS}?search=Coast&status=draft,publish*"), 200, &[], r#"[{"id":9,"title":{"raw":"Coast"}},{"id":10,"title":{"raw":"Coast"}}]"#);
-        assert_eq!(run(&two, &again, &Progress::default(), &mut |_| {}), Err(Stopped::Uncertain { drafts: 2 }), "more than one could be it: none is chosen");
-        assert!(!two.bodies.borrow().iter().any(|(key, _)| key.contains("/posts")), "and no other is made");
+            .answer_to(
+                "POST",
+                MEDIA,
+                201,
+                &[],
+                r#"{"id":41,"source_url":"https://example.com/blog/a.jpg"}"#,
+            )
+            .answer(
+                &format!("{POSTS}?search=Coast&status=draft,publish*"),
+                200,
+                &[],
+                r#"[{"id":9,"title":{"raw":"Coast"}},{"id":10,"title":{"raw":"Coast"}}]"#,
+            );
+        assert_eq!(
+            run(&two, &again, &Progress::default(), &mut |_| {}),
+            Err(Stopped::Uncertain { drafts: 2 }),
+            "more than one could be it: none is chosen"
+        );
+        assert!(
+            !two.bodies
+                .borrow()
+                .iter()
+                .any(|(key, _)| key.contains("/posts")),
+            "and no other is made"
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -2173,10 +3896,24 @@ mod tests {
         let mut missing = job(&dir, None, HashMap::new());
         missing.sources.insert(11, None);
         let fake = Fake::default();
-        assert_eq!(run(&fake, &missing, &Progress::default(), &mut |_| {}), Err(Stopped::Photo { media_id: 11, uploaded: 0 }));
+        assert_eq!(
+            run(&fake, &missing, &Progress::default(), &mut |_| {}),
+            Err(Stopped::Photo {
+                media_id: 11,
+                uploaded: 0
+            })
+        );
         let cancelled = Progress::default();
         cancelled.cancel.store(true, Ordering::Relaxed);
-        assert_eq!(run(&fake, &job(&dir, None, HashMap::new()), &cancelled, &mut |_| {}), Err(Stopped::Cancelled { uploaded: 0 }));
+        assert_eq!(
+            run(
+                &fake,
+                &job(&dir, None, HashMap::new()),
+                &cancelled,
+                &mut |_| {}
+            ),
+            Err(Stopped::Cancelled { uploaded: 0 })
+        );
         assert!(fake.bodies.borrow().is_empty());
         let _ = std::fs::remove_dir_all(dir);
     }
@@ -2194,69 +3931,167 @@ mod tests {
             fingerprint: "ab".into(),
             changed_on_site,
         };
-        let to = |earlier: crate::db::Publication, update: Option<bool>| target(3, 1, UploadSize::Low, Some(earlier), update, None, None);
-        assert_eq!(to(earlier("draft", false), None).earlier.map(|post| post.post_id), Some(7), "an untouched draft is changed in place");
+        let to = |earlier: crate::db::Publication, update: Option<bool>| {
+            target(3, 1, UploadSize::Low, Some(earlier), update, None, None)
+        };
+        assert_eq!(
+            to(earlier("draft", false), None)
+                .earlier
+                .map(|post| post.post_id),
+            Some(7),
+            "an untouched draft is changed in place"
+        );
         for (status, changed) in [("draft", true), ("publish", false)] {
             let new = to(earlier(status, changed), Some(false));
-            assert_eq!((new.earlier, new.update, new.allow_new), (None, false, true), "{status}: a new draft");
+            assert_eq!(
+                (new.earlier, new.update, new.allow_new),
+                (None, false, true),
+                "{status}: a new draft"
+            );
             let replace = to(earlier(status, changed), Some(true));
-            assert_eq!((replace.earlier.map(|post| post.post_id), replace.update), (Some(7), true), "{status}: changed as chosen");
+            assert_eq!(
+                (replace.earlier.map(|post| post.post_id), replace.update),
+                (Some(7), true),
+                "{status}: changed as chosen"
+            );
         }
         let adopted = target(3, 1, UploadSize::Low, None, None, Some(30), Some(true));
-        assert_eq!((adopted.earlier.map(|post| (post.post_id, post.remote_status)), adopted.update, adopted.allow_new), (Some((30, "publish".to_string())), true, false));
+        assert_eq!(
+            (
+                adopted
+                    .earlier
+                    .map(|post| (post.post_id, post.remote_status)),
+                adopted.update,
+                adopted.allow_new
+            ),
+            (Some((30, "publish".to_string())), true, false)
+        );
         let beside = target(3, 1, UploadSize::Low, None, None, Some(30), Some(false));
         assert_eq!((beside.earlier, beside.allow_new), (None, true));
 
         // The new draft is made without a word to post 7.
         let dir = temp_dir("copy");
         let chosen = to(earlier("draft", true), Some(false));
-        let copy = Job { overwrite: chosen.update, ..job(&dir, chosen.earlier.map(|post| post.post_id), HashMap::new()) };
+        let copy = Job {
+            overwrite: chosen.update,
+            ..job(
+                &dir,
+                chosen.earlier.map(|post| post.post_id),
+                HashMap::new(),
+            )
+        };
         let fake = Fake::default()
-            .answer_to("POST", MEDIA, 201, &[], r#"{"id":41,"source_url":"https://example.com/blog/a.jpg"}"#)
+            .answer_to(
+                "POST",
+                MEDIA,
+                201,
+                &[],
+                r#"{"id":41,"source_url":"https://example.com/blog/a.jpg"}"#,
+            )
             .answer_to("POST", POSTS, 201, &[], r#"{"id":9}"#);
-        assert_eq!(run(&fake, &copy, &Progress::default(), &mut |_| {}).map(|saved| saved.post_id), Ok(9));
-        assert!(!fake.asked.borrow().iter().any(|(url, _)| url.contains("/posts/7")));
+        assert_eq!(
+            run(&fake, &copy, &Progress::default(), &mut |_| {}).map(|saved| saved.post_id),
+            Ok(9)
+        );
+        assert!(!fake
+            .asked
+            .borrow()
+            .iter()
+            .any(|(url, _)| url.contains("/posts/7")));
         let _ = std::fs::remove_dir_all(dir);
     }
 
     /// The photos the job sent, decoded.
     fn sent_photos(fake: &Fake) -> Vec<(u32, u32)> {
         let bodies = fake.bodies.borrow();
-        let sent = bodies.iter().filter(|(key, _)| key.starts_with("POST") && key.ends_with("/media"));
-        sent.map(|(_, body)| image::load_from_memory(body).unwrap()).map(|image| (image.width(), image.height())).collect()
+        let sent = bodies
+            .iter()
+            .filter(|(key, _)| key.starts_with("POST") && key.ends_with("/media"));
+        sent.map(|(_, body)| image::load_from_memory(body).unwrap())
+            .map(|image| (image.width(), image.height()))
+            .collect()
     }
 
     #[test]
     fn a_photo_at_another_size_is_uploaded_again_never_reused() {
         let dir = temp_dir("sizes");
         let large = dir.join("large.jpg");
-        image::RgbImage::from_fn(3000, 2000, |x, y| image::Rgb([(x / 12) as u8, (y / 8) as u8, 90])).save(&large).unwrap();
-        let sized = |size: UploadSize, post_id: Option<i64>, uploads: HashMap<String, (i64, String)>| {
-            let mut job = job(&dir, post_id, uploads);
-            job.sources.insert(11, Some((large.clone(), Settings::default(), 0)));
-            Job { size, ..job }
-        };
+        image::RgbImage::from_fn(3000, 2000, |x, y| {
+            image::Rgb([(x / 12) as u8, (y / 8) as u8, 90])
+        })
+        .save(&large)
+        .unwrap();
+        let sized =
+            |size: UploadSize, post_id: Option<i64>, uploads: HashMap<String, (i64, String)>| {
+                let mut job = job(&dir, post_id, uploads);
+                job.sources
+                    .insert(11, Some((large.clone(), Settings::default(), 0)));
+                Job { size, ..job }
+            };
         let fake = Fake::default()
-            .answer_to("POST", MEDIA, 201, &[], r#"{"id":41,"source_url":"https://example.com/blog/standard.jpg"}"#)
+            .answer_to(
+                "POST",
+                MEDIA,
+                201,
+                &[],
+                r#"{"id":41,"source_url":"https://example.com/blog/standard.jpg"}"#,
+            )
             .answer_to("POST", POSTS, 201, &[], r#"{"id":7}"#);
         let mut events = Vec::new();
-        run(&fake, &sized(UploadSize::Standard, None, HashMap::new()), &Progress::default(), &mut |event| events.push(event)).unwrap();
+        run(
+            &fake,
+            &sized(UploadSize::Standard, None, HashMap::new()),
+            &Progress::default(),
+            &mut |event| events.push(event),
+        )
+        .unwrap();
         assert_eq!(sent_photos(&fake), [(2048, 1365)]);
-        let Some(Event::Uploaded { hash, .. }) = events.into_iter().find(|event| matches!(event, Event::Uploaded { .. })) else { panic!() };
+        let Some(Event::Uploaded { hash, .. }) = events
+            .into_iter()
+            .find(|event| matches!(event, Event::Uploaded { .. }))
+        else {
+            panic!()
+        };
 
         // The same Story at Low resolution: its own upload, and the post uses it.
-        let known = HashMap::from([(hash, (41, "https://example.com/blog/standard.jpg".to_string()))]);
+        let known = HashMap::from([(
+            hash,
+            (41, "https://example.com/blog/standard.jpg".to_string()),
+        )]);
         let fake = Fake::default()
-            .answer(&format!("{POSTS}/7?context=edit"), 200, &[], r#"{"status":"draft"}"#)
-            .answer_to("POST", MEDIA, 201, &[], r#"{"id":42,"source_url":"https://example.com/blog/low.jpg"}"#)
+            .answer(
+                &format!("{POSTS}/7?context=edit"),
+                200,
+                &[],
+                r#"{"status":"draft"}"#,
+            )
+            .answer_to(
+                "POST",
+                MEDIA,
+                201,
+                &[],
+                r#"{"id":42,"source_url":"https://example.com/blog/low.jpg"}"#,
+            )
             .answer_to("POST", &format!("{POSTS}/7"), 200, &[], r#"{"id":7}"#);
-        let saved = run(&fake, &sized(UploadSize::Low, Some(7), known), &Progress::default(), &mut |_| {}).unwrap();
-        assert_eq!((saved.uploaded, saved.reused, saved.media), (1, 0, vec![42]));
+        let saved = run(
+            &fake,
+            &sized(UploadSize::Low, Some(7), known),
+            &Progress::default(),
+            &mut |_| {},
+        )
+        .unwrap();
+        assert_eq!(
+            (saved.uploaded, saved.reused, saved.media),
+            (1, 0, vec![42])
+        );
         assert_eq!(sent_photos(&fake), [(1280, 853)]);
         let bodies = fake.bodies.borrow();
         let post: serde_json::Value = serde_json::from_slice(&bodies.last().unwrap().1).unwrap();
         assert_eq!(post["featured_media"], 42);
-        assert!(!post["content"].as_str().unwrap().contains("standard.jpg"), "the larger upload isn't used");
+        assert!(
+            !post["content"].as_str().unwrap().contains("standard.jpg"),
+            "the larger upload isn't used"
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -2265,7 +4100,11 @@ mod tests {
         use exif::{Field, In, Tag, Value};
         let dir = temp_dir("camera-details");
         let mut writer = exif::experimental::Writer::new();
-        let model = Field { tag: Tag::Model, ifd_num: In::PRIMARY, value: Value::Ascii(vec![b"X-T5".to_vec()]) };
+        let model = Field {
+            tag: Tag::Model,
+            ifd_num: In::PRIMARY,
+            value: Value::Ascii(vec![b"X-T5".to_vec()]),
+        };
         writer.push_field(&model);
         let mut tiff = std::io::Cursor::new(Vec::new());
         writer.write(&mut tiff, false).unwrap();
@@ -2274,36 +4113,85 @@ mod tests {
         app1.extend(u16::try_from(2 + 6 + tiff.len()).unwrap().to_be_bytes());
         app1.extend(b"Exif\0\0");
         app1.extend(tiff);
-        let stored = crate::image_io::encode_jpeg(&RgbaImage::from_pixel(600, 400, Rgba([90, 120, 160, 255])), 90).unwrap();
+        let stored = crate::image_io::encode_jpeg(
+            &RgbaImage::from_pixel(600, 400, Rgba([90, 120, 160, 255])),
+            90,
+        )
+        .unwrap();
         let photo = dir.join("camera.jpg");
         std::fs::write(&photo, [&stored[..2], &app1, &stored[2..]].concat()).unwrap();
         let with = |exif: bool, post_id: Option<i64>, uploads: HashMap<String, (i64, String)>| {
             let mut job = job(&dir, post_id, uploads);
-            job.sources.insert(11, Some((photo.clone(), Settings::default(), 0)));
+            job.sources
+                .insert(11, Some((photo.clone(), Settings::default(), 0)));
             Job { exif, ..job }
         };
-        let camera = |fake: &Fake| fake.bodies.borrow().iter().any(|(key, body)| key.ends_with("/media") && body.windows(4).any(|window| window == b"X-T5"));
+        let camera = |fake: &Fake| {
+            fake.bodies.borrow().iter().any(|(key, body)| {
+                key.ends_with("/media") && body.windows(4).any(|window| window == b"X-T5")
+            })
+        };
 
         let fake = Fake::default()
-            .answer_to("POST", MEDIA, 201, &[], r#"{"id":41,"source_url":"https://example.com/blog/with.jpg"}"#)
+            .answer_to(
+                "POST",
+                MEDIA,
+                201,
+                &[],
+                r#"{"id":41,"source_url":"https://example.com/blog/with.jpg"}"#,
+            )
             .answer_to("POST", POSTS, 201, &[], r#"{"id":7}"#);
         let mut events = Vec::new();
-        run(&fake, &with(true, None, HashMap::new()), &Progress::default(), &mut |event| events.push(event)).unwrap();
+        run(
+            &fake,
+            &with(true, None, HashMap::new()),
+            &Progress::default(),
+            &mut |event| events.push(event),
+        )
+        .unwrap();
         assert!(camera(&fake));
-        let Some(Event::Uploaded { hash, .. }) = events.into_iter().find(|event| matches!(event, Event::Uploaded { .. })) else { panic!() };
+        let Some(Event::Uploaded { hash, .. }) = events
+            .into_iter()
+            .find(|event| matches!(event, Event::Uploaded { .. }))
+        else {
+            panic!()
+        };
 
         // Keep camera details turned off: the upload that has them isn't used again.
         let known = HashMap::from([(hash, (41, "https://example.com/blog/with.jpg".to_string()))]);
         let fake = Fake::default()
-            .answer(&format!("{POSTS}/7?context=edit"), 200, &[], r#"{"status":"draft"}"#)
-            .answer_to("POST", MEDIA, 201, &[], r#"{"id":42,"source_url":"https://example.com/blog/without.jpg"}"#)
+            .answer(
+                &format!("{POSTS}/7?context=edit"),
+                200,
+                &[],
+                r#"{"status":"draft"}"#,
+            )
+            .answer_to(
+                "POST",
+                MEDIA,
+                201,
+                &[],
+                r#"{"id":42,"source_url":"https://example.com/blog/without.jpg"}"#,
+            )
             .answer_to("POST", &format!("{POSTS}/7"), 200, &[], r#"{"id":7}"#);
-        let saved = run(&fake, &with(false, Some(7), known), &Progress::default(), &mut |_| {}).unwrap();
-        assert_eq!((saved.uploaded, saved.reused, saved.media), (1, 0, vec![42]));
+        let saved = run(
+            &fake,
+            &with(false, Some(7), known),
+            &Progress::default(),
+            &mut |_| {},
+        )
+        .unwrap();
+        assert_eq!(
+            (saved.uploaded, saved.reused, saved.media),
+            (1, 0, vec![42])
+        );
         assert!(!camera(&fake), "sent without the camera");
         let bodies = fake.bodies.borrow();
         let post: serde_json::Value = serde_json::from_slice(&bodies.last().unwrap().1).unwrap();
-        assert!(!post["content"].as_str().unwrap().contains("with.jpg"), "the upload with camera details isn't used");
+        assert!(
+            !post["content"].as_str().unwrap().contains("with.jpg"),
+            "the upload with camera details isn't used"
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -2312,11 +4200,34 @@ mod tests {
         let dir = temp_dir("render");
         let damaged = dir.join("damaged.jpg");
         std::fs::write(&damaged, b"\xFF\xD8\xFF\xE0 not a whole photo").unwrap();
-        let mut failing = job(&dir, Some(7), HashMap::from([("an-earlier-render".to_string(), (41, "https://example.com/blog/a.jpg".to_string()))]));
-        failing.sources.insert(11, Some((damaged, Settings::default(), 0)));
-        let fake = Fake::default().answer(&format!("{POSTS}/7?context=edit"), 200, &[], r#"{"status":"draft"}"#);
-        assert_eq!(run(&fake, &failing, &Progress::default(), &mut |_| {}), Err(Stopped::Photo { media_id: 11, uploaded: 0 }));
-        assert!(fake.bodies.borrow().is_empty(), "no upload, no earlier upload in its place, and the draft unchanged");
+        let mut failing = job(
+            &dir,
+            Some(7),
+            HashMap::from([(
+                "an-earlier-render".to_string(),
+                (41, "https://example.com/blog/a.jpg".to_string()),
+            )]),
+        );
+        failing
+            .sources
+            .insert(11, Some((damaged, Settings::default(), 0)));
+        let fake = Fake::default().answer(
+            &format!("{POSTS}/7?context=edit"),
+            200,
+            &[],
+            r#"{"status":"draft"}"#,
+        );
+        assert_eq!(
+            run(&fake, &failing, &Progress::default(), &mut |_| {}),
+            Err(Stopped::Photo {
+                media_id: 11,
+                uploaded: 0
+            })
+        );
+        assert!(
+            fake.bodies.borrow().is_empty(),
+            "no upload, no earlier upload in its place, and the draft unchanged"
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -2334,14 +4245,23 @@ mod tests {
     }
 
     #[test]
-    fn each_size_sends_every_kind_of_photo_upright_fitted_at_its_quality_with_only_how_it_was_taken() {
+    fn each_size_sends_every_kind_of_photo_upright_fitted_at_its_quality_with_only_how_it_was_taken(
+    ) {
         use exif::{Field, In, Tag, Value};
         let dir = temp_dir("both-sizes");
-        let gradient = |w: u32, h: u32| image::RgbImage::from_fn(w, h, move |x, y| image::Rgb([(x * 255 / w) as u8, (y * 255 / h) as u8, 90]));
+        let gradient = |w: u32, h: u32| {
+            image::RgbImage::from_fn(w, h, move |x, y| {
+                image::Rgb([(x * 255 / w) as u8, (y * 255 / h) as u8, 90])
+            })
+        };
 
         // Turned in the camera: stored wide, shown tall, with where it was
         // taken and the camera's serial number.
-        let field = |tag, value| Field { tag, ifd_num: In::PRIMARY, value };
+        let field = |tag, value| Field {
+            tag,
+            ifd_num: In::PRIMARY,
+            value,
+        };
         let ascii = |text: &str| Value::Ascii(vec![text.as_bytes().to_vec()]);
         let mut writer = exif::experimental::Writer::new();
         let fields = [
@@ -2349,7 +4269,10 @@ mod tests {
             field(Tag::Model, ascii("X-T5")),
             field(Tag::BodySerialNumber, ascii("SERIAL-123")),
             field(Tag::GPSLatitudeRef, ascii("N")),
-            field(Tag::GPSLatitude, Value::Rational(vec![(37, 1).into(), (10, 1).into(), (0, 1).into()])),
+            field(
+                Tag::GPSLatitude,
+                Value::Rational(vec![(37, 1).into(), (10, 1).into(), (0, 1).into()]),
+            ),
         ];
         fields.iter().for_each(|field| writer.push_field(field));
         let mut tiff = std::io::Cursor::new(Vec::new());
@@ -2359,7 +4282,11 @@ mod tests {
         app1.extend(u16::try_from(2 + 6 + tiff.len()).unwrap().to_be_bytes());
         app1.extend(b"Exif\0\0");
         app1.extend(tiff);
-        let stored = crate::image_io::encode_jpeg(&image::DynamicImage::ImageRgb8(gradient(3000, 2000)).to_rgba8(), 92).unwrap();
+        let stored = crate::image_io::encode_jpeg(
+            &image::DynamicImage::ImageRgb8(gradient(3000, 2000)).to_rgba8(),
+            92,
+        )
+        .unwrap();
         let turned = dir.join("turned.jpg");
         std::fs::write(&turned, [&stored[..2], &app1, &stored[2..]].concat()).unwrap();
 
@@ -2371,17 +4298,46 @@ mod tests {
         gradient(3000, 2000).save(&wide).unwrap();
         let mut left_half = Settings::default();
         left_half.set_crop([0.0, 0.0, 0.5, 1.0]);
-        let preview = crate::image_io::encode_jpeg(&image::DynamicImage::ImageRgb8(gradient(2400, 1600)).to_rgba8(), 90).unwrap();
+        let preview = crate::image_io::encode_jpeg(
+            &image::DynamicImage::ImageRgb8(gradient(2400, 1600)).to_rgba8(),
+            90,
+        )
+        .unwrap();
         let raw = dir.join("raw.3fr");
-        std::fs::write(&raw, crate::story_html::tests::raw_with_preview(&preview, 2400, 1600)).unwrap();
+        std::fs::write(
+            &raw,
+            crate::story_html::tests::raw_with_preview(&preview, 2400, 1600),
+        )
+        .unwrap();
 
         let source = crate::photo_info::read_exif(&turned).unwrap();
-        assert!(source.get_field(Tag::GPSLatitude, In::PRIMARY).is_some() && source.get_field(Tag::BodySerialNumber, In::PRIMARY).is_some());
-        let at = |quality| quantization(&crate::image_io::encode_jpeg(&RgbaImage::from_pixel(8, 8, Rgba([1, 2, 3, 255])), quality).unwrap());
-        assert!(!at(85).is_empty() && at(85) != at(80), "the two qualities can be told apart in the bytes");
+        assert!(
+            source.get_field(Tag::GPSLatitude, In::PRIMARY).is_some()
+                && source
+                    .get_field(Tag::BodySerialNumber, In::PRIMARY)
+                    .is_some()
+        );
+        let at = |quality| {
+            quantization(
+                &crate::image_io::encode_jpeg(
+                    &RgbaImage::from_pixel(8, 8, Rgba([1, 2, 3, 255])),
+                    quality,
+                )
+                .unwrap(),
+            )
+        };
+        assert!(
+            !at(85).is_empty() && at(85) != at(80),
+            "the two qualities can be told apart in the bytes"
+        );
 
         let originals = [&turned, &tall, &small, &wide, &raw];
-        let checksums = |paths: &[&std::path::PathBuf]| paths.iter().map(|path| crate::upload::hash(&std::fs::read(path).unwrap())).collect::<Vec<_>>();
+        let checksums = |paths: &[&std::path::PathBuf]| {
+            paths
+                .iter()
+                .map(|path| crate::upload::hash(&std::fs::read(path).unwrap()))
+                .collect::<Vec<_>>()
+        };
         let before = checksums(&originals);
         let top_half = crate::trip::CoverCrop([0, 0, 10_000, 5_000]);
 
@@ -2396,54 +4352,130 @@ mod tests {
             ]);
             job.blocks = vec![
                 StoryBlock::new(Block::Photo(MediaUse::new(1))),
-                StoryBlock::new(Block::Gallery(vec![MediaUse::new(2), MediaUse::new(3), MediaUse::new(4)])),
+                StoryBlock::new(Block::Gallery(vec![
+                    MediaUse::new(2),
+                    MediaUse::new(3),
+                    MediaUse::new(4),
+                ])),
                 StoryBlock::new(Block::Photo(MediaUse::new(5))),
             ];
             job.story.cover = Some(2);
             job.story.cover_crop = top_half;
             let job = Job { size, ..job };
             let fake = Fake::default()
-                .answer_to("POST", MEDIA, 201, &[], r#"{"id":41,"source_url":"https://example.com/blog/a.jpg"}"#)
+                .answer_to(
+                    "POST",
+                    MEDIA,
+                    201,
+                    &[],
+                    r#"{"id":41,"source_url":"https://example.com/blog/a.jpg"}"#,
+                )
                 .answer_to("POST", POSTS, 201, &[], r#"{"id":7}"#);
             run(&fake, &job, &Progress::default(), &mut |_| {}).unwrap();
 
             let fit = |w, h| crate::upload::fitted(w, h, size);
             let (tall_w, tall_h) = fit(1500, 2600);
-            let cover = crate::story_html::crop_cover(&RgbaImage::new(tall_w, tall_h), top_half).dimensions();
-            let mut expected = vec![fit(2000, 3000), (tall_w, tall_h), (900, 600), fit(1500, 2000), fit(2400, 1600), cover];
+            let cover = crate::story_html::crop_cover(&RgbaImage::new(tall_w, tall_h), top_half)
+                .dimensions();
+            let mut expected = vec![
+                fit(2000, 3000),
+                (tall_w, tall_h),
+                (900, 600),
+                fit(1500, 2000),
+                fit(2400, 1600),
+                cover,
+            ];
             let mut sent = sent_photos(&fake);
             expected.sort();
             sent.sort();
-            assert_eq!(sent, expected, "{size:?}: upright, within {} px, never enlarged, cropped as edited and as framed", size.edge());
+            assert_eq!(
+                sent,
+                expected,
+                "{size:?}: upright, within {} px, never enlarged, cropped as edited and as framed",
+                size.edge()
+            );
             assert!(sent.iter().all(|&(w, h)| w.max(h) <= size.edge()));
 
             let tables = at(size.quality());
             let bodies = fake.bodies.borrow();
-            let uploads: Vec<&Vec<u8>> = bodies.iter().filter(|(key, _)| key.starts_with("POST") && key.ends_with("/media")).map(|(_, body)| body).collect();
+            let uploads: Vec<&Vec<u8>> = bodies
+                .iter()
+                .filter(|(key, _)| key.starts_with("POST") && key.ends_with("/media"))
+                .map(|(_, body)| body)
+                .collect();
             assert_eq!(uploads.len(), 6);
             for body in &uploads {
-                assert_eq!(quantization(body), tables, "{size:?}: encoded at quality {}", size.quality());
+                assert_eq!(
+                    quantization(body),
+                    tables,
+                    "{size:?}: encoded at quality {}",
+                    size.quality()
+                );
                 let has = |marker: &[u8]| body.windows(marker.len()).any(|window| window == marker);
                 assert!(!has(b"SERIAL-123"), "no serial number is sent");
-                let exif = exif::Reader::new().read_from_container(&mut std::io::Cursor::new(body)).ok();
-                let field = |tag| exif.as_ref().and_then(|exif| exif.get_field(tag, In::PRIMARY)).is_some();
-                assert!(!field(Tag::Orientation) && !field(Tag::GPSLatitude) && !field(Tag::GPSLatitudeRef) && !field(Tag::BodySerialNumber));
+                let exif = exif::Reader::new()
+                    .read_from_container(&mut std::io::Cursor::new(body))
+                    .ok();
+                let field = |tag| {
+                    exif.as_ref()
+                        .and_then(|exif| exif.get_field(tag, In::PRIMARY))
+                        .is_some()
+                };
+                assert!(
+                    !field(Tag::Orientation)
+                        && !field(Tag::GPSLatitude)
+                        && !field(Tag::GPSLatitudeRef)
+                        && !field(Tag::BodySerialNumber)
+                );
             }
-            let camera = uploads.iter().filter(|body| body.windows(4).any(|window| window == b"X-T5")).count();
-            assert_eq!(camera, 1, "the camera that took it is kept, on its photo alone");
+            let camera = uploads
+                .iter()
+                .filter(|body| body.windows(4).any(|window| window == b"X-T5"))
+                .count();
+            assert_eq!(
+                camera, 1,
+                "the camera that took it is kept, on its photo alone"
+            );
         }
-        assert_eq!(checksums(&originals), before, "the originals are never written");
+        assert_eq!(
+            checksums(&originals),
+            before,
+            "the originals are never written"
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
     fn an_upload_a_post_stopped_using_is_deleted_only_when_nothing_on_the_site_shows_it() {
-        let credentials = Credentials { user: "ana".into(), password: "abcd efgh".into() };
-        let uploads = |names: &[(i64, &str)]| names.iter().map(|(id, name)| (*id, format!("https://example.com/blog/wp-content/uploads/2026/11/{name}"))).collect::<Vec<_>>();
-        let search = |route: &str, stem: &str| format!("https://example.com/blog/wp-json/wp/v2/{route}?search={stem}&per_page=1&_fields=id*");
-        let references = |route: &str, page| format!("https://example.com/blog/wp-json/wp/v2/{route}?context=edit&status=publish,future,draft,pending,private&per_page=20&page={page}&orderby=id&order=asc&_fields=featured_media,content.raw");
-        let delete = |id: i64| format!("https://example.com/blog/wp-json/wp/v2/media/{id}?force=true&_method=DELETE");
-        let first_page = serde_json::to_string(&vec![serde_json::json!({ "featured_media": 0, "content": { "raw": "" } }); 20]).unwrap();
+        let credentials = Credentials {
+            user: "ana".into(),
+            password: "abcd efgh".into(),
+        };
+        let uploads = |names: &[(i64, &str)]| {
+            names
+                .iter()
+                .map(|(id, name)| {
+                    (
+                        *id,
+                        format!("https://example.com/blog/wp-content/uploads/2026/11/{name}"),
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        let search = |route: &str, stem: &str| {
+            format!("https://example.com/blog/wp-json/wp/v2/{route}?search={stem}&per_page=1&_fields=id*")
+        };
+        let references = |route: &str, page| {
+            format!("https://example.com/blog/wp-json/wp/v2/{route}?context=edit&status=publish,future,draft,pending,private&per_page=20&page={page}&orderby=id&order=asc&_fields=featured_media,content.raw")
+        };
+        let delete = |id: i64| {
+            format!("https://example.com/blog/wp-json/wp/v2/media/{id}?force=true&_method=DELETE")
+        };
+        let first_page = serde_json::to_string(&vec![
+            serde_json::json!({ "featured_media": 0, "content": { "raw": "" } });
+            20
+        ])
+        .unwrap();
         let fake = Fake::default()
             .answer(&references("posts", 1), 200, &[("x-wp-total", "0")], "[]")
             .answer(&references("pages", 1), 200, &[("x-wp-total", "21")], &first_page)
@@ -2473,9 +4505,26 @@ mod tests {
             (45, "a.jpg"),
         ]);
         let deleted = delete_unused(&fake, &local_api(), &credentials, Policy::default(), &sent);
-        assert_eq!(deleted, Deleted { gone: vec![42, 43], in_use: 7, failure: None, left: Vec::new() }, "featured images and shortcode references are kept");
-        let posts = fake.bodies.borrow().iter().filter(|(key, _)| key.starts_with("POST")).count();
-        assert_eq!(posts, 2, "only the two found nowhere were asked to be deleted");
+        assert_eq!(
+            deleted,
+            Deleted {
+                gone: vec![42, 43],
+                in_use: 7,
+                failure: None,
+                left: Vec::new()
+            },
+            "featured images and shortcode references are kept"
+        );
+        let posts = fake
+            .bodies
+            .borrow()
+            .iter()
+            .filter(|(key, _)| key.starts_with("POST"))
+            .count();
+        assert_eq!(
+            posts, 2,
+            "only the two found nowhere were asked to be deleted"
+        );
 
         // An account that may not delete uploads: it stops there.
         let refused = Fake::default()
@@ -2483,92 +4532,273 @@ mod tests {
             .answer(&references("pages", 1), 200, &[("x-wp-total", "0")], "[]")
             .answer(&search("posts", "temple-tea-c9d0e1f2"), 200, &[], "[]")
             .answer(&search("pages", "temple-tea-c9d0e1f2"), 200, &[], "[]")
-            .answer_to("POST", &delete(42), 403, &[], r#"{"code":"rest_cannot_delete"}"#);
-        let deleted = delete_unused(&refused, &local_api(), &credentials, Policy::default(), &uploads(&[(42, "temple-tea-c9d0e1f2.jpg"), (43, "temple-walk-0a1b2c3d.mp4")]));
-        assert_eq!(deleted, Deleted { gone: Vec::new(), in_use: 0, failure: Some(Failure::Forbidden), left: vec![42, 43] }, "those not reached are told, to be offered again");
+            .answer_to(
+                "POST",
+                &delete(42),
+                403,
+                &[],
+                r#"{"code":"rest_cannot_delete"}"#,
+            );
+        let deleted = delete_unused(
+            &refused,
+            &local_api(),
+            &credentials,
+            Policy::default(),
+            &uploads(&[
+                (42, "temple-tea-c9d0e1f2.jpg"),
+                (43, "temple-walk-0a1b2c3d.mp4"),
+            ]),
+        );
+        assert_eq!(
+            deleted,
+            Deleted {
+                gone: Vec::new(),
+                in_use: 0,
+                failure: Some(Failure::Forbidden),
+                left: vec![42, 43]
+            },
+            "those not reached are told, to be offered again"
+        );
 
-        let incomplete = Fake::default().answer(&references("posts", 1), 200, &[("x-wp-total", "1")], "[]");
-        let deleted = delete_unused(&incomplete, &local_api(), &credentials, Policy::default(), &sent);
+        let incomplete =
+            Fake::default().answer(&references("posts", 1), 200, &[("x-wp-total", "1")], "[]");
+        let deleted = delete_unused(
+            &incomplete,
+            &local_api(),
+            &credentials,
+            Policy::default(),
+            &sent,
+        );
         assert_eq!(deleted.failure, Some(Failure::CleanupAccess));
-        assert_eq!(deleted.left, sent.iter().map(|(id, _)| *id).collect::<Vec<_>>());
-        assert!(incomplete.bodies.borrow().iter().all(|(key, _)| !key.starts_with("POST")));
+        assert_eq!(
+            deleted.left,
+            sent.iter().map(|(id, _)| *id).collect::<Vec<_>>()
+        );
+        assert!(incomplete
+            .bodies
+            .borrow()
+            .iter()
+            .all(|(key, _)| !key.starts_with("POST")));
 
         let author = Fake::default()
             .answer(&references("posts", 1), 200, &[("x-wp-total", "0")], "[]")
             .answer(&references("pages", 1), 400, &[], r#"{"code":"rest_invalid_param","data":{"details":{"status":{"code":"rest_forbidden_status"}}}}"#);
-        let deleted = delete_unused(&author, &local_api(), &credentials, Policy::default(), &sent);
+        let deleted = delete_unused(
+            &author,
+            &local_api(),
+            &credentials,
+            Policy::default(),
+            &sent,
+        );
         assert_eq!(deleted.failure, Some(Failure::CleanupAccess));
-        assert!(author.bodies.borrow().iter().all(|(key, _)| !key.starts_with("POST")));
+        assert!(author
+            .bodies
+            .borrow()
+            .iter()
+            .all(|(key, _)| !key.starts_with("POST")));
     }
 
     #[test]
     fn a_post_check_that_stops_the_job_comes_before_the_journey_is_made() {
         let dir = temp_dir("check-first");
-        let journey = Journey { post_id: None, title: "Coast".into(), description: String::new() };
-        let job = Job { journey: Some(journey), ..job(&dir, Some(7), HashMap::new()) };
+        let journey = Journey {
+            post_id: None,
+            title: "Coast".into(),
+            description: String::new(),
+        };
+        let job = Job {
+            journey: Some(journey),
+            ..job(&dir, Some(7), HashMap::new())
+        };
         let fake = Fake::default()
             .answer_to("OPTIONS", POSTS, 200, &[], &schema(r#""_vl_trip_id":{}"#))
-            .answer_to("GET", &format!("{POSTS}/7*"), 200, &[], r#"{"id":7,"status":"publish"}"#)
-            .answer_to("POST", JOURNEYS_URL, 201, &[], r#"{"id":90,"status":"draft"}"#);
+            .answer_to(
+                "GET",
+                &format!("{POSTS}/7*"),
+                200,
+                &[],
+                r#"{"id":7,"status":"publish"}"#,
+            )
+            .answer_to(
+                "POST",
+                JOURNEYS_URL,
+                201,
+                &[],
+                r#"{"id":90,"status":"draft"}"#,
+            );
         let stopped = run(&fake, &job, &Progress::default(), &mut |_| {});
         assert_eq!(stopped, Err(Stopped::NotDraft("publish".into())));
-        assert!(fake.bodies.borrow().is_empty(), "nothing sent, no Journey made: {:?}", fake.bodies.borrow().iter().map(|(key, _)| key.clone()).collect::<Vec<_>>());
+        assert!(
+            fake.bodies.borrow().is_empty(),
+            "nothing sent, no Journey made: {:?}",
+            fake.bodies
+                .borrow()
+                .iter()
+                .map(|(key, _)| key.clone())
+                .collect::<Vec<_>>()
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
     fn a_story_by_day_scheduled_too_soon_makes_no_empty_drafts() {
         let dir = temp_dir("days-too-soon");
-        let at = chrono::NaiveDate::from_ymd_opt(2026, 11, 1).unwrap().and_hms_opt(8, 1, 0).unwrap();
-        let blocks = vec![StoryBlock::new(Block::Heading("Harbour".into())), StoryBlock::new(Block::Paragraph("Rain".into()))];
-        let job = Job { blocks, days: Some(HashMap::new()), publish: true, schedule: Some(at), ..job(&dir, None, HashMap::new()) };
+        let at = chrono::NaiveDate::from_ymd_opt(2026, 11, 1)
+            .unwrap()
+            .and_hms_opt(8, 1, 0)
+            .unwrap();
+        let blocks = vec![
+            StoryBlock::new(Block::Heading("Harbour".into())),
+            StoryBlock::new(Block::Paragraph("Rain".into())),
+        ];
+        let job = Job {
+            blocks,
+            days: Some(HashMap::new()),
+            publish: true,
+            schedule: Some(at),
+            ..job(&dir, None, HashMap::new())
+        };
         let fake = Fake::default()
-            .answer("https://example.com/blog/wp-json/", 200, &[("date", "Sun, 01 Nov 2026 08:00:00 GMT")], r#"{"gmt_offset":0}"#)
+            .answer(
+                "https://example.com/blog/wp-json/",
+                200,
+                &[("date", "Sun, 01 Nov 2026 08:00:00 GMT")],
+                r#"{"gmt_offset":0}"#,
+            )
             .answer_to("POST", POSTS, 201, &[], r#"{"id":8,"status":"draft"}"#);
-        assert_eq!(run_days(&fake, &job, &Progress::default(), &mut |_| {}), Err(Stopped::TooSoon));
-        assert!(fake.bodies.borrow().is_empty(), "no empty Day draft is left behind");
+        assert_eq!(
+            run_days(&fake, &job, &Progress::default(), &mut |_| {}),
+            Err(Stopped::TooSoon)
+        );
+        assert!(
+            fake.bodies.borrow().is_empty(),
+            "no empty Day draft is left behind"
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
     fn a_journey_whose_answer_was_lost_is_found_not_made_again() {
         let dir = temp_dir("lost-journey");
-        let journey = Journey { post_id: None, title: "Coast".into(), description: String::new() };
-        let job = Job { journey: Some(journey), ..job(&dir, None, HashMap::new()) };
+        let journey = Journey {
+            post_id: None,
+            title: "Coast".into(),
+            description: String::new(),
+        };
+        let job = Job {
+            journey: Some(journey),
+            ..job(&dir, None, HashMap::new())
+        };
         let fake = Fake::default()
             .answer_to("OPTIONS", POSTS, 200, &[], &schema(r#""_vl_trip_id":{}"#))
             .answer_to("POST", JOURNEYS_URL, 502, &[], "")
-            .answer_to("GET", &format!("{JOURNEYS_URL}?search*"), 200, &[], r#"[{"id":90,"title":{"raw":"Coast"}}]"#)
-            .answer_to("GET", &format!("{JOURNEYS_URL}/90*"), 200, &[], r#"{"id":90,"status":"draft","meta":{"_vl_trip_days":""}}"#)
-            .answer_to("POST", &format!("{JOURNEYS_URL}/90"), 200, &[], r#"{"id":90}"#)
-            .answer_to("POST", MEDIA, 201, &[], r#"{"id":41,"source_url":"https://example.com/blog/a.jpg"}"#)
-            .answer_to("POST", POSTS, 201, &[], r#"{"id":7,"status":"draft","meta":{"_vl_trip_id":90}}"#);
+            .answer_to(
+                "GET",
+                &format!("{JOURNEYS_URL}?search*"),
+                200,
+                &[],
+                r#"[{"id":90,"title":{"raw":"Coast"}}]"#,
+            )
+            .answer_to(
+                "GET",
+                &format!("{JOURNEYS_URL}/90*"),
+                200,
+                &[],
+                r#"{"id":90,"status":"draft","meta":{"_vl_trip_days":""}}"#,
+            )
+            .answer_to(
+                "POST",
+                &format!("{JOURNEYS_URL}/90"),
+                200,
+                &[],
+                r#"{"id":90}"#,
+            )
+            .answer_to(
+                "POST",
+                MEDIA,
+                201,
+                &[],
+                r#"{"id":41,"source_url":"https://example.com/blog/a.jpg"}"#,
+            )
+            .answer_to(
+                "POST",
+                POSTS,
+                201,
+                &[],
+                r#"{"id":7,"status":"draft","meta":{"_vl_trip_id":90}}"#,
+            );
         let mut events = Vec::new();
-        run(&fake, &job, &Progress::default(), &mut |event| events.push(event)).unwrap();
-        assert!(events.contains(&Event::Journey { trip_id: 1, post_id: 90 }));
-        let made = fake.bodies.borrow().iter().filter(|(key, _)| *key == format!("POST {JOURNEYS_URL}")).count();
+        run(&fake, &job, &Progress::default(), &mut |event| {
+            events.push(event)
+        })
+        .unwrap();
+        assert!(events.contains(&Event::Journey {
+            trip_id: 1,
+            post_id: 90
+        }));
+        let made = fake
+            .bodies
+            .borrow()
+            .iter()
+            .filter(|(key, _)| *key == format!("POST {JOURNEYS_URL}"))
+            .count();
         assert_eq!(made, 1, "sent once, then found by its title");
-        let looked = fake.asked.borrow().iter().map(|(url, _)| url.clone()).find(|url| url.starts_with(&format!("{JOURNEYS_URL}?search"))).unwrap();
-        assert!(looked.contains("status=draft&after="), "only drafts made since, never another Trip's Journey changed meanwhile: {looked}");
+        let looked = fake
+            .asked
+            .borrow()
+            .iter()
+            .map(|(url, _)| url.clone())
+            .find(|url| url.starts_with(&format!("{JOURNEYS_URL}?search")))
+            .unwrap();
+        assert!(
+            looked.contains("status=draft&after="),
+            "only drafts made since, never another Trip's Journey changed meanwhile: {looked}"
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
     fn an_untitled_story_never_takes_another_untitled_post() {
         let dir = temp_dir("untitled");
-        let mut job = Job { allow_new: false, ..job(&dir, None, HashMap::new()) };
+        let mut job = Job {
+            allow_new: false,
+            ..job(&dir, None, HashMap::new())
+        };
         job.story.title = String::new();
         let fake = Fake::default()
-            .answer_to("GET", &format!("{POSTS}?search*"), 200, &[], r#"[{"id":5,"title":{"raw":""}}]"#)
-            .answer_to("POST", MEDIA, 201, &[], r#"{"id":41,"source_url":"https://example.com/blog/a.jpg"}"#)
+            .answer_to(
+                "GET",
+                &format!("{POSTS}?search*"),
+                200,
+                &[],
+                r#"[{"id":5,"title":{"raw":""}}]"#,
+            )
+            .answer_to(
+                "POST",
+                MEDIA,
+                201,
+                &[],
+                r#"{"id":41,"source_url":"https://example.com/blog/a.jpg"}"#,
+            )
             .answer_to("POST", POSTS, 201, &[], r#"{"id":8,"status":"draft"}"#);
         let progress = Progress::default();
         let saved = run(&fake, &job, &progress, &mut |_| {}).unwrap();
-        assert_eq!(saved.post_id, 8, "a new draft, not someone else's untitled post");
-        assert!(fake.bodies.borrow().iter().all(|(key, _)| !key.contains("/posts/5")));
+        assert_eq!(
+            saved.post_id, 8,
+            "a new draft, not someone else's untitled post"
+        );
+        assert!(fake
+            .bodies
+            .borrow()
+            .iter()
+            .all(|(key, _)| !key.contains("/posts/5")));
         // Sending is counted on its own once the photos are rendered.
         assert!(progress.uploading.load(Ordering::Relaxed));
-        assert_eq!(progress.done.load(Ordering::Relaxed), progress.total.load(Ordering::Relaxed), "every step counted, none beyond");
+        assert_eq!(
+            progress.done.load(Ordering::Relaxed),
+            progress.total.load(Ordering::Relaxed),
+            "every step counted, none beyond"
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 }

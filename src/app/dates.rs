@@ -49,11 +49,15 @@ impl PicassoApp {
     }
 
     pub(super) fn adjust_date_modal(&mut self, ctx: &egui::Context) {
-        let Modal::AdjustDate(dialog) = &mut self.modal else { return };
+        let Modal::AdjustDate(dialog) = &mut self.modal else {
+            return;
+        };
         let mut close = false;
         let mut apply = false;
         let target = match dialog.mode {
-            DateMode::Shift => Some(dialog.first + ((dialog.days * 24 + dialog.hours) * 60 + dialog.minutes) * 60),
+            DateMode::Shift => {
+                Some(dialog.first + ((dialog.days * 24 + dialog.hours) * 60 + dialog.minutes) * 60)
+            }
             DateMode::Set => parse_time(&dialog.text),
             DateMode::File => None,
         };
@@ -111,7 +115,9 @@ impl PicassoApp {
             });
         });
         if apply {
-            let Modal::AdjustDate(dialog) = std::mem::replace(&mut self.modal, Modal::None) else { return };
+            let Modal::AdjustDate(dialog) = std::mem::replace(&mut self.modal, Modal::None) else {
+                return;
+            };
             match (dialog.mode, target) {
                 (DateMode::File, _) => self.db.reset_taken(&dialog.ids),
                 (_, Some(target)) => self.db.shift_taken(&dialog.ids, target - dialog.first),
@@ -129,7 +135,11 @@ impl PicassoApp {
 
 fn format_time(secs: i64) -> String {
     chrono::DateTime::from_timestamp(secs, 0)
-        .map(|time| time.with_timezone(&Local).format("%Y-%m-%d %H:%M").to_string())
+        .map(|time| {
+            time.with_timezone(&Local)
+                .format("%Y-%m-%d %H:%M")
+                .to_string()
+        })
         .unwrap_or_default()
 }
 
@@ -140,7 +150,11 @@ fn parse_time(text: &str) -> Option<i64> {
     let naive = ["%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"]
         .iter()
         .find_map(|format| NaiveDateTime::parse_from_str(&text, format).ok())
-        .or_else(|| NaiveDate::parse_from_str(&text, "%Y-%m-%d").ok()?.and_hms_opt(12, 0, 0))?;
+        .or_else(|| {
+            NaiveDate::parse_from_str(&text, "%Y-%m-%d")
+                .ok()?
+                .and_hms_opt(12, 0, 0)
+        })?;
     let secs = Local.from_local_datetime(&naive).earliest()?.timestamp();
     (secs >= crate::types::EARLIEST_PHOTO).then_some(secs)
 }
@@ -151,7 +165,10 @@ mod tests {
 
     #[test]
     fn typed_dates_are_read_in_local_time() {
-        let noon = Local.with_ymd_and_hms(2019, 5, 17, 12, 0, 0).unwrap().timestamp();
+        let noon = Local
+            .with_ymd_and_hms(2019, 5, 17, 12, 0, 0)
+            .unwrap()
+            .timestamp();
         assert_eq!(parse_time("2019-05-17"), Some(noon));
         assert_eq!(parse_time(" 2019/05/17 14:30 "), Some(noon + 9000));
         assert_eq!(parse_time("2019.05.17 14:30:15"), Some(noon + 9015));

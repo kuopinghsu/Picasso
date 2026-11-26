@@ -11,7 +11,15 @@ use chrono::format::{Item, StrftimeItems};
 use crate::i18n::{tr, trf};
 
 /// The keywords offered under the pattern, as they are typed into it.
-pub const KEYWORDS: [&str; 7] = ["${DateTimeOriginal}", "${FileModifyDate}", "${Model}", "%f", "%-03c", "%le", "%e"];
+pub const KEYWORDS: [&str; 7] = [
+    "${DateTimeOriginal}",
+    "${FileModifyDate}",
+    "${Model}",
+    "%f",
+    "%-03c",
+    "%le",
+    "%e",
+];
 /// The pattern and date format of the exiftool command most people start from.
 pub const PATTERN: &str = "${DateTimeOriginal}%-03c.%le";
 pub const DATE_FORMAT: &str = "%Y.%m.%d-%Hh%Mm%Ss";
@@ -78,23 +86,45 @@ enum Token {
 /// moved by the `shift` time offset first. A copy number goes to a file only
 /// when its name is taken, and a file already named by the pattern keeps its
 /// name, so renaming twice changes nothing.
-pub fn plan(pattern: &str, date_format: &str, shift: &str, files: &[File], others: &[String]) -> Result<Vec<Outcome>, String> {
+pub fn plan(
+    pattern: &str,
+    date_format: &str,
+    shift: &str,
+    files: &[File],
+    others: &[String],
+) -> Result<Vec<Outcome>, String> {
     let tokens = parse(pattern)?;
-    let dated = tokens.iter().any(|token| matches!(token, Token::Taken | Token::Modified));
+    let dated = tokens
+        .iter()
+        .any(|token| matches!(token, Token::Taken | Token::Modified));
     if dated && StrftimeItems::new(date_format).any(|item| matches!(item, Item::Error)) {
         return Err(tr("The date format isn't valid").into());
     }
     let shift = if dated { offset(shift)? } else { 0 };
-    let dates = Dates { format: date_format, shift };
-    let copies: Vec<Copy> = tokens.iter().filter_map(|token| if let Token::Copy(copy) = token { Some(*copy) } else { None }).collect();
+    let dates = Dates {
+        format: date_format,
+        shift,
+    };
+    let copies: Vec<Copy> = tokens
+        .iter()
+        .filter_map(|token| {
+            if let Token::Copy(copy) = token {
+                Some(*copy)
+            } else {
+                None
+            }
+        })
+        .collect();
     let first = copies.iter().any(|copy| copy.always).then_some(0);
     let mut taken: HashSet<String> = others.iter().map(|name| key(name)).collect();
     let mut outcomes: Vec<Option<Outcome>> = vec![None; files.len()];
     let mut parts = Vec::with_capacity(files.len());
     for (file, outcome) in files.iter().zip(&mut outcomes) {
-        let expanded = expand(&tokens, file, &dates).and_then(|expanded| match problem(&join(&expanded, &copies, first), &file.name) {
-            Some(problem) => Err(problem),
-            None => Ok(expanded),
+        let expanded = expand(&tokens, file, &dates).and_then(|expanded| {
+            match problem(&join(&expanded, &copies, first), &file.name) {
+                Some(problem) => Err(problem),
+                None => Ok(expanded),
+            }
         });
         match expanded {
             Err(reason) => {
@@ -120,7 +150,9 @@ pub fn plan(pattern: &str, date_format: &str, shift: &str, files: &[File], other
     let after = |number: Option<u32>| Some(number.map_or(1, |n| n + 1));
     let mut next: HashMap<&[String], Option<u32>> = HashMap::new();
     for ((expanded, outcome), file) in parts.iter().zip(&mut outcomes).zip(files) {
-        let Some(expanded) = expanded.as_deref().filter(|_| outcome.is_none()) else { continue };
+        let Some(expanded) = expanded.as_deref().filter(|_| outcome.is_none()) else {
+            continue;
+        };
         // Below `lowest` every name is taken; a number skipped only because a
         // companion's name is taken stays free for the next file.
         let mut number = next.get(expanded).copied().unwrap_or(first);
@@ -141,7 +173,10 @@ pub fn plan(pattern: &str, date_format: &str, shift: &str, files: &[File], other
         });
         next.insert(expanded, lowest);
     }
-    let mut outcomes: Vec<Outcome> = outcomes.into_iter().map(|outcome| outcome.unwrap_or(Outcome::Same)).collect();
+    let mut outcomes: Vec<Outcome> = outcomes
+        .into_iter()
+        .map(|outcome| outcome.unwrap_or(Outcome::Same))
+        .collect();
     // A file that can't be renamed keeps its name, so no other file can take it.
     loop {
         let kept: HashSet<String> = files
@@ -152,7 +187,8 @@ pub fn plan(pattern: &str, date_format: &str, shift: &str, files: &[File], other
             .collect();
         let mut changed = false;
         for (file, outcome) in files.iter().zip(&mut outcomes) {
-            if matches!(outcome, Outcome::Rename(name) if new_names(file, name).iter().any(|name| kept.contains(&key(name)))) {
+            if matches!(outcome, Outcome::Rename(name) if new_names(file, name).iter().any(|name| kept.contains(&key(name))))
+            {
                 *outcome = Outcome::Fails(tr("The name is taken by another file").into());
                 changed = true;
             }
@@ -170,13 +206,23 @@ fn names_of(file: &File) -> impl Iterator<Item = &str> {
 
 /// The names `file` and its companions get when it is renamed to `name`.
 fn new_names(file: &File, name: &str) -> Vec<String> {
-    std::iter::once(name.to_string()).chain(file.companions.iter().map(|companion| companion_name(companion, &file.name, name))).collect()
+    std::iter::once(name.to_string())
+        .chain(
+            file.companions
+                .iter()
+                .map(|companion| companion_name(companion, &file.name, name)),
+        )
+        .collect()
 }
 
 /// Takes all of `names`, if none is taken yet.
 fn claim(taken: &mut HashSet<String>, names: &[String]) -> bool {
     let keys: Vec<String> = names.iter().map(|name| key(name)).collect();
-    if keys.iter().enumerate().any(|(i, name)| taken.contains(name) || keys[..i].contains(name)) {
+    if keys
+        .iter()
+        .enumerate()
+        .any(|(i, name)| taken.contains(name) || keys[..i].contains(name))
+    {
         return false;
     }
     taken.extend(keys);
@@ -188,12 +234,21 @@ fn claim(taken: &mut HashSet<String>, names: &[String]) -> bool {
 /// `DSC0001.JPG.xmp` the whole name.
 pub fn companion_name(companion: &str, old: &str, new: &str) -> String {
     let path = Path::new(companion);
-    let extension = path.extension().map(|ext| ext.to_string_lossy().into_owned()).unwrap_or_default();
-    let stem = path.file_stem().map(|stem| stem.to_string_lossy().to_lowercase()).unwrap_or_default();
+    let extension = path
+        .extension()
+        .map(|ext| ext.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let stem = path
+        .file_stem()
+        .map(|stem| stem.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
     if stem == old.to_lowercase() {
         format!("{new}.{extension}")
     } else {
-        let new_stem = Path::new(new).file_stem().map(|stem| stem.to_string_lossy().into_owned()).unwrap_or_default();
+        let new_stem = Path::new(new)
+            .file_stem()
+            .map(|stem| stem.to_string_lossy().into_owned())
+            .unwrap_or_default();
         format!("{new_stem}.{extension}")
     }
 }
@@ -254,7 +309,9 @@ fn parse(pattern: &str) -> Result<Vec<Token>, String> {
                         (&inner[..end], &inner[end + 1..])
                     }
                     None => {
-                        let end = after.find(|c: char| !(c.is_ascii_alphanumeric() || c == '_')).unwrap_or(after.len());
+                        let end = after
+                            .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+                            .unwrap_or(after.len());
                         (&after[..end], &after[end..])
                     }
                 };
@@ -292,7 +349,9 @@ fn parse(pattern: &str) -> Result<Vec<Token>, String> {
                     Some('+') => ("_", &after[1..]),
                     _ => ("", after),
                 };
-                let digits = body.find(|c: char| !c.is_ascii_digit()).unwrap_or(body.len());
+                let digits = body
+                    .find(|c: char| !c.is_ascii_digit())
+                    .unwrap_or(body.len());
                 let width = body[..digits].parse::<usize>().unwrap_or(0).min(9);
                 let body = &body[digits..];
                 let (always, body) = match body.strip_prefix('.') {
@@ -300,9 +359,20 @@ fn parse(pattern: &str) -> Result<Vec<Token>, String> {
                     None => (false, body),
                 };
                 let Some(next) = body.strip_prefix('c') else {
-                    return Err(unknown(&rest[..rest.len() - body.len() + body.chars().next().map_or(0, char::len_utf8)]));
+                    return Err(unknown(
+                        &rest[..rest.len() - body.len()
+                            + body.chars().next().map_or(0, char::len_utf8)],
+                    ));
                 };
-                push(&mut tokens, &mut text, Token::Copy(Copy { lead, width, always }));
+                push(
+                    &mut tokens,
+                    &mut text,
+                    Token::Copy(Copy {
+                        lead,
+                        width,
+                        always,
+                    }),
+                );
                 rest = next;
             }
             _ => {
@@ -327,16 +397,35 @@ struct Dates<'a> {
 /// The new name of `file`, in parts that the copy numbers go between.
 fn expand(tokens: &[Token], file: &File, dates: &Dates) -> Result<Vec<String>, String> {
     let path = Path::new(&file.name);
-    let stem = path.file_stem().map(|stem| stem.to_string_lossy().into_owned()).unwrap_or_default();
-    let extension = path.extension().map(|ext| ext.to_string_lossy().into_owned()).unwrap_or_default();
+    let stem = path
+        .file_stem()
+        .map(|stem| stem.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let extension = path
+        .extension()
+        .map(|ext| ext.to_string_lossy().into_owned())
+        .unwrap_or_default();
     let mut parts = vec![String::new()];
     for token in tokens {
         let text = match token {
             Token::Text(text) => text.clone(),
             Token::Taken => local_time(file.taken_at, dates),
             Token::Modified => local_time(file.modified_at, dates),
-            Token::Model if file.camera.trim().is_empty() => return Err(tr("The camera isn't known").into()),
-            Token::Model => file.camera.trim().chars().map(|c| if c < ' ' || NOT_IN_NAMES.contains(c) { '_' } else { c }).collect(),
+            Token::Model if file.camera.trim().is_empty() => {
+                return Err(tr("The camera isn't known").into())
+            }
+            Token::Model => file
+                .camera
+                .trim()
+                .chars()
+                .map(|c| {
+                    if c < ' ' || NOT_IN_NAMES.contains(c) {
+                        '_'
+                    } else {
+                        c
+                    }
+                })
+                .collect(),
             Token::Stem(case) => cased(&stem, *case),
             Token::Extension(case) => cased(&extension, *case),
             Token::Copy(_) => {
@@ -355,14 +444,19 @@ fn expand(tokens: &[Token], file: &File, dates: &Dates) -> Result<Vec<String>, S
 /// and video dates in UTC, so this gives both as the camera showed them, as
 /// exiftool does with `-api QuickTimeUTC=1`.
 fn local_time(secs: i64, dates: &Dates) -> String {
-    let Some(time) = chrono::DateTime::from_timestamp(secs, 0).map(|time| time.with_timezone(&chrono::Local)) else {
+    let Some(time) =
+        chrono::DateTime::from_timestamp(secs, 0).map(|time| time.with_timezone(&chrono::Local))
+    else {
         return String::new();
     };
     if dates.shift == 0 {
         return time.format(dates.format).to_string();
     }
     let shift = chrono::Duration::seconds(dates.shift);
-    let on_clock = time.naive_local().checked_add_signed(shift).and_then(|clock| clock.and_local_timezone(chrono::Local).earliest());
+    let on_clock = time
+        .naive_local()
+        .checked_add_signed(shift)
+        .and_then(|clock| clock.and_local_timezone(chrono::Local).earliest());
     match on_clock.or_else(|| time.checked_add_signed(shift)) {
         Some(shifted) => shifted.format(dates.format).to_string(),
         None => String::new(),
@@ -375,7 +469,9 @@ fn local_time(secs: i64, dates: &Dates) -> String {
 pub fn offset(text: &str) -> Result<i64, String> {
     let invalid = || tr("The time offset isn't valid").to_string();
     let number = |field: &str| match field.len() {
-        1..=6 if field.bytes().all(|byte| byte.is_ascii_digit()) => field.parse::<i64>().map_err(|_| invalid()),
+        1..=6 if field.bytes().all(|byte| byte.is_ascii_digit()) => {
+            field.parse::<i64>().map_err(|_| invalid())
+        }
         _ => Err(invalid()),
     };
     let text = text.trim();
@@ -413,7 +509,11 @@ fn join(parts: &[String], copies: &[Copy], number: Option<u32>) -> String {
     let mut name = parts[0].clone();
     for (copy, part) in copies.iter().zip(&parts[1..]) {
         if let Some(number) = number {
-            name.push_str(&format!("{}{number:0width$}", copy.lead, width = copy.width));
+            name.push_str(&format!(
+                "{}{number:0width$}",
+                copy.lead,
+                width = copy.width
+            ));
         }
         name.push_str(part);
     }
@@ -422,7 +522,12 @@ fn join(parts: &[String], copies: &[Copy], number: Option<u32>) -> String {
 
 /// The copy number with which the pattern gives the file the name it has,
 /// read from the digits after the first copy number's lead.
-fn own_number(parts: &[String], copies: &[Copy], first: Option<u32>, current: &str) -> Option<Option<u32>> {
+fn own_number(
+    parts: &[String],
+    copies: &[Copy],
+    first: Option<u32>,
+    current: &str,
+) -> Option<Option<u32>> {
     let current = key(current);
     let head = key(&parts[0]);
     if !current.starts_with(&head) || !current.ends_with(&key(parts.last()?)) {
@@ -431,26 +536,54 @@ fn own_number(parts: &[String], copies: &[Copy], first: Option<u32>, current: &s
     let Some(copy) = copies.first() else {
         return (head == current).then_some(None);
     };
-    let digits = current[head.len()..].strip_prefix(copy.lead).unwrap_or_default();
-    let run = digits.find(|c: char| !c.is_ascii_digit()).unwrap_or(digits.len());
+    let digits = current[head.len()..]
+        .strip_prefix(copy.lead)
+        .unwrap_or_default();
+    let run = digits
+        .find(|c: char| !c.is_ascii_digit())
+        .unwrap_or(digits.len());
     let lowest = first.unwrap_or(1);
     std::iter::once(first)
-        .chain((1..=run.min(10)).filter_map(|len| digits[..len].parse::<u32>().ok()).filter(|n| *n >= lowest).map(Some))
+        .chain(
+            (1..=run.min(10))
+                .filter_map(|len| digits[..len].parse::<u32>().ok())
+                .filter(|n| *n >= lowest)
+                .map(Some),
+        )
         .find(|number| key(&join(parts, copies, *number)) == current)
 }
 
 /// Why `name` can't replace `original`, if it can't.
 fn problem(name: &str, original: &str) -> Option<String> {
-    let extension = |name: &str| Path::new(name).extension().map(|ext| ext.to_string_lossy().to_lowercase());
-    if name.is_empty() || extension(name) != extension(original) || Path::new(name).file_stem().is_none() {
+    let extension = |name: &str| {
+        Path::new(name)
+            .extension()
+            .map(|ext| ext.to_string_lossy().to_lowercase())
+    };
+    if name.is_empty()
+        || extension(name) != extension(original)
+        || Path::new(name).file_stem().is_none()
+    {
         return Some(tr("The new name must end with the file's extension").into());
     }
     if name.chars().any(|c| c < ' ' || NOT_IN_NAMES.contains(c)) || name.ends_with([' ', '.']) {
         return Some(tr("The name has characters that aren't allowed").into());
     }
-    let device = name.split('.').next().unwrap_or_default().trim_end().to_ascii_uppercase();
-    let numbered = |prefix: &str| device.strip_prefix(prefix).is_some_and(|rest| rest.len() == 1 && rest.as_bytes()[0].is_ascii_digit());
-    if matches!(device.as_str(), "CON" | "PRN" | "AUX" | "NUL") || numbered("COM") || numbered("LPT") {
+    let device = name
+        .split('.')
+        .next()
+        .unwrap_or_default()
+        .trim_end()
+        .to_ascii_uppercase();
+    let numbered = |prefix: &str| {
+        device
+            .strip_prefix(prefix)
+            .is_some_and(|rest| rest.len() == 1 && rest.as_bytes()[0].is_ascii_digit())
+    };
+    if matches!(device.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || numbered("COM")
+        || numbered("LPT")
+    {
         return Some(tr("Windows doesn't allow this name").into());
     }
     (length(name) > 255).then(|| tr("The name is too long").into())
@@ -483,7 +616,11 @@ pub fn apply(dir: &Path, renames: &[(String, String)]) -> Result<(), String> {
     let mut temporary = Vec::with_capacity(renames.len());
     for (from, _) in renames {
         // A name near the length limit gets a short temporary name instead.
-        let base = if length(from) + TEMPORARY.len() + 8 > 255 { String::new() } else { from.clone() };
+        let base = if length(from) + TEMPORARY.len() + 8 > 255 {
+            String::new()
+        } else {
+            from.clone()
+        };
         let mut temp = dir.join(format!("{base}{TEMPORARY}"));
         for n in 1.. {
             if temp.symlink_metadata().is_err() {
@@ -492,13 +629,25 @@ pub fn apply(dir: &Path, renames: &[(String, String)]) -> Result<(), String> {
             temp = dir.join(format!("{base}{TEMPORARY}{n}"));
         }
         if let Err(err) = move_file(&dir.join(from), &temp) {
-            return Err(put_back(dir, &renames[..temporary.len()], &temporary, 0, format!("{from}: {err}")));
+            return Err(put_back(
+                dir,
+                &renames[..temporary.len()],
+                &temporary,
+                0,
+                format!("{from}: {err}"),
+            ));
         }
         temporary.push(temp);
     }
     for (done, (_, to)) in renames.iter().enumerate() {
         if let Err(err) = move_file(&temporary[done], &dir.join(to)) {
-            return Err(put_back(dir, renames, &temporary, done, format!("{to}: {err}")));
+            return Err(put_back(
+                dir,
+                renames,
+                &temporary,
+                done,
+                format!("{to}: {err}"),
+            ));
         }
     }
     Ok(())
@@ -507,7 +656,13 @@ pub fn apply(dir: &Path, renames: &[(String, String)]) -> Result<(), String> {
 /// Gives every file its first name back, when the first `done` have their
 /// new names and the others their temporary ones. Returns `error`, with the
 /// files that couldn't go back.
-fn put_back(dir: &Path, renames: &[(String, String)], temporary: &[PathBuf], done: usize, error: String) -> String {
+fn put_back(
+    dir: &Path,
+    renames: &[(String, String)],
+    temporary: &[PathBuf],
+    done: usize,
+    error: String,
+) -> String {
     let mut stuck = Vec::new();
     for ((_, to), temp) in renames.iter().zip(temporary).take(done) {
         if move_file(&dir.join(to), temp).is_err() {
@@ -516,13 +671,21 @@ fn put_back(dir: &Path, renames: &[(String, String)], temporary: &[PathBuf], don
     }
     for ((from, to), temp) in renames.iter().zip(temporary) {
         if !stuck.contains(to) && move_file(temp, &dir.join(from)).is_err() {
-            stuck.push(temp.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default());
+            stuck.push(
+                temp.file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_default(),
+            );
         }
     }
     if stuck.is_empty() {
         error
     } else {
-        format!("{error} ({}: {})", tr("These files kept another name"), stuck.join(", "))
+        format!(
+            "{error} ({}: {})",
+            tr("These files kept another name"),
+            stuck.join(", ")
+        )
     }
 }
 
@@ -548,18 +711,31 @@ pub fn history(dir: &Path) -> Result<Vec<Batch>, String> {
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(err) => return Err(format!("{LOG}: {err}")),
     };
-    let doc: serde_json::Value = serde_json::from_str(&text).map_err(|err| format!("{LOG}: {err}"))?;
-    let batches = doc.get("renamings").and_then(|list| list.as_array()).ok_or_else(|| format!("{LOG}: renamings"))?;
+    let doc: serde_json::Value =
+        serde_json::from_str(&text).map_err(|err| format!("{LOG}: {err}"))?;
+    let batches = doc
+        .get("renamings")
+        .and_then(|list| list.as_array())
+        .ok_or_else(|| format!("{LOG}: renamings"))?;
     Ok(batches
         .iter()
         .map(|batch| Batch {
-            at: batch.get("at").and_then(|at| at.as_str()).unwrap_or_default().to_string(),
+            at: batch
+                .get("at")
+                .and_then(|at| at.as_str())
+                .unwrap_or_default()
+                .to_string(),
             files: batch
                 .get("files")
                 .and_then(|files| files.as_array())
                 .into_iter()
                 .flatten()
-                .filter_map(|file| Some((file.get("from")?.as_str()?.to_string(), file.get("to")?.as_str()?.to_string())))
+                .filter_map(|file| {
+                    Some((
+                        file.get("from")?.as_str()?.to_string(),
+                        file.get("to")?.as_str()?.to_string(),
+                    ))
+                })
                 .collect(),
         })
         .filter(|batch| !batch.files.is_empty())
@@ -569,7 +745,10 @@ pub fn history(dir: &Path) -> Result<Vec<Batch>, String> {
 /// Adds the renaming of `files`, as (old name, new name), to the log in `dir`.
 pub fn record(dir: &Path, files: &[(String, String)]) -> Result<(), String> {
     let mut batches = history(dir)?;
-    batches.push(Batch { at: chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(), files: files.to_vec() });
+    batches.push(Batch {
+        at: chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
+        files: files.to_vec(),
+    });
     let extra = batches.len().saturating_sub(LOG_KEEP);
     batches.drain(..extra);
     save_history(dir, &batches)
@@ -589,16 +768,25 @@ pub struct UndoPlan {
 /// What Undo can do with `batch` in a folder that holds `names`.
 pub fn undo_plan(batch: &Batch, names: &[String]) -> UndoPlan {
     let present: HashSet<String> = names.iter().map(|name| key(name)).collect();
-    let (mut back, gone): (Vec<_>, Vec<_>) = batch.files.iter().cloned().partition(|(_, to)| present.contains(&key(to)));
+    let (mut back, gone): (Vec<_>, Vec<_>) = batch
+        .files
+        .iter()
+        .cloned()
+        .partition(|(_, to)| present.contains(&key(to)));
     let mut blocked = Vec::new();
     loop {
         let leaving: HashSet<String> = back.iter().map(|(_, to)| key(to)).collect();
-        let (free, held): (Vec<_>, Vec<_>) =
-            back.into_iter().partition(|(from, _)| !present.contains(&key(from)) || leaving.contains(&key(from)));
+        let (free, held): (Vec<_>, Vec<_>) = back
+            .into_iter()
+            .partition(|(from, _)| !present.contains(&key(from)) || leaving.contains(&key(from)));
         back = free;
         if held.is_empty() {
             let back = back.into_iter().map(|(from, to)| (to, from)).collect();
-            return UndoPlan { back, left: blocked, gone: gone.len() };
+            return UndoPlan {
+                back,
+                left: blocked,
+                gone: gone.len(),
+            };
         }
         blocked.extend(held);
     }
@@ -630,8 +818,11 @@ fn save_history(dir: &Path, batches: &[Batch]) -> Result<(), String> {
     let renamings: Vec<serde_json::Value> = batches
         .iter()
         .map(|batch| {
-            let files: Vec<serde_json::Value> =
-                batch.files.iter().map(|(from, to)| serde_json::json!({ "from": from, "to": to })).collect();
+            let files: Vec<serde_json::Value> = batch
+                .files
+                .iter()
+                .map(|(from, to)| serde_json::json!({ "from": from, "to": to }))
+                .collect();
             serde_json::json!({ "at": batch.at, "files": files })
         })
         .collect();
@@ -651,7 +842,10 @@ fn save_history(dir: &Path, batches: &[Batch]) -> Result<(), String> {
 /// Renames a file, but never over another: `std::fs::rename` would replace it.
 fn move_file(from: &Path, to: &Path) -> std::io::Result<()> {
     if to.symlink_metadata().is_ok() {
-        return Err(std::io::Error::new(std::io::ErrorKind::AlreadyExists, tr("The name is taken by another file")));
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::AlreadyExists,
+            tr("The name is taken by another file"),
+        ));
     }
     std::fs::rename(from, to)
 }
@@ -663,8 +857,19 @@ mod tests {
 
     fn file(id: i64, name: &str, taken: &str) -> File {
         let time = chrono::NaiveDateTime::parse_from_str(taken, "%Y-%m-%d %H:%M:%S").unwrap();
-        let taken_at = chrono::Local.from_local_datetime(&time).earliest().unwrap().timestamp();
-        File { id, name: name.into(), taken_at, modified_at: taken_at + 60, camera: "Sony ILCE-7M3".into(), companions: Vec::new() }
+        let taken_at = chrono::Local
+            .from_local_datetime(&time)
+            .earliest()
+            .unwrap()
+            .timestamp();
+        File {
+            id,
+            name: name.into(),
+            taken_at,
+            modified_at: taken_at + 60,
+            camera: "Sony ILCE-7M3".into(),
+            companions: Vec::new(),
+        }
     }
 
     fn names(pattern: &str, files: &[File], others: &[&str]) -> Vec<Outcome> {
@@ -686,12 +891,29 @@ mod tests {
         ];
         assert_eq!(
             names(PATTERN, &files, &[]),
-            [rename("2023.05.17-14h30m05s.jpg"), rename("2023.05.17-14h30m05s-001.jpg"), rename("2023.05.17-14h30m05s-002.jpg"), rename("2023.05.18-09h00m00s.mov")]
+            [
+                rename("2023.05.17-14h30m05s.jpg"),
+                rename("2023.05.17-14h30m05s-001.jpg"),
+                rename("2023.05.17-14h30m05s-002.jpg"),
+                rename("2023.05.18-09h00m00s.mov")
+            ]
         );
-        assert_eq!(names("%.c_%uf.%e", &files[..2], &[]), [rename("0_DSC0001.JPG"), rename("0_DSC0002.JPG")]);
-        assert_eq!(names("x%.c.%le", &files[..2], &[]), [rename("x0.jpg"), rename("x1.jpg")]);
-        assert_eq!(names("${Model}_%lf%+2c.%le", &files[..1], &[]), [rename("Sony ILCE-7M3_dsc0001.jpg")]);
-        assert_eq!(names("$FileModifyDate.%le", &files[..1], &[]), [rename("2023.05.17-14h31m05s.jpg")]);
+        assert_eq!(
+            names("%.c_%uf.%e", &files[..2], &[]),
+            [rename("0_DSC0001.JPG"), rename("0_DSC0002.JPG")]
+        );
+        assert_eq!(
+            names("x%.c.%le", &files[..2], &[]),
+            [rename("x0.jpg"), rename("x1.jpg")]
+        );
+        assert_eq!(
+            names("${Model}_%lf%+2c.%le", &files[..1], &[]),
+            [rename("Sony ILCE-7M3_dsc0001.jpg")]
+        );
+        assert_eq!(
+            names("$FileModifyDate.%le", &files[..1], &[]),
+            [rename("2023.05.17-14h31m05s.jpg")]
+        );
     }
 
     #[test]
@@ -706,40 +928,90 @@ mod tests {
         }
         let files = [file(1, "a.jpg", "2023-12-31 23:30:05")];
         let shifted = |shift: &str| plan(PATTERN, DATE_FORMAT, shift, &files, &[]);
-        assert_eq!(shifted("+1:00").unwrap(), [rename("2024.01.01-00h30m05s.jpg")], "a camera an hour behind");
-        assert_eq!(shifted("-0:30:05").unwrap(), [rename("2023.12.31-23h00m00s.jpg")]);
+        assert_eq!(
+            shifted("+1:00").unwrap(),
+            [rename("2024.01.01-00h30m05s.jpg")],
+            "a camera an hour behind"
+        );
+        assert_eq!(
+            shifted("-0:30:05").unwrap(),
+            [rename("2023.12.31-23h00m00s.jpg")]
+        );
         assert!(shifted("1h").is_err());
         let last = chrono::DateTime::<chrono::Utc>::MAX_UTC.timestamp() - 2 * 86_400;
-        let far = [File { taken_at: last, ..file(2, "b.jpg", "2023-12-31 23:30:05") }];
+        let far = [File {
+            taken_at: last,
+            ..file(2, "b.jpg", "2023-12-31 23:30:05")
+        }];
         let outcome = plan(PATTERN, DATE_FORMAT, "+999999 0:00", &far, &[]).unwrap();
-        assert!(matches!(outcome.as_slice(), [Outcome::Fails(_)]), "a date moved past the calendar's end fails rather than panics");
-        assert!(plan("%f.%le", DATE_FORMAT, "1h", &files, &[]).is_ok(), "the offset matters only with a date");
+        assert!(
+            matches!(outcome.as_slice(), [Outcome::Fails(_)]),
+            "a date moved past the calendar's end fails rather than panics"
+        );
+        assert!(
+            plan("%f.%le", DATE_FORMAT, "1h", &files, &[]).is_ok(),
+            "the offset matters only with a date"
+        );
     }
 
     #[test]
     fn renaming_twice_changes_nothing_and_other_files_keep_their_names() {
-        let files = [file(1, "2023.05.17-14h30m05s-001.jpg", "2023-05-17 14:30:05"), file(2, "IMG_9.jpg", "2023-05-17 14:30:05")];
-        assert_eq!(names(PATTERN, &files, &[]), [Outcome::Same, rename("2023.05.17-14h30m05s.jpg")]);
-        assert_eq!(names(PATTERN, &files, &["2023.05.17-14h30m05s.jpg"]), [Outcome::Same, rename("2023.05.17-14h30m05s-002.jpg")]);
+        let files = [
+            file(1, "2023.05.17-14h30m05s-001.jpg", "2023-05-17 14:30:05"),
+            file(2, "IMG_9.jpg", "2023-05-17 14:30:05"),
+        ];
+        assert_eq!(
+            names(PATTERN, &files, &[]),
+            [Outcome::Same, rename("2023.05.17-14h30m05s.jpg")]
+        );
+        assert_eq!(
+            names(PATTERN, &files, &["2023.05.17-14h30m05s.jpg"]),
+            [Outcome::Same, rename("2023.05.17-14h30m05s-002.jpg")]
+        );
         let upper = [file(1, "2023.05.17-14h30m05s.JPG", "2023-05-17 14:30:05")];
-        assert_eq!(names(PATTERN, &upper, &[]), [rename("2023.05.17-14h30m05s.jpg")], "only the case of the extension changes");
+        assert_eq!(
+            names(PATTERN, &upper, &[]),
+            [rename("2023.05.17-14h30m05s.jpg")],
+            "only the case of the extension changes"
+        );
         assert_eq!(
             names("${DateTimeOriginal}.%le", &files, &[]),
-            [rename("2023.05.17-14h30m05s.jpg"), Outcome::Fails(tr("The name is taken by another file").into())],
+            [
+                rename("2023.05.17-14h30m05s.jpg"),
+                Outcome::Fails(tr("The name is taken by another file").into())
+            ],
             "without %c a second file can't have the name"
         );
 
-        let unknown = File { camera: String::new(), ..file(1, "Sony ILCE-7M3.jpg", "2023-05-17 14:30:05") };
+        let unknown = File {
+            camera: String::new(),
+            ..file(1, "Sony ILCE-7M3.jpg", "2023-05-17 14:30:05")
+        };
         let known = file(2, "b.jpg", "2023-05-17 14:30:05");
         let both = [unknown, known];
         let fails = |reason: &'static str| Outcome::Fails(tr(reason).into());
-        assert_eq!(names("${Model}%-03c.%le", &both, &[]), [fails("The camera isn't known"), rename("Sony ILCE-7M3-001.jpg")], "a file that fails keeps its name");
-        assert_eq!(names("${Model}.%le", &both, &[]), [fails("The camera isn't known"), fails("The name is taken by another file")]);
+        assert_eq!(
+            names("${Model}%-03c.%le", &both, &[]),
+            [
+                fails("The camera isn't known"),
+                rename("Sony ILCE-7M3-001.jpg")
+            ],
+            "a file that fails keeps its name"
+        );
+        assert_eq!(
+            names("${Model}.%le", &both, &[]),
+            [
+                fails("The camera isn't known"),
+                fails("The name is taken by another file")
+            ]
+        );
     }
 
     #[test]
     fn a_large_folder_gets_numbers_in_order_and_keeps_them_the_second_time() {
-        let many: Vec<File> = (0..3000).map(|n| file(n, &format!("DSC{n:05}.JPG"), "2023-05-17 14:30:05")).collect();
+        let many: Vec<File> = (0..3000)
+            .map(|n| file(n, &format!("DSC{n:05}.JPG"), "2023-05-17 14:30:05"))
+            .collect();
         let outcomes = names("trip%-03c.%le", &many, &[]);
         assert_eq!(outcomes[0], rename("trip.jpg"));
         assert_eq!(outcomes[2999], rename("trip-2999.jpg"));
@@ -747,35 +1019,65 @@ mod tests {
             .into_iter()
             .zip(&outcomes)
             .map(|(file, outcome)| match outcome {
-                Outcome::Rename(name) => File { name: name.clone(), ..file },
+                Outcome::Rename(name) => File {
+                    name: name.clone(),
+                    ..file
+                },
                 _ => file,
             })
             .collect();
-        assert!(names("trip%-03c.%le", &renamed, &[]).iter().all(|outcome| *outcome == Outcome::Same));
+        assert!(names("trip%-03c.%le", &renamed, &[])
+            .iter()
+            .all(|outcome| *outcome == Outcome::Same));
     }
 
     #[test]
     fn bad_patterns_and_names_are_reported_before_anything_changes() {
         let files = [file(1, "a.jpg", "2023-05-17 14:30:05")];
-        assert!(plan("${Lens}.%le", DATE_FORMAT, "", &files, &[]).unwrap_err().contains("${Lens}"));
+        assert!(plan("${Lens}.%le", DATE_FORMAT, "", &files, &[])
+            .unwrap_err()
+            .contains("${Lens}"));
         assert!(plan("${DateTimeOriginal.%le", DATE_FORMAT, "", &files, &[]).is_err());
-        assert!(plan("%q.%le", DATE_FORMAT, "", &files, &[]).unwrap_err().contains("%q"));
+        assert!(plan("%q.%le", DATE_FORMAT, "", &files, &[])
+            .unwrap_err()
+            .contains("%q"));
         assert!(plan(PATTERN, "%Y-%Q", "", &files, &[]).is_err());
-        assert!(plan("%f.%le", "%Y-%Q", "", &files, &[]).is_ok(), "the date format matters only with a date");
-        let fails = |pattern: &str| matches!(names(pattern, &files, &[]).as_slice(), [Outcome::Fails(_)]);
+        assert!(
+            plan("%f.%le", "%Y-%Q", "", &files, &[]).is_ok(),
+            "the date format matters only with a date"
+        );
+        let fails =
+            |pattern: &str| matches!(names(pattern, &files, &[]).as_slice(), [Outcome::Fails(_)]);
         assert!(fails("${DateTimeOriginal}"), "the extension is gone");
         assert!(fails("%f.png"), "another extension");
         assert!(fails(".%le"));
         assert!(plan("%f%%.%le", DATE_FORMAT, "", &files, &[]).unwrap() == [rename("a%.jpg")]);
         let colon = plan("${DateTimeOriginal}.%le", "%H:%M", "", &files, &[]).unwrap();
-        assert!(matches!(colon.as_slice(), [Outcome::Fails(_)]), "a colon can't be in a name");
-        let unknown = File { camera: String::new(), ..file(2, "b.jpg", "2023-05-17 14:30:05") };
-        assert!(matches!(names("${Model}.%le", &[unknown], &[]).as_slice(), [Outcome::Fails(_)]));
+        assert!(
+            matches!(colon.as_slice(), [Outcome::Fails(_)]),
+            "a colon can't be in a name"
+        );
+        let unknown = File {
+            camera: String::new(),
+            ..file(2, "b.jpg", "2023-05-17 14:30:05")
+        };
+        assert!(matches!(
+            names("${Model}.%le", &[unknown], &[]).as_slice(),
+            [Outcome::Fails(_)]
+        ));
         for device in ["con.%le", "NUL.%le", "Com1.%le", "lpt9 .x.%le"] {
-            assert_eq!(names(device, &files, &[]), [Outcome::Fails(tr("Windows doesn't allow this name").into())], "{device}");
+            assert_eq!(
+                names(device, &files, &[]),
+                [Outcome::Fails(tr("Windows doesn't allow this name").into())],
+                "{device}"
+            );
         }
         assert_eq!(names("console.%le", &files, &[]), [rename("console.jpg")]);
-        let long = [file(3, &format!("{}.JPG", "相".repeat(100)), "2023-05-17 14:30:05")];
+        let long = [file(
+            3,
+            &format!("{}.JPG", "相".repeat(100)),
+            "2023-05-17 14:30:05",
+        )];
         assert_eq!(
             matches!(names("%f.%le", &long, &[]).as_slice(), [Outcome::Rename(_)]),
             cfg!(windows),
@@ -785,15 +1087,37 @@ mod tests {
 
     #[test]
     fn files_that_go_with_a_photo_are_renamed_with_it() {
-        let mut files = vec![file(1, "DSC0001.ARW", "2023-05-17 14:30:05"), file(2, "DSC0001.JPG", "2023-05-17 14:30:05"), file(3, "MVI_7.MOV", "2023-05-18 09:00:00")];
-        let names_in_folder = ["DSC0001.xmp", "DSC0001.JPG.xmp", "mvi_7.THM", "notes.txt", "other.xmp"].map(String::from).to_vec();
+        let mut files = vec![
+            file(1, "DSC0001.ARW", "2023-05-17 14:30:05"),
+            file(2, "DSC0001.JPG", "2023-05-17 14:30:05"),
+            file(3, "MVI_7.MOV", "2023-05-18 09:00:00"),
+        ];
+        let names_in_folder = [
+            "DSC0001.xmp",
+            "DSC0001.JPG.xmp",
+            "mvi_7.THM",
+            "notes.txt",
+            "other.xmp",
+        ]
+        .map(String::from)
+        .to_vec();
         let others = attach(&mut files, names_in_folder);
         assert_eq!(others, ["notes.txt", "other.xmp"]);
-        assert_eq!(files[0].companions, ["DSC0001.xmp"], "the first photo of a name gets it");
+        assert_eq!(
+            files[0].companions,
+            ["DSC0001.xmp"],
+            "the first photo of a name gets it"
+        );
         assert_eq!(files[1].companions, ["DSC0001.JPG.xmp"]);
         assert_eq!(files[2].companions, ["mvi_7.THM"]);
-        assert_eq!(companion_name("DSC0001.xmp", "DSC0001.ARW", "2023.05.17-14h30m05s.arw"), "2023.05.17-14h30m05s.xmp");
-        assert_eq!(companion_name("DSC0001.JPG.xmp", "DSC0001.JPG", "2023.05.17-14h30m05s.jpg"), "2023.05.17-14h30m05s.jpg.xmp");
+        assert_eq!(
+            companion_name("DSC0001.xmp", "DSC0001.ARW", "2023.05.17-14h30m05s.arw"),
+            "2023.05.17-14h30m05s.xmp"
+        );
+        assert_eq!(
+            companion_name("DSC0001.JPG.xmp", "DSC0001.JPG", "2023.05.17-14h30m05s.jpg"),
+            "2023.05.17-14h30m05s.jpg.xmp"
+        );
 
         let taken = ["2023.05.18-09h00m00s.THM".to_string()];
         assert_eq!(
@@ -801,7 +1125,10 @@ mod tests {
             [rename("2023.05.18-09h00m00s-001.mov")],
             "a name whose companion's name is taken isn't used"
         );
-        let with = File { companions: vec!["a.xmp".into()], ..file(4, "a.jpg", "2023-05-17 14:30:05") };
+        let with = File {
+            companions: vec!["a.xmp".into()],
+            ..file(4, "a.jpg", "2023-05-17 14:30:05")
+        };
         let without = file(5, "b.jpg", "2023-05-17 14:30:05");
         assert_eq!(
             names("trip%-03c.%le", &[with, without], &["trip.xmp"]),
@@ -813,15 +1140,40 @@ mod tests {
     #[test]
     fn undo_puts_back_what_it_can_and_keeps_the_rest_for_later() {
         let pair = |from: &str, to: &str| (from.to_string(), to.to_string());
-        let batch = Batch { at: String::new(), files: vec![pair("a.jpg", "b.jpg"), pair("b.jpg", "c.jpg"), pair("d.jpg", "e.jpg"), pair("f.jpg", "g.jpg")] };
+        let batch = Batch {
+            at: String::new(),
+            files: vec![
+                pair("a.jpg", "b.jpg"),
+                pair("b.jpg", "c.jpg"),
+                pair("d.jpg", "e.jpg"),
+                pair("f.jpg", "g.jpg"),
+            ],
+        };
         let folder = ["b.jpg", "c.jpg", "d.jpg", "e.jpg"].map(String::from);
         let undo = undo_plan(&batch, &folder);
-        assert_eq!(undo.back, [pair("b.jpg", "a.jpg"), pair("c.jpg", "b.jpg")], "a name another file of the renaming gives up is free");
-        assert_eq!(undo.left, [pair("d.jpg", "e.jpg")], "a new d.jpg has the earlier name");
+        assert_eq!(
+            undo.back,
+            [pair("b.jpg", "a.jpg"), pair("c.jpg", "b.jpg")],
+            "a name another file of the renaming gives up is free"
+        );
+        assert_eq!(
+            undo.left,
+            [pair("d.jpg", "e.jpg")],
+            "a new d.jpg has the earlier name"
+        );
         assert_eq!(undo.gone, 1);
         let blocked_first = ["b.jpg", "c.jpg", "a.jpg"].map(String::from);
-        let undo = undo_plan(&Batch { files: batch.files[..2].to_vec(), ..batch }, &blocked_first);
-        assert!(undo.back.is_empty(), "b.jpg can't go back to a.jpg, so c.jpg can't go back to b.jpg");
+        let undo = undo_plan(
+            &Batch {
+                files: batch.files[..2].to_vec(),
+                ..batch
+            },
+            &blocked_first,
+        );
+        assert!(
+            undo.back.is_empty(),
+            "b.jpg can't go back to a.jpg, so c.jpg can't go back to b.jpg"
+        );
         assert_eq!(undo.left.len(), 2);
     }
 
@@ -836,9 +1188,16 @@ mod tests {
         record(&dir, &[pair("b.jpg", "c.jpg"), pair("x.jpg", "y.jpg")]).unwrap();
         let listed = history(&dir).unwrap();
         assert_eq!(listed.len(), 2);
-        assert_eq!(listed[1].files, [pair("b.jpg", "c.jpg"), pair("x.jpg", "y.jpg")]);
+        assert_eq!(
+            listed[1].files,
+            [pair("b.jpg", "c.jpg"), pair("x.jpg", "y.jpg")]
+        );
         undone(&dir, &[pair("x.jpg", "y.jpg")]).unwrap();
-        assert_eq!(history(&dir).unwrap()[1].files, [pair("x.jpg", "y.jpg")], "what couldn't go back stays listed");
+        assert_eq!(
+            history(&dir).unwrap()[1].files,
+            [pair("x.jpg", "y.jpg")],
+            "what couldn't go back stays listed"
+        );
         undone(&dir, &[]).unwrap();
         assert_eq!(history(&dir).unwrap()[0].files, [pair("a.jpg", "b.jpg")]);
         undone(&dir, &[]).unwrap();
@@ -846,7 +1205,11 @@ mod tests {
 
         std::fs::write(dir.join(LOG), "not json").unwrap();
         assert!(record(&dir, &[pair("a.jpg", "b.jpg")]).is_err());
-        assert_eq!(std::fs::read_to_string(dir.join(LOG)).unwrap(), "not json", "a list it can't read is kept");
+        assert_eq!(
+            std::fs::read_to_string(dir.join(LOG)).unwrap(),
+            "not json",
+            "a list it can't read is kept"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -865,10 +1228,18 @@ mod tests {
 
         let err = apply(&dir, &[pair("a.jpg", "d.jpg"), pair("b.jpg", "c.jpg")]).unwrap_err();
         assert!(err.contains("c.jpg"));
-        assert_eq!(std::fs::read_to_string(dir.join("a.jpg")).unwrap(), "B", "everything went back");
+        assert_eq!(
+            std::fs::read_to_string(dir.join("a.jpg")).unwrap(),
+            "B",
+            "everything went back"
+        );
         assert_eq!(std::fs::read_to_string(dir.join("c.jpg")).unwrap(), "C");
         assert!(!dir.join("d.jpg").exists());
-        let left: Vec<_> = std::fs::read_dir(&dir).unwrap().flatten().map(|entry| entry.file_name()).collect();
+        let left: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .map(|entry| entry.file_name())
+            .collect();
         assert_eq!(left.len(), 3, "no temporary names are left: {left:?}");
         let _ = std::fs::remove_dir_all(&dir);
     }

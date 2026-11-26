@@ -40,7 +40,10 @@ impl DupeScan {
     /// Follows photos renamed since the search, as (photo, new path, new
     /// file name).
     pub(super) fn renamed(&mut self, renames: &[(i64, String, String)]) {
-        let renames: std::collections::HashMap<i64, (&String, &String)> = renames.iter().map(|(id, path, name)| (*id, (path, name))).collect();
+        let renames: std::collections::HashMap<i64, (&String, &String)> = renames
+            .iter()
+            .map(|(id, path, name)| (*id, (path, name)))
+            .collect();
         for photo in self.groups.iter_mut().flatten().flatten() {
             if let Some((path, name)) = renames.get(&photo.id) {
                 photo.path = (*path).clone();
@@ -93,20 +96,22 @@ impl PicassoApp {
         let hashes_path = self.cache_dir.join(HASHES_FILE);
         let events = self.events_tx.clone();
         let ctx = ctx.clone();
-        let _ = std::thread::Builder::new().name("picasso-duplicates".into()).spawn(move || {
-            let hashes = HashStore::open(&hashes_path);
-            let groups = find(&db_path, &hashes, run, &cancel, &events, &ctx);
-            if let Some(groups) = groups.filter(|_| !cancel.load(Ordering::Relaxed)) {
-                let total = groups.iter().map(Vec::len).sum();
-                let _ = events.send(UiEvent::Duplicates {
-                    run,
-                    checked: total,
-                    total,
-                    groups: Some(groups),
-                });
-                ctx.request_repaint();
-            }
-        });
+        let _ = std::thread::Builder::new()
+            .name("picasso-duplicates".into())
+            .spawn(move || {
+                let hashes = HashStore::open(&hashes_path);
+                let groups = find(&db_path, &hashes, run, &cancel, &events, &ctx);
+                if let Some(groups) = groups.filter(|_| !cancel.load(Ordering::Relaxed)) {
+                    let total = groups.iter().map(Vec::len).sum();
+                    let _ = events.send(UiEvent::Duplicates {
+                        run,
+                        checked: total,
+                        total,
+                        groups: Some(groups),
+                    });
+                    ctx.request_repaint();
+                }
+            });
     }
 
     fn stop_duplicates(&mut self) {
@@ -115,14 +120,28 @@ impl PicassoApp {
         }
     }
 
-    pub(super) fn on_duplicates(&mut self, run: u64, checked: usize, total: usize, groups: Option<Vec<Vec<Photo>>>) {
-        let Some(scan) = self.dupes.as_mut().filter(|scan| scan.run == run) else { return };
+    pub(super) fn on_duplicates(
+        &mut self,
+        run: u64,
+        checked: usize,
+        total: usize,
+        groups: Option<Vec<Vec<Photo>>>,
+    ) {
+        let Some(scan) = self.dupes.as_mut().filter(|scan| scan.run == run) else {
+            return;
+        };
         scan.checked = checked;
         scan.total = total;
         if let Some(mut groups) = groups {
             for group in &mut groups {
                 // Kept first: a starred or edited copy, else the first by path.
-                group.sort_by_key(|photo| (!photo.starred, !self.edits.contains_key(&photo.id), photo.path.clone()));
+                group.sort_by_key(|photo| {
+                    (
+                        !photo.starred,
+                        !self.edits.contains_key(&photo.id),
+                        photo.path.clone(),
+                    )
+                });
             }
             groups.sort_by(|a, b| a[0].path.cmp(&b[0].path));
             scan.groups = Some(groups);
@@ -130,7 +149,9 @@ impl PicassoApp {
     }
 
     pub(super) fn duplicates_modal(&mut self, ctx: &egui::Context) {
-        let Modal::Duplicates { confirm_all } = self.modal else { return };
+        let Modal::Duplicates { confirm_all } = self.modal else {
+            return;
+        };
         let Some(scan) = self.dupes.take() else {
             self.modal = Modal::None;
             return;
@@ -259,52 +280,79 @@ impl PicassoApp {
         if close || response.should_close() {
             self.modal = Modal::None;
         } else {
-            self.modal = Modal::Duplicates { confirm_all: confirm };
+            self.modal = Modal::Duplicates {
+                confirm_all: confirm,
+            };
         }
     }
 
     /// One copy with its thumbnail, folder, and buttons.
     fn copy_row(&mut self, ui: &mut egui::Ui, photo: &Photo, kept: bool) -> Option<Action> {
         let plain = shell::plain_path(&photo.path);
-        let parent = Path::new(&plain).parent().map(|path| path.display().to_string()).unwrap_or_default();
+        let parent = Path::new(&plain)
+            .parent()
+            .map(|path| path.display().to_string())
+            .unwrap_or_default();
         let mut action = None;
         let size = Vec2::new(ui.available_width(), ROW_HEIGHT);
-        let response = ui.allocate_ui_with_layout(size, Layout::right_to_left(Align::Center), |ui| {
-            ui.set_min_size(size);
-            if !kept && ui.button(tr("Move to trash")).clicked() {
-                action = Some(Action::Trash(vec![photo.id]));
-            }
-            if ui.button(tr("Show in folder")).clicked() {
-                action = Some(Action::Reveal(photo.path.clone()));
-            }
-            ui.add_space(8.0);
-            ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
-                ui.add_space(16.0);
-                self.ensure_thumb(photo.id, &photo.path);
-                let (rect, _) = ui.allocate_exact_size(Vec2::new(60.0, 44.0), egui::Sense::hover());
-                if let Some((texture, w, h)) = self.thumb_texture(photo.id) {
-                    theme::paint_image_rounded(ui.painter(), &texture, rect, theme::cover_uv(w, h), photo.rotation, 4.0);
-                } else {
-                    ui.painter().rect_filled(rect, 4, theme::placeholder());
+        let response =
+            ui.allocate_ui_with_layout(size, Layout::right_to_left(Align::Center), |ui| {
+                ui.set_min_size(size);
+                if !kept && ui.button(tr("Move to trash")).clicked() {
+                    action = Some(Action::Trash(vec![photo.id]));
                 }
-                ui.add_space(6.0);
-                ui.with_layout(Layout::top_down(Align::Min), |ui| {
-                    ui.spacing_mut().item_spacing.y = 2.0;
-                    ui.add_space(9.0);
-                    ui.horizontal(|ui| {
-                        if kept {
-                            ui.label(RichText::new(tr("Kept")).size(12.0).strong().color(theme::accent()));
-                        }
-                        let name = RichText::new(&photo.filename).size(13.5).color(theme::text());
-                        ui.add(egui::Label::new(name).truncate()).on_hover_text(&plain);
+                if ui.button(tr("Show in folder")).clicked() {
+                    action = Some(Action::Reveal(photo.path.clone()));
+                }
+                ui.add_space(8.0);
+                ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                    ui.add_space(16.0);
+                    self.ensure_thumb(photo.id, &photo.path);
+                    let (rect, _) =
+                        ui.allocate_exact_size(Vec2::new(60.0, 44.0), egui::Sense::hover());
+                    if let Some((texture, w, h)) = self.thumb_texture(photo.id) {
+                        theme::paint_image_rounded(
+                            ui.painter(),
+                            &texture,
+                            rect,
+                            theme::cover_uv(w, h),
+                            photo.rotation,
+                            4.0,
+                        );
+                    } else {
+                        ui.painter().rect_filled(rect, 4, theme::placeholder());
+                    }
+                    ui.add_space(6.0);
+                    ui.with_layout(Layout::top_down(Align::Min), |ui| {
+                        ui.spacing_mut().item_spacing.y = 2.0;
+                        ui.add_space(9.0);
+                        ui.horizontal(|ui| {
+                            if kept {
+                                ui.label(
+                                    RichText::new(tr("Kept"))
+                                        .size(12.0)
+                                        .strong()
+                                        .color(theme::accent()),
+                                );
+                            }
+                            let name = RichText::new(&photo.filename)
+                                .size(13.5)
+                                .color(theme::text());
+                            ui.add(egui::Label::new(name).truncate())
+                                .on_hover_text(&plain);
+                        });
+                        let folder = RichText::new(&parent).size(12.0).color(theme::muted());
+                        ui.add(egui::Label::new(folder).truncate())
+                            .on_hover_text(&parent);
                     });
-                    let folder = RichText::new(&parent).size(12.0).color(theme::muted());
-                    ui.add(egui::Label::new(folder).truncate()).on_hover_text(&parent);
                 });
             });
-        });
         let rect = response.response.rect;
-        ui.painter().hline(rect.x_range(), rect.bottom() - 0.5, Stroke::new(1.0, theme::hairline()));
+        ui.painter().hline(
+            rect.x_range(),
+            rect.bottom() - 0.5,
+            Stroke::new(1.0, theme::hairline()),
+        );
         action
     }
 }
@@ -317,11 +365,16 @@ fn group_row(ui: &mut egui::Ui, group: &[Photo]) -> Option<Action> {
     ui.allocate_ui_with_layout(size, Layout::right_to_left(Align::Max), |ui| {
         ui.set_min_size(size);
         if ui.button(tr("Trash extra copies")).clicked() {
-            action = Some(Action::Trash(group[1..].iter().map(|photo| photo.id).collect()));
+            action = Some(Action::Trash(
+                group[1..].iter().map(|photo| photo.id).collect(),
+            ));
         }
         ui.with_layout(Layout::left_to_right(Align::Max), |ui| {
             let first = &group[0];
-            let mut text = trf("{} copies · {}", &[&group.len(), &format_bytes(first.bytes)]);
+            let mut text = trf(
+                "{} copies · {}",
+                &[&group.len(), &format_bytes(first.bytes)],
+            );
             if first.width > 0 {
                 text.push_str(&format!(" · {} × {}", first.width, first.height));
             }
@@ -333,7 +386,14 @@ fn group_row(ui: &mut egui::Ui, group: &[Photo]) -> Option<Action> {
 
 /// Groups of identical files among those the catalog lists with equal
 /// sizes, or `None` when stopped.
-fn find(db_path: &Path, hashes: &HashStore, run: u64, cancel: &AtomicBool, events: &Sender<UiEvent>, ctx: &egui::Context) -> Option<Vec<Vec<Photo>>> {
+fn find(
+    db_path: &Path,
+    hashes: &HashStore,
+    run: u64,
+    cancel: &AtomicBool,
+    events: &Sender<UiEvent>,
+    ctx: &egui::Context,
+) -> Option<Vec<Vec<Photo>>> {
     let candidates = Database::open_reader(db_path).ok()?.duplicate_candidates();
     hashes.keep_only(candidates.iter().flatten().map(|photo| photo.path.as_str()));
     let mut progress = Progress {
@@ -346,7 +406,9 @@ fn find(db_path: &Path, hashes: &HashStore, run: u64, cancel: &AtomicBool, event
     };
     progress.send();
     let same_head = split(candidates, Part::Head, hashes, cancel, &mut progress)?;
-    let (mut found, large): (Vec<_>, Vec<_>) = same_head.into_iter().partition(|group| group[0].bytes <= HEAD);
+    let (mut found, large): (Vec<_>, Vec<_>) = same_head
+        .into_iter()
+        .partition(|group| group[0].bytes <= HEAD);
     progress.total += large.iter().map(Vec::len).sum::<usize>();
     found.extend(split(large, Part::Whole, hashes, cancel, &mut progress)?);
     Some(found)
@@ -392,7 +454,9 @@ impl HashStore {
         };
         self.conn
             .as_ref()?
-            .query_row(sql, rusqlite::params![path, stamp.0, stamp.1], |row| row.get(0))
+            .query_row(sql, rusqlite::params![path, stamp.0, stamp.1], |row| {
+                row.get(0)
+            })
             .ok()
     }
 
@@ -419,7 +483,9 @@ impl HashStore {
             .prepare("SELECT path FROM hashes")
             .and_then(|mut stmt| stmt.query_map([], |row| row.get(0))?.collect())
             .unwrap_or_default();
-        let Ok(tx) = conn.unchecked_transaction() else { return };
+        let Ok(tx) = conn.unchecked_transaction() else {
+            return;
+        };
         for path in stored.iter().filter(|path| !keep.contains(path.as_str())) {
             let _ = tx.execute("DELETE FROM hashes WHERE path=?1", [path]);
         }
@@ -430,7 +496,11 @@ impl HashStore {
 /// Size and modification time of the file on disk now.
 fn stamp(path: &Path) -> Option<(i64, i64)> {
     let meta = std::fs::metadata(path).ok()?;
-    let modified = meta.modified().ok()?.duration_since(std::time::UNIX_EPOCH).ok()?;
+    let modified = meta
+        .modified()
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?;
     Some((meta.len() as i64, modified.as_nanos() as i64))
 }
 
@@ -467,7 +537,13 @@ impl Progress<'_> {
 /// returns the parts with more than one file; unreadable files drop out.
 /// Files are read in path order, so a disk with heads mostly reads on
 /// through a folder. `None` when stopped.
-fn split(groups: Vec<Vec<Photo>>, part: Part, hashes: &HashStore, cancel: &AtomicBool, progress: &mut Progress) -> Option<Vec<Vec<Photo>>> {
+fn split(
+    groups: Vec<Vec<Photo>>,
+    part: Part,
+    hashes: &HashStore,
+    cancel: &AtomicBool,
+    progress: &mut Progress,
+) -> Option<Vec<Vec<Photo>>> {
     let mut files: Vec<(usize, Photo)> = groups
         .into_iter()
         .enumerate()
@@ -495,7 +571,12 @@ fn split(groups: Vec<Vec<Photo>>, part: Part, hashes: &HashStore, cancel: &Atomi
         }
         progress.step();
     }
-    Some(by_hash.into_values().filter(|group| group.len() > 1).collect())
+    Some(
+        by_hash
+            .into_values()
+            .filter(|group| group.len() > 1)
+            .collect(),
+    )
 }
 
 fn hash_file(path: &Path, limit: Option<u64>) -> Option<Vec<u8>> {
@@ -575,7 +656,10 @@ mod tests {
         let cancel = AtomicBool::new(false);
         let hashes = HashStore::open(&dir.join(HASHES_FILE));
         let search = |progress: &mut Progress| {
-            let groups = vec![vec![photo(1, &a), photo(2, &b), photo(3, &c)], vec![photo(4, &other)]];
+            let groups = vec![
+                vec![photo(1, &a), photo(2, &b), photo(3, &c)],
+                vec![photo(4, &other)],
+            ];
             let groups = split(groups, Part::Head, &hashes, &cancel, progress).unwrap();
             assert_eq!(groups.len(), 1);
             assert_eq!(groups[0].len(), 3);

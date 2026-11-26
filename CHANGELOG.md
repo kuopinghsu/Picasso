@@ -201,6 +201,11 @@ section of this file as the release notes.
 
 ### Fixed
 
+- AppImage startup no longer mixes bundled libxkbcommon-x11 with the system’s
+  libxkbcommon, which could crash before showing a window on Ubuntu 22.04.
+- AppImage filenames use `x86_64` and `aarch64` without a redundant `linux` label,
+  following the AppImage catalog’s naming guidance. Startup checks now require a visible window
+  and cover Ubuntu 22.04 with a system libxkbcommon and bundled libxkbcommon-x11.
 - WordPress: a password-protected story or Journey no longer shows its places before the
   password is entered, on its page, on the VoyageLight Travel atlas or in the REST API.
   VoyageLight's map pins show titles such as Mom's café as written, not as `Mom&#8217;s café`.

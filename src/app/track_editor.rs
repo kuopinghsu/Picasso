@@ -8,7 +8,10 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use crossbeam_channel::{Receiver, Sender, TryRecvError};
-use eframe::egui::{self, Align2, Color32, FontId, Key, Margin, Modifiers, Pos2, Rect, RichText, Sense, Stroke, Vec2};
+use eframe::egui::{
+    self, Align2, Color32, FontId, Key, Margin, Modifiers, Pos2, Rect, RichText, Sense, Stroke,
+    Vec2,
+};
 
 use crate::geo;
 use crate::i18n::{tr, trf};
@@ -17,7 +20,8 @@ use crate::track_edit::{self, EditPoint, Format, Loaded, Settings};
 use crate::types::{folder_label, format_duration, format_timestamp};
 
 use super::places::{
-    grouped, map_backdrop, pinch_steps, truncated, wheel_steps, zoom_control, zoom_step, MapView, MAX_ZOOM, MIN_ZOOM, ZOOM_BUTTON,
+    grouped, map_backdrop, pinch_steps, truncated, wheel_steps, zoom_control, zoom_step, MapView,
+    MAX_ZOOM, MIN_ZOOM, ZOOM_BUTTON,
 };
 use super::theme::{self, ACCENT, DANGER, WHITE};
 use super::PicassoApp;
@@ -85,7 +89,12 @@ impl Measures {
             along.push(total);
         }
         let heights = has_heights(points).then(|| {
-            points.iter().filter_map(|point| point.ele).fold((f64::MAX, f64::MIN), |(low, high), ele| (low.min(ele), high.max(ele)))
+            points
+                .iter()
+                .filter_map(|point| point.ele)
+                .fold((f64::MAX, f64::MIN), |(low, high), ele| {
+                    (low.min(ele), high.max(ele))
+                })
         });
         Measures {
             revision,
@@ -208,17 +217,30 @@ impl TrackEditor {
     fn new(path: PathBuf, base: Settings, ctx: &egui::Context) -> TrackEditor {
         let (sender, receiver) = crossbeam_channel::bounded(1);
         let (file, ctx) = (path.clone(), ctx.clone());
-        let _ = std::thread::Builder::new().name("picasso-track".into()).spawn(move || {
-            let opened = track_edit::load(&file, base).map(|loaded| {
-                let settings = loaded.settings.unwrap_or(base);
-                let points = if loaded.cleaned { loaded.points.clone() } else { track_edit::optimize(&loaded.points, &settings) };
-                Opened { loaded, points, settings }
+        let _ = std::thread::Builder::new()
+            .name("picasso-track".into())
+            .spawn(move || {
+                let opened = track_edit::load(&file, base).map(|loaded| {
+                    let settings = loaded.settings.unwrap_or(base);
+                    let points = if loaded.cleaned {
+                        loaded.points.clone()
+                    } else {
+                        track_edit::optimize(&loaded.points, &settings)
+                    };
+                    Opened {
+                        loaded,
+                        points,
+                        settings,
+                    }
+                });
+                let _ = sender.send(opened);
+                ctx.request_repaint();
             });
-            let _ = sender.send(opened);
-            ctx.request_repaint();
-        });
         TrackEditor {
-            name: path.file_stem().map(|stem| stem.to_string_lossy().into_owned()).unwrap_or_default(),
+            name: path
+                .file_stem()
+                .map(|stem| stem.to_string_lossy().into_owned())
+                .unwrap_or_default(),
             path,
             format: Format::Gpx,
             raw: Vec::new(),
@@ -241,7 +263,12 @@ impl TrackEditor {
             box_mode: false,
             box_from: None,
             show_raw: false,
-            view: MapView { lat: 0.0, lon: 0.0, zoom: MIN_ZOOM, pan: Vec2::ZERO },
+            view: MapView {
+                lat: 0.0,
+                lon: 0.0,
+                zoom: MIN_ZOOM,
+                pan: Vec2::ZERO,
+            },
             wheel: 0.0,
             pinch: 0.0,
             framed: false,
@@ -272,13 +299,20 @@ impl TrackEditor {
         let point = self.points[index];
         self.selection = HashSet::from([index]);
         self.focus = Some(index);
-        self.view = MapView { lat: point.lat, lon: point.lon, zoom: self.view.zoom, pan: Vec2::ZERO };
+        self.view = MapView {
+            lat: point.lat,
+            lon: point.lon,
+            zoom: self.view.zoom,
+            pan: Vec2::ZERO,
+        };
     }
 
     /// Moves the focus `by` points along the track, from either end when no
     /// point has it.
     fn step(&mut self, by: isize) {
-        let Some(last) = self.points.len().checked_sub(1) else { return };
+        let Some(last) = self.points.len().checked_sub(1) else {
+            return;
+        };
         let next = match self.focus {
             Some(index) => index.saturating_add_signed(by).min(last),
             None if by > 0 => 0,
@@ -295,14 +329,21 @@ impl TrackEditor {
     /// terrain tiles on a thread, so a later cleanup keeps them. Undo takes
     /// them off the points again.
     fn look_up_heights(&mut self, cache: &Path, ctx: &egui::Context) {
-        let places: Vec<(f64, f64)> = self.points.iter().chain(&self.raw).map(|point| (point.lat, point.lon)).collect();
+        let places: Vec<(f64, f64)> = self
+            .points
+            .iter()
+            .chain(&self.raw)
+            .map(|point| (point.lat, point.lon))
+            .collect();
         let progress = Arc::new(geo::TerrainProgress::default());
         let (sender, receiver) = crossbeam_channel::bounded(1);
         let (cache, ctx, shared) = (cache.to_path_buf(), ctx.clone(), Arc::clone(&progress));
-        let spawned = std::thread::Builder::new().name("picasso-terrain".into()).spawn(move || {
-            let _ = sender.send(geo::terrain_heights(&places, &cache, &shared));
-            ctx.request_repaint();
-        });
+        let spawned = std::thread::Builder::new()
+            .name("picasso-terrain".into())
+            .spawn(move || {
+                let _ = sender.send(geo::terrain_heights(&places, &cache, &shared));
+                ctx.request_repaint();
+            });
         if spawned.is_ok() {
             self.looking_up = Some((receiver, progress));
         }
@@ -324,7 +365,9 @@ impl TrackEditor {
             .filter_map(|(index, (_, height))| height.map(|height| (index, tidy(height))))
             .collect();
         if found.is_empty() {
-            self.tell(tr("Couldn't download the terrain data. Check the internet connection."));
+            self.tell(tr(
+                "Couldn't download the terrain data. Check the internet connection.",
+            ));
             return;
         }
         if all && found.iter().all(|&(_, height)| height == 0.0) {
@@ -347,11 +390,23 @@ impl TrackEditor {
             }
         }
         self.terrain_heights = true;
-        let added = if found.len() == 1 { "Added a height to {} point." } else { "Added heights to {} points." };
+        let added = if found.len() == 1 {
+            "Added a height to {} point."
+        } else {
+            "Added heights to {} points."
+        };
         let mut text = trf(added, &[&grouped(found.len())]);
-        let missing = self.points.iter().filter(|point| point.ele.is_none()).count();
+        let missing = self
+            .points
+            .iter()
+            .filter(|point| point.ele.is_none())
+            .count();
         if missing > 0 {
-            let still = if missing == 1 { "{} point still has no height." } else { "{} points still have no height." };
+            let still = if missing == 1 {
+                "{} point still has no height."
+            } else {
+                "{} points still have no height."
+            };
             text = format!("{text} {}", trf(still, &[&grouped(missing)]));
         }
         self.tell(text);
@@ -361,23 +416,37 @@ impl TrackEditor {
         // A thread that ended without an answer stopped with a panic.
         let opened = match self.opening.as_ref().map(Receiver::try_recv) {
             Some(Ok(opened)) => Some(opened),
-            Some(Err(TryRecvError::Disconnected)) => Some(Err(tr("Reading the track stopped unexpectedly.").to_string())),
+            Some(Err(TryRecvError::Disconnected)) => Some(Err(tr(
+                "Reading the track stopped unexpectedly.",
+            )
+            .to_string())),
             _ => None,
         };
         if let Some(opened) = opened {
             self.opening = None;
             let restored = self.restored.take();
             match opened {
-                Ok(Opened { loaded, points, settings }) => {
+                Ok(Opened {
+                    loaded,
+                    points,
+                    settings,
+                }) => {
                     let mut note = if restored.is_some() {
                         tr("Restored the unsaved edits.").to_string()
                     } else if loaded.cleaned {
                         tr("Opened as saved, without a new cleanup.").to_string()
                     } else {
-                        trf("Cleaned up from {} points to {}.", &[&loaded.points.len(), &points.len()])
+                        trf(
+                            "Cleaned up from {} points to {}.",
+                            &[&loaded.points.len(), &points.len()],
+                        )
                     };
                     if loaded.untimed > 0 {
-                        let left = if loaded.untimed == 1 { "Left out {} point without a time." } else { "Left out {} points without a time." };
+                        let left = if loaded.untimed == 1 {
+                            "Left out {} point without a time."
+                        } else {
+                            "Left out {} points without a time."
+                        };
                         note = format!("{note} {}", trf(left, &[&grouped(loaded.untimed)]));
                     }
                     self.tell(note);
@@ -415,7 +484,10 @@ impl TrackEditor {
         match cleaned {
             Some(Some(points)) if points.len() >= 2 => {
                 self.cleaning = None;
-                self.tell(trf("Cleaned up from {} points to {}.", &[&self.raw.len(), &points.len()]));
+                self.tell(trf(
+                    "Cleaned up from {} points to {}.",
+                    &[&self.raw.len(), &points.len()],
+                ));
                 self.push_undo();
                 self.points = points;
                 // The panel can't change while the cleanup runs.
@@ -424,7 +496,9 @@ impl TrackEditor {
             }
             Some(Some(_)) => {
                 self.cleaning = None;
-                self.tell(tr("The cleanup left fewer than two points. Try other settings."));
+                self.tell(tr(
+                    "The cleanup left fewer than two points. Try other settings.",
+                ));
             }
             Some(None) => {
                 self.cleaning = None;
@@ -432,7 +506,11 @@ impl TrackEditor {
             }
             None => {}
         }
-        let heights = match self.looking_up.as_ref().map(|(receiver, _)| receiver.try_recv()) {
+        let heights = match self
+            .looking_up
+            .as_ref()
+            .map(|(receiver, _)| receiver.try_recv())
+        {
             Some(Ok(heights)) => Some(heights),
             Some(Err(TryRecvError::Disconnected)) => Some(Vec::new()),
             _ => None,
@@ -499,8 +577,14 @@ impl TrackEditor {
     /// Puts `(points, settings)` from Undo or Redo in place, and returns the
     /// ones they replace. Going back over a cleanup puts its settings back
     /// in the panel; other steps leave changes there not applied yet.
-    fn swap_points(&mut self, (points, settings): (Vec<EditPoint>, Settings)) -> (Vec<EditPoint>, Settings) {
-        let now = (std::mem::replace(&mut self.points, points), self.points_settings);
+    fn swap_points(
+        &mut self,
+        (points, settings): (Vec<EditPoint>, Settings),
+    ) -> (Vec<EditPoint>, Settings) {
+        let now = (
+            std::mem::replace(&mut self.points, points),
+            self.points_settings,
+        );
         if settings != self.points_settings {
             self.settings = settings;
         }
@@ -522,7 +606,11 @@ impl TrackEditor {
 
     fn measures(&mut self) -> Rc<Measures> {
         match &self.measures {
-            Some(measures) if measures.revision == self.revision && measures.settings == self.settings => Rc::clone(measures),
+            Some(measures)
+                if measures.revision == self.revision && measures.settings == self.settings =>
+            {
+                Rc::clone(measures)
+            }
             _ => {
                 let measures = Rc::new(Measures::of(&self.points, self.settings, self.revision));
                 self.measures = Some(Rc::clone(&measures));
@@ -543,7 +631,14 @@ impl TrackEditor {
         self.selection.clear();
         self.focus = None;
         self.menu_point = None;
-        self.tell(trf(if count == 1 { "Removed {} point" } else { "Removed {} points" }, &[&count]));
+        self.tell(trf(
+            if count == 1 {
+                "Removed {} point"
+            } else {
+                "Removed {} points"
+            },
+            &[&count],
+        ));
     }
 
     /// Cleans the points as read up again with the current settings, on a
@@ -551,10 +646,12 @@ impl TrackEditor {
     fn clean_up(&mut self, ctx: &egui::Context) {
         let (sender, receiver) = crossbeam_channel::bounded(1);
         let (raw, settings, ctx) = (self.raw.clone(), self.settings, ctx.clone());
-        let spawned = std::thread::Builder::new().name("picasso-track-cleanup".into()).spawn(move || {
-            let _ = sender.send(track_edit::optimize(&raw, &settings));
-            ctx.request_repaint();
-        });
+        let spawned = std::thread::Builder::new()
+            .name("picasso-track-cleanup".into())
+            .spawn(move || {
+                let _ = sender.send(track_edit::optimize(&raw, &settings));
+                ctx.request_repaint();
+            });
         if spawned.is_ok() {
             self.cleaning = Some(receiver);
         }
@@ -581,26 +678,46 @@ impl TrackEditor {
     fn to_latlon(&self, rect: Rect, pos: Pos2) -> (f64, f64) {
         let (cx, cy) = geo::latlon_to_world(self.view.lat, self.view.lon, self.view.zoom);
         let offset = pos - rect.center() - self.view.pan;
-        geo::world_to_latlon(cx + f64::from(offset.x), cy + f64::from(offset.y), self.view.zoom)
+        geo::world_to_latlon(
+            cx + f64::from(offset.x),
+            cy + f64::from(offset.y),
+            self.view.zoom,
+        )
     }
 
     fn bake_pan(&mut self) {
         let (cx, cy) = geo::latlon_to_world(self.view.lat, self.view.lon, self.view.zoom);
-        let (lat, lon) = geo::world_to_latlon(cx - f64::from(self.view.pan.x), cy - f64::from(self.view.pan.y), self.view.zoom);
-        self.view = MapView { lat, lon, zoom: self.view.zoom, pan: Vec2::ZERO };
+        let (lat, lon) = geo::world_to_latlon(
+            cx - f64::from(self.view.pan.x),
+            cy - f64::from(self.view.pan.y),
+            self.view.zoom,
+        );
+        self.view = MapView {
+            lat,
+            lon,
+            zoom: self.view.zoom,
+            pan: Vec2::ZERO,
+        };
     }
 
     /// Zooms by `steps` levels, keeping the place under `pointer` there.
     fn zoom_at(&mut self, steps: i32, pointer: Pos2, rect: Rect) {
-        let next = (i32::from(self.view.zoom) + steps).clamp(i32::from(MIN_ZOOM), i32::from(MAX_ZOOM)) as u8;
+        let next = (i32::from(self.view.zoom) + steps)
+            .clamp(i32::from(MIN_ZOOM), i32::from(MAX_ZOOM)) as u8;
         if next == self.view.zoom {
             return;
         }
         let (lat, lon) = self.to_latlon(rect, pointer);
         let (x, y) = geo::latlon_to_world(lat, lon, next);
         let offset = pointer - rect.center();
-        let (lat, lon) = geo::world_to_latlon(x - f64::from(offset.x), y - f64::from(offset.y), next);
-        self.view = MapView { lat, lon, zoom: next, pan: Vec2::ZERO };
+        let (lat, lon) =
+            geo::world_to_latlon(x - f64::from(offset.x), y - f64::from(offset.y), next);
+        self.view = MapView {
+            lat,
+            lon,
+            zoom: next,
+            pan: Vec2::ZERO,
+        };
     }
 
     /// Centers the map on `points` at the closest zoom that shows them all
@@ -616,18 +733,29 @@ impl TrackEditor {
         let room = size * 0.85;
         let mut zoom = MAX_ZOOM.min(17);
         while zoom > MIN_ZOOM
-            && ((max.0 - min.0) * f64::from(1u32 << zoom) > f64::from(room.x) || (max.1 - min.1) * f64::from(1u32 << zoom) > f64::from(room.y))
+            && ((max.0 - min.0) * f64::from(1u32 << zoom) > f64::from(room.x)
+                || (max.1 - min.1) * f64::from(1u32 << zoom) > f64::from(room.y))
         {
             zoom -= 1;
         }
         let (lat, lon) = geo::world_to_latlon((min.0 + max.0) / 2.0, (min.1 + max.1) / 2.0, 0);
-        self.view = MapView { lat, lon, zoom, pan: Vec2::ZERO };
+        self.view = MapView {
+            lat,
+            lon,
+            zoom,
+            pan: Vec2::ZERO,
+        };
     }
 
     fn go_to(&mut self, preset: Preset, size: Vec2) {
         let close = |editor: &mut TrackEditor, point: Option<EditPoint>| {
             if let Some(point) = point {
-                editor.view = MapView { lat: point.lat, lon: point.lon, zoom: CLOSE_ZOOM, pan: Vec2::ZERO };
+                editor.view = MapView {
+                    lat: point.lat,
+                    lon: point.lon,
+                    zoom: CLOSE_ZOOM,
+                    pan: Vec2::ZERO,
+                };
             }
         };
         match preset {
@@ -639,7 +767,14 @@ impl TrackEditor {
             Preset::End => close(self, self.points.last().copied()),
             Preset::Highest => {
                 let top = if self.measures().heights.is_some() {
-                    self.points.iter().filter(|point| point.ele.is_some()).max_by(|a, b| a.ele.partial_cmp(&b.ele).unwrap_or(std::cmp::Ordering::Equal))
+                    self.points
+                        .iter()
+                        .filter(|point| point.ele.is_some())
+                        .max_by(|a, b| {
+                            a.ele
+                                .partial_cmp(&b.ele)
+                                .unwrap_or(std::cmp::Ordering::Equal)
+                        })
                 } else {
                     None
                 };
@@ -653,7 +788,11 @@ impl TrackEditor {
 
     /// Saves a copy beside the track in the chosen format.
     fn save(&mut self, format: Format) -> Option<PathBuf> {
-        let (label, extension) = if format == Format::Kml { ("KML", "kml") } else { ("GPX", "gpx") };
+        let (label, extension) = if format == Format::Kml {
+            ("KML", "kml")
+        } else {
+            ("GPX", "gpx")
+        };
         let mut dialog = rfd::FileDialog::new()
             .set_title(tr("Save the track"))
             .set_file_name(track_edit::saved_name(&self.path, extension))
@@ -670,9 +809,10 @@ impl TrackEditor {
     }
 
     fn can_overwrite(&self) -> bool {
-        self.path.extension().and_then(|ext| ext.to_str()).is_some_and(|ext| {
-            ext.eq_ignore_ascii_case("gpx") || ext.eq_ignore_ascii_case("kml")
-        })
+        self.path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("gpx") || ext.eq_ignore_ascii_case("kml"))
     }
 
     fn overwrite(&mut self) -> bool {
@@ -711,7 +851,11 @@ impl TrackEditor {
     /// The format Save writes without asking: the track's own, or GPX for
     /// a Polarsteps file.
     fn own_format(&self) -> Format {
-        if self.format == Format::Kml { Format::Kml } else { Format::Gpx }
+        if self.format == Format::Kml {
+            Format::Kml
+        } else {
+            Format::Gpx
+        }
     }
 }
 
@@ -748,7 +892,12 @@ struct Kept {
 
 impl Kept {
     fn of(editor: &TrackEditor) -> Kept {
-        Kept { path: editor.path.clone(), name: editor.name.clone(), points: editor.points.clone(), settings: editor.points_settings }
+        Kept {
+            path: editor.path.clone(),
+            name: editor.name.clone(),
+            points: editor.points.clone(),
+            settings: editor.points_settings,
+        }
     }
 }
 
@@ -775,32 +924,36 @@ impl Keeper {
     pub(super) fn new(data_dir: &Path) -> Keeper {
         let (jobs, inbox) = crossbeam_channel::unbounded::<KeepJob>();
         let file = data_dir.join(RECOVERY_FILE);
-        let _ = std::thread::Builder::new().name("picasso-track-keeper".into()).spawn(move || {
-            while let Ok(job) = inbox.recv() {
-                // Of the changes waiting, only the last one counts.
-                let (mut change, mut flushed) = (None, Vec::new());
-                for job in std::iter::once(job).chain(inbox.try_iter()) {
-                    match job {
-                        KeepJob::Flush(done) => flushed.push(done),
-                        other => change = Some(other),
-                    }
-                }
-                match change {
-                    Some(KeepJob::Keep(kept)) => {
-                        if let Err(err) = crate::image_io::write_whole(&file, recovery_text(&kept).as_bytes()) {
-                            eprintln!("picasso track: {err}");
+        let _ = std::thread::Builder::new()
+            .name("picasso-track-keeper".into())
+            .spawn(move || {
+                while let Ok(job) = inbox.recv() {
+                    // Of the changes waiting, only the last one counts.
+                    let (mut change, mut flushed) = (None, Vec::new());
+                    for job in std::iter::once(job).chain(inbox.try_iter()) {
+                        match job {
+                            KeepJob::Flush(done) => flushed.push(done),
+                            other => change = Some(other),
                         }
                     }
-                    Some(KeepJob::Forget) => {
-                        let _ = std::fs::remove_file(&file);
+                    match change {
+                        Some(KeepJob::Keep(kept)) => {
+                            if let Err(err) =
+                                crate::image_io::write_whole(&file, recovery_text(&kept).as_bytes())
+                            {
+                                eprintln!("picasso track: {err}");
+                            }
+                        }
+                        Some(KeepJob::Forget) => {
+                            let _ = std::fs::remove_file(&file);
+                        }
+                        _ => {}
                     }
-                    _ => {}
+                    for done in flushed {
+                        let _ = done.send(());
+                    }
                 }
-                for done in flushed {
-                    let _ = done.send(());
-                }
-            }
-        });
+            });
         Keeper { jobs }
     }
 
@@ -841,7 +994,11 @@ impl PicassoApp {
     /// for the changes on their way to reach the disk. Closing the window
     /// asks first, but Cmd+Q on a Mac quits without asking.
     pub(super) fn keep_track_edits(&self) {
-        if let Some(editor) = self.track_editor.as_ref().filter(|editor| editor.dirty && editor.points.len() >= 2) {
+        if let Some(editor) = self
+            .track_editor
+            .as_ref()
+            .filter(|editor| editor.dirty && editor.points.len() >= 2)
+        {
             self.track_keeper.keep(editor);
         }
         self.track_keeper.flush();
@@ -866,7 +1023,9 @@ impl PicassoApp {
                 editor.changed = None;
             }
             Some((revision, at)) if revision == editor.revision => {
-                ctx.request_repaint_after(std::time::Duration::from_secs_f64(KEEP_AFTER - (now - at)));
+                ctx.request_repaint_after(std::time::Duration::from_secs_f64(
+                    KEEP_AFTER - (now - at),
+                ));
             }
             _ => {
                 editor.changed = Some((editor.revision, now));
@@ -885,16 +1044,28 @@ impl PicassoApp {
 
     /// Asks whether to restore the track edits kept when Picasso quit.
     pub(super) fn track_recovery_ui(&mut self, ctx: &egui::Context) {
-        let Some(recovery) = &self.track_recovery else { return };
+        let Some(recovery) = &self.track_recovery else {
+            return;
+        };
         let name = folder_label(&recovery.path.to_string_lossy());
         let mut choice = None;
         // Esc and clicks beside it don't close it: until it is answered,
         // another track's edits would be kept in place of these.
         egui::Modal::new(egui::Id::unique("track-recovery")).show(ctx, |ui| {
             ui.set_width(360.0);
-            ui.label(RichText::new(tr("Restore the unsaved track edits?")).size(16.0).strong());
+            ui.label(
+                RichText::new(tr("Restore the unsaved track edits?"))
+                    .size(16.0)
+                    .strong(),
+            );
             ui.add_space(6.0);
-            ui.label(RichText::new(trf("Picasso quit before the edits to {} were saved.", &[&name])).color(theme::muted()));
+            ui.label(
+                RichText::new(trf(
+                    "Picasso quit before the edits to {} were saved.",
+                    &[&name],
+                ))
+                .color(theme::muted()),
+            );
             ui.add_space(12.0);
             ui.horizontal(|ui| {
                 if ui.add(theme::primary_button(tr("Restore"))).clicked() {
@@ -909,7 +1080,8 @@ impl PicassoApp {
             (Some(restore), Some(recovery)) => {
                 self.track_keeper.forget();
                 if restore {
-                    let mut editor = TrackEditor::new(recovery.path, Settings::load(&self.config), ctx);
+                    let mut editor =
+                        TrackEditor::new(recovery.path, Settings::load(&self.config), ctx);
                     editor.restored = Some(recovery.loaded);
                     self.track_editor = Some(editor);
                 }
@@ -919,17 +1091,28 @@ impl PicassoApp {
     }
 
     pub(super) fn track_editor_ui(&mut self, ui: &mut egui::Ui) {
-        let Some(mut editor) = self.track_editor.take() else { return };
+        let Some(mut editor) = self.track_editor.take() else {
+            return;
+        };
         editor.pump();
         ui.spacing_mut().item_spacing.y = 0.0;
         let mut close = false;
         track_header(ui, &mut editor, &mut close);
         let full = ui.available_rect_before_wrap();
-        ui.painter().hline(full.x_range(), full.top(), Stroke::new(1.0, theme::hairline()));
+        ui.painter().hline(
+            full.x_range(),
+            full.top(),
+            Stroke::new(1.0, theme::hairline()),
+        );
         let ready = editor.error.is_none() && editor.opening.is_none();
         let map_rect = Rect::from_min_max(full.min, Pos2::new(full.max.x - PANEL_W, full.max.y));
         if let Some(err) = editor.error.clone() {
-            close |= track_message(ui, full, &trf("Couldn't open the track: {}", &[&err]), false);
+            close |= track_message(
+                ui,
+                full,
+                &trf("Couldn't open the track: {}", &[&err]),
+                false,
+            );
         } else if !ready {
             track_message(ui, full, tr("Loading…"), true);
         } else {
@@ -941,16 +1124,26 @@ impl PicassoApp {
             self.track_map(ui, &mut editor, map_rect);
             self.track_overlays(ui, &mut editor, map_rect);
             let panel_rect = Rect::from_min_max(Pos2::new(map_rect.max.x, full.min.y), full.max);
-            track_panel(ui, panel_rect, &mut editor, &mut self.config, &self.cache_dir);
+            track_panel(
+                ui,
+                panel_rect,
+                &mut editor,
+                &mut self.config,
+                &self.cache_dir,
+            );
         }
         ui.advance_cursor_after_rect(full);
         if ready {
             track_keys(ui.ctx(), &mut editor, map_rect.size(), &mut close);
-        } else if ui.ctx().input_mut(|input| input.consume_key(Modifiers::NONE, Key::Escape)) {
+        } else if ui
+            .ctx()
+            .input_mut(|input| input.consume_key(Modifiers::NONE, Key::Escape))
+        {
             close = true;
         }
         if editor.dirty && ui.ctx().input(|input| input.viewport().close_requested()) {
-            ui.ctx().send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            ui.ctx()
+                .send_viewport_cmd(egui::ViewportCommand::CancelClose);
             editor.asking_close = true;
             editor.quit_after_discard = true;
         }
@@ -970,7 +1163,8 @@ impl PicassoApp {
             let path = editor.path.to_string_lossy();
             if let Some(track) = self.tracks.iter().find(|track| track.path == path) {
                 let _ = self.cmd_tx.send(crate::worker::Command::RefreshTrack {
-                    folder_id: track.folder_id, path: path.into_owned(),
+                    folder_id: track.folder_id,
+                    path: path.into_owned(),
                 });
             }
         }
@@ -989,18 +1183,24 @@ impl PicassoApp {
         let response = ui.interact(rect, egui::Id::unique("track-map"), Sense::click_and_drag());
         let pointer = response.hover_pos();
         if response.hovered() {
-            let (scroll, pinch) = ui.input(|input| (input.smooth_scroll_delta.y, input.zoom_delta()));
-            let steps = wheel_steps(&mut editor.wheel, scroll) + pinch_steps(&mut editor.pinch, pinch);
+            let (scroll, pinch) =
+                ui.input(|input| (input.smooth_scroll_delta.y, input.zoom_delta()));
+            let steps =
+                wheel_steps(&mut editor.wheel, scroll) + pinch_steps(&mut editor.pinch, pinch);
             if let Some(pointer) = pointer.filter(|_| steps != 0) {
                 editor.zoom_at(steps, pointer, rect);
             }
         }
 
-        let screen: Vec<Pos2> = (0..editor.points.len()).map(|index| {
-            let point = editor.point(index);
-            editor.to_screen(rect, point.lat, point.lon)
-        }).collect();
-        let in_view: Vec<usize> = (0..screen.len()).filter(|index| rect.expand(POINT_REACH).contains(screen[*index])).collect();
+        let screen: Vec<Pos2> = (0..editor.points.len())
+            .map(|index| {
+                let point = editor.point(index);
+                editor.to_screen(rect, point.lat, point.lon)
+            })
+            .collect();
+        let in_view: Vec<usize> = (0..screen.len())
+            .filter(|index| rect.expand(POINT_REACH).contains(screen[*index]))
+            .collect();
         let near_point = |pos: Pos2| {
             in_view
                 .iter()
@@ -1013,7 +1213,11 @@ impl PicassoApp {
             screen
                 .windows(2)
                 .enumerate()
-                .filter(|(_, pair)| Rect::from_two_pos(pair[0], pair[1]).expand(LINE_REACH).contains(pos))
+                .filter(|(_, pair)| {
+                    Rect::from_two_pos(pair[0], pair[1])
+                        .expand(LINE_REACH)
+                        .contains(pos)
+                })
                 .map(|(index, pair)| (index, distance_to_segment(pos, pair[0], pair[1])))
                 .filter(|(_, distance)| *distance <= LINE_REACH)
                 .min_by(|a, b| a.1.total_cmp(&b.1))
@@ -1022,13 +1226,21 @@ impl PicassoApp {
         // A cleanup on its way replaces the points, so they aren't edited
         // meanwhile.
         let locked = editor.busy();
-        let hovered_point = pointer.filter(|_| editor.dragging.is_none()).and_then(near_point);
-        let hovered_line = if hovered_point.is_none() && !editor.box_mode && !locked { pointer.and_then(near_line) } else { None };
+        let hovered_point = pointer
+            .filter(|_| editor.dragging.is_none())
+            .and_then(near_point);
+        let hovered_line = if hovered_point.is_none() && !editor.box_mode && !locked {
+            pointer.and_then(near_line)
+        } else {
+            None
+        };
         editor.map_hover = hovered_point;
 
         if response.drag_started() {
             editor.drag_cancelled = false;
-            let origin = ui.input(|input| input.pointer.press_origin()).unwrap_or_default();
+            let origin = ui
+                .input(|input| input.pointer.press_origin())
+                .unwrap_or_default();
             if editor.box_mode {
                 editor.box_from = Some(origin);
             } else if let Some(index) = near_point(origin).filter(|_| !locked) {
@@ -1055,8 +1267,13 @@ impl PicassoApp {
                 editor.points[index].lon = lon;
                 editor.tell(trf("Moved point {}", &[&(index + 1)]));
             } else if let Some(from) = editor.box_from.take() {
-                let area = Rect::from_two_pos(from, response.interact_pointer_pos().unwrap_or(from));
-                let picked: Vec<usize> = in_view.iter().copied().filter(|index| area.contains(screen[*index])).collect();
+                let area =
+                    Rect::from_two_pos(from, response.interact_pointer_pos().unwrap_or(from));
+                let picked: Vec<usize> = in_view
+                    .iter()
+                    .copied()
+                    .filter(|index| area.contains(screen[*index]))
+                    .collect();
                 if !ui.input(|input| input.modifiers.shift) {
                     editor.selection.clear();
                 }
@@ -1097,24 +1314,44 @@ impl PicassoApp {
         painter.rect_filled(rect, 0, map_backdrop());
         self.paint_tiles(&painter, rect, editor.view);
         if editor.show_raw {
-            let raw: Vec<Pos2> = editor.raw.iter().map(|point| editor.to_screen(rect, point.lat, point.lon)).collect();
-            painter.add(egui::Shape::line(raw, Stroke::new(2.0, Color32::from_rgba_unmultiplied(80, 80, 80, 150))));
+            let raw: Vec<Pos2> = editor
+                .raw
+                .iter()
+                .map(|point| editor.to_screen(rect, point.lat, point.lon))
+                .collect();
+            painter.add(egui::Shape::line(
+                raw,
+                Stroke::new(2.0, Color32::from_rgba_unmultiplied(80, 80, 80, 150)),
+            ));
         }
         let measures = editor.measures();
         let flights = &measures.flights;
-        let shown = |index: usize, pair: &[Pos2]| !flights[index] && Rect::from_two_pos(pair[0], pair[1]).intersects(rect);
+        let shown = |index: usize, pair: &[Pos2]| {
+            !flights[index] && Rect::from_two_pos(pair[0], pair[1]).intersects(rect)
+        };
         for (index, pair) in screen.windows(2).enumerate() {
             if flights[index] && Rect::from_two_pos(pair[0], pair[1]).intersects(rect) {
-                painter.add(egui::Shape::dashed_line(&[pair[0], pair[1]], Stroke::new(2.5, FLIGHT), 8.0, 6.0));
+                painter.add(egui::Shape::dashed_line(
+                    &[pair[0], pair[1]],
+                    Stroke::new(2.5, FLIGHT),
+                    8.0,
+                    6.0,
+                ));
                 paint_plane(&painter, pair[0].lerp(pair[1], 0.5), pair[1] - pair[0]);
             } else if shown(index, pair) {
-                painter.line_segment([pair[0], pair[1]], Stroke::new(7.0, Color32::from_white_alpha(225)));
+                painter.line_segment(
+                    [pair[0], pair[1]],
+                    Stroke::new(7.0, Color32::from_white_alpha(225)),
+                );
             }
         }
         for (index, pair) in screen.windows(2).enumerate() {
             if shown(index, pair) {
                 let lit = hovered_line == Some(index);
-                painter.line_segment([pair[0], pair[1]], Stroke::new(if lit { 5.5 } else { 3.5 }, LINE));
+                painter.line_segment(
+                    [pair[0], pair[1]],
+                    Stroke::new(if lit { 5.5 } else { 3.5 }, LINE),
+                );
             }
         }
         if let (Some(segment), Some(pos)) = (hovered_line, pointer) {
@@ -1130,23 +1367,45 @@ impl PicassoApp {
             let pos = screen[index];
             if point.dwell_ms > 0 {
                 let hours = (point.dwell_ms as f32 / 3_600_000.0).min(24.0);
-                painter.circle(pos, 8.0 + 9.0 * hours / 24.0, STAY.gamma_multiply(0.4), Stroke::new(1.5, STAY));
+                painter.circle(
+                    pos,
+                    8.0 + 9.0 * hours / 24.0,
+                    STAY.gamma_multiply(0.4),
+                    Stroke::new(1.5, STAY),
+                );
             }
             let selected = editor.selection.contains(&index);
-            let lit = hovered_point == Some(index) || editor.dragging.is_some_and(|(dragged, _, _)| dragged == index);
+            let lit = hovered_point == Some(index)
+                || editor
+                    .dragging
+                    .is_some_and(|(dragged, _, _)| dragged == index);
             if lit {
                 painter.circle_filled(pos, 12.0, LINE.gamma_multiply(0.22));
             }
             // Handles closer together than this would bury the line.
             let spaced = last_handle.is_none_or(|last| last.distance(pos) >= HANDLE_GAP);
             if selected {
-                painter.circle(pos, if lit { 6.5 } else { 5.5 }, ACCENT, Stroke::new(2.0, WHITE));
+                painter.circle(
+                    pos,
+                    if lit { 6.5 } else { 5.5 },
+                    ACCENT,
+                    Stroke::new(2.0, WHITE),
+                );
             } else if lit || (every && spaced) {
-                painter.circle(pos, if lit { 6.0 } else { 3.0 }, WHITE, Stroke::new(1.5, LINE));
+                painter.circle(
+                    pos,
+                    if lit { 6.0 } else { 3.0 },
+                    WHITE,
+                    Stroke::new(1.5, LINE),
+                );
                 last_handle = Some(pos);
             }
         }
-        if let Some(pos) = editor.profile_hover.and_then(|index| screen.get(index)).filter(|pos| rect.contains(**pos)) {
+        if let Some(pos) = editor
+            .profile_hover
+            .and_then(|index| screen.get(index))
+            .filter(|pos| rect.contains(**pos))
+        {
             painter.circle_filled(*pos, 13.0, ACCENT.gamma_multiply(0.25));
             painter.circle(*pos, 6.5, WHITE, Stroke::new(3.0, ACCENT));
         }
@@ -1161,7 +1420,14 @@ impl PicassoApp {
             painter.rect_stroke(area, 4, Stroke::new(1.5, ACCENT), egui::StrokeKind::Inside);
         }
         if let (Some(index), Some(pos)) = (hovered_point, pointer) {
-            paint_point_card(&painter, rect, pos, index, &editor.points[index], measures.heights.is_some());
+            paint_point_card(
+                &painter,
+                rect,
+                pos,
+                index,
+                &editor.points[index],
+                measures.heights.is_some(),
+            );
         }
         self.paint_map_notes(&painter, rect, editor.view);
 
@@ -1178,7 +1444,10 @@ impl PicassoApp {
             ui.ctx().set_cursor_icon(cursor);
         }
         response.context_menu(|ui| {
-            if let Some(index) = editor.menu_point.filter(|index| *index < editor.points.len()) {
+            if let Some(index) = editor
+                .menu_point
+                .filter(|index| *index < editor.points.len())
+            {
                 if ui.button(tr("Remove point")).clicked() {
                     editor.remove(HashSet::from([index]));
                     ui.close();
@@ -1196,68 +1465,148 @@ impl PicassoApp {
     /// over the map.
     fn track_overlays(&mut self, ui: &mut egui::Ui, editor: &mut TrackEditor, rect: Rect) {
         let ctx = ui.ctx().clone();
-        floating(&ctx, "track-tools", rect.left_top() + Vec2::splat(INSET), Align2::LEFT_TOP, rect, |ui| {
-            ui.spacing_mut().item_spacing = Vec2::splat(2.0);
-            if tool_button(ui, Glyph::Move, !editor.box_mode, tr("Move and add points (V)")).clicked() {
-                editor.box_mode = false;
-            }
-            if tool_button(ui, Glyph::Box, editor.box_mode, tr("Drag a box round points to select them (R)")).clicked() {
-                editor.box_mode = true;
-            }
-            let (line, _) = ui.allocate_exact_size(Vec2::new(TOOL, 7.0), Sense::hover());
-            ui.painter().hline(line.x_range().shrink(6.0), line.center().y, Stroke::new(1.0, theme::hairline()));
-            let hint = format!("{}\n{}", tr("Show original"), tr("Draw the track as read, before the cleanup"));
-            if tool_button(ui, Glyph::Original, editor.show_raw, &hint).clicked() {
-                editor.show_raw = !editor.show_raw;
-            }
-        });
+        floating(
+            &ctx,
+            "track-tools",
+            rect.left_top() + Vec2::splat(INSET),
+            Align2::LEFT_TOP,
+            rect,
+            |ui| {
+                ui.spacing_mut().item_spacing = Vec2::splat(2.0);
+                if tool_button(
+                    ui,
+                    Glyph::Move,
+                    !editor.box_mode,
+                    tr("Move and add points (V)"),
+                )
+                .clicked()
+                {
+                    editor.box_mode = false;
+                }
+                if tool_button(
+                    ui,
+                    Glyph::Box,
+                    editor.box_mode,
+                    tr("Drag a box round points to select them (R)"),
+                )
+                .clicked()
+                {
+                    editor.box_mode = true;
+                }
+                let (line, _) = ui.allocate_exact_size(Vec2::new(TOOL, 7.0), Sense::hover());
+                ui.painter().hline(
+                    line.x_range().shrink(6.0),
+                    line.center().y,
+                    Stroke::new(1.0, theme::hairline()),
+                );
+                let hint = format!(
+                    "{}\n{}",
+                    tr("Show original"),
+                    tr("Draw the track as read, before the cleanup")
+                );
+                if tool_button(ui, Glyph::Original, editor.show_raw, &hint).clicked() {
+                    editor.show_raw = !editor.show_raw;
+                }
+            },
+        );
 
         let size = rect.size();
-        floating(&ctx, "track-views", Pos2::new(rect.center().x, rect.top() + INSET), Align2::CENTER_TOP, rect, |ui| {
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 2.0;
-                for (preset, label, key) in PRESETS {
-                    let button = egui::Button::selectable(false, RichText::new(tr(label)).size(12.5)).min_size(Vec2::new(0.0, 28.0));
-                    if ui.add(button).on_hover_text(format!("{} ({key})", tr(label))).clicked() {
-                        editor.go_to(preset, size);
+        floating(
+            &ctx,
+            "track-views",
+            Pos2::new(rect.center().x, rect.top() + INSET),
+            Align2::CENTER_TOP,
+            rect,
+            |ui| {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 2.0;
+                    for (preset, label, key) in PRESETS {
+                        let button =
+                            egui::Button::selectable(false, RichText::new(tr(label)).size(12.5))
+                                .min_size(Vec2::new(0.0, 28.0));
+                        if ui
+                            .add(button)
+                            .on_hover_text(format!("{} ({key})", tr(label)))
+                            .clicked()
+                        {
+                            editor.go_to(preset, size);
+                        }
                     }
-                }
-            });
-        });
+                });
+            },
+        );
 
         let step = zoom_step((rect.height() - 2.0 * INSET).min(240.0));
         let corner = Pos2::new(rect.right() - INSET - ZOOM_BUTTON, rect.top() + INSET);
         if let Some(next) = zoom_control(ui, corner, editor.view.zoom, step, "track-zoom") {
-            editor.zoom_at(i32::from(next) - i32::from(editor.view.zoom), rect.center(), rect);
+            editor.zoom_at(
+                i32::from(next) - i32::from(editor.view.zoom),
+                rect.center(),
+                rect,
+            );
         }
 
         let bottom = Pos2::new(rect.center().x, rect.bottom() - 30.0);
         let mut raised = 0.0;
         let count = editor.selection.len();
         if count > 0 {
-            let bar = floating(&ctx, "track-selection", bottom, Align2::CENTER_BOTTOM, rect, |ui| {
-                ui.horizontal(|ui| {
-                    ui.add_space(8.0);
-                    let text = trf(if count == 1 { "{} point selected" } else { "{} points selected" }, &[&grouped(count)]);
-                    ui.label(RichText::new(text).strong().color(theme::text()));
-                    ui.add_space(10.0);
-                    let remove = ui.add_enabled(!editor.busy(), theme::danger_button(tr("Remove")));
-                    if remove.on_hover_text(tr("Remove the selected points (Delete)")).clicked() {
-                        editor.remove(editor.selection.clone());
-                    }
-                    if ui.button(tr("Clear selection")).on_hover_text("Esc").clicked() {
-                        editor.selection.clear();
-                        editor.focus = None;
-                    }
-                });
-            });
+            let bar = floating(
+                &ctx,
+                "track-selection",
+                bottom,
+                Align2::CENTER_BOTTOM,
+                rect,
+                |ui| {
+                    ui.horizontal(|ui| {
+                        ui.add_space(8.0);
+                        let text = trf(
+                            if count == 1 {
+                                "{} point selected"
+                            } else {
+                                "{} points selected"
+                            },
+                            &[&grouped(count)],
+                        );
+                        ui.label(RichText::new(text).strong().color(theme::text()));
+                        ui.add_space(10.0);
+                        let remove =
+                            ui.add_enabled(!editor.busy(), theme::danger_button(tr("Remove")));
+                        if remove
+                            .on_hover_text(tr("Remove the selected points (Delete)"))
+                            .clicked()
+                        {
+                            editor.remove(editor.selection.clone());
+                        }
+                        if ui
+                            .button(tr("Clear selection"))
+                            .on_hover_text("Esc")
+                            .clicked()
+                        {
+                            editor.selection.clear();
+                            editor.focus = None;
+                        }
+                    });
+                },
+            );
             raised = bar.response.rect.height() + 10.0;
         } else if editor.box_mode {
-            let hint = floating(&ctx, "track-box-hint", bottom, Align2::CENTER_BOTTOM, rect, |ui| {
-                egui::Frame::new().inner_margin(Margin::symmetric(8, 4)).show(ui, |ui| {
-                    ui.label(RichText::new(tr("Drag a box round points to select them (R)")).color(theme::muted()));
-                });
-            });
+            let hint = floating(
+                &ctx,
+                "track-box-hint",
+                bottom,
+                Align2::CENTER_BOTTOM,
+                rect,
+                |ui| {
+                    egui::Frame::new()
+                        .inner_margin(Margin::symmetric(8, 4))
+                        .show(ui, |ui| {
+                            ui.label(
+                                RichText::new(tr("Drag a box round points to select them (R)"))
+                                    .color(theme::muted()),
+                            );
+                        });
+                },
+            );
             raised = hint.response.rect.height() + 10.0;
         }
 
@@ -1272,7 +1621,9 @@ impl PicassoApp {
         if age >= TOAST_SECONDS {
             return;
         }
-        let presence = (age / TOAST_FADE).min((TOAST_SECONDS - age) / TOAST_FADE).min(1.0) as f32;
+        let presence = (age / TOAST_FADE)
+            .min((TOAST_SECONDS - age) / TOAST_FADE)
+            .min(1.0) as f32;
         egui::Area::new(egui::Id::unique("track-toast"))
             .order(egui::Order::Middle)
             .interactable(false)
@@ -1286,9 +1637,15 @@ impl PicassoApp {
                     .corner_radius(16)
                     .inner_margin(Margin::symmetric(14, 7))
                     .shadow(theme::card_shadow())
-                    .show(ui, |ui| ui.label(RichText::new(&editor.note).size(12.5).color(WHITE)));
+                    .show(ui, |ui| {
+                        ui.label(RichText::new(&editor.note).size(12.5).color(WHITE))
+                    });
             });
-        let wait = if presence < 1.0 { 0.016 } else { TOAST_SECONDS - TOAST_FADE - age };
+        let wait = if presence < 1.0 {
+            0.016
+        } else {
+            TOAST_SECONDS - TOAST_FADE - age
+        };
         ctx.request_repaint_after(std::time::Duration::from_secs_f64(wait.max(0.016)));
     }
 }
@@ -1298,8 +1655,13 @@ fn track_header(ui: &mut egui::Ui, editor: &mut TrackEditor, close: &mut bool) {
     theme::toolbar_frame(theme::toolbar()).show(ui, |ui| {
         ui.set_width(ui.available_width());
         ui.horizontal(|ui| {
-            let back = egui::Button::new(RichText::new(tr("‹  Back")).color(theme::text())).frame_when_inactive(false);
-            if ui.add(back).on_hover_text(tr("Close the track editor (Esc)")).clicked() {
+            let back = egui::Button::new(RichText::new(tr("‹  Back")).color(theme::text()))
+                .frame_when_inactive(false);
+            if ui
+                .add(back)
+                .on_hover_text(tr("Close the track editor (Esc)"))
+                .clicked()
+            {
                 *close = true;
             }
             ui.add(egui::Separator::default().vertical().spacing(14.0));
@@ -1307,17 +1669,30 @@ fn track_header(ui: &mut egui::Ui, editor: &mut TrackEditor, close: &mut bool) {
                 ui.spacing_mut().item_spacing.y = 1.0;
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 6.0;
-                    ui.label(RichText::new(&editor.name).size(15.0).strong().color(theme::text()));
+                    ui.label(
+                        RichText::new(&editor.name)
+                            .size(15.0)
+                            .strong()
+                            .color(theme::text()),
+                    );
                     badge(ui, &format_badge(&editor.path.to_string_lossy()));
                     if editor.dirty {
-                        let (dot, response) = ui.allocate_exact_size(Vec2::splat(8.0), Sense::hover());
-                        ui.painter().circle_filled(dot.center(), 3.5, theme::accent());
+                        let (dot, response) =
+                            ui.allocate_exact_size(Vec2::splat(8.0), Sense::hover());
+                        ui.painter()
+                            .circle_filled(dot.center(), 3.5, theme::accent());
                         let unsaved = tr("Changes not saved yet");
-                        response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, unsaved));
+                        response.widget_info(|| {
+                            egui::WidgetInfo::labeled(egui::Role::Label, true, unsaved)
+                        });
                         response.on_hover_text(unsaved);
                     }
                 });
-                let folder = editor.path.parent().map(|dir| folder_label(&dir.to_string_lossy())).unwrap_or_default();
+                let folder = editor
+                    .path
+                    .parent()
+                    .map(|dir| folder_label(&dir.to_string_lossy()))
+                    .unwrap_or_default();
                 ui.label(RichText::new(folder).size(11.5).color(theme::muted()));
             });
             if editor.busy() {
@@ -1328,11 +1703,13 @@ fn track_header(ui: &mut egui::Ui, editor: &mut TrackEditor, close: &mut bool) {
                 ui.add_enabled_ui(ready, |ui| {
                     save_buttons(ui, editor);
                     ui.add_space(10.0);
-                    let redo = theme::icon_button(ui, theme::Icon::Redo, !editor.redo.is_empty(), false);
+                    let redo =
+                        theme::icon_button(ui, theme::Icon::Redo, !editor.redo.is_empty(), false);
                     if redo.on_hover_text(tr("Redo (Ctrl+Y)")).clicked() {
                         editor.redo();
                     }
-                    let undo = theme::icon_button(ui, theme::Icon::Undo, !editor.undo.is_empty(), false);
+                    let undo =
+                        theme::icon_button(ui, theme::Icon::Undo, !editor.undo.is_empty(), false);
                     if undo.on_hover_text(tr("Undo (Ctrl+Z)")).clicked() {
                         editor.undo();
                     }
@@ -1345,7 +1722,13 @@ fn track_header(ui: &mut egui::Ui, editor: &mut TrackEditor, close: &mut bool) {
 /// Save in the track's own format, with the other format under the arrow
 /// beside it.
 fn save_buttons(ui: &mut egui::Ui, editor: &mut TrackEditor) {
-    let label = |format: Format| if format == Format::Kml { tr("Save as KML…") } else { tr("Save as GPX…") };
+    let label = |format: Format| {
+        if format == Format::Kml {
+            tr("Save as KML…")
+        } else {
+            tr("Save as GPX…")
+        }
+    };
     ui.scope(|ui| {
         ui.spacing_mut().item_spacing.x = 1.0;
         ui.spacing_mut().button_padding.x = 7.0;
@@ -1359,7 +1742,8 @@ fn save_buttons(ui: &mut egui::Ui, editor: &mut TrackEditor) {
             }
             if editor.can_overwrite() {
                 let shortcut = egui::KeyboardShortcut::new(Modifiers::COMMAND, Key::S);
-                let button = egui::Button::new(tr("Save over original…")).shortcut_text(ui.ctx().format_shortcut(&shortcut));
+                let button = egui::Button::new(tr("Save over original…"))
+                    .shortcut_text(ui.ctx().format_shortcut(&shortcut));
                 if ui.add(button).clicked() {
                     editor.asking_overwrite = true;
                     ui.close();
@@ -1368,7 +1752,11 @@ fn save_buttons(ui: &mut egui::Ui, editor: &mut TrackEditor) {
         });
         ui.spacing_mut().button_padding.x = 12.0;
         let own = editor.own_format();
-        if ui.add(theme::primary_button(label(own))).on_hover_text(tr("Save a copy")).clicked() {
+        if ui
+            .add(theme::primary_button(label(own)))
+            .on_hover_text(tr("Save a copy"))
+            .clicked()
+        {
             editor.save(own);
         }
     });
@@ -1378,7 +1766,11 @@ fn save_buttons(ui: &mut egui::Ui, editor: &mut TrackEditor) {
 /// is clicked.
 fn track_message(ui: &mut egui::Ui, rect: Rect, text: &str, loading: bool) -> bool {
     let area = Rect::from_center_size(rect.center(), Vec2::new(rect.width().min(420.0), 180.0));
-    let mut ui = ui.new_child(egui::UiBuilder::new().max_rect(area).layout(egui::Layout::top_down(egui::Align::Center)));
+    let mut ui = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(area)
+            .layout(egui::Layout::top_down(egui::Align::Center)),
+    );
     ui.spacing_mut().item_spacing.y = 10.0;
     if loading {
         ui.add(egui::Spinner::new().size(28.0));
@@ -1392,14 +1784,21 @@ fn track_message(ui: &mut egui::Ui, rect: Rect, text: &str, loading: bool) -> bo
 /// Undo, Redo, Select, Remove, the views, the points, Save, and Esc.
 fn track_keys(ctx: &egui::Context, editor: &mut TrackEditor, size: Vec2, close: &mut bool) {
     let modal = ctx.memory(|memory| memory.top_modal_layer().is_some());
-    if ctx.egui_wants_keyboard_input() || egui::Popup::is_any_open(ctx) || modal || editor.asking_close || editor.asking_overwrite {
+    if ctx.egui_wants_keyboard_input()
+        || egui::Popup::is_any_open(ctx)
+        || modal
+        || editor.asking_close
+        || editor.asking_overwrite
+    {
         return;
     }
     let command = |key| ctx.input_mut(|input| input.consume_key(Modifiers::COMMAND, key));
     let plain = |key| ctx.input_mut(|input| input.consume_key(Modifiers::NONE, key));
     // Edits wait while a cleanup on its way would replace them.
     let busy = editor.busy();
-    if ctx.input_mut(|input| input.consume_key(Modifiers::COMMAND | Modifiers::SHIFT, Key::Z)) || command(Key::Y) {
+    if ctx.input_mut(|input| input.consume_key(Modifiers::COMMAND | Modifiers::SHIFT, Key::Z))
+        || command(Key::Y)
+    {
         if !busy {
             editor.redo();
         }
@@ -1437,7 +1836,10 @@ fn track_keys(ctx: &egui::Context, editor: &mut TrackEditor, size: Vec2, close: 
             *close = true;
         }
     } else {
-        for (key, (preset, _, _)) in [Key::Num1, Key::Num2, Key::Num3, Key::Num4].into_iter().zip(PRESETS) {
+        for (key, (preset, _, _)) in [Key::Num1, Key::Num2, Key::Num3, Key::Num4]
+            .into_iter()
+            .zip(PRESETS)
+        {
             if plain(key) {
                 editor.go_to(preset, size);
             }
@@ -1450,14 +1852,22 @@ fn ask_overwrite(ctx: &egui::Context, editor: &mut TrackEditor) -> bool {
     let mut cancel = false;
     let response = egui::Modal::new(egui::Id::unique("track-overwrite")).show(ctx, |ui| {
         ui.set_width(360.0);
-        ui.label(RichText::new(tr("Overwrite the original track?")).size(16.0).strong());
+        ui.label(
+            RichText::new(tr("Overwrite the original track?"))
+                .size(16.0)
+                .strong(),
+        );
         ui.add_space(6.0);
-        ui.label(tr("The original file will be overwritten with the edited track."));
+        ui.label(tr(
+            "The original file will be overwritten with the edited track.",
+        ));
         ui.label(RichText::new(editor.path.to_string_lossy()).color(theme::muted()));
         ui.add_space(12.0);
         ui.horizontal(|ui| {
             cancel = ui.button(tr("Cancel")).clicked();
-            overwrite = ui.add(theme::danger_button(tr("Overwrite original"))).clicked();
+            overwrite = ui
+                .add(theme::danger_button(tr("Overwrite original")))
+                .clicked();
         });
     });
     if overwrite || cancel || response.should_close() {
@@ -1472,9 +1882,18 @@ fn ask_discard(ctx: &egui::Context, editor: &mut TrackEditor) -> bool {
     let mut discard = false;
     let response = egui::Modal::new(egui::Id::unique("track-discard")).show(ctx, |ui| {
         ui.set_width(340.0);
-        ui.label(RichText::new(tr("Discard the changes to this track?")).size(16.0).strong());
+        ui.label(
+            RichText::new(tr("Discard the changes to this track?"))
+                .size(16.0)
+                .strong(),
+        );
         ui.add_space(6.0);
-        ui.label(RichText::new(tr("The file stays as it is. Save a copy first to keep your edits.")).color(theme::muted()));
+        ui.label(
+            RichText::new(tr(
+                "The file stays as it is. Save a copy first to keep your edits.",
+            ))
+            .color(theme::muted()),
+        );
         ui.add_space(12.0);
         ui.horizontal(|ui| {
             if ui.add(theme::danger_button(tr("Discard"))).clicked() {
@@ -1496,9 +1915,19 @@ fn ask_discard(ctx: &egui::Context, editor: &mut TrackEditor) -> bool {
 
 /// The inspector beside the map: statistics, the elevation profile, the
 /// focused point, and the cleanup settings.
-fn track_panel(ui: &mut egui::Ui, rect: Rect, editor: &mut TrackEditor, config: &mut crate::config::Config, cache: &Path) {
+fn track_panel(
+    ui: &mut egui::Ui,
+    rect: Rect,
+    editor: &mut TrackEditor,
+    config: &mut crate::config::Config,
+    cache: &Path,
+) {
     ui.painter().rect_filled(rect, 0, theme::sidebar());
-    ui.painter().vline(rect.left(), rect.y_range(), Stroke::new(1.0, theme::hairline()));
+    ui.painter().vline(
+        rect.left(),
+        rect.y_range(),
+        Stroke::new(1.0, theme::hairline()),
+    );
     let mut ui = ui.new_child(egui::UiBuilder::new().max_rect(rect));
     egui::ScrollArea::vertical().id_salt("track-panel").auto_shrink([false, false]).show(&mut ui, |ui| {
         egui::Frame::new().inner_margin(Margin { left: 16, right: 16, top: 6, bottom: 18 }).show(ui, |ui| {
@@ -1576,12 +2005,20 @@ fn point_section(ui: &mut egui::Ui, editor: &mut TrackEditor, heights: bool) {
     let (mut step, mut remove) = (None, false);
     section(ui, tr("Point"), |ui| {
         ui.spacing_mut().item_spacing.x = 2.0;
-        remove = ui.add_enabled_ui(!editor.busy(), |ui| glyph_button(ui, Glyph::Trash, tr("Remove point")).clicked()).inner;
+        remove = ui
+            .add_enabled_ui(!editor.busy(), |ui| {
+                glyph_button(ui, Glyph::Trash, tr("Remove point")).clicked()
+            })
+            .inner;
         ui.add_space(6.0);
         if nav_button(ui, "›", index + 1 < count, tr("Next point (→)")) {
             step = Some(1);
         }
-        ui.label(RichText::new(format!("{} / {}", grouped(index + 1), grouped(count))).size(11.5).color(theme::muted()));
+        ui.label(
+            RichText::new(format!("{} / {}", grouped(index + 1), grouped(count)))
+                .size(11.5)
+                .color(theme::muted()),
+        );
         if nav_button(ui, "‹", index > 0, tr("Previous point (←)")) {
             step = Some(-1);
         }
@@ -1589,26 +2026,37 @@ fn point_section(ui: &mut egui::Ui, editor: &mut TrackEditor, heights: bool) {
     let point = editor.points[index];
     panel_card().show(ui, |ui| {
         ui.set_width(ui.available_width());
-        egui::Grid::new("track-point").num_columns(2).spacing([16.0, 5.0]).show(ui, |ui| {
-            if let Some(ms) = point.time {
-                row(ui, tr("Time"), format_timestamp(ms.div_euclid(1000)));
-            }
-            row(ui, tr("Latitude"), format!("{:.6}", point.lat));
-            row(ui, tr("Longitude"), format!("{:.6}", point.lon));
-            if let Some(ele) = point.ele.filter(|_| heights) {
-                row(ui, tr("Elevation"), format!("{ele:.1} m"));
-            }
-            if index > 0 {
-                let before = editor.points[index - 1];
-                row(ui, tr("Speed"), format!("{:.1} km/h", track_edit::speed_kmh(&before, &point)));
-                if track_edit::flights(&editor.points[index - 1..=index], &editor.settings)[0] {
-                    row(ui, tr("Arrived by"), tr("Flight").to_string());
+        egui::Grid::new("track-point")
+            .num_columns(2)
+            .spacing([16.0, 5.0])
+            .show(ui, |ui| {
+                if let Some(ms) = point.time {
+                    row(ui, tr("Time"), format_timestamp(ms.div_euclid(1000)));
                 }
-            }
-            if point.dwell_ms > 0 {
-                row(ui, tr("Stay"), format_duration(point.dwell_ms as f64 / 1000.0));
-            }
-        });
+                row(ui, tr("Latitude"), format!("{:.6}", point.lat));
+                row(ui, tr("Longitude"), format!("{:.6}", point.lon));
+                if let Some(ele) = point.ele.filter(|_| heights) {
+                    row(ui, tr("Elevation"), format!("{ele:.1} m"));
+                }
+                if index > 0 {
+                    let before = editor.points[index - 1];
+                    row(
+                        ui,
+                        tr("Speed"),
+                        format!("{:.1} km/h", track_edit::speed_kmh(&before, &point)),
+                    );
+                    if track_edit::flights(&editor.points[index - 1..=index], &editor.settings)[0] {
+                        row(ui, tr("Arrived by"), tr("Flight").to_string());
+                    }
+                }
+                if point.dwell_ms > 0 {
+                    row(
+                        ui,
+                        tr("Stay"),
+                        format_duration(point.dwell_ms as f64 / 1000.0),
+                    );
+                }
+            });
     });
     if remove {
         editor.remove(HashSet::from([index]));
@@ -1617,26 +2065,45 @@ fn point_section(ui: &mut egui::Ui, editor: &mut TrackEditor, heights: bool) {
     }
 }
 
-fn cleanup_section(ui: &mut egui::Ui, editor: &mut TrackEditor, config: &mut crate::config::Config) {
+fn cleanup_section(
+    ui: &mut egui::Ui,
+    editor: &mut TrackEditor,
+    config: &mut crate::config::Config,
+) {
     let mut defaults = false;
     section(ui, tr("Cleanup"), |ui| {
-        let link = RichText::new(tr("Defaults")).size(12.0).color(ui.visuals().hyperlink_color);
-        defaults = ui.add(egui::Button::new(link).frame_when_inactive(false)).clicked();
+        let link = RichText::new(tr("Defaults"))
+            .size(12.0)
+            .color(ui.visuals().hyperlink_color);
+        defaults = ui
+            .add(egui::Button::new(link).frame_when_inactive(false))
+            .clicked();
     });
     if defaults {
         editor.settings = Settings::default();
         editor.settings_unsaved = true;
     }
     if editor.settings_from_file {
-        ui.label(RichText::new(tr("These settings were saved in the file.")).size(12.0).color(theme::accent()));
+        ui.label(
+            RichText::new(tr("These settings were saved in the file."))
+                .size(12.0)
+                .color(theme::accent()),
+        );
     }
     panel_card().show(ui, |ui| {
         ui.set_width(ui.available_width());
         editor.settings_unsaved |= settings_form(ui, "track-settings", &mut editor.settings);
     });
     let enabled = !editor.busy() && !editor.raw.is_empty();
-    let button = egui::Button::new(tr("Clean up again")).min_size(Vec2::new(ui.available_width(), 30.0));
-    if ui.add_enabled(enabled, button).on_hover_text(tr("Clean the track as read up with these settings. Undo brings your edits back.")).clicked() {
+    let button =
+        egui::Button::new(tr("Clean up again")).min_size(Vec2::new(ui.available_width(), 30.0));
+    if ui
+        .add_enabled(enabled, button)
+        .on_hover_text(tr(
+            "Clean the track as read up with these settings. Undo brings your edits back.",
+        ))
+        .clicked()
+    {
         editor.clean_up(ui.ctx());
     }
     // Saved once a drag on a number ends rather than on every step.
@@ -1649,18 +2116,36 @@ fn cleanup_section(ui: &mut egui::Ui, editor: &mut TrackEditor, config: &mut cra
 /// The button that looks the missing heights up, or how far the lookup is.
 fn height_lookup(ui: &mut egui::Ui, editor: &mut TrackEditor, cache: &Path, primary: bool) {
     if let Some((_, progress)) = &editor.looking_up {
-        let (done, total) = (progress.done.load(Ordering::Relaxed), progress.total.load(Ordering::Relaxed));
+        let (done, total) = (
+            progress.done.load(Ordering::Relaxed),
+            progress.total.load(Ordering::Relaxed),
+        );
         ui.horizontal(|ui| {
             ui.add(egui::Spinner::new().size(13.0));
-            note(ui, &trf("Looking up heights… {} of {} tiles", &[&grouped(done), &grouped(total)]));
+            note(
+                ui,
+                &trf(
+                    "Looking up heights… {} of {} tiles",
+                    &[&grouped(done), &grouped(total)],
+                ),
+            );
         });
-        ui.ctx().request_repaint_after(std::time::Duration::from_millis(150));
+        ui.ctx()
+            .request_repaint_after(std::time::Duration::from_millis(150));
         return;
     }
     let label = tr("Look up heights");
-    let button = if primary { theme::primary_button(label) } else { egui::Button::new(label) };
+    let button = if primary {
+        theme::primary_button(label)
+    } else {
+        egui::Button::new(label)
+    };
     let hint = tr("Fills in each point's height from free terrain data. Only the numbers of the map tiles along the track are sent, as when showing the map; the points stay on this computer.");
-    if ui.add_enabled(!editor.busy(), button).on_hover_text(hint).clicked() {
+    if ui
+        .add_enabled(!editor.busy(), button)
+        .on_hover_text(hint)
+        .clicked()
+    {
         editor.look_up_heights(cache, ui.ctx());
     }
 }
@@ -1678,13 +2163,26 @@ fn elevation_profile(
     map_hover: Option<usize>,
 ) -> (Option<usize>, Option<usize>) {
     let total = along.last().copied().unwrap_or_default();
-    let heights: Vec<(usize, f64)> = points.iter().enumerate().filter_map(|(index, point)| point.ele.map(|ele| (index, ele))).collect();
+    let heights: Vec<(usize, f64)> = points
+        .iter()
+        .enumerate()
+        .filter_map(|(index, point)| point.ele.map(|ele| (index, ele)))
+        .collect();
     let (low, high) = range;
     let span = (high - low).max(10.0);
 
-    let (rect, response) = ui.allocate_exact_size(Vec2::new(ui.available_width(), PROFILE_H), Sense::click_and_drag());
+    let (rect, response) = ui.allocate_exact_size(
+        Vec2::new(ui.available_width(), PROFILE_H),
+        Sense::click_and_drag(),
+    );
     let painter = ui.painter_at(rect.expand(1.0));
-    painter.rect(rect, 8, theme::bg(), Stroke::new(1.0, theme::hairline()), egui::StrokeKind::Inside);
+    painter.rect(
+        rect,
+        8,
+        theme::bg(),
+        Stroke::new(1.0, theme::hairline()),
+        egui::StrokeKind::Inside,
+    );
     let plot = rect.shrink2(Vec2::new(8.0, 12.0));
     let x_of = |index: usize| plot.left() + (along[index] / total.max(1.0)) as f32 * plot.width();
     let y_of = |ele: f64| plot.bottom() - ((ele - low) / span) as f32 * plot.height();
@@ -1717,24 +2215,58 @@ fn elevation_profile(
             .into_iter()
             .flatten()
             .filter_map(|slot| heights.get(slot))
-            .min_by(|a, b| (along[a.0] - target).abs().total_cmp(&(along[b.0] - target).abs()))
+            .min_by(|a, b| {
+                (along[a.0] - target)
+                    .abs()
+                    .total_cmp(&(along[b.0] - target).abs())
+            })
             .map(|(index, _)| *index)
     };
     let hovered = response.hover_pos().and_then(pick);
-    let picked = if response.clicked() || response.dragged() { response.interact_pointer_pos().and_then(pick) } else { None };
-    if let Some(ele) = focus.and_then(|index| points.get(index).and_then(|point| point.ele.map(|ele| (index, ele)))) {
-        painter.circle(Pos2::new(x_of(ele.0), y_of(ele.1)), 4.5, theme::accent(), Stroke::new(2.0, WHITE));
+    let picked = if response.clicked() || response.dragged() {
+        response.interact_pointer_pos().and_then(pick)
+    } else {
+        None
+    };
+    if let Some(ele) = focus.and_then(|index| {
+        points
+            .get(index)
+            .and_then(|point| point.ele.map(|ele| (index, ele)))
+    }) {
+        painter.circle(
+            Pos2::new(x_of(ele.0), y_of(ele.1)),
+            4.5,
+            theme::accent(),
+            Stroke::new(2.0, WHITE),
+        );
     }
-    if let Some((index, ele)) = hovered.or(map_hover).and_then(|index| points.get(index).and_then(|point| point.ele.map(|ele| (index, ele)))) {
+    if let Some((index, ele)) = hovered.or(map_hover).and_then(|index| {
+        points
+            .get(index)
+            .and_then(|point| point.ele.map(|ele| (index, ele)))
+    }) {
         let pos = Pos2::new(x_of(index), y_of(ele));
-        painter.vline(pos.x, rect.y_range().shrink(4.0), Stroke::new(1.0, theme::muted().gamma_multiply(0.6)));
+        painter.vline(
+            pos.x,
+            rect.y_range().shrink(4.0),
+            Stroke::new(1.0, theme::muted().gamma_multiply(0.6)),
+        );
         painter.circle(pos, 4.5, WHITE, Stroke::new(2.0, LINE));
         let text = format!("{ele:.0} m · {}", format_distance(along[index]));
         let galley = painter.layout_no_wrap(text, FontId::proportional(11.0), theme::text());
         let width = galley.size().x + 10.0;
         let left = (pos.x - width / 2.0).clamp(rect.left() + 4.0, rect.right() - 4.0 - width);
-        let label = Rect::from_min_size(Pos2::new(left, rect.top() + 3.0), Vec2::new(width, galley.size().y + 4.0));
-        painter.rect(label, 4, theme::bg(), Stroke::new(1.0, theme::hairline()), egui::StrokeKind::Inside);
+        let label = Rect::from_min_size(
+            Pos2::new(left, rect.top() + 3.0),
+            Vec2::new(width, galley.size().y + 4.0),
+        );
+        painter.rect(
+            label,
+            4,
+            theme::bg(),
+            Stroke::new(1.0, theme::hairline()),
+            egui::StrokeKind::Inside,
+        );
         painter.galley(label.min + Vec2::new(5.0, 2.0), galley, theme::text());
     }
     if response.hovered() {
@@ -1752,13 +2284,24 @@ fn stat_tiles(ui: &mut egui::Ui, tiles: &[(String, String, Option<String>)]) {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = gap;
             for (label, value, hint) in pair {
-                let (rect, response) = ui.allocate_exact_size(Vec2::new(width, 54.0), Sense::hover());
+                let (rect, response) =
+                    ui.allocate_exact_size(Vec2::new(width, 54.0), Sense::hover());
                 let painter = ui.painter();
-                painter.rect(rect, 8, theme::bg(), Stroke::new(1.0, theme::hairline()), egui::StrokeKind::Inside);
+                painter.rect(
+                    rect,
+                    8,
+                    theme::bg(),
+                    Stroke::new(1.0, theme::hairline()),
+                    egui::StrokeKind::Inside,
+                );
                 let value = truncated(painter, value.clone(), 17.0, theme::text(), width - 20.0);
                 painter.galley(rect.left_top() + Vec2::new(10.0, 8.0), value, theme::text());
                 let name = truncated(painter, label.clone(), 11.0, theme::muted(), width - 20.0);
-                painter.galley(rect.left_bottom() + Vec2::new(10.0, -9.0 - name.size().y), name, theme::muted());
+                painter.galley(
+                    rect.left_bottom() + Vec2::new(10.0, -9.0 - name.size().y),
+                    name,
+                    theme::muted(),
+                );
                 response.on_hover_text(hint.as_deref().unwrap_or(label));
             }
         });
@@ -1770,7 +2313,12 @@ fn section(ui: &mut egui::Ui, title: &str, right: impl FnOnce(&mut egui::Ui)) {
     ui.add_space(10.0);
     ui.horizontal(|ui| {
         ui.set_min_height(24.0);
-        ui.label(RichText::new(title.to_uppercase()).size(10.5).strong().color(theme::muted()));
+        ui.label(
+            RichText::new(title.to_uppercase())
+                .size(10.5)
+                .strong()
+                .color(theme::muted()),
+        );
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), right);
     });
 }
@@ -1788,11 +2336,25 @@ fn badge(ui: &mut egui::Ui, text: &str) {
         .fill(theme::well())
         .corner_radius(4)
         .inner_margin(Margin::symmetric(5, 1))
-        .show(ui, |ui| ui.label(RichText::new(text).size(10.5).strong().color(theme::muted())));
+        .show(ui, |ui| {
+            ui.label(
+                RichText::new(text)
+                    .size(10.5)
+                    .strong()
+                    .color(theme::muted()),
+            )
+        });
 }
 
 /// A card floating over the map in `within`, placed by its `pivot` at `at`.
-fn floating<R>(ctx: &egui::Context, id: &str, at: Pos2, pivot: Align2, within: Rect, add: impl FnOnce(&mut egui::Ui) -> R) -> egui::InnerResponse<R> {
+fn floating<R>(
+    ctx: &egui::Context,
+    id: &str,
+    at: Pos2,
+    pivot: Align2,
+    within: Rect,
+    add: impl FnOnce(&mut egui::Ui) -> R,
+) -> egui::InnerResponse<R> {
     egui::Area::new(egui::Id::unique(id))
         .order(egui::Order::Middle)
         .fixed_pos(at)
@@ -1820,20 +2382,41 @@ enum Glyph {
 }
 
 fn tool_button(ui: &mut egui::Ui, glyph: Glyph, selected: bool, hint: &str) -> egui::Response {
-    let response = ui.add(egui::Button::selectable(selected, "").min_size(Vec2::splat(TOOL))).on_hover_text(hint);
-    theme_glyph(ui.painter(), glyph, response.rect.center(), if selected { theme::accent() } else { theme::text() });
+    let response = ui
+        .add(egui::Button::selectable(selected, "").min_size(Vec2::splat(TOOL)))
+        .on_hover_text(hint);
+    theme_glyph(
+        ui.painter(),
+        glyph,
+        response.rect.center(),
+        if selected {
+            theme::accent()
+        } else {
+            theme::text()
+        },
+    );
     response
 }
 
 fn glyph_button(ui: &mut egui::Ui, glyph: Glyph, hint: &str) -> egui::Response {
-    let response = ui.add(egui::Button::new("").frame_when_inactive(false).min_size(Vec2::new(26.0, 24.0))).on_hover_text(hint);
+    let response = ui
+        .add(
+            egui::Button::new("")
+                .frame_when_inactive(false)
+                .min_size(Vec2::new(26.0, 24.0)),
+        )
+        .on_hover_text(hint);
     theme_glyph(ui.painter(), glyph, response.rect.center(), theme::muted());
     response
 }
 
 fn nav_button(ui: &mut egui::Ui, text: &str, enabled: bool, hint: &str) -> bool {
-    let button = egui::Button::new(RichText::new(text).size(15.0)).frame_when_inactive(false).min_size(Vec2::new(24.0, 24.0));
-    ui.add_enabled(enabled, button).on_hover_text(hint).clicked()
+    let button = egui::Button::new(RichText::new(text).size(15.0))
+        .frame_when_inactive(false)
+        .min_size(Vec2::new(24.0, 24.0));
+    ui.add_enabled(enabled, button)
+        .on_hover_text(hint)
+        .clicked()
 }
 
 /// Line glyphs about 14 points wide, in the style of the theme's icons.
@@ -1842,31 +2425,64 @@ fn theme_glyph(painter: &egui::Painter, glyph: Glyph, center: Pos2, color: Color
     let at = |x: f32, y: f32| center + Vec2::new(x, y);
     match glyph {
         Glyph::Move => {
-            let arrow = [(-4.0, -6.5), (-4.0, 5.0), (-1.1, 2.4), (1.1, 7.0), (2.9, 6.1), (0.8, 1.6), (4.5, 1.4)];
-            painter.add(egui::Shape::closed_line(arrow.iter().map(|(x, y)| at(*x, *y)).collect(), stroke));
+            let arrow = [
+                (-4.0, -6.5),
+                (-4.0, 5.0),
+                (-1.1, 2.4),
+                (1.1, 7.0),
+                (2.9, 6.1),
+                (0.8, 1.6),
+                (4.5, 1.4),
+            ];
+            painter.add(egui::Shape::closed_line(
+                arrow.iter().map(|(x, y)| at(*x, *y)).collect(),
+                stroke,
+            ));
         }
         Glyph::Box => {
-            let corners = [at(-6.5, -5.5), at(6.5, -5.5), at(6.5, 5.5), at(-6.5, 5.5), at(-6.5, -5.5)];
+            let corners = [
+                at(-6.5, -5.5),
+                at(6.5, -5.5),
+                at(6.5, 5.5),
+                at(-6.5, 5.5),
+                at(-6.5, -5.5),
+            ];
             painter.add(egui::Shape::dashed_line(&corners, stroke, 2.5, 2.0));
         }
         Glyph::Original => {
-            let wave = |dy: f32| (0..=12).map(|step| {
-                let x = -7.0 + 14.0 * step as f32 / 12.0;
-                at(x, dy + 2.2 * (x * 0.55).sin())
-            }).collect::<Vec<_>>();
+            let wave = |dy: f32| {
+                (0..=12)
+                    .map(|step| {
+                        let x = -7.0 + 14.0 * step as f32 / 12.0;
+                        at(x, dy + 2.2 * (x * 0.55).sin())
+                    })
+                    .collect::<Vec<_>>()
+            };
             painter.add(egui::Shape::line(wave(-2.5), stroke));
-            painter.add(egui::Shape::line(wave(2.5), Stroke::new(1.4, color.gamma_multiply(0.4))));
+            painter.add(egui::Shape::line(
+                wave(2.5),
+                Stroke::new(1.4, color.gamma_multiply(0.4)),
+            ));
         }
         Glyph::Trash => {
             painter.hline((center.x - 5.5)..=(center.x + 5.5), center.y - 4.0, stroke);
-            painter.add(egui::Shape::line(vec![at(-2.0, -4.0), at(-2.0, -6.0), at(2.0, -6.0), at(2.0, -4.0)], stroke));
-            painter.add(egui::Shape::line(vec![at(-4.2, -4.0), at(-3.4, 6.0), at(3.4, 6.0), at(4.2, -4.0)], stroke));
+            painter.add(egui::Shape::line(
+                vec![at(-2.0, -4.0), at(-2.0, -6.0), at(2.0, -6.0), at(2.0, -4.0)],
+                stroke,
+            ));
+            painter.add(egui::Shape::line(
+                vec![at(-4.2, -4.0), at(-3.4, 6.0), at(3.4, 6.0), at(4.2, -4.0)],
+                stroke,
+            ));
             for x in [-1.3, 1.3] {
                 painter.vline(center.x + x, (center.y - 1.5)..=(center.y + 3.5), stroke);
             }
         }
         Glyph::Chevron => {
-            painter.add(egui::Shape::line(vec![at(-3.5, -1.5), at(0.0, 2.0), at(3.5, -1.5)], Stroke::new(1.6, color)));
+            painter.add(egui::Shape::line(
+                vec![at(-3.5, -1.5), at(0.0, 2.0), at(3.5, -1.5)],
+                Stroke::new(1.6, color),
+            ));
         }
     }
 }
@@ -1879,8 +2495,18 @@ fn paint_plane(painter: &egui::Painter, center: Pos2, heading: Vec2) {
     let at = |x: f32, y: f32| center + along * x + side * y;
     painter.line_segment([at(-6.0, 0.0), at(6.0, 0.0)], Stroke::new(2.2, FLIGHT));
     for flip in [-1.0, 1.0] {
-        let mut wing = vec![at(1.5, 0.0), at(-1.5, 6.0 * flip), at(-3.2, 6.0 * flip), at(-1.2, 0.0)];
-        let mut tail = vec![at(-4.4, 0.0), at(-5.8, 2.8 * flip), at(-6.8, 2.8 * flip), at(-6.0, 0.0)];
+        let mut wing = vec![
+            at(1.5, 0.0),
+            at(-1.5, 6.0 * flip),
+            at(-3.2, 6.0 * flip),
+            at(-1.2, 0.0),
+        ];
+        let mut tail = vec![
+            at(-4.4, 0.0),
+            at(-5.8, 2.8 * flip),
+            at(-6.8, 2.8 * flip),
+            at(-6.0, 0.0),
+        ];
         // Clockwise on screen, as the tessellator's edge smoothing expects.
         if flip < 0.0 {
             wing.reverse();
@@ -1895,13 +2521,30 @@ fn paint_plane(painter: &egui::Painter, center: Pos2, heading: Vec2) {
 fn paint_marker(painter: &egui::Painter, pos: Pos2, color: Color32) {
     painter.circle_filled(pos, 3.0, Color32::from_black_alpha(60));
     theme::paint_pin(painter, pos - Vec2::new(0.0, 1.45 * 9.5), 9.5, WHITE, WHITE);
-    theme::paint_pin(painter, pos - Vec2::new(0.0, 1.45 * 9.5 + 0.5), 8.0, color, WHITE);
+    theme::paint_pin(
+        painter,
+        pos - Vec2::new(0.0, 1.45 * 9.5 + 0.5),
+        8.0,
+        color,
+        WHITE,
+    );
 }
 
 /// The number, time, and height (when the track has `heights`) of the
 /// point under the pointer, in a card beside it.
-fn paint_point_card(painter: &egui::Painter, rect: Rect, pointer: Pos2, index: usize, point: &EditPoint, heights: bool) {
-    let title = painter.layout_no_wrap(format!("{} {}", tr("Point"), grouped(index + 1)), FontId::proportional(12.5), theme::text());
+fn paint_point_card(
+    painter: &egui::Painter,
+    rect: Rect,
+    pointer: Pos2,
+    index: usize,
+    point: &EditPoint,
+    heights: bool,
+) {
+    let title = painter.layout_no_wrap(
+        format!("{} {}", tr("Point"), grouped(index + 1)),
+        FontId::proportional(12.5),
+        theme::text(),
+    );
     let mut details = Vec::new();
     if let Some(ms) = point.time {
         details.push(format_timestamp(ms.div_euclid(1000)));
@@ -1909,9 +2552,20 @@ fn paint_point_card(painter: &egui::Painter, rect: Rect, pointer: Pos2, index: u
     if let Some(ele) = point.ele.filter(|_| heights) {
         details.push(format!("{ele:.0} m"));
     }
-    let detail = (!details.is_empty()).then(|| painter.layout_no_wrap(details.join("  ·  "), FontId::proportional(11.5), theme::muted()));
-    let width = title.size().x.max(detail.as_ref().map_or(0.0, |galley| galley.size().x)) + 20.0;
-    let height = title.size().y + detail.as_ref().map_or(0.0, |galley| galley.size().y + 2.0) + 14.0;
+    let detail = (!details.is_empty()).then(|| {
+        painter.layout_no_wrap(
+            details.join("  ·  "),
+            FontId::proportional(11.5),
+            theme::muted(),
+        )
+    });
+    let width = title
+        .size()
+        .x
+        .max(detail.as_ref().map_or(0.0, |galley| galley.size().x))
+        + 20.0;
+    let height =
+        title.size().y + detail.as_ref().map_or(0.0, |galley| galley.size().y + 2.0) + 14.0;
     let mut at = pointer + Vec2::splat(16.0);
     if at.x + width > rect.right() - 8.0 {
         at.x = pointer.x - 16.0 - width;
@@ -1921,11 +2575,21 @@ fn paint_point_card(painter: &egui::Painter, rect: Rect, pointer: Pos2, index: u
     }
     let card = Rect::from_min_size(at, Vec2::new(width, height));
     painter.add(theme::card_shadow().as_shape(card, 8));
-    painter.rect(card, 8, theme::bg(), Stroke::new(1.0, theme::hairline()), egui::StrokeKind::Inside);
+    painter.rect(
+        card,
+        8,
+        theme::bg(),
+        Stroke::new(1.0, theme::hairline()),
+        egui::StrokeKind::Inside,
+    );
     let title_height = title.size().y;
     painter.galley(at + Vec2::new(10.0, 7.0), title, theme::text());
     if let Some(detail) = detail {
-        painter.galley(at + Vec2::new(10.0, 9.0 + title_height), detail, theme::muted());
+        painter.galley(
+            at + Vec2::new(10.0, 9.0 + title_height),
+            detail,
+            theme::muted(),
+        );
     }
 }
 
@@ -1942,7 +2606,10 @@ pub(super) fn settings_form(ui: &mut egui::Ui, id: &str, settings: &mut Settings
         number(ui, tr("Flight distance"), &mut settings.flight_km, 1.0..=20_000.0, " km", tr("Steps longer than this are flights."));
         number(ui, tr("Flight speed"), &mut settings.flight_kmh, 1.0..=2000.0, " km/h", tr("Steps faster than this are flights."));
     });
-    ui.checkbox(&mut settings.remove_redundant, tr("Remove redundant points"));
+    ui.checkbox(
+        &mut settings.remove_redundant,
+        tr("Remove redundant points"),
+    );
     ui.checkbox(&mut settings.fill_gaps, tr("Fill long gaps with a curve"));
     *settings != before
 }
@@ -1957,17 +2624,33 @@ fn row(ui: &mut egui::Ui, label: &str, value: String) {
     ui.end_row();
 }
 
-fn number(ui: &mut egui::Ui, label: &str, value: &mut f64, range: std::ops::RangeInclusive<f64>, suffix: &str, hint: &str) {
+fn number(
+    ui: &mut egui::Ui,
+    label: &str,
+    value: &mut f64,
+    range: std::ops::RangeInclusive<f64>,
+    suffix: &str,
+    hint: &str,
+) {
     ui.label(label).on_hover_text(hint);
     let speed = (*value * 0.01).max(0.1);
-    ui.add(egui::DragValue::new(value).range(range).speed(speed).max_decimals(1).suffix(suffix)).on_hover_text(hint);
+    ui.add(
+        egui::DragValue::new(value)
+            .range(range)
+            .speed(speed)
+            .max_decimals(1)
+            .suffix(suffix),
+    )
+    .on_hover_text(hint);
     ui.end_row();
 }
 
 /// Whether any point has a height. Some apps write 0 for every point when
 /// they recorded none.
 fn has_heights(points: &[EditPoint]) -> bool {
-    points.iter().any(|point| point.ele.is_some_and(|ele| ele != 0.0))
+    points
+        .iter()
+        .any(|point| point.ele.is_some_and(|ele| ele != 0.0))
 }
 
 fn format_hours(hours: f64) -> String {
@@ -1988,19 +2671,30 @@ fn distance_to_segment(pos: Pos2, a: Pos2, b: Pos2) -> f32 {
 /// The Library preview's route, from a green start to a red end, at the
 /// same center and scale as its basemap.
 pub(super) fn paint_track_shape(
-    painter: &egui::Painter, center: Pos2, segments: &[crate::track::MapSegment], [cx, cy]: [f64; 2], scale: f64,
+    painter: &egui::Painter,
+    center: Pos2,
+    segments: &[crate::track::MapSegment],
+    [cx, cy]: [f64; 2],
+    scale: f64,
 ) {
-    let at = |[x, y]: [f64; 2]| center + Vec2::new(((x - cx) * scale) as f32, ((y - cy) * scale) as f32);
+    let at =
+        |[x, y]: [f64; 2]| center + Vec2::new(((x - cx) * scale) as f32, ((y - cy) * scale) as f32);
     for segment in segments {
         let mut line: Vec<Pos2> = Vec::with_capacity(segment.points.len().min(2000));
         for point in &segment.points {
             let pos = at(*point);
-            if line.last().is_none_or(|last: &Pos2| last.distance(pos) >= 1.0) {
+            if line
+                .last()
+                .is_none_or(|last: &Pos2| last.distance(pos) >= 1.0)
+            {
                 line.push(pos);
             }
         }
         if line.len() >= 2 {
-            painter.add(egui::Shape::line(line.clone(), Stroke::new(4.0, Color32::from_white_alpha(220))));
+            painter.add(egui::Shape::line(
+                line.clone(),
+                Stroke::new(4.0, Color32::from_white_alpha(220)),
+            ));
             painter.add(egui::Shape::line(line, Stroke::new(2.2, LINE)));
         }
     }
@@ -2015,7 +2709,10 @@ pub(super) fn paint_track_shape(
 
 /// "GPX", "KML", or "JSON", from the file name.
 pub(super) fn format_badge(path: &str) -> String {
-    Path::new(path).extension().map(|ext| ext.to_string_lossy().to_uppercase()).unwrap_or_default()
+    Path::new(path)
+        .extension()
+        .map(|ext| ext.to_string_lossy().to_uppercase())
+        .unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -2023,7 +2720,13 @@ mod tests {
     use super::*;
 
     fn at(ele: Option<f64>) -> EditPoint {
-        EditPoint { lat: 0.0, lon: 0.0, ele, time: None, dwell_ms: 0 }
+        EditPoint {
+            lat: 0.0,
+            lon: 0.0,
+            ele,
+            time: None,
+            dwell_ms: 0,
+        }
     }
 
     /// An editor for a track that isn't there, so it ends up with an error
@@ -2063,12 +2766,16 @@ mod tests {
     #[test]
     fn kept_edits_come_back_when_the_track_is_gone() {
         let ctx = egui::Context::default();
-        let dir = std::env::temp_dir().join(format!("picasso-track-recovery-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("picasso-track-recovery-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         assert!(read_recovery(&dir).is_none());
         let mut quitting = editor(&ctx);
         quitting.name = "Ride".into();
-        quitting.points = vec![EditPoint::new(25.0, 121.0, Some(3.0), Some(1_000)), EditPoint::new(25.1, 121.1, None, Some(61_000))];
+        quitting.points = vec![
+            EditPoint::new(25.0, 121.0, Some(3.0), Some(1_000)),
+            EditPoint::new(25.1, 121.1, None, Some(61_000)),
+        ];
         let keeper = Keeper::new(&dir);
         keeper.keep(&quitting);
         keeper.flush();
@@ -2136,18 +2843,28 @@ mod tests {
         editor.points[0].lat = 1.0;
         editor.settings.max_speed_kmh = 7.0;
         editor.undo();
-        assert_eq!((editor.points[0].lat, editor.settings.max_speed_kmh), (0.0, 7.0));
+        assert_eq!(
+            (editor.points[0].lat, editor.settings.max_speed_kmh),
+            (0.0, 7.0)
+        );
         // Undoing the cleanup puts its settings back.
         editor.undo();
-        assert_eq!((editor.points.len(), editor.settings, editor.points_settings), (3, old, old));
+        assert_eq!(
+            (editor.points.len(), editor.settings, editor.points_settings),
+            (3, old, old)
+        );
         editor.redo();
-        assert_eq!((editor.points.len(), editor.settings, editor.points_settings), (2, new, new));
+        assert_eq!(
+            (editor.points.len(), editor.settings, editor.points_settings),
+            (2, new, new)
+        );
     }
 
     #[test]
     fn overwriting_a_track_keeps_its_format_and_saves_the_edited_points() {
         let ctx = egui::Context::default();
-        let dir = std::env::temp_dir().join(format!("picasso-overwrite-track-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("picasso-overwrite-track-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         for (extension, format) in [("gpx", Format::Gpx), ("kml", Format::Kml)] {
             let path = dir.join(format!("ride.{extension}"));
@@ -2230,14 +2947,38 @@ mod tests {
         assert!(editor.undo.is_empty() && !editor.terrain_heights);
         assert!(!has_heights(&editor.points));
         editor.take_heights(&[Some(512.04), None, Some(1.0), Some(2.0), Some(3.0)]);
-        assert_eq!(editor.points.iter().map(|point| point.ele).collect::<Vec<_>>(), [Some(512.0), None]);
-        assert_eq!(editor.raw.iter().map(|point| point.ele).collect::<Vec<_>>(), [Some(1.0), Some(2.0), Some(3.0)]);
+        assert_eq!(
+            editor
+                .points
+                .iter()
+                .map(|point| point.ele)
+                .collect::<Vec<_>>(),
+            [Some(512.0), None]
+        );
+        assert_eq!(
+            editor.raw.iter().map(|point| point.ele).collect::<Vec<_>>(),
+            [Some(1.0), Some(2.0), Some(3.0)]
+        );
         assert!(editor.terrain_heights && editor.dirty);
-        assert!(editor.note.contains("1 point still has no height"), "{}", editor.note);
+        assert!(
+            editor.note.contains("1 point still has no height"),
+            "{}",
+            editor.note
+        );
         // Looking up again fills only the point still without a height.
         editor.take_heights(&[Some(9.0), Some(640.0), Some(9.0), Some(9.0), Some(9.0)]);
-        assert_eq!(editor.points.iter().map(|point| point.ele).collect::<Vec<_>>(), [Some(512.0), Some(640.0)]);
-        assert_eq!(editor.raw.iter().map(|point| point.ele).collect::<Vec<_>>(), [Some(1.0), Some(2.0), Some(3.0)]);
+        assert_eq!(
+            editor
+                .points
+                .iter()
+                .map(|point| point.ele)
+                .collect::<Vec<_>>(),
+            [Some(512.0), Some(640.0)]
+        );
+        assert_eq!(
+            editor.raw.iter().map(|point| point.ele).collect::<Vec<_>>(),
+            [Some(1.0), Some(2.0), Some(3.0)]
+        );
         editor.undo();
         editor.undo();
         assert!(!has_heights(&editor.points));

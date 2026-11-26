@@ -8,9 +8,9 @@ mod editor_panel;
 mod editor_stage;
 mod export;
 mod frame_stats;
+mod geotagging;
 #[cfg(test)]
 pub(crate) mod headless;
-mod geotagging;
 mod help;
 mod library;
 mod loader;
@@ -22,13 +22,13 @@ mod recovery;
 mod renamer;
 mod settings;
 mod share;
-mod similar;
 mod side;
+mod similar;
 mod stats;
 mod story;
-mod travel;
 mod theme;
 mod track_editor;
+mod travel;
 mod tree;
 mod trip_package;
 mod trips;
@@ -126,20 +126,33 @@ struct SearchMenu {
 
 enum Modal {
     None,
-    AddFolder { path: String, error: String },
-    NewAlbum { name: String, error: String },
+    AddFolder {
+        path: String,
+        error: String,
+    },
+    NewAlbum {
+        name: String,
+        error: String,
+    },
     /// `bytes` is their total size, added up when the dialog first shows.
-    Trash { ids: Vec<i64>, bytes: Option<u64> },
+    Trash {
+        ids: Vec<i64>,
+        bytes: Option<u64>,
+    },
     /// Files the scans could not read; `confirm_all` while asking before
     /// moving them all to the trash.
-    Unreadable { confirm_all: bool },
+    Unreadable {
+        confirm_all: bool,
+    },
     Export(export::ExportDialog),
     AdjustDate(dates::DateDialog),
     Geotag(geotagging::GeotagDialog),
     Rename(renamer::RenameDialog),
     /// The duplicate search; `confirm_all` while asking before moving every
     /// extra copy to the trash.
-    Duplicates { confirm_all: bool },
+    Duplicates {
+        confirm_all: bool,
+    },
     Similar,
     Trip(trips::TripDialog),
     AddToTrip(trips::AddDialog),
@@ -224,7 +237,12 @@ impl ThumbCache {
         self.map.insert(id, tex);
         let sharp = Self::SHARP_CAPACITY.max(2 * self.keep);
         if self.map.values().filter(|tex| tex.sharp()).count() > sharp {
-            let mut ages: Vec<(u64, i64)> = self.map.iter().filter(|(_, tex)| tex.sharp()).map(|(id, tex)| (tex.used, *id)).collect();
+            let mut ages: Vec<(u64, i64)> = self
+                .map
+                .iter()
+                .filter(|(_, tex)| tex.sharp())
+                .map(|(id, tex)| (tex.used, *id))
+                .collect();
             ages.sort_unstable();
             for (_, old) in ages.into_iter().take(sharp / 4) {
                 self.map.remove(&old);
@@ -233,7 +251,8 @@ impl ThumbCache {
         let capacity = Self::CAPACITY.max(2 * self.keep);
         if self.map.len() > capacity {
             // Evict in chunks so the scan for the oldest runs rarely.
-            let mut ages: Vec<(u64, i64)> = self.map.iter().map(|(id, tex)| (tex.used, *id)).collect();
+            let mut ages: Vec<(u64, i64)> =
+                self.map.iter().map(|(id, tex)| (tex.used, *id)).collect();
             ages.sort_unstable();
             for (_, old) in ages.into_iter().take(capacity / 10) {
                 self.map.remove(&old);
@@ -531,7 +550,12 @@ impl PicassoApp {
 
     /// The app on the library in `data_dir`, with thumbnails and map tiles in
     /// `cache` and `settings.json` in `config_dir`.
-    fn open(ctx: &egui::Context, args: Vec<PathBuf>, (data_dir, cache): (PathBuf, PathBuf), config_dir: &Path) -> Result<Self, String> {
+    fn open(
+        ctx: &egui::Context,
+        args: Vec<PathBuf>,
+        (data_dir, cache): (PathBuf, PathBuf),
+        config_dir: &Path,
+    ) -> Result<Self, String> {
         let _ = std::fs::create_dir_all(&data_dir);
         let track_recovery = track_editor::read_recovery(&data_dir);
         let track_keeper = track_editor::Keeper::new(&data_dir);
@@ -548,11 +572,13 @@ impl PicassoApp {
         let database = Database::open(&data_dir.join("picasso.db"))?;
         if crate::backup::due(&data_dir) {
             let data_dir = data_dir.clone();
-            let _ = std::thread::Builder::new().name("picasso-backup".into()).spawn(move || {
-                if let Err(err) = crate::backup::create(&data_dir) {
-                    eprintln!("picasso backup: {err}");
-                }
-            });
+            let _ = std::thread::Builder::new()
+                .name("picasso-backup".into())
+                .spawn(move || {
+                    if let Err(err) = crate::backup::create(&data_dir) {
+                        eprintln!("picasso backup: {err}");
+                    }
+                });
         }
         let mut config = Config::load(config_dir, &database);
         FileType::set_enabled(&config.file_types());
@@ -613,7 +639,10 @@ impl PicassoApp {
                 .spawn(move || crate::geo::tile_loop(jobs, done, cache))
                 .expect("tile thread");
         }
-        let map_source = config.text("map_source").and_then(MapSource::from_code).unwrap_or_default();
+        let map_source = config
+            .text("map_source")
+            .and_then(MapSource::from_code)
+            .unwrap_or_default();
         let carto_key = settings::load_carto_key(&mut config);
         let (watch_tx, watch_rx) = crossbeam_channel::unbounded();
         let watcher = notify::recommended_watcher(move |result| {
@@ -827,15 +856,21 @@ impl PicassoApp {
                 app.edits.insert(id, settings);
             }
         }
-        app.user_presets = crate::edit::presets::user_presets_from_json(&app.db.setting("user_presets").unwrap_or_default());
+        app.user_presets = crate::edit::presets::user_presets_from_json(
+            &app.db.setting("user_presets").unwrap_or_default(),
+        );
         app.show_info = app.db.setting("viewer_info").as_deref() != Some("0");
         app.side = SidePanel::from_setting(app.db.setting("side_panel").as_deref());
         if app.side != SidePanel::None {
             app.side_last = app.side;
         }
         let config = &app.config;
-        app.thumb_size = config.number("thumb_size").map_or(app.thumb_size, |size| size.clamp(MIN_THUMB, MAX_THUMB));
-        app.slideshow_interval = config.number("slideshow_interval").map_or(app.slideshow_interval, |secs| secs.clamp(1.0, 15.0));
+        app.thumb_size = config
+            .number("thumb_size")
+            .map_or(app.thumb_size, |size| size.clamp(MIN_THUMB, MAX_THUMB));
+        app.slideshow_interval = config
+            .number("slideshow_interval")
+            .map_or(app.slideshow_interval, |secs| secs.clamp(1.0, 15.0));
         app.slideshow_shuffle = config.flag("slideshow_shuffle").unwrap_or(false);
         app.confirm_trash = config.flag("confirm_trash").unwrap_or(true);
         app.show_tracks = config.flag("map_tracks").unwrap_or(true);
@@ -848,7 +883,9 @@ impl PicassoApp {
         app.excluded = app.db.excluded_dirs();
         app.load_update();
         match restored {
-            Some(Ok(())) => app.activity = tr("The library was restored from the backup").to_string(),
+            Some(Ok(())) => {
+                app.activity = tr("The library was restored from the backup").to_string()
+            }
             Some(Err(err)) => app.activity = trf("Couldn't restore the backup: {}", &[&err]),
             None => {}
         }
@@ -892,7 +929,11 @@ impl PicassoApp {
             if let Some(lists) = loaded.lists {
                 // A scan can follow a renamed folder or drop a deleted one.
                 let moved = self.folders.len() != lists.folders.len()
-                    || self.folders.iter().zip(&lists.folders).any(|(a, b)| a.id != b.id || a.path != b.path);
+                    || self
+                        .folders
+                        .iter()
+                        .zip(&lists.folders)
+                        .any(|(a, b)| a.id != b.id || a.path != b.path);
                 self.folders = lists.folders;
                 if moved {
                     if let Nav::Folder(id) = self.nav {
@@ -939,15 +980,22 @@ impl PicassoApp {
     fn show_photos(&mut self, photos: Vec<Photo>, keep: Option<i64>) {
         self.photos = photos;
         if self.edited_only {
-            self.photos.retain(|photo| self.edits.contains_key(&photo.id));
+            self.photos
+                .retain(|photo| self.edits.contains_key(&photo.id));
         }
         if self.map_starred && self.nav == Nav::Places {
             self.photos.retain(|photo| photo.starred);
         }
         if let Some(edited) = crate::db::edited_filter(&self.search) {
-            self.photos.retain(|photo| self.edits.contains_key(&photo.id) == edited);
+            self.photos
+                .retain(|photo| self.edits.contains_key(&photo.id) == edited);
         }
-        self.index_of = self.photos.iter().enumerate().map(|(index, photo)| (photo.id, index)).collect();
+        self.index_of = self
+            .photos
+            .iter()
+            .enumerate()
+            .map(|(index, photo)| (photo.id, index))
+            .collect();
         self.view_epoch = self.view_epoch.wrapping_add(1);
         if let Some(index) = keep.and_then(|id| self.index_of(id)) {
             self.viewer_index = index;
@@ -991,7 +1039,11 @@ impl PicassoApp {
                 .map(|(index, _)| index)
                 .collect();
         }
-        let mut indices: Vec<usize> = self.selection.iter().filter_map(|id| self.index_of(*id)).collect();
+        let mut indices: Vec<usize> = self
+            .selection
+            .iter()
+            .filter_map(|id| self.index_of(*id))
+            .collect();
         if indices.len() > count {
             indices.select_nth_unstable(count - 1);
             indices.truncate(count);
@@ -1054,8 +1106,14 @@ impl PicassoApp {
     /// The texture it would have replaced goes too, as it may show the file
     /// as it was before a scan found it changed.
     fn unseen_thumb(&mut self, event: &UiEvent) -> bool {
-        let UiEvent::Thumb { id, .. } = event else { return false };
-        let shown = self.thumb_drawn.contains(id) || self.thumb_wanted.lock().map_or(true, |wanted| wanted.contains(id));
+        let UiEvent::Thumb { id, .. } = event else {
+            return false;
+        };
+        let shown = self.thumb_drawn.contains(id)
+            || self
+                .thumb_wanted
+                .lock()
+                .map_or(true, |wanted| wanted.contains(id));
         if !shown {
             self.thumb_waiting.remove(id);
             self.thumbs.map.remove(id);
@@ -1069,8 +1127,15 @@ impl PicassoApp {
                 self.scans += 1;
                 self.activity = trf("Scanning {}", &[&name]);
             }
-            UiEvent::ScanProgress { folder, checked, indexed } => {
-                self.activity = trf("Scanning {} · {} checked · {} updated", &[&folder, &checked, &indexed]);
+            UiEvent::ScanProgress {
+                folder,
+                checked,
+                indexed,
+            } => {
+                self.activity = trf(
+                    "Scanning {} · {} checked · {} updated",
+                    &[&folder, &checked, &indexed],
+                );
             }
             UiEvent::ScanFinished { folder, unreadable } => {
                 self.scans = self.scans.saturating_sub(1);
@@ -1088,10 +1153,9 @@ impl PicassoApp {
             UiEvent::Tracks(tracks) => self.tracks = tracks,
             UiEvent::Restored(ids) => {
                 for id in ids {
-                    let settings = self
-                        .db
-                        .edit_history(id)
-                        .map(|(steps, applied)| crate::edit::History::from_json(&steps, applied).settings());
+                    let settings = self.db.edit_history(id).map(|(steps, applied)| {
+                        crate::edit::History::from_json(&steps, applied).settings()
+                    });
                     match settings.filter(|settings| !settings.is_identity()) {
                         Some(settings) => self.edits.insert(id, settings),
                         None => self.edits.remove(&id),
@@ -1101,7 +1165,13 @@ impl PicassoApp {
                 }
                 self.library_dirty = true;
             }
-            UiEvent::Thumb { id, w, h, rgba, edit } => {
+            UiEvent::Thumb {
+                id,
+                w,
+                h,
+                rgba,
+                edit,
+            } => {
                 self.thumb_waiting.remove(&id);
                 if edit != self.edit_settings(id) {
                     // Rendered with older steps; asked for again when drawn.
@@ -1113,7 +1183,16 @@ impl PicassoApp {
                 }
                 let asked = old.map_or(0, |old| old.asked);
                 if let Some(texture) = upload(ctx, &format!("thumb-{id}"), w, h, &rgba) {
-                    self.thumbs.insert(id, ThumbTex { texture, w, h, used: 0, asked });
+                    self.thumbs.insert(
+                        id,
+                        ThumbTex {
+                            texture,
+                            w,
+                            h,
+                            used: 0,
+                            asked,
+                        },
+                    );
                 } else {
                     self.thumb_failed.insert(id);
                 }
@@ -1149,8 +1228,15 @@ impl PicassoApp {
                         // A shuffled slideshow loads photos far from the one
                         // shown, so the oldest can be on screen or fading out.
                         let shown = self.photos.get(self.viewer_index).map(|photo| photo.id);
-                        let fading = self.slideshow.as_ref().and_then(|show| show.fade).map(|(id, _)| id);
-                        let oldest = self.displays.iter().position(|item| Some(item.id) != shown && Some(item.id) != fading);
+                        let fading = self
+                            .slideshow
+                            .as_ref()
+                            .and_then(|show| show.fade)
+                            .map(|(id, _)| id);
+                        let oldest = self
+                            .displays
+                            .iter()
+                            .position(|item| Some(item.id) != shown && Some(item.id) != fading);
                         self.displays.remove(oldest.unwrap_or(0));
                     }
                 }
@@ -1198,7 +1284,12 @@ impl PicassoApp {
                 error,
                 finished,
             } => self.on_batch_export(exported, failed, error, finished),
-            UiEvent::Similar { run, done, total, found } => self.on_similar(run, done, total, found),
+            UiEvent::Similar {
+                run,
+                done,
+                total,
+                found,
+            } => self.on_similar(run, done, total, found),
             UiEvent::Duplicates {
                 run,
                 checked,
@@ -1206,15 +1297,27 @@ impl PicassoApp {
                 groups,
             } => self.on_duplicates(run, checked, total, groups),
             UiEvent::DaysSuggested { trip_id, outcome } => self.on_days_suggested(trip_id, outcome),
-            UiEvent::PlacesSuggested { trip_id, outcome } => self.on_places_suggested(trip_id, outcome),
+            UiEvent::PlacesSuggested { trip_id, outcome } => {
+                self.on_places_suggested(trip_id, outcome)
+            }
             UiEvent::PlaceNamed { place_id, outcome } => self.on_place_named(place_id, outcome),
             UiEvent::StoryPreviewed(job, outcome) => self.on_story_previewed(&job, outcome),
-            UiEvent::StoryExported(story_id, job, content, outcome) => self.on_story_exported(story_id, &job, content, outcome),
-            UiEvent::StoryContent(story_id, asked, content) => self.on_story_content(story_id, asked, content),
-            UiEvent::RouteProfile(story_id, source, profile) => self.on_route_profile(story_id, source, profile),
-            UiEvent::PublishProgress(site_id, log, event) => self.on_publish_progress(site_id, log, event),
+            UiEvent::StoryExported(story_id, job, content, outcome) => {
+                self.on_story_exported(story_id, &job, content, outcome)
+            }
+            UiEvent::StoryContent(story_id, asked, content) => {
+                self.on_story_content(story_id, asked, content)
+            }
+            UiEvent::RouteProfile(story_id, source, profile) => {
+                self.on_route_profile(story_id, source, profile)
+            }
+            UiEvent::PublishProgress(site_id, log, event) => {
+                self.on_publish_progress(site_id, log, event)
+            }
             UiEvent::StoryPublished(done) => self.on_story_published(*done),
-            UiEvent::UploadsDeleted(site_id, site, deleted) => self.on_uploads_deleted(site_id, &site, deleted),
+            UiEvent::UploadsDeleted(site_id, site, deleted) => {
+                self.on_uploads_deleted(site_id, &site, deleted)
+            }
             UiEvent::TripPackaged(outcome) => self.on_trip_packaged(outcome),
             UiEvent::TripUnpacked(outcome) => self.on_trip_unpacked(*outcome),
         }
@@ -1225,7 +1328,9 @@ impl PicassoApp {
             let Ok(event) = result else { continue };
             if !matches!(
                 event.kind,
-                notify::EventKind::Create(_) | notify::EventKind::Modify(_) | notify::EventKind::Remove(_)
+                notify::EventKind::Create(_)
+                    | notify::EventKind::Modify(_)
+                    | notify::EventKind::Remove(_)
             ) {
                 continue;
             }
@@ -1234,7 +1339,8 @@ impl PicassoApp {
                     continue;
                 }
                 if let Some(id) = self.folder_for(&path) {
-                    self.watch_deadline.insert(id, Instant::now() + Duration::from_millis(700));
+                    self.watch_deadline
+                        .insert(id, Instant::now() + Duration::from_millis(700));
                 }
             }
         }
@@ -1265,9 +1371,15 @@ impl PicassoApp {
     /// Watches every added folder with everything in it, and the folder
     /// each one is in, so renaming or deleting an added folder is seen too.
     fn sync_watches(&mut self) {
-        let roots: Vec<PathBuf> = self.folders.iter().map(|folder| PathBuf::from(&folder.path)).collect();
-        let mut desired: Vec<(PathBuf, RecursiveMode)> =
-            roots.iter().map(|path| (path.clone(), RecursiveMode::Recursive)).collect();
+        let roots: Vec<PathBuf> = self
+            .folders
+            .iter()
+            .map(|folder| PathBuf::from(&folder.path))
+            .collect();
+        let mut desired: Vec<(PathBuf, RecursiveMode)> = roots
+            .iter()
+            .map(|path| (path.clone(), RecursiveMode::Recursive))
+            .collect();
         for parent in roots.iter().filter_map(|path| path.parent()) {
             let covered = roots.iter().any(|root| parent.starts_with(root));
             if !covered && !desired.iter().any(|(path, _)| path == parent) {
@@ -1296,15 +1408,21 @@ impl PicassoApp {
     }
 
     fn tick_slideshow(&mut self) {
-        let Some(show) = self.slideshow.as_ref() else { return };
+        let Some(show) = self.slideshow.as_ref() else {
+            return;
+        };
         if !show.playing || self.photos.is_empty() {
             return;
         }
         let (elapsed, interval) = (show.last.elapsed().as_secs_f32(), show.interval);
-        let Some(next) = self.upcoming_slide() else { return };
+        let Some(next) = self.upcoming_slide() else {
+            return;
+        };
         self.request_display(next);
         let ready = self.photos.get(next).is_some_and(|photo| {
-            photo.is_video() || self.display_texture(photo.id).is_some() || self.display_failed.contains(&photo.id)
+            photo.is_video()
+                || self.display_texture(photo.id).is_some()
+                || self.display_failed.contains(&photo.id)
         });
         if elapsed < interval || (!ready && elapsed < interval + SLIDE_WAIT) {
             return;
@@ -1328,13 +1446,22 @@ impl PicassoApp {
         let show = self.slideshow.as_mut()?;
         loop {
             match show.queue.last() {
-                Some(id) if Some(*id) != current && self.index_of.contains_key(id) => return self.index_of.get(id).copied(),
+                Some(id) if Some(*id) != current && self.index_of.contains_key(id) => {
+                    return self.index_of.get(id).copied()
+                }
                 Some(_) => {
                     show.queue.pop();
                 }
                 None => {
-                    show.queue = self.photos.iter().map(|photo| photo.id).filter(|id| Some(*id) != current).collect();
-                    let seed = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(1, |time| time.as_nanos() as u64);
+                    show.queue = self
+                        .photos
+                        .iter()
+                        .map(|photo| photo.id)
+                        .filter(|id| Some(*id) != current)
+                        .collect();
+                    let seed = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map_or(1, |time| time.as_nanos() as u64);
                     shuffle(&mut show.queue, seed);
                 }
             }
@@ -1374,14 +1501,16 @@ impl PicassoApp {
     fn handle_keys(&mut self, ctx: &egui::Context) {
         // An open menu or drop-down closes on Escape itself; the press is
         // left for it rather than also leaving the viewer.
-        let escape = !egui::Popup::is_any_open(ctx) && ctx.input_mut(|input| input.consume_key(Modifiers::NONE, Key::Escape));
+        let escape = !egui::Popup::is_any_open(ctx)
+            && ctx.input_mut(|input| input.consume_key(Modifiers::NONE, Key::Escape));
         if escape {
             // The folder removal is asked over any window, so it closes first.
             if self.remove_asked.take().is_some() {
                 return;
             }
             if !matches!(self.modal, Modal::None) {
-                if matches!(self.modal, Modal::DeleteUploads) && !self.publish_leftovers.is_empty() {
+                if matches!(self.modal, Modal::DeleteUploads) && !self.publish_leftovers.is_empty()
+                {
                     // Kept, or it would be asked about again at once.
                     self.publish_leftovers.remove(0);
                 }
@@ -1413,14 +1542,20 @@ impl PicassoApp {
             }
             return;
         }
-        if ctx.text_edit_focused() || !matches!(self.modal, Modal::None) || self.remove_asked.is_some() {
+        if ctx.text_edit_focused()
+            || !matches!(self.modal, Modal::None)
+            || self.remove_asked.is_some()
+        {
             return;
         }
         // A control reached with Tab takes Enter and Space as a click and the
         // arrows to move on, except a photo of the grid, whose arrows move
         // the selection and the focus with it.
         let focused = ctx.memory(|memory| memory.focused());
-        let on_photo = self.photo_focus.filter(|(id, _)| focused == Some(*id)).map(|(_, photo)| photo);
+        let on_photo = self
+            .photo_focus
+            .filter(|(id, _)| focused == Some(*id))
+            .map(|(_, photo)| photo);
         let steer = focused.is_none() || on_photo.is_some();
         let command = |key| ctx.input_mut(|input| input.consume_key(Modifiers::COMMAND, key));
         if !self.editing && command(Key::F) {
@@ -1432,7 +1567,9 @@ impl PicassoApp {
         let plain = |key| ctx.input_mut(|input| input.consume_key(Modifiers::NONE, key));
         let shift = |key| ctx.input_mut(|input| input.consume_key(Modifiers::SHIFT, key));
         // Statistics and the Travel Map show no photos to select, open, or trash.
-        let photo_keys = self.mode == Mode::View || !(matches!(self.nav, Nav::Statistics | Nav::TravelMap | Nav::Trips) || self.story_shown());
+        let photo_keys = self.mode == Mode::View
+            || !(matches!(self.nav, Nav::Statistics | Nav::TravelMap | Nav::Trips)
+                || self.story_shown());
 
         if command(Key::A) && self.mode == Mode::Browse && photo_keys {
             self.selection.clear();
@@ -1465,17 +1602,24 @@ impl PicassoApp {
                 Mode::Browse => self.primary_index(),
                 Mode::View => Some(self.viewer_index),
             };
-            if let Some(id) = index.and_then(|index| self.photos.get(index)).map(|photo| photo.id) {
+            if let Some(id) = index
+                .and_then(|index| self.photos.get(index))
+                .map(|photo| photo.id)
+            {
                 self.copy_picture(ctx, id);
             }
         }
-        let command_shift = |key| ctx.input_mut(|input| input.consume_key(Modifiers::COMMAND | Modifiers::SHIFT, key));
+        let command_shift = |key| {
+            ctx.input_mut(|input| input.consume_key(Modifiers::COMMAND | Modifiers::SHIFT, key))
+        };
         if command_shift(Key::C) {
             let index = match self.mode {
                 Mode::Browse => self.primary_index(),
                 Mode::View => Some(self.viewer_index),
             };
-            let id = index.and_then(|index| self.photos.get(index)).map(|photo| photo.id);
+            let id = index
+                .and_then(|index| self.photos.get(index))
+                .map(|photo| photo.id);
             self.copy_settings(id);
         }
         if command_shift(Key::V) {
@@ -1512,7 +1656,11 @@ impl PicassoApp {
             if plain(Key::T) {
                 self.set_tool(editor::Tool::Transform);
             }
-            let framing = self.edit.as_ref().filter(|session| session.uncropped()).map(|session| session.tool);
+            let framing = self
+                .edit
+                .as_ref()
+                .filter(|session| session.uncropped())
+                .map(|session| session.tool);
             if let Some(tool) = framing.filter(|_| steer && plain(Key::Enter)) {
                 self.set_tool(tool);
             }
@@ -1536,18 +1684,28 @@ impl PicassoApp {
                 }
             }
             let cols = self.grid_cols.max(1) as isize;
-            let step = [(Key::ArrowLeft, -1), (Key::ArrowRight, 1), (Key::ArrowUp, -cols), (Key::ArrowDown, cols)]
-                .into_iter()
-                .find(|(key, _)| steer && plain(*key));
+            let step = [
+                (Key::ArrowLeft, -1),
+                (Key::ArrowRight, 1),
+                (Key::ArrowUp, -cols),
+                (Key::ArrowDown, cols),
+            ]
+            .into_iter()
+            .find(|(key, _)| steer && plain(*key));
             if let Some((_, delta)) = step {
-                if let Some(photo) = on_photo.filter(|photo| self.photos.iter().any(|shown| shown.id == *photo)) {
+                if let Some(photo) =
+                    on_photo.filter(|photo| self.photos.iter().any(|shown| shown.id == *photo))
+                {
                     self.selection.clear();
                     self.selection.insert(photo);
                     self.anchor = Some(photo);
                 }
                 self.move_selection(delta);
                 if on_photo.is_some() {
-                    self.focus_photo = self.primary_index().and_then(|index| self.photos.get(index)).map(|photo| photo.id);
+                    self.focus_photo = self
+                        .primary_index()
+                        .and_then(|index| self.photos.get(index))
+                        .map(|photo| photo.id);
                 }
             }
             if plain(Key::Delete) && !self.selection.is_empty() {
@@ -1636,14 +1794,27 @@ impl PicassoApp {
         ui.horizontal(|ui| {
             let (rect, icon) = ui.allocate_exact_size(Vec2::splat(28.0), egui::Sense::click());
             theme::paint_logo(ui.painter(), &self.logo, rect);
-            let name = ui.add(egui::Label::new(egui::RichText::new("Picasso").size(17.0).strong().color(theme::text())).sense(egui::Sense::click()));
-            let brand = icon.union(name).on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(tr("About Picasso"));
+            let name = ui.add(
+                egui::Label::new(
+                    egui::RichText::new("Picasso")
+                        .size(17.0)
+                        .strong()
+                        .color(theme::text()),
+                )
+                .sense(egui::Sense::click()),
+            );
+            let brand = icon
+                .union(name)
+                .on_hover_cursor(egui::CursorIcon::PointingHand)
+                .on_hover_text(tr("About Picasso"));
             if brand.clicked() {
                 self.modal = Modal::About;
             }
             ui.add_space(24.0);
             // The field's margins and a gap before the actions at the end.
-            let search_w = (ui.available_width() - theme::trailing_width(ui.ctx(), "top-bar") - 48.0).clamp(160.0, 420.0);
+            let search_w =
+                (ui.available_width() - theme::trailing_width(ui.ctx(), "top-bar") - 48.0)
+                    .clamp(160.0, 420.0);
             let search_id = egui::Id::unique("search");
             self.search_keys(ui, search_id);
             let response = ui.add(
@@ -1654,11 +1825,16 @@ impl PicassoApp {
                     .desired_width(search_w),
             );
             // Named before the tooltip, which would otherwise name it.
-            ui.ctx().accesskit_node_builder(response.id, |node| node.set_label(tr("Search photos")));
-            let response = response.on_hover_text(format!("{}\n\n{}", tr(SEARCH_HINT), tr(SEARCH_TRIP_HINT)));
+            ui.ctx()
+                .accesskit_node_builder(response.id, |node| node.set_label(tr("Search photos")));
+            let response =
+                response.on_hover_text(format!("{}\n\n{}", tr(SEARCH_HINT), tr(SEARCH_TRIP_HINT)));
             if std::mem::take(&mut self.focus_search) {
                 response.request_focus();
-                let all = egui::text::CCursorRange::two(egui::text::CCursor::new(0), egui::text::CCursor::new(self.search.chars().count()));
+                let all = egui::text::CCursorRange::two(
+                    egui::text::CCursor::new(0),
+                    egui::text::CCursor::new(self.search.chars().count()),
+                );
                 if let Some(mut state) = egui::TextEdit::load_state(ui.ctx(), response.id) {
                     state.cursor.set_char_range(Some(all));
                     state.store(ui.ctx(), response.id);
@@ -1702,10 +1878,18 @@ impl PicassoApp {
                         error: String::new(),
                     };
                 }
-                if ui.button(tr("Refresh")).on_hover_text(tr("Rescan folders")).clicked() {
+                if ui
+                    .button(tr("Refresh"))
+                    .on_hover_text(tr("Rescan folders"))
+                    .clicked()
+                {
                     self.rescan();
                 }
-                if ui.button(tr("Slideshow")).on_hover_text(tr("Play Fullscreen Slideshow")).clicked() {
+                if ui
+                    .button(tr("Slideshow"))
+                    .on_hover_text(tr("Play Fullscreen Slideshow"))
+                    .clicked()
+                {
                     self.start_slideshow();
                 }
                 let help = ui.button("     ");
@@ -1730,14 +1914,19 @@ impl PicassoApp {
 
     /// Flips between the light and dark themes from the viewer toolbar.
     pub(super) fn toggle_theme(&mut self, ctx: &egui::Context) {
-        let mode = if theme::is_dark() { ThemeMode::Light } else { ThemeMode::Dark };
+        let mode = if theme::is_dark() {
+            ThemeMode::Light
+        } else {
+            ThemeMode::Dark
+        };
         self.set_theme_mode(ctx, mode);
     }
 
     /// `None` follows the operating system each time Picasso starts.
     fn set_language(&mut self, language: Option<Lang>) {
         self.language = language;
-        self.config.set("language", language.map_or("auto", Lang::code));
+        self.config
+            .set("language", language.map_or("auto", Lang::code));
         i18n::set(language.unwrap_or_else(i18n::system));
         self.exif.clear();
         // OpenFreeMap names are drawn in the app language.
@@ -1752,13 +1941,17 @@ impl PicassoApp {
             // Statistics, the Travel Map, the Trips page, and pages of
             // Stories have no side panel, and they and Places have no
             // thumbnails to size.
-            let charts = matches!(self.nav, Nav::Statistics | Nav::TravelMap | Nav::Trips) || self.stories_page_shown();
+            let charts = matches!(self.nav, Nav::Statistics | Nav::TravelMap | Nav::Trips)
+                || self.stories_page_shown();
             // Laid out from the right first, so the tray gets what is left
             // and a long selection can't push these off the window.
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if !charts {
                     let panel = side::panel_icon(ui, self.side != SidePanel::None);
-                    if panel.on_hover_text(tr("Show or hide the side panel (I)")).clicked() {
+                    if panel
+                        .on_hover_text(tr("Show or hide the side panel (I)"))
+                        .clicked()
+                    {
                         self.toggle_side_panel();
                     }
                 }
@@ -1766,8 +1959,11 @@ impl PicassoApp {
                     ui.add_space(12.0);
                     ui.label(egui::RichText::new("▮").size(16.0).color(theme::muted()));
                     let mut size = self.thumb_size;
-                    let response = ui.add(egui::Slider::new(&mut size, MIN_THUMB..=MAX_THUMB).show_value(false));
-                    response.widget_info(|| egui::WidgetInfo::slider(true, f64::from(size), tr("Thumbnail size")));
+                    let response = ui
+                        .add(egui::Slider::new(&mut size, MIN_THUMB..=MAX_THUMB).show_value(false));
+                    response.widget_info(|| {
+                        egui::WidgetInfo::slider(true, f64::from(size), tr("Thumbnail size"))
+                    });
                     let response = response.on_hover_text(tr("Thumbnail size"));
                     ui.label(egui::RichText::new("▮").size(10.0).color(theme::muted()));
                     self.set_thumb_size(size, &response);
@@ -1787,14 +1983,28 @@ impl PicassoApp {
         const THUMB: Vec2 = Vec2::new(46.0, 34.0);
         let start = ui.cursor().min.x;
         let room = ui.available_width() - self.tray_rest;
-        let fit = (room / (THUMB.x + ui.spacing().item_spacing.x)).floor().clamp(0.0, 16.0) as usize;
-        ui.label(egui::RichText::new(tr("Photo Tray")).strong().size(12.0).color(theme::muted()));
+        let fit = (room / (THUMB.x + ui.spacing().item_spacing.x))
+            .floor()
+            .clamp(0.0, 16.0) as usize;
+        ui.label(
+            egui::RichText::new(tr("Photo Tray"))
+                .strong()
+                .size(12.0)
+                .color(theme::muted()),
+        );
         let mut rest = ui.cursor().min.x - start;
         let held: Vec<(i64, String, String, i32)> = self
             .tray_indices(fit)
             .into_iter()
             .filter_map(|index| self.photos.get(index))
-            .map(|photo| (photo.id, photo.path.clone(), photo.filename.clone(), photo.rotation))
+            .map(|photo| {
+                (
+                    photo.id,
+                    photo.path.clone(),
+                    photo.filename.clone(),
+                    photo.rotation,
+                )
+            })
             .collect();
         let extra = self.selection.len().saturating_sub(held.len());
         for (id, path, name, rotation) in &held {
@@ -1802,11 +2012,23 @@ impl PicassoApp {
             let (rect, response) = ui.allocate_exact_size(THUMB, egui::Sense::click());
             response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, name));
             if let Some((texture, w, h)) = self.thumb_texture(*id) {
-                theme::paint_image_rounded(ui.painter(), &texture, rect, theme::cover_uv(w, h), *rotation, 5.0);
+                theme::paint_image_rounded(
+                    ui.painter(),
+                    &texture,
+                    rect,
+                    theme::cover_uv(w, h),
+                    *rotation,
+                    5.0,
+                );
             } else {
                 ui.painter().rect_filled(rect, 5, theme::placeholder());
             }
-            ui.painter().rect_stroke(rect, 5, egui::Stroke::new(1.0, Color32::from_black_alpha(20)), egui::StrokeKind::Inside);
+            ui.painter().rect_stroke(
+                rect,
+                5,
+                egui::Stroke::new(1.0, Color32::from_black_alpha(20)),
+                egui::StrokeKind::Inside,
+            );
             if response.double_clicked() {
                 if let Some(index) = self.index_of(*id) {
                     self.open_at(index);
@@ -1820,10 +2042,18 @@ impl PicassoApp {
         }
         let notes = ui.cursor().min.x;
         if extra > 0 {
-            ui.label(egui::RichText::new(format!("+{extra}")).color(theme::muted()).size(12.0));
+            ui.label(
+                egui::RichText::new(format!("+{extra}"))
+                    .color(theme::muted())
+                    .size(12.0),
+            );
         }
         if !self.selection.is_empty() {
-            if ui.button(tr("Clear")).on_hover_text(tr("Clear items from the selection")).clicked() {
+            if ui
+                .button(tr("Clear"))
+                .on_hover_text(tr("Clear items from the selection"))
+                .clicked()
+            {
                 self.selection.clear();
                 self.anchor = None;
             }
@@ -1831,7 +2061,11 @@ impl PicassoApp {
                 let ids: Vec<i64> = self.selection.iter().copied().collect();
                 self.modal = Modal::trash(ids);
             }
-            if ui.button(tr("Export…")).on_hover_text(tr("Save the selected photos with their edits")).clicked() {
+            if ui
+                .button(tr("Export…"))
+                .on_hover_text(tr("Save the selected photos with their edits"))
+                .clicked()
+            {
                 let ids = self.selection_in_order();
                 self.open_export(&ids);
             }
@@ -1846,7 +2080,11 @@ impl PicassoApp {
         if unreadable > 0 {
             ui.label(egui::RichText::new("·").color(theme::muted()).size(12.0));
             let note = trf("{} files could not be read", &[&unreadable]);
-            if ui.link(egui::RichText::new(note).size(12.0)).on_hover_text(tr("Show the files that could not be read")).clicked() {
+            if ui
+                .link(egui::RichText::new(note).size(12.0))
+                .on_hover_text(tr("Show the files that could not be read"))
+                .clicked()
+            {
                 self.modal = Modal::Unreadable { confirm_all: false };
             }
         }
@@ -1858,8 +2096,16 @@ impl PicassoApp {
                 self.last_trashed = None;
             } else {
                 let note = trf("Moved {} to trash", &[&files.len()]);
-                ui.label(egui::RichText::new(format!("·  {note}")).color(theme::muted()).size(12.0));
-                if ui.link(egui::RichText::new(tr("Undo")).size(12.0)).on_hover_text(tr("Put these files back where they were")).clicked() {
+                ui.label(
+                    egui::RichText::new(format!("·  {note}"))
+                        .color(theme::muted())
+                        .size(12.0),
+                );
+                if ui
+                    .link(egui::RichText::new(tr("Undo")).size(12.0))
+                    .on_hover_text(tr("Put these files back where they were"))
+                    .clicked()
+                {
                     self.undo_trash();
                 }
                 ui.ctx().request_repaint_after(left);
@@ -1880,82 +2126,152 @@ impl PicassoApp {
     }
 
     fn sidebar(&mut self, ui: &mut egui::Ui) {
-        egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-            ui.spacing_mut().item_spacing.y = 2.0;
-            tree_section(ui, tr("Library"));
-            if self.tree_row(ui, tr("Library"), Glyph::Library, self.nav == Nav::Library, None).clicked() {
-                self.set_nav(Nav::Library);
-            }
-            if self.tree_row(ui, tr("Starred Photos"), Glyph::Star, self.nav == Nav::Starred, None).clicked() {
-                self.set_nav(Nav::Starred);
-            }
-            if self.tree_row(ui, tr("Places"), Glyph::Pin, self.nav == Nav::Places, None).clicked() {
-                self.set_nav(Nav::Places);
-            }
-            if self.tree_row(ui, tr("Statistics"), Glyph::Chart, self.nav == Nav::Statistics, None).clicked() {
-                self.set_nav(Nav::Statistics);
-            }
-            if self.tree_row(ui, tr("Travel Map"), Glyph::Globe, self.nav == Nav::TravelMap, None).clicked() {
-                self.set_nav(Nav::TravelMap);
-            }
-            let showing = matches!(self.modal, Modal::Duplicates { .. });
-            let found = self.duplicate_groups().map(|groups| groups as i64);
-            if self
-                .tree_row(ui, tr("Duplicates"), Glyph::Copies, showing, found)
-                .on_hover_text(tr("Find files with identical copies"))
-                .clicked()
-            {
-                self.show_duplicates(ui.ctx());
-            }
-            tree_section(ui, tr("Albums"));
-            let albums: Vec<(i64, String, i64)> = self
-                .albums
-                .iter()
-                .map(|album| (album.id, album.name.clone(), album.count))
-                .collect();
-            for (id, name, count) in albums {
-                let response = self.tree_row(ui, &name, Glyph::Album, self.nav == Nav::Album(id), Some(count));
-                if response.clicked() {
-                    self.set_nav(Nav::Album(id));
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                ui.spacing_mut().item_spacing.y = 2.0;
+                tree_section(ui, tr("Library"));
+                if self
+                    .tree_row(
+                        ui,
+                        tr("Library"),
+                        Glyph::Library,
+                        self.nav == Nav::Library,
+                        None,
+                    )
+                    .clicked()
+                {
+                    self.set_nav(Nav::Library);
                 }
-                response.context_menu(|ui| {
-                    if ui.button(tr("Delete album")).on_hover_text(tr("Its photos stay in your library")).clicked() {
-                        self.db.delete_album(id);
-                        if self.nav == Nav::Album(id) {
-                            self.nav = Nav::Library;
-                        }
-                        self.reload();
-                        ui.close();
+                if self
+                    .tree_row(
+                        ui,
+                        tr("Starred Photos"),
+                        Glyph::Star,
+                        self.nav == Nav::Starred,
+                        None,
+                    )
+                    .clicked()
+                {
+                    self.set_nav(Nav::Starred);
+                }
+                if self
+                    .tree_row(ui, tr("Places"), Glyph::Pin, self.nav == Nav::Places, None)
+                    .clicked()
+                {
+                    self.set_nav(Nav::Places);
+                }
+                if self
+                    .tree_row(
+                        ui,
+                        tr("Statistics"),
+                        Glyph::Chart,
+                        self.nav == Nav::Statistics,
+                        None,
+                    )
+                    .clicked()
+                {
+                    self.set_nav(Nav::Statistics);
+                }
+                if self
+                    .tree_row(
+                        ui,
+                        tr("Travel Map"),
+                        Glyph::Globe,
+                        self.nav == Nav::TravelMap,
+                        None,
+                    )
+                    .clicked()
+                {
+                    self.set_nav(Nav::TravelMap);
+                }
+                let showing = matches!(self.modal, Modal::Duplicates { .. });
+                let found = self.duplicate_groups().map(|groups| groups as i64);
+                if self
+                    .tree_row(ui, tr("Duplicates"), Glyph::Copies, showing, found)
+                    .on_hover_text(tr("Find files with identical copies"))
+                    .clicked()
+                {
+                    self.show_duplicates(ui.ctx());
+                }
+                tree_section(ui, tr("Albums"));
+                let albums: Vec<(i64, String, i64)> = self
+                    .albums
+                    .iter()
+                    .map(|album| (album.id, album.name.clone(), album.count))
+                    .collect();
+                for (id, name, count) in albums {
+                    let response = self.tree_row(
+                        ui,
+                        &name,
+                        Glyph::Album,
+                        self.nav == Nav::Album(id),
+                        Some(count),
+                    );
+                    if response.clicked() {
+                        self.set_nav(Nav::Album(id));
                     }
-                });
-            }
-            if ui
-                .add(egui::Button::new(egui::RichText::new(tr("+  New album")).color(theme::muted())).frame(false))
-                .clicked()
-            {
-                self.modal = Modal::NewAlbum {
-                    name: String::new(),
-                    error: String::new(),
-                };
-            }
-            self.trips_sidebar(ui);
-            tree_section(ui, tr("Folders"));
-            self.folder_tree_ui(ui);
-        });
+                    response.context_menu(|ui| {
+                        if ui
+                            .button(tr("Delete album"))
+                            .on_hover_text(tr("Its photos stay in your library"))
+                            .clicked()
+                        {
+                            self.db.delete_album(id);
+                            if self.nav == Nav::Album(id) {
+                                self.nav = Nav::Library;
+                            }
+                            self.reload();
+                            ui.close();
+                        }
+                    });
+                }
+                if ui
+                    .add(
+                        egui::Button::new(
+                            egui::RichText::new(tr("+  New album")).color(theme::muted()),
+                        )
+                        .frame(false),
+                    )
+                    .clicked()
+                {
+                    self.modal = Modal::NewAlbum {
+                        name: String::new(),
+                        error: String::new(),
+                    };
+                }
+                self.trips_sidebar(ui);
+                tree_section(ui, tr("Folders"));
+                self.folder_tree_ui(ui);
+            });
     }
 
-    fn tree_row(&mut self, ui: &mut egui::Ui, label: &str, glyph: Glyph, selected: bool, count: Option<i64>) -> egui::Response {
+    fn tree_row(
+        &mut self,
+        ui: &mut egui::Ui,
+        label: &str,
+        glyph: Glyph,
+        selected: bool,
+        count: Option<i64>,
+    ) -> egui::Response {
         let width = ui.available_width();
         let (rect, response) = ui.allocate_exact_size(Vec2::new(width, 30.0), egui::Sense::click());
         let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
         let name = count.map_or_else(|| label.to_owned(), |count| format!("{label}, {count}"));
-        response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, &name));
+        response
+            .widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, &name));
         if selected {
-            ui.painter().rect_filled(rect, theme::RADIUS, theme::select());
+            ui.painter()
+                .rect_filled(rect, theme::RADIUS, theme::select());
         } else if response.hovered() {
-            ui.painter().rect_filled(rect, theme::RADIUS, theme::hover());
+            ui.painter()
+                .rect_filled(rect, theme::RADIUS, theme::hover());
         }
-        paint_glyph(ui.painter(), rect.left_center() + Vec2::new(10.0, 0.0), glyph);
+        paint_glyph(
+            ui.painter(),
+            rect.left_center() + Vec2::new(10.0, 0.0),
+            glyph,
+        );
         let mut text_right = rect.right() - 10.0;
         if let Some(count) = count {
             let count_rect = ui.painter().text(
@@ -1973,7 +2289,11 @@ impl PicassoApp {
             egui::Align2::LEFT_CENTER,
             label,
             egui::FontId::proportional(13.5),
-            if selected { theme::accent() } else { theme::text() },
+            if selected {
+                theme::accent()
+            } else {
+                theme::text()
+            },
         );
         response
     }
@@ -1986,7 +2306,10 @@ impl PicassoApp {
         if !menu.open || menu.shown.is_empty() || !ui.memory(|mem| mem.has_focus(id)) {
             return;
         }
-        let steps = ui.input_mut(|i| i.count_and_consume_key(Modifiers::NONE, Key::ArrowDown) as isize - i.count_and_consume_key(Modifiers::NONE, Key::ArrowUp) as isize);
+        let steps = ui.input_mut(|i| {
+            i.count_and_consume_key(Modifiers::NONE, Key::ArrowDown) as isize
+                - i.count_and_consume_key(Modifiers::NONE, Key::ArrowUp) as isize
+        });
         if steps != 0 {
             let at = menu.pick.map_or(-1, |pick| pick as isize) + steps;
             menu.pick = (at >= 0).then(|| (at as usize).min(menu.shown.len() - 1));
@@ -2002,10 +2325,19 @@ impl PicassoApp {
     /// Lists the recent searches under the search box while it has the
     /// focus, and returns the one clicked. What was typed is remembered when
     /// the box loses the focus, unless a search from the list replaces it.
-    fn recent_searches(&mut self, ui: &egui::Ui, search: &egui::Response, submitted: bool) -> Option<String> {
+    fn recent_searches(
+        &mut self,
+        ui: &egui::Ui,
+        search: &egui::Response,
+        submitted: bool,
+    ) -> Option<String> {
         let id = egui::Popup::default_response_id(search);
         let pointer = ui.input(|i| i.pointer.interact_pos());
-        let in_list = ui.ctx().read_response(id).zip(pointer).is_some_and(|(list, pos)| list.rect.contains(pos));
+        let in_list = ui
+            .ctx()
+            .read_response(id)
+            .zip(pointer)
+            .is_some_and(|(list, pos)| list.rect.contains(pos));
         let menu = &mut self.search_menu;
         if search.has_focus() {
             menu.open = true;
@@ -2016,7 +2348,9 @@ impl PicassoApp {
             if !menu.open {
                 self.config.remember_search(&self.search);
             }
-        } else if menu.open && ui.input(|i| i.focused && !i.pointer.any_down() && !i.pointer.any_released()) {
+        } else if menu.open
+            && ui.input(|i| i.focused && !i.pointer.any_down() && !i.pointer.any_released())
+        {
             menu.open = false;
             self.config.remember_search(&self.search);
         }
@@ -2026,7 +2360,11 @@ impl PicassoApp {
             menu.pick = None;
             return None;
         }
-        let typed = if menu.typed { self.search.trim().to_lowercase() } else { String::new() };
+        let typed = if menu.typed {
+            self.search.trim().to_lowercase()
+        } else {
+            String::new()
+        };
         menu.shown = self
             .config
             .searches()
@@ -2050,14 +2388,27 @@ impl PicassoApp {
             .layout(egui::Layout::top_down_justified(egui::Align::Min))
             .show(|ui| {
                 ui.set_width(search.rect.width() - ui.spacing().menu_margin.sum().x);
-                ui.label(egui::RichText::new(tr("Recent searches")).small().color(theme::muted()));
+                ui.label(
+                    egui::RichText::new(tr("Recent searches"))
+                        .small()
+                        .color(theme::muted()),
+                );
                 for (index, earlier) in menu.shown.iter().enumerate() {
-                    if ui.selectable_label(menu.pick == Some(index), earlier).clicked() {
+                    if ui
+                        .selectable_label(menu.pick == Some(index), earlier)
+                        .clicked()
+                    {
                         picked = Some(earlier.clone());
                     }
                 }
                 ui.separator();
-                if ui.selectable_label(false, egui::RichText::new(tr("Clear recent searches")).color(theme::muted())).clicked() {
+                if ui
+                    .selectable_label(
+                        false,
+                        egui::RichText::new(tr("Clear recent searches")).color(theme::muted()),
+                    )
+                    .clicked()
+                {
                     forget = true;
                 }
             });
@@ -2213,7 +2564,9 @@ impl PicassoApp {
     }
 
     fn add_folder_modal(&mut self, ctx: &egui::Context) {
-        let Modal::AddFolder { path, error } = &self.modal else { return };
+        let Modal::AddFolder { path, error } = &self.modal else {
+            return;
+        };
         let mut path = path.clone();
         let error = error.clone();
         let mut close = false;
@@ -2225,7 +2578,9 @@ impl PicassoApp {
             .resizable(false)
             .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
             .show(ctx, |ui| {
-                ui.label(tr("Picasso watches this folder and adds new photos as they appear."));
+                ui.label(tr(
+                    "Picasso watches this folder and adds new photos as they appear.",
+                ));
                 ui.add_space(6.0);
                 ui.horizontal(|ui| {
                     let response = ui.add(
@@ -2254,7 +2609,10 @@ impl PicassoApp {
                 });
             });
         if browse {
-            if let Some(picked) = rfd::FileDialog::new().set_title(tr("Add a photo folder")).pick_folder() {
+            if let Some(picked) = rfd::FileDialog::new()
+                .set_title(tr("Add a photo folder"))
+                .pick_folder()
+            {
                 path = picked.display().to_string();
             }
         }
@@ -2275,7 +2633,9 @@ impl PicassoApp {
     }
 
     fn new_album_modal(&mut self, ctx: &egui::Context) {
-        let Modal::NewAlbum { name, error } = &self.modal else { return };
+        let Modal::NewAlbum { name, error } = &self.modal else {
+            return;
+        };
         let mut name = name.clone();
         let error = error.clone();
         let mut close = false;
@@ -2286,7 +2646,11 @@ impl PicassoApp {
             .resizable(false)
             .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
             .show(ctx, |ui| {
-                let response = ui.add(egui::TextEdit::singleline(&mut name).hint_text(tr("Album name")).desired_width(260.0));
+                let response = ui.add(
+                    egui::TextEdit::singleline(&mut name)
+                        .hint_text(tr("Album name"))
+                        .desired_width(260.0),
+                );
                 if response.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) {
                     submit = true;
                 }
@@ -2326,7 +2690,9 @@ impl PicassoApp {
     }
 
     fn trash_modal(&mut self, ctx: &egui::Context) {
-        let Modal::Trash { ids, bytes } = &mut self.modal else { return };
+        let Modal::Trash { ids, bytes } = &mut self.modal else {
+            return;
+        };
         let count = ids.len();
         let bytes = *bytes.get_or_insert_with(|| total_bytes(&self.photos, &self.db, ids));
         let mut close = false;
@@ -2403,13 +2769,17 @@ impl PicassoApp {
         if let Some(list) = self.unreadable.get_mut(&folder) {
             list.retain(|item| !Path::new(&item.path).starts_with(&dir));
         }
-        self.tracks.retain(|track| track.folder_id != folder || !Path::new(&track.path).starts_with(&dir));
+        self.tracks
+            .retain(|track| track.folder_id != folder || !Path::new(&track.path).starts_with(&dir));
         if let Nav::Dir(ref path) = self.nav {
             if Path::new(path).starts_with(&dir) {
                 self.nav = Nav::Folder(folder);
             }
         }
-        self.activity = trf("Picasso no longer scans {}", &[&settings::display_path(Path::new(&dir))]);
+        self.activity = trf(
+            "Picasso no longer scans {}",
+            &[&settings::display_path(Path::new(&dir))],
+        );
         self.reload();
         Ok(())
     }
@@ -2417,7 +2787,10 @@ impl PicassoApp {
     fn include_dir(&mut self, dir: &str) {
         if let Some(folder) = self.db.include_dir(dir) {
             let _ = self.cmd_tx.send(Command::Scan(folder));
-            self.activity = trf("Picasso scans {} again", &[&settings::display_path(Path::new(dir))]);
+            self.activity = trf(
+                "Picasso scans {} again",
+                &[&settings::display_path(Path::new(dir))],
+            );
         }
         self.excluded = self.db.excluded_dirs();
     }
@@ -2488,11 +2861,19 @@ impl PicassoApp {
         self.mode = Mode::Browse;
         // The grid gets back its selection if the photo last shown was part of
         // it; otherwise that photo alone. Photos gone meanwhile are dropped.
-        if let (Some((selection, anchor)), Some(shown)) = (self.browse_selection.take(), self.photos.get(self.viewer_index)) {
+        if let (Some((selection, anchor)), Some(shown)) = (
+            self.browse_selection.take(),
+            self.photos.get(self.viewer_index),
+        ) {
             let shown = shown.id;
             if selection.contains(&shown) {
-                self.selection = selection.into_iter().filter(|id| self.index_of(*id).is_some()).collect();
-                self.anchor = anchor.filter(|id| self.selection.contains(id)).or(Some(shown));
+                self.selection = selection
+                    .into_iter()
+                    .filter(|id| self.index_of(*id).is_some())
+                    .collect();
+                self.anchor = anchor
+                    .filter(|id| self.selection.contains(id))
+                    .or(Some(shown));
             }
             self.scroll_to = Some(shown);
         }
@@ -2528,7 +2909,8 @@ impl PicassoApp {
         if self.photos.is_empty() {
             return;
         }
-        let next = (self.viewer_index as isize + delta).clamp(0, self.photos.len() as isize - 1) as usize;
+        let next =
+            (self.viewer_index as isize + delta).clamp(0, self.photos.len() as isize - 1) as usize;
         self.set_index(next, true);
         let id = self.photos[next].id;
         self.selection.clear();
@@ -2581,7 +2963,10 @@ impl PicassoApp {
                 return Some(index);
             }
         }
-        self.selection.iter().filter_map(|id| self.index_of(*id)).min()
+        self.selection
+            .iter()
+            .filter_map(|id| self.index_of(*id))
+            .min()
     }
 
     fn primary_starred(&self) -> bool {
@@ -2592,7 +2977,10 @@ impl PicassoApp {
     }
 
     fn toggle_star(&mut self, id: i64) {
-        if let Some(photo) = self.index_of(id).and_then(|index| self.photos.get_mut(index)) {
+        if let Some(photo) = self
+            .index_of(id)
+            .and_then(|index| self.photos.get_mut(index))
+        {
             photo.starred = !photo.starred;
             let starred = photo.starred;
             self.db.set_star(id, starred);
@@ -2630,7 +3018,11 @@ impl PicassoApp {
             return;
         }
         for id in ids {
-            if let Some(photo) = self.index_of.get(id).and_then(|&index| self.photos.get_mut(index)) {
+            if let Some(photo) = self
+                .index_of
+                .get(id)
+                .and_then(|&index| self.photos.get_mut(index))
+            {
                 photo.starred = make;
             }
         }
@@ -2640,7 +3032,10 @@ impl PicassoApp {
     /// grid.
     fn rotate_current(&mut self, delta: i32) {
         let ids: Vec<i64> = if self.mode == Mode::View {
-            self.photos.get(self.viewer_index).map(|photo| vec![photo.id]).unwrap_or_default()
+            self.photos
+                .get(self.viewer_index)
+                .map(|photo| vec![photo.id])
+                .unwrap_or_default()
         } else {
             self.selection.iter().copied().collect()
         };
@@ -2666,7 +3061,11 @@ impl PicassoApp {
         }
         self.db.rotate(ids, delta);
         let turned: HashSet<i64> = ids.iter().copied().collect();
-        for photo in self.photos.iter_mut().filter(|photo| turned.contains(&photo.id)) {
+        for photo in self
+            .photos
+            .iter_mut()
+            .filter(|photo| turned.contains(&photo.id))
+        {
             photo.rotation = turn(photo.rotation, delta);
         }
         if self.mode == Mode::View {
@@ -2693,28 +3092,62 @@ impl PicassoApp {
 
     /// Moves photos to the system trash; returns those that went.
     fn trash_ids(&mut self, ids: &[i64]) -> Vec<i64> {
-        let photos: Vec<crate::types::Photo> = ids.iter().filter_map(|id| self.db.photo(*id)).collect();
+        let photos: Vec<crate::types::Photo> =
+            ids.iter().filter_map(|id| self.db.photo(*id)).collect();
         if photos.is_empty() {
             return Vec::new();
         }
-        let before: Vec<bool> = photos.iter().map(|photo| Path::new(&photo.path).exists()).collect();
-        let present: Vec<&str> = photos.iter().zip(&before).filter(|(_, there)| **there).map(|(photo, _)| photo.path.as_str()).collect();
+        let before: Vec<bool> = photos
+            .iter()
+            .map(|photo| Path::new(&photo.path).exists())
+            .collect();
+        let present: Vec<&str> = photos
+            .iter()
+            .zip(&before)
+            .filter(|(_, there)| **there)
+            .map(|(photo, _)| photo.path.as_str())
+            .collect();
         // One call for all files: the system trash is slow file by file.
-        let result = if present.is_empty() { Ok(()) } else { trash::delete_all(present) };
-        let after: Vec<bool> = photos.iter().map(|photo| Path::new(&photo.path).exists()).collect();
+        let result = if present.is_empty() {
+            Ok(())
+        } else {
+            trash::delete_all(present)
+        };
+        let after: Vec<bool> = photos
+            .iter()
+            .map(|photo| Path::new(&photo.path).exists())
+            .collect();
         let outcome = trash_outcome(&before, &after);
         let mut notes = Vec::new();
         if let [only] = outcome.failed[..] {
-            let reason = result.as_ref().err().map_or_else(|| tr("it is still there").to_string(), ToString::to_string);
-            notes.push(trf("Couldn't trash {}: {}", &[&photos[only].filename, &reason]));
+            let reason = result
+                .as_ref()
+                .err()
+                .map_or_else(|| tr("it is still there").to_string(), ToString::to_string);
+            notes.push(trf(
+                "Couldn't trash {}: {}",
+                &[&photos[only].filename, &reason],
+            ));
         } else if !outcome.failed.is_empty() {
-            let reason = result.as_ref().err().map_or_else(|| tr("they are still there").to_string(), ToString::to_string);
-            notes.push(trf("Couldn't move {} photos to the trash: {}", &[&outcome.failed.len(), &reason]));
+            let reason = result.as_ref().err().map_or_else(
+                || tr("they are still there").to_string(),
+                ToString::to_string,
+            );
+            notes.push(trf(
+                "Couldn't move {} photos to the trash: {}",
+                &[&outcome.failed.len(), &reason],
+            ));
         }
         if let [only] = outcome.missing[..] {
-            notes.push(trf("{} wasn't found, so it stays in the library. Is its drive connected?", &[&photos[only].filename]));
+            notes.push(trf(
+                "{} wasn't found, so it stays in the library. Is its drive connected?",
+                &[&photos[only].filename],
+            ));
         } else if !outcome.missing.is_empty() {
-            notes.push(trf("{} files weren't found, so they stay in the library. Is their drive connected?", &[&outcome.missing.len()]));
+            notes.push(trf(
+                "{} files weren't found, so they stay in the library. Is their drive connected?",
+                &[&outcome.missing.len()],
+            ));
         }
         self.activity = notes.join(" · ");
         let mut removed = Vec::new();
@@ -2741,7 +3174,9 @@ impl PicassoApp {
     /// Puts the latest batch moved to the trash back, then rescans its
     /// folders, which gives the photos their stars and edits back.
     fn undo_trash(&mut self) {
-        let Some((_, trashed)) = self.last_trashed.take() else { return };
+        let Some((_, trashed)) = self.last_trashed.take() else {
+            return;
+        };
         let paths: Vec<String> = trashed.iter().map(|(path, _)| path.clone()).collect();
         match crate::shell::restore(&paths) {
             Ok(count) => self.activity = trf("Put {} back from the trash", &[&count]),
@@ -2783,12 +3218,16 @@ impl PicassoApp {
     /// remembered between sessions.
     fn toggle_info(&mut self) {
         self.show_info = !self.show_info;
-        self.db.set_setting("viewer_info", if self.show_info { "1" } else { "0" });
+        self.db
+            .set_setting("viewer_info", if self.show_info { "1" } else { "0" });
     }
 
     fn ensure_thumb(&mut self, id: i64, path: &str) {
         self.thumb_drawn.insert(id);
-        if self.thumbs.map.contains_key(&id) || self.thumb_waiting.contains(&id) || self.thumb_failed.contains(&id) {
+        if self.thumbs.map.contains_key(&id)
+            || self.thumb_waiting.contains(&id)
+            || self.thumb_failed.contains(&id)
+        {
             return;
         }
         self.thumb_waiting.insert(id);
@@ -2811,7 +3250,9 @@ impl PicassoApp {
         const STEP: u32 = 128;
         const MAX_EDGE: u32 = 1024;
         let edit = self.edit_settings(id);
-        let Some(tex) = self.thumbs.map.get_mut(&id) else { return };
+        let Some(tex) = self.thumbs.map.get_mut(&id) else {
+            return;
+        };
         if held || pixels <= tex.w.min(tex.h) as f32 * 1.15 {
             return;
         }
@@ -2823,7 +3264,12 @@ impl PicassoApp {
         if let Ok(mut wanted) = self.thumb_wanted.lock() {
             wanted.insert(id);
         }
-        let _ = self.urgent_tx.send(ThumbJob::Thumb { id, path: path.to_string(), edit, edge });
+        let _ = self.urgent_tx.send(ThumbJob::Thumb {
+            id,
+            path: path.to_string(),
+            edit,
+            edge,
+        });
     }
 
     fn thumb_texture(&mut self, id: i64) -> Option<(TextureHandle, usize, usize)> {
@@ -2855,7 +3301,9 @@ impl PicassoApp {
     }
 
     fn request_display(&mut self, index: usize) {
-        let Some(photo) = self.photos.get(index) else { return };
+        let Some(photo) = self.photos.get(index) else {
+            return;
+        };
         if self.displays.iter().any(|item| item.id == photo.id)
             || self.display_inflight.contains_key(&photo.id)
             || self.display_failed.contains(&photo.id)
@@ -2883,11 +3331,15 @@ impl PicassoApp {
     /// Asks for photo `index` decoded at full resolution, up to the largest
     /// texture the GPU takes, once it is drawn larger than its view.
     fn request_sharp(&mut self, index: usize, drawn: Vec2, max_side: usize) {
-        let Some(photo) = self.photos.get(index) else { return };
+        let Some(photo) = self.photos.get(index) else {
+            return;
+        };
         if self.sharp == Some(photo.id) || crate::types::is_video_path(Path::new(&photo.path)) {
             return;
         }
-        let Some((_, w, h)) = self.display_texture(photo.id) else { return };
+        let Some((_, w, h)) = self.display_texture(photo.id) else {
+            return;
+        };
         let have = w.max(h) as f32;
         let edge = photo.width.max(photo.height).min(max_side as u32);
         if drawn.max_elem() <= have * 1.02 || edge as f32 <= have * 1.02 {
@@ -2903,13 +3355,21 @@ impl PicassoApp {
             gate.insert(id, nonce);
         }
         let edit = self.edit_settings(id);
-        let _ = self.urgent_tx.send(ThumbJob::Display { id, path, nonce, edit, edge });
+        let _ = self.urgent_tx.send(ThumbJob::Display {
+            id,
+            path,
+            nonce,
+            edit,
+            edge,
+        });
     }
 
     /// Frees the full-resolution view unless it belongs to `keep`. The
     /// photo decodes at the usual size when shown again.
     fn drop_sharp(&mut self, keep: Option<i64>) {
-        let Some(id) = self.sharp.filter(|id| Some(*id) != keep) else { return };
+        let Some(id) = self.sharp.filter(|id| Some(*id) != keep) else {
+            return;
+        };
         self.sharp = None;
         self.displays.retain(|item| item.id != id);
         self.display_nonce.remove(&id);
@@ -2980,7 +3440,11 @@ impl eframe::App for PicassoApp {
         self.pump_update(ctx);
         self.tick_slideshow();
         let busy = self.scans > 0
-            || self.slideshow.as_ref().map(|show| show.playing).unwrap_or(false)
+            || self
+                .slideshow
+                .as_ref()
+                .map(|show| show.playing)
+                .unwrap_or(false)
             || !self.thumb_waiting.is_empty()
             || !self.display_inflight.is_empty();
         if busy {
@@ -2994,7 +3458,12 @@ impl eframe::App for PicassoApp {
             self.end_edit_session();
             let ctx = ui.ctx().clone();
             let helping = matches!(self.modal, Modal::Help);
-            if !helping && ctx.input_mut(|input| input.consume_key(Modifiers::NONE, Key::F1) || input.consume_key(Modifiers::NONE, Key::Questionmark)) {
+            if !helping
+                && ctx.input_mut(|input| {
+                    input.consume_key(Modifiers::NONE, Key::F1)
+                        || input.consume_key(Modifiers::NONE, Key::Questionmark)
+                })
+            {
                 self.modal = Modal::Help;
             }
             egui::CentralPanel::default()
@@ -3024,7 +3493,10 @@ impl eframe::App for PicassoApp {
                 .show(ui, |ui| self.viewer_ui(ui));
         } else {
             egui::Panel::top("header")
-                .frame(theme::toolbar_frame(theme::toolbar()).inner_margin(egui::Margin::symmetric(16, 10)))
+                .frame(
+                    theme::toolbar_frame(theme::toolbar())
+                        .inner_margin(egui::Margin::symmetric(16, 10)),
+                )
                 .show(ui, |ui| self.header(ui));
             egui::Panel::bottom("tray")
                 .frame(theme::toolbar_frame(theme::tray()))
@@ -3034,15 +3506,24 @@ impl eframe::App for PicassoApp {
                 .default_size(232.0)
                 .min_size(190.0)
                 .max_size(340.0)
-                .frame(theme::toolbar_frame(theme::sidebar()).inner_margin(egui::Margin::symmetric(10, 6)))
+                .frame(
+                    theme::toolbar_frame(theme::sidebar())
+                        .inner_margin(egui::Margin::symmetric(10, 6)),
+                )
                 .show(ui, |ui| self.sidebar(ui));
-            if self.side != SidePanel::None && !matches!(self.nav, Nav::Statistics | Nav::TravelMap | Nav::Trips) && !self.stories_page_shown() {
+            if self.side != SidePanel::None
+                && !matches!(self.nav, Nav::Statistics | Nav::TravelMap | Nav::Trips)
+                && !self.stories_page_shown()
+            {
                 egui::Panel::right("side")
                     .resizable(true)
                     .default_size(300.0)
                     .min_size(250.0)
                     .max_size(520.0)
-                    .frame(theme::toolbar_frame(theme::sidebar()).inner_margin(egui::Margin::symmetric(14, 10)))
+                    .frame(
+                        theme::toolbar_frame(theme::sidebar())
+                            .inner_margin(egui::Margin::symmetric(14, 10)),
+                    )
                     .show(ui, |ui| self.side_ui(ui));
             }
             egui::CentralPanel::default()
@@ -3060,7 +3541,13 @@ impl eframe::App for PicassoApp {
 fn total_bytes(photos: &[Photo], db: &Database, ids: &[i64]) -> u64 {
     let loaded: HashMap<i64, u64> = photos.iter().map(|photo| (photo.id, photo.bytes)).collect();
     ids.iter()
-        .map(|id| loaded.get(id).copied().or_else(|| db.photo(*id).map(|photo| photo.bytes)).unwrap_or(0))
+        .map(|id| {
+            loaded
+                .get(id)
+                .copied()
+                .or_else(|| db.photo(*id).map(|photo| photo.bytes))
+                .unwrap_or(0)
+        })
         .sum()
 }
 
@@ -3088,7 +3575,13 @@ fn trash_outcome(before: &[bool], after: &[bool]) -> TrashOutcome {
     outcome
 }
 
-fn upload(ctx: &egui::Context, name: &str, w: usize, h: usize, rgba: &[u8]) -> Option<TextureHandle> {
+fn upload(
+    ctx: &egui::Context,
+    name: &str,
+    w: usize,
+    h: usize,
+    rgba: &[u8],
+) -> Option<TextureHandle> {
     if w == 0 || h == 0 || rgba.len() < w * h * 4 {
         return None;
     }
@@ -3122,7 +3615,12 @@ fn tree_section(ui: &mut egui::Ui, title: &str) {
     ui.add_space(14.0);
     ui.horizontal(|ui| {
         ui.add_space(10.0);
-        ui.label(egui::RichText::new(title.to_uppercase()).size(11.0).strong().color(theme::muted()));
+        ui.label(
+            egui::RichText::new(title.to_uppercase())
+                .size(11.0)
+                .strong()
+                .color(theme::muted()),
+        );
     });
     ui.add_space(4.0);
 }
@@ -3144,7 +3642,11 @@ fn paint_glyph(painter: &egui::Painter, center_left: egui::Pos2, glyph: Glyph) {
     match glyph {
         Glyph::Trip => {
             // A suitcase.
-            painter.rect_filled(Rect::from_min_size(origin + Vec2::new(0.0, 4.0), Vec2::new(14.0, 10.0)), 3, theme::GOLD);
+            painter.rect_filled(
+                Rect::from_min_size(origin + Vec2::new(0.0, 4.0), Vec2::new(14.0, 10.0)),
+                3,
+                theme::GOLD,
+            );
             painter.rect_stroke(
                 Rect::from_min_size(origin + Vec2::new(4.5, 0.5), Vec2::new(5.0, 4.0)),
                 1,
@@ -3153,8 +3655,16 @@ fn paint_glyph(painter: &egui::Painter, center_left: egui::Pos2, glyph: Glyph) {
             );
         }
         Glyph::Album => {
-            painter.rect_filled(Rect::from_min_size(origin + Vec2::new(3.0, 0.0), Vec2::new(11.0, 11.0)), 3, theme::ALBUM.gamma_multiply(0.45));
-            painter.rect_filled(Rect::from_min_size(origin + Vec2::new(0.0, 3.0), Vec2::new(11.0, 11.0)), 3, theme::ALBUM);
+            painter.rect_filled(
+                Rect::from_min_size(origin + Vec2::new(3.0, 0.0), Vec2::new(11.0, 11.0)),
+                3,
+                theme::ALBUM.gamma_multiply(0.45),
+            );
+            painter.rect_filled(
+                Rect::from_min_size(origin + Vec2::new(0.0, 3.0), Vec2::new(11.0, 11.0)),
+                3,
+                theme::ALBUM,
+            );
         }
         Glyph::Star => {
             painter.text(
@@ -3168,7 +3678,11 @@ fn paint_glyph(painter: &egui::Painter, center_left: egui::Pos2, glyph: Glyph) {
         Glyph::Library => {
             let tile = Vec2::splat(6.0);
             for (dx, dy) in [(0.0, 0.0), (8.0, 0.0), (0.0, 8.0), (8.0, 8.0)] {
-                painter.rect_filled(Rect::from_min_size(origin + Vec2::new(dx, dy), tile), 2, theme::accent());
+                painter.rect_filled(
+                    Rect::from_min_size(origin + Vec2::new(dx, dy), tile),
+                    2,
+                    theme::accent(),
+                );
             }
         }
         Glyph::Pin => {
@@ -3185,7 +3699,10 @@ fn paint_glyph(painter: &egui::Painter, center_left: egui::Pos2, glyph: Glyph) {
         Glyph::Chart => {
             for (n, h) in [6.0, 13.0, 9.0].into_iter().enumerate() {
                 let left = origin.x + 1.0 + n as f32 * 4.5;
-                let bar = Rect::from_min_max(egui::pos2(left, origin.y + 14.0 - h), egui::pos2(left + 3.5, origin.y + 14.0));
+                let bar = Rect::from_min_max(
+                    egui::pos2(left, origin.y + 14.0 - h),
+                    egui::pos2(left + 3.5, origin.y + 14.0),
+                );
                 painter.rect_filled(bar, 1, theme::GREEN);
             }
         }
@@ -3193,18 +3710,33 @@ fn paint_glyph(painter: &egui::Painter, center_left: egui::Pos2, glyph: Glyph) {
             let center = origin + Vec2::new(7.0, 7.0);
             let line = egui::Stroke::new(1.2, Color32::WHITE);
             painter.circle_filled(center, 6.5, theme::GOLD);
-            painter.line_segment([center - Vec2::new(6.0, 0.0), center + Vec2::new(6.0, 0.0)], line);
-            painter.add(egui::Shape::ellipse_stroke(center, Vec2::new(2.6, 6.0), line));
+            painter.line_segment(
+                [center - Vec2::new(6.0, 0.0), center + Vec2::new(6.0, 0.0)],
+                line,
+            );
+            painter.add(egui::Shape::ellipse_stroke(
+                center,
+                Vec2::new(2.6, 6.0),
+                line,
+            ));
         }
     }
 }
 
 /// Resolves a star action from the same reference photo used by its label.
 /// Right-clicking outside the selection affects only the clicked photo.
-fn star_change(photos: &[Photo], selection: &HashSet<i64>, reference: i64) -> Option<(Vec<i64>, bool)> {
+fn star_change(
+    photos: &[Photo],
+    selection: &HashSet<i64>,
+    reference: i64,
+) -> Option<(Vec<i64>, bool)> {
     let photo = photos.iter().find(|photo| photo.id == reference)?;
     let ids = if selection.contains(&reference) {
-        photos.iter().filter(|photo| selection.contains(&photo.id)).map(|photo| photo.id).collect()
+        photos
+            .iter()
+            .filter(|photo| selection.contains(&photo.id))
+            .map(|photo| photo.id)
+            .collect()
     } else {
         vec![reference]
     };
@@ -3218,7 +3750,14 @@ mod tests {
     #[test]
     fn only_files_that_left_count_as_trashed() {
         let outcome = trash_outcome(&[true, true, false, false], &[false, true, false, false]);
-        assert_eq!(outcome, TrashOutcome { trashed: vec![0], failed: vec![1], missing: vec![2, 3] });
+        assert_eq!(
+            outcome,
+            TrashOutcome {
+                trashed: vec![0],
+                failed: vec![1],
+                missing: vec![2, 3]
+            }
+        );
         assert!(trash_outcome(&[], &[]).trashed.is_empty());
     }
 
@@ -3235,7 +3774,14 @@ mod tests {
         // Stands in for the trash, which here removes only the file that was there.
         std::fs::remove_file(&there).unwrap();
         let after: Vec<bool> = paths.iter().map(|path| path.exists()).collect();
-        assert_eq!(trash_outcome(&before, &after), TrashOutcome { trashed: vec![0], failed: vec![], missing: vec![1] });
+        assert_eq!(
+            trash_outcome(&before, &after),
+            TrashOutcome {
+                trashed: vec![0],
+                failed: vec![],
+                missing: vec![1]
+            }
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

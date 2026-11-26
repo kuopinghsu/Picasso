@@ -13,7 +13,7 @@ endif::[]
 
 Picasso is a free, open-source photo library, viewer and editor for Windows, macOS and Linux.
 It organizes photos in your existing folders and lets you edit them without changing the original files.
-No cloud account is required, and photos and videos are not uploaded.
+No cloud account is required. Photos and videos stay on your computer unless you choose to publish them.
 
 This guide covers installation, everyday tasks, editing, maps, trips and stories, and library recovery.
 For a first session, follow <<install>> and <<first-start>>, then try <<editing>> and <<exporting>>.
@@ -29,11 +29,12 @@ image::picasso.png[The Picasso library: folder tree on the left, thumbnail grid 
 
 Download Picasso from the https://github.com/kuopinghsu/picasso/releases/latest[latest release].
 Use `x64` packages on Intel and AMD processors, and `arm64` ones on 64-bit Arm processors.
+AppImage filenames use `x86_64` for Intel and AMD processors and `aarch64` for 64-bit Arm processors.
 
 Windows::
 Supports Windows 10 and 11 on x64 and Arm64.
 Download the `.exe` and run it. No installer is required.
-The `.zip` holds the same program with the READMEs and the license.
+The `.zip` contains the same program with the READMEs and the license.
 
 macOS::
 Supports macOS 11 or later on Apple silicon and Intel Macs; use the universal package.
@@ -48,8 +49,8 @@ Replace the version and processor name in this example with those of your downlo
 +
 [source,bash]
 ----
-chmod +x picasso-<version>-linux-x64.AppImage
-./picasso-<version>-linux-x64.AppImage
+chmod +x picasso-<version>-x86_64.AppImage
+./picasso-<version>-x86_64.AppImage
 ----
 +
 For Ubuntu 22.04 or newer, `sudo apt install ./picasso-<version>-linux-x64.deb` installs Picasso with its menu entry.
@@ -129,8 +130,8 @@ Click the logo at the top left to open *About Picasso*, which shows the version,
 
 Press kbd:[I], or click the side panel button at the right of the bottom bar, to show or hide the Info and Map panel beside the grid.
 It shows the selected photo's camera details and where it was taken, on the *Info* and *Map* tabs at its top.
-In Places the same button shows or hides the list of what is on the map.
-The slider beside the button sets the thumbnail size; it shows only where there are thumbnails, so not in Places, Statistics, or the Travel Map, which also have no side panel button.
+In Places, the same button shows or hides the list of map items.
+The slider beside the button sets the thumbnail size. It is hidden in Places, Statistics and Travel Map because these views have no thumbnail grid. Statistics and Travel Map also have no side panel button.
 
 == Finding photos
 
@@ -155,12 +156,12 @@ A date finds the photos taken then:
 You can also write `2019/05` or `2019.05`.
 Dates and words combine, so `2019-05 beach` finds the May 2019 photos that match "beach".
 
-Search words narrow the results further:
+Use these search filters to narrow the results:
 
 * `type:video`, `type:photo`, or `type:raw`, or one format such as `type:jpg` or `type:nef`
 * `gps:yes` or `gps:no`, for photos with or without a place on the map
 * `is:edited` or `is:starred`
-* `is:notrip` or `is:intrip`, for photos in no Trip or in one, and `is:review` for Trip photos whose time needs review
+* `is:notrip` or `is:intrip`, for photos outside or inside a Trip, and `is:review` for Trip photos whose time needs review
 * `trip:`, `day:`, `place:`, or `story:` with part of a Trip's title or destination, a Day's title, a Place's name or local name, or a Story's title, such as `place:alfama`
 * `camera:` or `lens:` with part of the name, such as `lens:50mm`
 * `focal:35`, or a range such as `focal:24-70` or `focal:200-`, in millimeters
@@ -171,7 +172,7 @@ kbd:[Ctrl+F] jumps to the search box from anywhere but the editor, closing the v
 
 When you click in the search box, it lists your ten most recent searches, and once you type, only those that contain what you have typed.
 Click one to search for it again, or pick one with kbd:[↑] and kbd:[↓] and press kbd:[Enter].
-A search is added to the list when you press kbd:[Enter] or click away from the box.
+A search is saved when you press kbd:[Enter] or click away from the box.
 The list is kept in `settings.json`, so it is there the next time you start Picasso; *Clear recent searches* at the bottom of the list empties it.
 
 === Selecting
@@ -185,6 +186,42 @@ The list is kept in `settings.json`, so it is there the next time you start Pica
 
 The selected photos appear in the *Photo Tray* in the status bar.
 *Clear* empties it.
+
+== Viewing photos and videos
+
+Double-click a photo, or select it and press kbd:[Enter], to open the viewer.
+
+* kbd:[←] and kbd:[→] go to the previous and next photo; kbd:[Home] and kbd:[End] go to the first and last.
+* Zoom with the mouse wheel, kbd:[Ctrl] and the wheel, a trackpad pinch, or kbd:[+] and kbd:[−].
+Drag to pan.
+* kbd:[0] fits the photo to the window, and kbd:[1] shows it at actual size, with one image pixel per display pixel.
+* The filmstrip along the bottom shows the photos around this one; click one to go there.
+* kbd:[I] shows the details panel with the camera settings, a histogram, the *Caption*, *Show in folder*, and *Show on map*.
+* kbd:[F11] switches to full screen, and kbd:[Esc] goes back to the library.
+
+Use the theme button in the viewer toolbar to switch between light and dark themes.
+
+=== Slideshows
+
+Click *Slideshow*, or press kbd:[Space] in the viewer, to start a slideshow from the selected photo.
+kbd:[Space] pauses and resumes, and kbd:[Esc] ends the slideshow.
+*Settings → General* sets how long each photo shows.
+Each photo fades into the next.
+*Shuffle* in the toolbar, or kbd:[Shift+S], plays the photos in a random order, showing each photo once before repeating.
+
+=== Copying and opening photos elsewhere
+
+* kbd:[Ctrl+C], or *Copy picture*, puts the photo on the clipboard with its edits, at up to 4096 px, to paste into another app.
+* *Copy path* copies the full path of each selected photo, one per line.
+* *Open with default app* opens the file in the app your system uses for it.
+
+They are on a thumbnail's right-click menu and the viewer's *···* menu.
+
+=== Videos
+
+Videos show in the grid with a play badge and their length.
+In the viewer, kbd:[Space] plays and pauses, and kbd:[M] mutes.
+Videos cannot be edited.
 
 == Organizing photos
 
@@ -239,37 +276,47 @@ Either way, a photo that comes back within 90 days gets its stars, caption, albu
 
 === Renaming files
 
-Right-click a folder in the folder tree and choose *Rename files…* to rename its photos and videos from a pattern, as `+exiftool "-filename<${DateTimeOriginal}%-03c.%le" -d %Y.%m.%d-%Hh%Mm%Ss .+` does.
+Right-click a folder in the folder tree and choose *Rename files…*. Enter a pattern to rename its photos and videos. This is equivalent to the exiftool command `+exiftool "-filename<${DateTimeOriginal}%-03c.%le" -d %Y.%m.%d-%Hh%Mm%Ss .+`.
 Only the files directly in that folder are renamed, not those in its subfolders.
 
 Type the pattern in *New name*, or click the keywords under it to add them:
 
-* `+${DateTimeOriginal}+` is the date taken and `+${FileModifyDate}+` the date the file last changed, both written in the *Date format*
+* `+${DateTimeOriginal}+` is the date taken and `+${FileModifyDate}+` the date the file was last modified, both written in the *Date format*
 * `+${Model}+` is the camera, as the Info panel names it
 * `%f` is the old name without its extension
 * `%-03c` is a copy number added only when the name is taken, so photos taken in the same second get `-001`, `-002`, and so on
 * `%le` is the extension in lowercase, and `%e` the extension as it is
 
 In the date format, `%Y` is the year, `%m` the month, `%d` the day, `%H` the hour, `%M` the minute, and `%S` the second, so `%Y.%m.%d-%Hh%Mm%Ss` gives `2023.05.17-14h30m05s`.
-The date taken is the one Picasso shows, including a date you fixed, with a video's time in local time, as exiftool's `-api QuickTimeUTC=1` gives.
-For a file with no date in it, that is the date the file last changed; use *Adjust date…* first to give it another.
+The pattern uses the capture date shown in Picasso, including any date correction you made. Video timestamps are converted to local time, as with exiftool's `-api QuickTimeUTC=1`.
+If the file has no capture date, Picasso uses its last modification date. Use *Adjust date…* first to set a different date.
 
-*Time offset* moves the dates in the names for a camera whose clock was off, as exiftool's `-globalTimeShift` does: `+1:30` is an hour and a half later, `-0:00:10` ten seconds earlier, and `+2 0:00` two days later.
+*Time offset* adjusts the dates used in filenames when the camera clock was incorrect. It works like exiftool's `-globalTimeShift`: `+1:30` is an hour and a half later, `-0:00:10` ten seconds earlier, and `+2 0:00` two days later.
 It changes only the names and isn't kept for next time; to fix the dates Picasso shows as well, use *Adjust date…* instead.
 
 The list shows every file's new name before anything changes.
 While Picasso reads the folder, the list says *Reading the folder…*, and *Rename* and *Undo* wait until it is done.
 A name that can't be used, such as one without the file's extension or with a `:`, is shown in red, and that file keeps its name.
 A file already named by the pattern keeps its name, so renaming twice changes nothing.
-*Rename* renames all the files or, if one can't be renamed, none of them; the photos keep their stars, captions, albums, edits, and places.
+*Rename* applies the changes as a group. If any rename fails, the operation is rolled back. Photos keep their stars, captions, albums, edits and places.
 The `.xmp`, `.aae`, and `.thm` files that go with a photo are renamed with it, so `DSC0001.xmp` and `DSC0001.JPG.xmp` follow `DSC0001.JPG`.
 
 Each renaming is listed in a `.picasso-renames.json` file in the folder, with every old and new name.
-*Undo* puts back the names from before the newest renaming in the list, also after Picasso was closed, and clicking it again goes back one more.
-A file whose earlier name another file has now, such as a new `DSC0001.JPG` from the camera, keeps its name and stays in the list for later.
+*Undo* restores the names from before the most recent rename, even after restarting Picasso. Click it again to undo the previous rename.
+If another file now uses an earlier name, such as a new `DSC0001.JPG` from the camera, Undo skips that file. It keeps its current name and remains in the list for a later attempt.
+
+=== Folders in the tree
+
+Right-click a folder in the sidebar for:
+
+* *Show in Finder* on a Mac, *Show in Explorer* on Windows, or *Show in folder* on Linux, which opens the folder
+* *Geotag from GPS track…*
+* *Rename files…*
+* *Exclude from scanning*, on a subfolder you don't want in the library
+* *Rescan this folder* and *Remove from Picasso…*, on a folder you added
 
 [#duplicates]
-== Finding duplicates
+=== Finding duplicates
 
 *Duplicates* in the sidebar finds files whose content is identical, byte for byte, even under other names or in other folders.
 The search runs in the background and continues when you close the Duplicates dialog, while Picasso remains open.
@@ -278,48 +325,7 @@ It finds exact copies, not photos that only look similar.
 
 In each group one file is *Kept*: a starred or edited one when there is one.
 Move the other copies to the trash one by one, with *Trash extra copies* for a group, or with *Move all extra copies to trash*.
-*Search again* looks once more.
-
-== Unreadable files
-
-When a scan finds files it can't read, such as a damaged photo, a link appears in the status bar.
-It opens the list, with *Show in folder* and *Move to trash* for each file.
-
-== Viewing photos and videos
-
-Double-click a photo, or select it and press kbd:[Enter], to open the viewer.
-
-* kbd:[←] and kbd:[→] go to the previous and next photo; kbd:[Home] and kbd:[End] go to the first and last.
-* Zoom with the mouse wheel, kbd:[Ctrl] and the wheel, a trackpad pinch, or kbd:[+] and kbd:[−].
-Drag to pan.
-* kbd:[0] fits the photo to the window, and kbd:[1] shows it at actual size, with one image pixel per display pixel.
-* The filmstrip along the bottom shows the photos around this one; click one to go there.
-* kbd:[I] shows the details panel with the camera settings, a histogram, the *Caption*, *Show in folder*, and *Show on map*.
-* kbd:[F11] switches to full screen, and kbd:[Esc] goes back to the library.
-
-Use the theme button in the viewer toolbar to switch between light and dark themes.
-
-=== Slideshows
-
-Click *Slideshow*, or press kbd:[Space] in the viewer, to play the photos from the selected one.
-kbd:[Space] pauses and resumes, and kbd:[Esc] ends the slideshow.
-*Settings → General* sets how long each photo shows.
-Each photo fades into the next.
-*Shuffle* in the toolbar, or kbd:[Shift+S], plays the photos in a random order, each once before any comes again.
-
-=== Copying and opening photos elsewhere
-
-* kbd:[Ctrl+C], or *Copy picture*, puts the photo on the clipboard with its edits, at up to 4096 px, to paste into another app.
-* *Copy path* copies the full path of each selected photo, one per line.
-* *Open with default app* opens the file in the app your system uses for it.
-
-They are on a thumbnail's right-click menu and the viewer's *···* menu.
-
-=== Videos
-
-Videos show in the grid with a play badge and their length.
-In the viewer, kbd:[Space] plays and pauses, and kbd:[M] mutes.
-Videos cannot be edited.
+Click *Search again* to repeat the search.
 
 [#editing]
 == Editing photos
@@ -432,11 +438,13 @@ image::places.png[Places]
 *Places* in the sidebar shows every photo with a location on a map.
 Drag to move the map, and zoom with the wheel or a pinch.
 Nearby photos are grouped into a pin that shows their count.
-Point at a pin for a card with its photos: click one to open it, or use *Select these photos* or *Zoom in*.
+Move the pointer over a pin for a card with its photos: click one to open it, or use *Select these photos* or *Zoom in*.
 Clicking a pin of several photos zooms in on them, or selects them when they were taken at one spot, and double-clicking a single photo's pin opens it.
 *Open in OpenStreetMap* opens the same view in your web browser.
 
-A search leaves only the matching photos on the map and frames them, and *Starred only* in the toolbar leaves only the starred ones. A search typed in the Library stays when you open Places, and stays when you go back to the Library, so you can see where the results were taken and return to them. *Show on map* clears the search and *Starred only*, so the photo you chose is always on the map.
+A search filters the map to matching photos and adjusts the view to show them. *Starred only* in the toolbar filters it to starred photos.
+The search stays active when you switch between Library and Places, so you can view the results on the map and return to the grid.
+*Show on map* clears the search and turns off *Starred only* to ensure the selected photo is visible.
 
 From a photo, *Show on map* opens Places at that photo.
 
@@ -455,7 +463,7 @@ A location from the camera's GPS is never changed.
 
 Picasso reads the `.gpx` and `.kml` files in your folders, and Polarsteps location exports in `.json` files (such as `locations.json`), and draws them as colored paths under the photo pins.
 Hover over a track for its name, start time, distance, and duration, and double-click it to zoom to it.
-Click a track to select the photos taken along it: those within 300 m of the path and, for a track with times, taken within 14 hours of them, so a camera clock set to another time zone still matches.
+Click a track to select photos taken within 300 m of its path. If the track has timestamps, photos must also have been taken within 14 hours of the corresponding track time. This allows for a camera clock set to a different time zone.
 *Select the photos taken along it* on the right-click menu of a track in the side panel does the same.
 *Tracks* in the Places toolbar turns the paths off.
 
@@ -481,7 +489,7 @@ A track without heights, such as one from Polarsteps, gets a note in place of th
 Click *Look up heights* to download https://github.com/tilezen/joerd/blob/master/docs/attribution.md[Terrain Tiles on AWS] and calculate elevations locally.
 The provider receives tile requests for the track area, rather than the track file or individual points.
 This reveals the requested terrain area to the provider.
-If some points still get no height, the button stays to try those again, and kbd:[Ctrl+Z] takes the heights off.
+If some points still have no elevation, the button remains available so you can try again. Press kbd:[Ctrl+Z] to undo the elevation lookup.
 Hover over the elevation profile to highlight the corresponding location on the map.
 Click or drag along the profile to select a point. Hovering over a map point also highlights it on the profile.
 
@@ -489,7 +497,7 @@ Click or drag along the profile to select a point. Hovering over a map point als
 
 * Drag a point to move it, and click the line to add one.
 * Right-click a point and choose *Remove point*, or select points and click *Remove* in the bar at the bottom of the map.
-* Press kbd:[R] and drag a box round points to select several, or kbd:[Ctrl]-click them; kbd:[V] goes back to moving points.
+* Press kbd:[R] and drag a box around points to select several, or kbd:[Ctrl]-click them; kbd:[V] goes back to moving points.
 * kbd:[←] and kbd:[→] step from point to point.
 * kbd:[Ctrl+Z] undoes and kbd:[Ctrl+Y] redoes.
 * kbd:[1] to kbd:[4] show the whole track, its start, its end, and its highest point.
@@ -497,7 +505,7 @@ Click or drag along the profile to select a point. Hovering over a map point als
 
 === Cleanup settings
 
-Steps longer than the *Flight distance* or faster than the *Flight speed* are drawn as a dashed flight, and places where you stayed longer than the *Stay* time get a circle.
+Track segments longer than the *Flight distance* or faster than the *Flight speed* are drawn as a dashed flight, and places where you stayed longer than the *Stay* time get a circle.
 Change the settings and click *Clean up again* to clean the track up once more; *Defaults* restores GPXViewer's values.
 Settings you change become the defaults for the next track.
 
@@ -520,11 +528,11 @@ If you carried a GPS logger or a phone app while shooting, Picasso can place you
 In a Trip, click *Geotag photos…* beside its *Tracks* instead: the Trip's photos and tracks are already chosen.
 . Under *Places from*, keep *GPS tracks* and tick the tracks to use.
 The tracks beside the folder are listed; *Add tracks…* adds more `.gpx`, `.kml`, or `.kmz` files, such as one per day.
-Or choose *Photos that have GPS*: photos from a phone, say, mark where you were, and the others take places between them.
+Or choose *Photos that have GPS* to use location records from other photos, such as phone photos. Picasso estimates locations for the remaining photos from their capture times.
 . Check the *Folder*, and set the *Camera time zone*: the offset of the camera's clock from UTC, such as `+01:00`.
 Cameras usually keep local time without a time zone.
 . Click *Check* to see how many photos would get a place, and each photo's match under *Each photo*, without saving anything.
-When another time zone would place clearly more of them, Picasso names it; click *Use* to take it and check again.
+If another time zone would match substantially more photos, Picasso suggests it. Click *Use* to apply it, then check again.
 Photos that record their own time zone are not offered another unless you type a different one, and then the one they record comes first.
 . Click *Geotag*.
 
@@ -549,14 +557,6 @@ Use `picasso geotag --help` for the command options.
 
 Here `picasso` stands for the Picasso program: the `.exe` you downloaded on Windows, `/Applications/Picasso.app/Contents/MacOS/picasso` on a Mac, the `.AppImage` file, or `picasso` once the `.deb` is installed.
 
-== Statistics
-
-image::statistics.png[Statistics]
-
-*Statistics* in the sidebar shows your library in numbers: photos per year and month, the days you took photos, your cameras, lenses, and focal lengths, and how many photos have a location.
-Click *All years* or a year to look at one year.
-Most items have *Show these photos*, and places have *Show on map*.
-
 == Travel Map
 
 image::travelmap.png[Travel Map]
@@ -580,13 +580,13 @@ A Story turns a Trip into a page to read: text and photos you can preview, expor
 
 Trips never change your photos.
 Stars, captions, dates, edits, locations, Albums and files stay as they are, and a photo can be in several Trips.
-Everything except publishing works offline.
+Most Trip and Story tools work offline. Publishing, looking up place names and downloading map tiles or elevation data require an internet connection.
 
 === Making a Trip
 
 * Select photos in the library and choose *Add to Trip* to put them in a new or existing Trip.
 * *New trip…* on the *Trips* page makes an empty Trip with a title, destination, dates and timezone. In the calendar beside a date, click the month's name to choose another month, and click the year to choose another year.
-* *Suggest trips…* groups the whole library by when photos were taken, starting a new group after a gap of days with no photos. Pick a group and *Create trip…*. Under *Camera clocks*, shift a camera whose clock was wrong by whole hours; this changes only the grouping, never the photos.
+* *Suggest trips…* groups the whole library by when photos were taken, starting a new group after a gap of days with no photos. Select a group and click *Create trip…*. Under *Camera clocks*, shift a camera whose clock was wrong by whole hours; this changes only the grouping, never the photos.
 
 Before photos are added, Picasso shows what will happen: how many photos and videos, their dates, how many are already in this or another Trip, how many have no date, and how many may be copies.
 Nothing is written until you confirm.
@@ -600,7 +600,7 @@ Open one to see its photos; the *Photos* and *Stories* tabs switch between its p
 It reads only the photos' own times and never changes them.
 Photos whose time is uncertain, such as those without a recorded time zone or taken around a daylight saving change, go to *Needs review* with the reason.
 
-* Choose a Day to see its photos, or *Not in a day* and *Needs review* to settle the rest.
+* Choose a Day to see its photos, or *Not in a day* and *Needs review* to review the remaining photos.
 * Select photos and use *Move to Day*, or press kbd:[Alt+1] to kbd:[Alt+9] for a Day and kbd:[Alt+0] for none.
 * *Arrange*, or kbd:[Alt+↑] and kbd:[Alt+↓], changes the order within a Day. kbd:[Ctrl+Z] undoes a move.
 
@@ -641,7 +641,7 @@ These words find Trip photos anywhere:
 *Similar photos…*, at the end of the *Show* row, finds photos in the Trip taken close together that look alike, such as a burst or several tries at the same shot.
 It is different from <<duplicates>>, which finds exact copies of files.
 
-The first time, Picasso looks at each photo, with a count and *Cancel*; afterwards only new photos are looked at.
+On first use, Picasso analyzes each photo and shows progress with a *Cancel* button. Later searches analyze only new photos.
 Then adjust the groups:
 
 * *Taken within* is the longest time between one photo of a group and the next, 10 seconds unless changed.
@@ -653,33 +653,113 @@ Videos and photos without a date are left out.
 
 === Writing a Story
 
-*New story* starts a *Blank story*, one made from the selected photos, or one made *From the trip's days*, with a heading for each Day and its photos in order.
-*For some dates…* asks which dates the Story is about, from a first to a last date typed or picked in the calendar, and whether to *Start with their photos* or blank; a blank Story left on the Trip's own dates is about the whole Trip.
-The *Dates* under the byline change that later; leave both empty for the whole Trip. A photo is on a date by its Day's date, or else by when it was taken, so dates work before the Trip has Days.
-The Story opens in place of the Trip's photos and is saved as you type; the bar at the top shows *Saving…* and then *Saved*.
-If a save fails, as when the disk is full, nothing of it is kept and the bar says so; *Try again* saves everything since the last save.
-Quitting saves the Story first; if that fails, Picasso asks before quitting, with *Try again*, *Keep editing* and *Quit anyway*.
-An empty Story offers *Start writing*, *Add photos*, which adds a gallery with the Trip's photos open to pick from, and *Add a route map*.
+*New story* offers three starting points: a *Blank story*, the selected photos, or *From the trip's days* with a heading and photos for each Day.
+Choose *For some dates…* to set a date range. Enter the first and last dates, or select them in the calendar.
+Then choose *Start with their photos* or start with a blank Story.
+A blank Story with the Trip's dates covers the whole Trip.
 
-* Type in a paragraph; kbd:[Enter] starts a new one. Typing `/` in an empty paragraph lists the blocks, such as `/heading` or `/grid 3x2`.
-* Markdown works at the start of an empty paragraph: `#` and a space make a heading, `##` and a space a subheading, `-` or `*` a list, `1.` a numbered list, `>` a quote, and `---` a separator with a new paragraph after it.
-* Point at a block to show its handle, its kind, *↑*, *↓* and *⋯* above it; the block you are writing in also shows buttons for bold, italic, strikethrough, code, a link and the text color, which gives the selection one of six colors, each lighter on dark pages so it stays easy to read. kbd:[Ctrl+Shift+↑] and kbd:[Ctrl+Shift+↓] move the chosen block, and kbd:[Ctrl+D] duplicates it. Click elsewhere or press kbd:[Esc] to let go of it. If something is open, kbd:[Esc] closes that first: the `/` menu (your words stay), framing the cover (like *Cancel*), the cover's photo choices, or the photo strip.
-* Point between blocks and click *+* to add one there, or use the handle to drag a block.
-* Select photos in the grid and choose *Add to Story* to add them as single photos, a *Gallery* or a *Photo grid*. Each photo has its own caption and alt text in that Story.
-* Blocks include *Heading*, *Subheading*, *Paragraph*, *List*, *Quote*, *Separator*, *Credits*, *Practical info*, *Link*, *Table*, *Video*, *YouTube video* and *Route map*, which draws a linked GPS track on the map.
-* A *Table* holds text in rows and columns, up to 8 columns and 30 rows. Point at *Table* in the *+* menu and click a square of the grid beside it to choose how many columns and rows, or type `/table 4x5`. Its first row is the header row until you turn off *Header row* above it. kbd:[Enter] goes to the cell below, adding a row after the last, kbd:[↑] and kbd:[↓] move between rows and on to the blocks around, and kbd:[Shift+Enter] breaks the line. The format buttons work in cells as in paragraphs. Right-click a cell, or use *Rows and columns* above the table, to add a row or column beside that cell or remove its own; *+ Add a row* and *+ Add a column* are below the table, and its size above it resizes it on the same grid. The grid marks the cells that have text, and resizing never removes them. The template, or your WordPress theme, gives it its look.
-* A table's columns fit their text until you drag a line between two columns to set their widths, or, in the chosen table, press kbd:[Tab] until the line is chosen and move it with kbd:[←] and kbd:[→]. Until then the editor shows the columns at equal widths. Double-click the line, or choose *Fit columns to their text* in a cell's menu, to let them fit their text again. Exported pages keep the widths, and so do WordPress sites with the VoyageLight theme or the Picasso Places plugin, until the post is edited in WordPress's block editor.
-* A *YouTube video* shows a video from YouTube. Paste the video's address from YouTube or youtu.be; a time in it, such as t=90, is where it starts. In the editor and in exported pages, a card stands in for the player and plays the video on YouTube, so pages still work offline and Picasso fetches nothing from YouTube. WordPress posts embed YouTube's player; with the VoyageLight theme or the Picasso Places plugin it starts at the time in the address. Export and publishing tell you about blocks whose address isn't a YouTube video's, which show only their caption.
-* A *Video* plays one of the Trip's videos, or the part of it you choose. When you add the block, choose one of the Trip's videos; *Replace video…* in the block's tools chooses another and keeps the caption. The Story shows the part's first frame and its length; click it to play it in place, with sound, and click again to pause. Drag the two handles on the line under it to choose where the part starts and ends, or press kbd:[Tab] until a handle is chosen and move it with kbd:[←] and kbd:[→], a tenth of a second at a time, or a second at a time with kbd:[Shift]. While you drag a handle, the video shows the frame where it is and the time shows above it. To look for the moment first, drag along the line, or play the video and pause it there, then click the start or end button beside the times to make the part start or end at the frame shown. Exported pages and WordPress posts get only that part, made by FFmpeg into a video every browser plays (H.264, at most 1080p), without where it was taken, and starting on its first frame; Markdown links that frame to the video. Picasso keeps the parts it made, so exporting or publishing again doesn't make them again. If a WordPress site refuses a video as larger than it accepts, the save stops and Picasso says how large it was; choose a shorter part, or raise the site's upload limit.
-* *Introduction* and *Conclusion* are optional text before and after the blocks.
-* Point at a photo in the Story to show its tools on its top-right corner: *Use as cover*, and in a gallery or grid *✕* to take the photo out. The photo that is the cover is labelled *Cover*.
-* Until the Story has a cover, *Add cover…* above the title shows the Story's photos; click one to make it the cover.
-* Point at the cover to show its tools on its bottom-right corner: *Frame cover…* chooses its shape, a fixed one or *Free* to drag the corners and edges to any shape, and the part of the photo it shows, in this Story only; *Remove cover* takes the cover away and leaves the photo in the Story.
-* *Add photos…* on a gallery or grid opens a strip of the Trip's photos, those of *This story's dates* first, in the order they were taken, when the Story has its own dates; choose *All days* or one Day instead. *Starred only* and *Not in the story yet* narrow it, and a dot marks photos already used.
+To change the range later, use *Dates* under the byline. Leave both dates empty to cover the whole Trip.
+A photo uses its Day's date if it belongs to a Day; otherwise, it uses its capture date. Date ranges also work before you create Days.
+
+The Story replaces the Trip's photo view and saves automatically as you type.
+The top bar shows *Saving…*, then *Saved*.
+If saving fails, for example because the disk is full, the bar shows an error. Changes since the last successful save remain unsaved.
+Click *Try again* to save them.
+Picasso also saves the Story before quitting. If saving fails, choose *Try again*, *Keep editing* or *Quit anyway*.
+
+An empty Story offers *Start writing*, *Add photos* and *Add a route map*.
+*Add photos* creates a gallery and opens the Trip's photos for you to choose from.
+
+==== Text and blocks
+
+Type in a paragraph; kbd:[Enter] starts a new one.
+Typing `/` in an empty paragraph lists the blocks, such as `/heading` or `/grid 3x2`.
+
+Markdown works at the start of an empty paragraph: `#` and a space make a heading, `##` and a space a subheading, `-` or `*` a list, `1.` a numbered list, `>` a quote, and `---` a separator with a new paragraph after it.
+
+Move the pointer over a block to show its drag handle, block type, *↑*, *↓* and *⋯* menu.
+The active block also shows text formatting buttons: bold, italic, strikethrough, code, link and text color.
+Choose one of six text colors for the selected text. Colors become lighter on dark pages for readability.
+Use kbd:[Ctrl+Shift+↑] or kbd:[Ctrl+Shift+↓] to move the selected block, and kbd:[Ctrl+D] to duplicate it.
+Click elsewhere or press kbd:[Esc] to deselect the block.
+If a menu or photo picker is open, kbd:[Esc] closes it first.
+Closing the `/` menu keeps the text you typed. During cover framing, kbd:[Esc] acts as *Cancel*.
+
+Point between blocks and click *+* to add one there, or use the handle to drag a block.
+
+Blocks include *Heading*, *Subheading*, *Paragraph*, *List*, *Quote*, *Separator*, *Credits*, *Practical info*, *Link*, *Table*, *Video*, *YouTube video* and *Route map*, which draws a linked GPS track on the map.
+
+*Introduction* and *Conclusion* are optional text before and after the blocks.
 
 Select text and press kbd:[Ctrl+B], kbd:[Ctrl+I] or kbd:[Ctrl+K] for bold, italic or a link.
 *↶* and *↷* at the top undo and redo, as do kbd:[Ctrl+Z] and kbd:[Ctrl+Shift+Z].
-A Story is a *Draft* until you click *Draft*, beside the way back to the Trip, to mark it *Finished*; click it again to make it a draft.
+A Story is a *Draft* until you click *Draft*, beside the button that returns to the Trip, to mark it *Finished*; click it again to make it a draft.
+
+==== Photos and covers
+
+Select photos in the grid and choose *Add to Story* to add them as single photos, a *Gallery* or a *Photo grid*.
+Each photo has its own caption and alt text in that Story.
+
+Move the pointer over a photo in the Story to show its tools on its top-right corner: *Use as cover*, and in a gallery or grid *✕* to take the photo out.
+The photo that is the cover is labelled *Cover*.
+
+Until the Story has a cover, *Add cover…* above the title shows the Story's photos; click one to make it the cover.
+
+Move the pointer over the cover to show its tools in the bottom-right corner.
+Choose *Frame cover…* to set the aspect ratio and the visible part of the photo. Choose a fixed ratio, or *Free* to drag the edges and corners freely.
+These changes apply only to this Story. *Remove cover* removes the cover while keeping the photo in the Story.
+
+Click *Add photos…* on a gallery or photo grid to open the Trip's photo strip.
+If the Story has its own date range, the strip starts with *This story's dates*, in capture order.
+You can also choose *All days* or a single Day.
+*Starred only* and *Not in the story yet* narrow it, and a dot marks photos already used.
+
+==== Tables
+
+A *Table* holds text in rows and columns, up to 8 columns and 30 rows.
+Move the pointer over *Table* in the *+* menu and click a square of the grid beside it to choose how many columns and rows, or type `/table 4x5`.
+The first row is a header by default. Turn off *Header row* above the table to use it as a normal row.
+
+* kbd:[Enter] moves to the cell below and adds a row if needed.
+* kbd:[↑] and kbd:[↓] move between rows and into the blocks above or below the table.
+* kbd:[Shift+Enter] starts a new line within the cell.
+
+The format buttons work in cells as in paragraphs.
+Right-click a cell, or use *Rows and columns* above the table, to insert or remove rows and columns.
+You can also use *+ Add a row* and *+ Add a column* below the table.
+Click the table size above it to resize the table using the grid.
+The grid marks the cells that have text, and resizing never removes them.
+The template, or your WordPress theme, gives it its look.
+
+By default, exported tables adjust column widths to fit the text. The editor displays equal column widths until you set them manually.
+To set a width, drag the divider between two columns.
+With the table selected, you can also press kbd:[Tab] to focus a divider, then use kbd:[←] and kbd:[→] to move it.
+Double-click the line, or choose *Fit columns to their text* in a cell's menu, to let them fit their text again.
+Exported pages keep the widths, and so do WordPress sites with the VoyageLight theme or the Picasso Places plugin, until the post is edited in WordPress's block editor.
+
+==== YouTube videos
+
+A *YouTube video* shows a video from YouTube.
+Paste a YouTube or youtu.be video URL. A timestamp in the URL, such as `t=90`, sets the playback start time.
+The editor and exported pages show a link card instead of an embedded player. The page can be viewed offline, and Picasso does not download anything from YouTube. Click the card to watch the video on YouTube with an internet connection.
+WordPress posts embed YouTube's player; with the VoyageLight theme or the Picasso Places plugin it starts at the time in the address.
+If a block has an invalid YouTube URL, it shows only its caption. Picasso warns you before export or publishing.
+
+==== Video clips
+
+A *Video* plays one of the Trip's videos, or the part of it you choose.
+When you add the block, choose one of the Trip's videos; *Replace video…* in the block's tools chooses another and keeps the caption.
+The Story shows the part's first frame and its length; click it to play it in place, with sound, and click again to pause.
+Drag the two handles on the timeline below the video to set the start and end of the clip.
+For keyboard control, press kbd:[Tab] to focus a handle. Use kbd:[←] or kbd:[→] to move it by 0.1 seconds, or hold kbd:[Shift] to move it by 1 second.
+While you drag a handle, the video shows the frame where it is and the time shows above it.
+To find a frame first, drag along the timeline, or play the video and pause at that frame.
+Then click the start or end button beside the times to use the current frame as the clip boundary.
+Exported pages and WordPress posts include only the selected clip.
+FFmpeg converts it to H.264 video at up to 1080p for playback in common browsers. The clip contains no location metadata and starts at its first frame.
+Markdown exports link the first frame to the video.
+Picasso keeps the parts it made, so exporting or publishing again doesn't make them again.
+If a WordPress site refuses a video as larger than it accepts, the save stops and Picasso says how large it was; choose a shorter part, or raise the site's upload limit.
 
 === Templates, preview and export
 
@@ -704,21 +784,26 @@ The password is kept in the system's credential store, never in the library or i
 Choose the *Photo size* (*Standard web* or *Low resolution*), whether to *Keep camera details*, *Categories and tags*, and *By Day* to make an index post and one post per Day.
 The *Summary* lists what will change on the site before anything is sent.
 The post becomes public only with *Publish it once saved*, or *At a set time*, after a confirmation of what readers will see.
-Photos never carry where they were taken, and Picasso never takes a post down; do that in WordPress.
+Uploaded photo files contain no location metadata.
+To remove a published post, use WordPress.
 
 Under *Places*, *Show places on the post's map* shows the Trip's Places where the Story's photos were taken.
 A site with the VoyageLight theme or the Picasso Places plugin, both in Picasso's `wordpress` folder, shows them on its own map; with any other theme, they go at the end of the post as a map picture with numbered pins and a list linked to OpenStreetMap, and the dialog says so.
-It is off until you tick it; untick a Place to leave it out, and choose *Exact* or *About 1 km*.
+This option is off by default.
+Enable it, choose the Places to include, and select *Exact* or *About 1 km*.
 Each Day post shows its Day's Places, and the confirmation names them before the post goes public.
-Ticking it off again takes them off the post on the next save.
+Disable the option to remove the places from the post the next time you save.
 *Link to the trip's Journey* makes a Journey page for the Trip, as a draft the first time, and links the post to it; with places shown, the Journey lists where each Day went.
 Journeys need the VoyageLight theme or the Picasso Places plugin; on another site the option is turned off and the dialog says why.
 
 Saving again updates the same draft.
-When it leaves out photos or videos the post showed before, a window lists those still on the site to tick: *Delete from site* deletes them from the site's media library for good, keeping any that another post or page there still shows, and *Keep* leaves them all.
-A post edited on the site since is not replaced unless you choose so, and an interrupted job resumes without uploading the same photos twice.
+If the updated post no longer uses some previously uploaded photos or videos, Picasso lists the files still on the site.
+Select files and choose *Delete from site* to remove them permanently from the site's media library.
+Files used by another post or page are kept. Choose *Keep* to leave all files on the site.
+If the post has been edited in WordPress since the last save, Picasso asks before replacing it.
+An interrupted publishing job resumes without uploading the same photos twice.
 *History* lists the last attempts.
-A job cut short because Picasso or the computer stopped shows as *Stopped before it finished*, with the photos that reached the site; publish again to finish it.
+A job interrupted when Picasso or the computer stopped shows as *Stopped before it finished*, with the photos that reached the site; publish again to finish it.
 A Story is published to a site one job at a time: closing the Story leaves its job running, and publishing it to that site again waits until the job has finished.
 
 === Moving, archiving and deleting Trips
@@ -730,6 +815,14 @@ A Story is published to a site one job at a time: closing the Story leaves its j
 *Delete trip…* first lists what goes with it.
 Deleting a Trip or a Story never removes photo files or anything published.
 Library backups include Trips and Stories.
+
+== Statistics
+
+image::statistics.png[Statistics]
+
+*Statistics* in the sidebar shows your library in numbers: photos per year and month, the days you took photos, your cameras, lenses, and focal lengths, and how many photos have a location.
+Select a year to view its statistics, or *All years* to view the whole library.
+Most items have *Show these photos*, and places have *Show on map*.
 
 == Settings
 
@@ -762,16 +855,6 @@ The *Track cleanup* settings the track editor uses when it opens a track, with *
 
 Storage::
 Where the library, the cache, and the settings are kept, how much space each takes, *Clear cache*, and the backups.
-
-=== Folders in the tree
-
-Right-click a folder in the sidebar for:
-
-* *Show in Finder* on a Mac, *Show in Explorer* on Windows, or *Show in folder* on Linux, which opens the folder
-* *Geotag from GPS track…*
-* *Rename files…*
-* *Exclude from scanning*, on a subfolder you don't want in the library
-* *Rescan this folder* and *Remove from Picasso…*, on a folder you added
 
 == Library storage and backups
 
@@ -854,7 +937,7 @@ Press kbd:[F1] or kbd:[?] to see every shortcut and mouse gesture in Picasso.
 | Key | Action
 
 | kbd:[Tab] / kbd:[Shift+Tab] | Move to the next or previous control
-| kbd:[Enter] / kbd:[Space] | Use the control the keyboard is on
+| kbd:[Enter] / kbd:[Space] | Activate the focused control
 | kbd:[Enter] | Open the selected photo
 | kbd:[Esc] | Close the editor, go back, or leave the slideshow
 | Arrow keys | Move the selection, or go to the previous or next photo
@@ -886,8 +969,8 @@ Press kbd:[F1] or kbd:[?] to see every shortcut and mouse gesture in Picasso.
 | kbd:[F11] | Full screen
 |===
 
-On a photo reached with kbd:[Tab], the arrow keys move the selection and the keyboard with it, and kbd:[Enter] opens the photo.
-The shortcuts work wherever the keyboard is, except while you type in a text field.
+After using kbd:[Tab] to focus a photo, use the arrow keys to move to another photo and kbd:[Enter] to open it.
+Most shortcuts work throughout Picasso. They are disabled while you type in a text field. Some shortcuts apply only to a specific tool or view.
 
 == Troubleshooting
 
@@ -911,7 +994,7 @@ Run it with `--appimage-extract-and-run` where FUSE is missing, as in containers
 
 GPS matching finds no photos or assigns the wrong places::
 See <<geotagging>>. Check that the track contains timestamps and covers the photo times.
-Verify the camera time zone, then preview the command-line results before saving.
+Verify the camera time zone, then use *Check* to review the matches before saving. On the command line, use `--dry-run`.
 
 Edits are missing in another application::
 Edits are stored in the Picasso library, not in the source photo.
@@ -919,6 +1002,11 @@ Use <<exporting>> to create a file with the edits applied.
 
 Picasso reports that the library cannot be opened::
 See <<recovery>>.
+
+=== Unreadable files
+
+When a scan finds files it can't read, such as a damaged photo, a link appears in the status bar.
+It opens the list, with *Show in folder* and *Move to trash* for each file.
 
 == Getting help
 

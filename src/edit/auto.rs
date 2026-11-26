@@ -65,7 +65,9 @@ pub fn auto_white_balance(image: &RgbaImage) -> (f32, f32) {
 pub fn auto_tone(image: &RgbaImage) -> Vec<(Control, f32)> {
     let mut bins = [0u64; 256];
     for pixel in image.pixels() {
-        let luma = (u32::from(pixel[0]) * 306 + u32::from(pixel[1]) * 601 + u32::from(pixel[2]) * 117) >> 10;
+        let luma =
+            (u32::from(pixel[0]) * 306 + u32::from(pixel[1]) * 601 + u32::from(pixel[2]) * 117)
+                >> 10;
         bins[luma.min(255) as usize] += 1;
     }
     let total = bins.iter().sum::<u64>().max(1) as f64;
@@ -79,22 +81,47 @@ pub fn auto_tone(image: &RgbaImage) -> Vec<(Control, f32)> {
         }
         255.0
     };
-    let share = |range: std::ops::RangeInclusive<usize>| (bins[range].iter().sum::<u64>() as f64 / total) as f32;
+    let share = |range: std::ops::RangeInclusive<usize>| {
+        (bins[range].iter().sum::<u64>() as f64 / total) as f32
+    };
 
     let median = percentile(0.5).max(1.0);
-    let exposure = ((srgb_to_linear(118.0 / 255.0) / srgb_to_linear(median / 255.0)).log2() * 0.7).clamp(-2.0, 2.0);
+    let exposure = ((srgb_to_linear(118.0 / 255.0) / srgb_to_linear(median / 255.0)).log2() * 0.7)
+        .clamp(-2.0, 2.0);
     let gain = exposure.exp2();
-    let shifted = |code: f32| super::color::linear_to_srgb((srgb_to_linear(code / 255.0) * gain).min(1.0)) * 255.0;
+    let shifted = |code: f32| {
+        super::color::linear_to_srgb((srgb_to_linear(code / 255.0) * gain).min(1.0)) * 255.0
+    };
     let (low, high) = (shifted(percentile(0.005)), shifted(percentile(0.995)));
     let spread = shifted(percentile(0.95)) - shifted(percentile(0.05));
 
-    let whites = if high < 245.0 { ((245.0 - high) * 0.5).min(40.0) } else { 0.0 };
-    let blacks = if low > 8.0 { -((low - 5.0) * 1.5).min(40.0) } else { 0.0 };
+    let whites = if high < 245.0 {
+        ((245.0 - high) * 0.5).min(40.0)
+    } else {
+        0.0
+    };
+    let blacks = if low > 8.0 {
+        -((low - 5.0) * 1.5).min(40.0)
+    } else {
+        0.0
+    };
     let bright = share(250..=255);
-    let highlights = if bright > 0.01 || exposure > 0.3 { -(bright * 400.0 + exposure.max(0.0) * 25.0).min(60.0) } else { 0.0 };
+    let highlights = if bright > 0.01 || exposure > 0.3 {
+        -(bright * 400.0 + exposure.max(0.0) * 25.0).min(60.0)
+    } else {
+        0.0
+    };
     let dark = share(0..=30);
-    let shadows = if dark > 0.12 { (dark * 120.0).min(50.0) } else { 0.0 };
-    let contrast = if spread < 150.0 { ((150.0 - spread) * 0.25).min(30.0) } else { 0.0 };
+    let shadows = if dark > 0.12 {
+        (dark * 120.0).min(50.0)
+    } else {
+        0.0
+    };
+    let contrast = if spread < 150.0 {
+        ((150.0 - spread) * 0.25).min(30.0)
+    } else {
+        0.0
+    };
     vec![
         (Control::EXPOSURE, (exposure * 100.0).round() / 100.0),
         (Control::CONTRAST, contrast.round()),
@@ -116,8 +143,13 @@ mod tests {
         let (temperature, tint) = white_balance_for(cast);
         let gains = white_balance_gains(temperature / 100.0, tint / 100.0);
         let fixed: Vec<f32> = cast.iter().zip(gains).map(|(c, g)| c * g).collect();
-        assert!((fixed[0] - fixed[1]).abs() < 0.01 && (fixed[1] - fixed[2]).abs() < 0.01, "{fixed:?}");
-        let dark = RgbaImage::from_fn(32, 32, |x, _| image::Rgba([(x * 2) as u8, (x * 2) as u8, (x * 2) as u8, 255]));
+        assert!(
+            (fixed[0] - fixed[1]).abs() < 0.01 && (fixed[1] - fixed[2]).abs() < 0.01,
+            "{fixed:?}"
+        );
+        let dark = RgbaImage::from_fn(32, 32, |x, _| {
+            image::Rgba([(x * 2) as u8, (x * 2) as u8, (x * 2) as u8, 255])
+        });
         let tone = auto_tone(&dark);
         assert!(tone[0].1 > 0.5, "a dark photo is brightened");
     }

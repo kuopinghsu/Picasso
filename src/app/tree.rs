@@ -36,7 +36,10 @@ pub(super) fn build(folders: &[Folder], dirs: &[(String, i64)]) -> Vec<FolderRoo
             let root = folder.path.trim_end_matches(MAIN_SEPARATOR);
             let mut children: Vec<DirNode> = Vec::new();
             for (dir, count) in dirs {
-                let Some(rel) = dir.strip_prefix(root).and_then(|rest| rest.strip_prefix(MAIN_SEPARATOR)) else {
+                let Some(rel) = dir
+                    .strip_prefix(root)
+                    .and_then(|rest| rest.strip_prefix(MAIN_SEPARATOR))
+                else {
                     continue;
                 };
                 let mut level = &mut children;
@@ -227,7 +230,10 @@ impl PicassoApp {
                     let _ = open::that(&path);
                     ui.close();
                 }
-                if ui.button(crate::i18n::tr("Geotag from GPS track…")).clicked() {
+                if ui
+                    .button(crate::i18n::tr("Geotag from GPS track…"))
+                    .clicked()
+                {
                     self.open_geotag(&path);
                     ui.close();
                 }
@@ -236,7 +242,10 @@ impl PicassoApp {
                     ui.close();
                 }
                 if let Nav::Dir(_) = row.nav {
-                    if ui.button(crate::i18n::tr("Exclude from scanning")).clicked() {
+                    if ui
+                        .button(crate::i18n::tr("Exclude from scanning"))
+                        .clicked()
+                    {
                         if let Err(err) = self.exclude_dir(std::path::Path::new(&path)) {
                             self.activity = err;
                         }
@@ -267,7 +276,8 @@ fn tree_line(ui: &mut egui::Ui, row: &Row, selected: bool) -> (egui::Response, b
     let name = format!("{}, {}", row.label, row.count);
     response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, &name));
     if let Some(open) = row.open {
-        ui.ctx().accesskit_node_builder(response.id, |node| node.set_expanded(open));
+        ui.ctx()
+            .accesskit_node_builder(response.id, |node| node.set_expanded(open));
     }
     let painter = ui.painter();
     if selected {
@@ -280,15 +290,31 @@ fn tree_line(ui: &mut egui::Ui, row: &Row, selected: bool) -> (egui::Response, b
     let cy = rect.center().y;
     if let Some(open) = row.open {
         let points = if open {
-            vec![egui::pos2(arrow_x - 1.0, cy - 2.5), egui::pos2(arrow_x + 7.0, cy - 2.5), egui::pos2(arrow_x + 3.0, cy + 2.5)]
+            vec![
+                egui::pos2(arrow_x - 1.0, cy - 2.5),
+                egui::pos2(arrow_x + 7.0, cy - 2.5),
+                egui::pos2(arrow_x + 3.0, cy + 2.5),
+            ]
         } else {
-            vec![egui::pos2(arrow_x + 1.0, cy - 4.0), egui::pos2(arrow_x + 6.0, cy), egui::pos2(arrow_x + 1.0, cy + 4.0)]
+            vec![
+                egui::pos2(arrow_x + 1.0, cy - 4.0),
+                egui::pos2(arrow_x + 6.0, cy),
+                egui::pos2(arrow_x + 1.0, cy + 4.0),
+            ]
         };
         painter.add(Shape::convex_polygon(points, theme::muted(), Stroke::NONE));
     }
     let icon = egui::pos2(arrow_x + 14.0, cy - 7.0);
-    painter.rect_filled(Rect::from_min_size(icon + Vec2::new(0.0, 1.0), Vec2::new(7.0, 4.0)), 2, Color32::from_rgb(0xD9, 0x9A, 0x1E));
-    painter.rect_filled(Rect::from_min_size(icon + Vec2::new(0.0, 3.0), Vec2::new(14.0, 10.0)), 2, theme::FOLDER);
+    painter.rect_filled(
+        Rect::from_min_size(icon + Vec2::new(0.0, 1.0), Vec2::new(7.0, 4.0)),
+        2,
+        Color32::from_rgb(0xD9, 0x9A, 0x1E),
+    );
+    painter.rect_filled(
+        Rect::from_min_size(icon + Vec2::new(0.0, 3.0), Vec2::new(14.0, 10.0)),
+        2,
+        theme::FOLDER,
+    );
 
     let count_rect = painter.text(
         egui::pos2(rect.right() - 10.0, cy),
@@ -303,7 +329,11 @@ fn tree_line(ui: &mut egui::Ui, row: &Row, selected: bool) -> (egui::Response, b
         egui::Align2::LEFT_CENTER,
         &row.label,
         egui::FontId::proportional(13.5),
-        if selected { theme::accent() } else { theme::text() },
+        if selected {
+            theme::accent()
+        } else {
+            theme::text()
+        },
     );
 
     let toggled = row.open.is_some()
@@ -336,16 +366,26 @@ mod tests {
         ];
         let tree = build(&folders, &dirs);
         assert_eq!(tree.len(), 1);
-        let names: Vec<(&str, i64)> = tree[0].children.iter().map(|node| (node.name.as_str(), node.count)).collect();
+        let names: Vec<(&str, i64)> = tree[0]
+            .children
+            .iter()
+            .map(|node| (node.name.as_str(), node.count))
+            .collect();
         assert_eq!(names, [("a", 4), ("b", 4)]);
-        assert_eq!(tree[0].children[0].children[0].path, join(&[&root, "a", "x"]));
+        assert_eq!(
+            tree[0].children[0].children[0].path,
+            join(&[&root, "a", "x"])
+        );
     }
 
     #[test]
     fn orders_embedded_numbers_by_value() {
         let mut names = ["35期", "2020", "2016", "img10", "img9", "_gsdata_", "Album"];
         names.sort_by(|a, b| natural_cmp(a, b));
-        assert_eq!(names, ["_gsdata_", "35期", "2016", "2020", "Album", "img9", "img10"]);
+        assert_eq!(
+            names,
+            ["_gsdata_", "35期", "2016", "2020", "Album", "img9", "img10"]
+        );
     }
 
     #[test]

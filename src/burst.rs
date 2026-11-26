@@ -54,7 +54,10 @@ pub fn group(shots: &[Shot], window: i64, max_distance: u32) -> Vec<Vec<i64>> {
     let mut current: Vec<i64> = Vec::new();
     let mut previous: Option<&Shot> = None;
     for shot in timed {
-        let joins = previous.is_some_and(|before| shot.taken_at - before.taken_at <= window && distance(shot.look, before.look) <= max_distance);
+        let joins = previous.is_some_and(|before| {
+            shot.taken_at - before.taken_at <= window
+                && distance(shot.look, before.look) <= max_distance
+        });
         if !joins && current.len() > 1 {
             groups.push(std::mem::take(&mut current));
         }
@@ -86,8 +89,14 @@ mod tests {
     #[test]
     fn photos_alike_have_close_looks_and_different_ones_far() {
         let base = look(&picture(0, false));
-        assert!(distance(base, look(&picture(2, false))) <= DEFAULT_DISTANCE, "a slightly moved frame");
-        assert!(distance(base, look(&picture(0, true))) > DEFAULT_DISTANCE, "a different picture");
+        assert!(
+            distance(base, look(&picture(2, false))) <= DEFAULT_DISTANCE,
+            "a slightly moved frame"
+        );
+        assert!(
+            distance(base, look(&picture(0, true))) > DEFAULT_DISTANCE,
+            "a different picture"
+        );
         assert_eq!(distance(5, 5), 0);
         assert_eq!(distance(0, u64::MAX), 64);
     }
@@ -107,9 +116,19 @@ mod tests {
             // No time: never grouped.
             shot(7, 0, 0b1111),
         ];
-        assert_eq!(group(&shots, DEFAULT_WINDOW, DEFAULT_DISTANCE), vec![vec![1, 2, 3], vec![5, 6]]);
-        assert_eq!(group(&shots, 120, DEFAULT_DISTANCE), vec![vec![1, 2, 3, 4], vec![5, 6]], "a wider window");
-        assert_eq!(group(&shots, DEFAULT_WINDOW, 0), Vec::<Vec<i64>>::new(), "only identical looks");
+        assert_eq!(
+            group(&shots, DEFAULT_WINDOW, DEFAULT_DISTANCE),
+            vec![vec![1, 2, 3], vec![5, 6]]
+        );
+        assert_eq!(
+            group(&shots, 120, DEFAULT_DISTANCE),
+            vec![vec![1, 2, 3, 4], vec![5, 6]],
+            "a wider window"
+        );
+        assert_eq!(
+            group(&shots, DEFAULT_WINDOW, 0),
+            Vec::<Vec<i64>>::new(),
+            "only identical looks"
+        );
     }
 }
-

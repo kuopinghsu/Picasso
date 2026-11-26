@@ -70,7 +70,10 @@ fn find_tools() -> Option<Tools> {
             dirs.push(custom);
         }
     }
-    if let Some(dir) = std::env::current_exe().ok().and_then(|exe| exe.parent().map(Path::to_path_buf)) {
+    if let Some(dir) = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(Path::to_path_buf))
+    {
         dirs.push(dir.join("ffmpeg"));
         dirs.push(dir);
     }
@@ -103,7 +106,12 @@ fn winget_package_bins(packages: &Path) -> Vec<PathBuf> {
         return bins;
     };
     for entry in entries.flatten() {
-        if !entry.file_name().to_string_lossy().to_lowercase().contains("ffmpeg") {
+        if !entry
+            .file_name()
+            .to_string_lossy()
+            .to_lowercase()
+            .contains("ffmpeg")
+        {
             continue;
         }
         if let Ok(builds) = std::fs::read_dir(entry.path()) {
@@ -144,7 +152,14 @@ pub struct VideoInfo {
 pub fn info(path: &Path) -> Result<VideoInfo, String> {
     let tools = tools().ok_or(tr("Install FFmpeg to read and play videos"))?;
     let output = command(&tools.ffprobe)
-        .args(["-v", "error", "-print_format", "json", "-show_format", "-show_streams"])
+        .args([
+            "-v",
+            "error",
+            "-print_format",
+            "json",
+            "-show_format",
+            "-show_streams",
+        ])
         .arg(path)
         .output()
         .map_err(|err| err.to_string())?;
@@ -159,9 +174,14 @@ fn parse_info(json: &Value) -> Result<VideoInfo, String> {
     let streams = json["streams"].as_array().map(Vec::as_slice).unwrap_or(&[]);
     let video = streams
         .iter()
-        .find(|stream| stream["codec_type"] == "video" && stream["disposition"]["attached_pic"].as_i64() != Some(1))
+        .find(|stream| {
+            stream["codec_type"] == "video"
+                && stream["disposition"]["attached_pic"].as_i64() != Some(1)
+        })
         .ok_or(tr("The file has no video track"))?;
-    let audio = streams.iter().find(|stream| stream["codec_type"] == "audio");
+    let audio = streams
+        .iter()
+        .find(|stream| stream["codec_type"] == "audio");
     let format = &json["format"];
 
     let mut width = video["width"].as_u64().unwrap_or(0) as u32;
@@ -173,15 +193,27 @@ fn parse_info(json: &Value) -> Result<VideoInfo, String> {
         .into_iter()
         .find_map(|rate| frame_rate(rate.as_str()?))
         .unwrap_or(30.0);
-    let duration = number(&format["duration"]).or_else(|| number(&video["duration"])).unwrap_or(0.0);
+    let duration = number(&format["duration"])
+        .or_else(|| number(&video["duration"]))
+        .unwrap_or(0.0);
     let tag = |keys: &[&str]| tag(format, video, keys);
 
     let taken_at = tag(&["com.apple.quicktime.creationdate"])
         .and_then(parse_time)
         .or_else(|| tag(&["creation_time", "date"]).and_then(parse_time));
-    let make = tag(&["com.apple.quicktime.make", "make", "com.android.manufacturer"]).unwrap_or("");
+    let make = tag(&[
+        "com.apple.quicktime.make",
+        "make",
+        "com.android.manufacturer",
+    ])
+    .unwrap_or("");
     let model = tag(&["com.apple.quicktime.model", "model", "com.android.model"]).unwrap_or("");
-    let gps = tag(&["location", "com.apple.quicktime.location.iso6709", "location-eng"]).and_then(parse_iso6709);
+    let gps = tag(&[
+        "location",
+        "com.apple.quicktime.location.iso6709",
+        "location-eng",
+    ])
+    .and_then(parse_iso6709);
 
     let audio_text = audio.map(|audio| {
         let mut parts = vec![audio["codec_name"].as_str().unwrap_or("audio").to_string()];
@@ -216,11 +248,15 @@ fn rotation(stream: &Value) -> i64 {
         .into_iter()
         .flatten()
         .find_map(|item| number(&item["rotation"]));
-    side.or_else(|| number(&stream["tags"]["rotate"])).unwrap_or(0.0).round() as i64
+    side.or_else(|| number(&stream["tags"]["rotate"]))
+        .unwrap_or(0.0)
+        .round() as i64
 }
 
 fn number(value: &Value) -> Option<f64> {
-    value.as_f64().or_else(|| value.as_str()?.trim().parse().ok())
+    value
+        .as_f64()
+        .or_else(|| value.as_str()?.trim().parse().ok())
 }
 
 fn frame_rate(text: &str) -> Option<f64> {
@@ -283,7 +319,9 @@ fn parse_iso6709(text: &str) -> Option<(f64, f64)> {
         numbers.push(current.parse::<f64>().ok()?);
     }
     let (lat, lon) = (*numbers.first()?, *numbers.get(1)?);
-    let valid = (-90.0..=90.0).contains(&lat) && (-180.0..=180.0).contains(&lon) && (lat, lon) != (0.0, 0.0);
+    let valid = (-90.0..=90.0).contains(&lat)
+        && (-180.0..=180.0).contains(&lon)
+        && (lat, lon) != (0.0, 0.0);
     valid.then_some((lat, lon))
 }
 
@@ -301,9 +339,19 @@ pub fn rows(info: &VideoInfo) -> Vec<(&'static str, String)> {
     };
     rows.push((
         "Video",
-        format!("{}, {} × {}, {fps} fps", info.video_codec, info.width, info.height),
+        format!(
+            "{}, {} × {}, {fps} fps",
+            info.video_codec, info.width, info.height
+        ),
     ));
-    rows.push(("Audio", if info.audio.is_empty() { tr("None").into() } else { info.audio.clone() }));
+    rows.push((
+        "Audio",
+        if info.audio.is_empty() {
+            tr("None").into()
+        } else {
+            info.audio.clone()
+        },
+    ));
     if let Some(bits) = info.bit_rate {
         rows.push(("Bit rate", format!("{:.1} Mbps", bits as f64 / 1_000_000.0)));
     }
@@ -349,7 +397,11 @@ pub fn probe_file(path: &Path, modified_at: i64) -> Probe {
 /// Frame size that fits within `edge`, never enlarged, in even pixels as
 /// most video filters expect.
 fn fit(width: u32, height: u32, edge: u32) -> (u32, u32) {
-    let (width, height) = if width == 0 || height == 0 { (1280, 720) } else { (width, height) };
+    let (width, height) = if width == 0 || height == 0 {
+        (1280, 720)
+    } else {
+        (width, height)
+    };
     let scale = (edge as f64 / width.max(height) as f64).min(1.0);
     let even = |n: u32| ((n as f64 * scale).round() as u32 / 2 * 2).max(2);
     (even(width), even(height))
@@ -370,7 +422,15 @@ fn grab(path: &Path, at: f64, width: u32, height: u32) -> Result<RgbaImage, Stri
         .args(["-nostdin", "-v", "error", "-ss", &format!("{at:.3}"), "-i"])
         .arg(path)
         .args(["-map", "0:v:0", "-frames:v", "1", "-an", "-sn", "-dn"])
-        .args(["-vf", &format!("scale={width}:{height}"), "-pix_fmt", "rgba", "-f", "rawvideo", "-"])
+        .args([
+            "-vf",
+            &format!("scale={width}:{height}"),
+            "-pix_fmt",
+            "rgba",
+            "-f",
+            "rawvideo",
+            "-",
+        ])
         .stdout(Stdio::piped())
         .output()
         .map_err(|err| err.to_string())?;
@@ -378,7 +438,8 @@ fn grab(path: &Path, at: f64, width: u32, height: u32) -> Result<RgbaImage, Stri
     if output.stdout.len() < len {
         return Err(tr("No frame could be decoded").into());
     }
-    RgbaImage::from_raw(width, height, output.stdout[..len].to_vec()).ok_or_else(|| "Bad frame".into())
+    RgbaImage::from_raw(width, height, output.stdout[..len].to_vec())
+        .ok_or_else(|| "Bad frame".into())
 }
 
 /// The frame `at` seconds into the video, scaled to fit `edge`.
@@ -395,8 +456,14 @@ pub const WEB_VIDEO_VERSION: u32 = 2;
 /// Frame size of a video for the web: within 1080p either way up, never
 /// enlarged, in even pixels.
 pub fn web_size(width: u32, height: u32) -> (u32, u32) {
-    let (width, height) = if width == 0 || height == 0 { (1280, 720) } else { (width, height) };
-    let scale = (1920.0 / f64::from(width.max(height))).min(1080.0 / f64::from(width.min(height))).min(1.0);
+    let (width, height) = if width == 0 || height == 0 {
+        (1280, 720)
+    } else {
+        (width, height)
+    };
+    let scale = (1920.0 / f64::from(width.max(height)))
+        .min(1080.0 / f64::from(width.min(height)))
+        .min(1.0);
     let even = |n: u32| ((f64::from(n) * scale).round() as u32 / 2 * 2).max(2);
     (even(width), even(height))
 }
@@ -409,9 +476,15 @@ const H264_ENCODERS: [&str; 4] = ["libx264", "h264_videotoolbox", "h264_mf", "li
 fn h264_encoder() -> Option<&'static str> {
     static FOUND: OnceLock<Option<&'static str>> = OnceLock::new();
     *FOUND.get_or_init(|| {
-        let output = command(&tools()?.ffmpeg).args(["-hide_banner", "-encoders"]).stdout(Stdio::piped()).output().ok()?;
+        let output = command(&tools()?.ffmpeg)
+            .args(["-hide_banner", "-encoders"])
+            .stdout(Stdio::piped())
+            .output()
+            .ok()?;
         let listed = String::from_utf8_lossy(&output.stdout);
-        H264_ENCODERS.into_iter().find(|name| listed.split_whitespace().any(|word| word == *name))
+        H264_ENCODERS
+            .into_iter()
+            .find(|name| listed.split_whitespace().any(|word| word == *name))
     })
 }
 
@@ -438,27 +511,75 @@ fn encoder_args(encoder: &'static str, width: u32, height: u32, fps: f64) -> Vec
 /// An `end` no later than `start` is the video's end. `done` hears how far
 /// it is, from 0 to 1. Setting `cancel` stops it; nothing is left at `out`
 /// unless it was made whole.
-pub fn web_video(path: &Path, out: &Path, start: f64, end: f64, cancel: &AtomicBool, done: &dyn Fn(f64)) -> Result<(), String> {
+pub fn web_video(
+    path: &Path,
+    out: &Path,
+    start: f64,
+    end: f64,
+    cancel: &AtomicBool,
+    done: &dyn Fn(f64),
+) -> Result<(), String> {
     let tools = tools().ok_or(tr("Install FFmpeg to read and play videos"))?;
     let encoder = h264_encoder().ok_or(tr("This FFmpeg can't make H.264 video"))?;
     let source = info(path)?;
     let (width, height) = web_size(source.width, source.height);
     let until = (end > start).then(|| format!("{:.3}", end - start));
-    let length = if end > start { end - start } else { (source.duration - start).max(0.1) };
+    let length = if end > start {
+        end - start
+    } else {
+        (source.duration - start).max(0.1)
+    };
     let mut filters = format!("scale={width}:{height},format=yuv420p");
     if source.fps > 60.5 {
         filters.push_str(",fps=60");
     }
     static RUN: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-    let partial = out.with_extension(format!("partial-{}-{}", std::process::id(), RUN.fetch_add(1, Ordering::Relaxed)));
+    let partial = out.with_extension(format!(
+        "partial-{}-{}",
+        std::process::id(),
+        RUN.fetch_add(1, Ordering::Relaxed)
+    ));
     let mut child = command(&tools.ffmpeg)
-        .args(["-nostdin", "-v", "error", "-y", "-ss", &format!("{start:.3}"), "-i"])
+        .args([
+            "-nostdin",
+            "-v",
+            "error",
+            "-y",
+            "-ss",
+            &format!("{start:.3}"),
+            "-i",
+        ])
         .arg(path)
         .args(until.iter().flat_map(|until| ["-t", until.as_str()]))
-        .args(["-map", "0:v:0", "-map", "0:a:0?", "-sn", "-dn", "-map_metadata", "-1", "-map_chapters", "-1"])
+        .args([
+            "-map",
+            "0:v:0",
+            "-map",
+            "0:a:0?",
+            "-sn",
+            "-dn",
+            "-map_metadata",
+            "-1",
+            "-map_chapters",
+            "-1",
+        ])
         .args(["-vf", &filters])
         .args(encoder_args(encoder, width, height, source.fps))
-        .args(["-c:a", "aac", "-b:a", "128k", "-ac", "2", "-movflags", "+faststart", "-progress", "pipe:1", "-nostats", "-f", "mp4"])
+        .args([
+            "-c:a",
+            "aac",
+            "-b:a",
+            "128k",
+            "-ac",
+            "2",
+            "-movflags",
+            "+faststart",
+            "-progress",
+            "pipe:1",
+            "-nostats",
+            "-f",
+            "mp4",
+        ])
         .arg(&partial)
         .stdout(Stdio::piped())
         .spawn()
@@ -466,14 +587,22 @@ pub fn web_video(path: &Path, out: &Path, start: f64, end: f64, cancel: &AtomicB
     let reached = Arc::new(std::sync::atomic::AtomicU64::new(0));
     if let Some(stdout) = child.stdout.take() {
         let reached = Arc::clone(&reached);
-        let _ = std::thread::Builder::new().name("picasso-video-progress".into()).spawn(move || {
-            use std::io::BufRead;
-            for line in std::io::BufReader::new(stdout).lines().map_while(Result::ok) {
-                if let Some(micros) = line.strip_prefix("out_time_us=").and_then(|micros| micros.trim().parse::<u64>().ok()) {
-                    reached.store(micros, Ordering::Relaxed);
+        let _ = std::thread::Builder::new()
+            .name("picasso-video-progress".into())
+            .spawn(move || {
+                use std::io::BufRead;
+                for line in std::io::BufReader::new(stdout)
+                    .lines()
+                    .map_while(Result::ok)
+                {
+                    if let Some(micros) = line
+                        .strip_prefix("out_time_us=")
+                        .and_then(|micros| micros.trim().parse::<u64>().ok())
+                    {
+                        reached.store(micros, Ordering::Relaxed);
+                    }
                 }
-            }
-        });
+            });
     }
     let status = loop {
         if cancel.load(Ordering::Relaxed) {
@@ -514,9 +643,33 @@ pub fn web_video(path: &Path, out: &Path, start: f64, end: f64, cancel: &AtomicB
 pub fn test_clip(path: &Path, seconds: u32) -> bool {
     let Some(tools) = tools() else { return false };
     command(&tools.ffmpeg)
-        .args(["-nostdin", "-v", "error", "-y", "-f", "lavfi", "-i", &format!("testsrc=duration={seconds}:size=320x240:rate=25")])
-        .args(["-f", "lavfi", "-i", &format!("sine=frequency=440:duration={seconds}")])
-        .args(["-c:v", "mpeg4", "-c:a", "aac", "-shortest", "-metadata", "location=+25.0330+121.5654/", "-metadata", "creation_time=2024-05-01T10:00:00Z"])
+        .args([
+            "-nostdin",
+            "-v",
+            "error",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            &format!("testsrc=duration={seconds}:size=320x240:rate=25"),
+        ])
+        .args([
+            "-f",
+            "lavfi",
+            "-i",
+            &format!("sine=frequency=440:duration={seconds}"),
+        ])
+        .args([
+            "-c:v",
+            "mpeg4",
+            "-c:a",
+            "aac",
+            "-shortest",
+            "-metadata",
+            "location=+25.0330+121.5654/",
+            "-metadata",
+            "creation_time=2024-05-01T10:00:00Z",
+        ])
         .arg(path)
         .status()
         .is_ok_and(|status| status.success())
@@ -598,7 +751,12 @@ impl Player {
 
     /// True until the first frame of a new stream is due.
     pub fn loading(&self) -> bool {
-        self.want_play && self.error.is_none() && self.stream.as_ref().is_none_or(|stream| stream.begun.is_none())
+        self.want_play
+            && self.error.is_none()
+            && self
+                .stream
+                .as_ref()
+                .is_none_or(|stream| stream.begun.is_none())
     }
 
     pub fn position(&self) -> f64 {
@@ -648,7 +806,11 @@ impl Player {
 
     pub fn seek(&mut self, to: f64) {
         let duration = self.duration();
-        self.position = if duration > 0.0 { to.clamp(0.0, duration) } else { to.max(0.0) };
+        self.position = if duration > 0.0 {
+            to.clamp(0.0, duration)
+        } else {
+            to.max(0.0)
+        };
         self.ended = false;
         self.stream = None;
         self.want_frame = true;
@@ -666,7 +828,11 @@ impl Player {
     }
 
     fn apply_volume(&self) {
-        if let Some(audio) = self.stream.as_ref().and_then(|stream| stream.audio.as_ref()) {
+        if let Some(audio) = self
+            .stream
+            .as_ref()
+            .and_then(|stream| stream.audio.as_ref())
+        {
             audio.set_volume(if self.muted { 0.0 } else { self.volume });
         }
     }
@@ -690,7 +856,14 @@ impl Player {
         let info = self.info.as_ref()?;
         if self.stream.is_none() && !self.ended && (self.want_play || self.want_frame) {
             let volume = if self.muted { 0.0 } else { self.volume };
-            match Stream::start(&self.path, info, (self.position, self.edge), !self.want_play, mixer, volume) {
+            match Stream::start(
+                &self.path,
+                info,
+                (self.position, self.edge),
+                !self.want_play,
+                mixer,
+                volume,
+            ) {
                 Ok(stream) => self.stream = Some(stream),
                 Err(err) => self.error = Some(err),
             }
@@ -740,9 +913,19 @@ impl Scrubber {
                 while let Ok(first) = asked.recv() {
                     let at = asked.try_iter().last().unwrap_or(first);
                     // The very end has no frame to decode.
-                    let at = if info.duration > 0.0 { at.min(info.duration - 0.1) } else { at };
-                    let Ok(image) = grab(&path, at.max(0.0), width, height) else { continue };
-                    let frame = Frame { width: width as usize, height: height as usize, rgba: image.into_raw() };
+                    let at = if info.duration > 0.0 {
+                        at.min(info.duration - 0.1)
+                    } else {
+                        at
+                    };
+                    let Ok(image) = grab(&path, at.max(0.0), width, height) else {
+                        continue;
+                    };
+                    let frame = Frame {
+                        width: width as usize,
+                        height: height as usize,
+                        rgba: image.into_raw(),
+                    };
                     if found.send(frame).is_err() {
                         return;
                     }
@@ -798,7 +981,10 @@ impl Stream {
             .args(["-nostdin", "-v", "error", "-ss", &start, "-i"])
             .arg(path)
             .args(["-map", "0:v:0", "-an", "-sn", "-dn"])
-            .args(["-vf", &format!("scale={width}:{height},fps={:.6}", info.fps)])
+            .args([
+                "-vf",
+                &format!("scale={width}:{height},fps={:.6}", info.fps),
+            ])
             .args(["-pix_fmt", "rgba", "-f", "rawvideo", "-"])
             .stdout(Stdio::piped())
             .spawn()
@@ -816,7 +1002,10 @@ impl Stream {
             let child = command(&tools.ffmpeg)
                 .args(["-nostdin", "-v", "error", "-ss", &start, "-i"])
                 .arg(path)
-                .args(["-map", "0:a:0", "-vn", "-sn", "-dn", "-ac", "2", "-ar", "48000", "-f", "f32le", "-"])
+                .args([
+                    "-map", "0:a:0", "-vn", "-sn", "-dn", "-ac", "2", "-ar", "48000", "-f",
+                    "f32le", "-",
+                ])
                 .stdout(Stdio::piped())
                 .spawn();
             if let Ok(mut child) = child {
@@ -973,7 +1162,9 @@ fn spawn_samples(mut stdout: ChildStdout, samples: Sender<Vec<f32>>, ready: Arc<
                     return;
                 }
                 let chunk = bytes
-                    .chunks_exact(4)
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
                     .map(|sample| f32::from_le_bytes([sample[0], sample[1], sample[2], sample[3]]))
                     .collect();
                 if samples.send(chunk).is_err() {
@@ -1058,8 +1249,14 @@ mod tests {
 
     #[test]
     fn reads_iso6709_locations() {
-        assert_eq!(parse_iso6709("+25.0330+121.5654+012.000/"), Some((25.033, 121.5654)));
-        assert_eq!(parse_iso6709("-33.8688+151.2093/"), Some((-33.8688, 151.2093)));
+        assert_eq!(
+            parse_iso6709("+25.0330+121.5654+012.000/"),
+            Some((25.033, 121.5654))
+        );
+        assert_eq!(
+            parse_iso6709("-33.8688+151.2093/"),
+            Some((-33.8688, 151.2093))
+        );
         assert_eq!(parse_iso6709("+00.0000+000.0000/"), None);
         assert_eq!(parse_iso6709("garbage"), None);
     }
@@ -1076,12 +1273,19 @@ mod tests {
         assert_eq!(web_size(3840, 2160), (1920, 1080));
         assert_eq!(web_size(2160, 3840), (1080, 1920));
         assert_eq!(web_size(1440, 1440), (1080, 1080));
-        assert_eq!(web_size(4096, 1716), (1920, 804), "wider than 16:9 fits its width");
+        assert_eq!(
+            web_size(4096, 1716),
+            (1920, 804),
+            "wider than 16:9 fits its width"
+        );
         assert_eq!(web_size(641, 481), (640, 480), "never enlarged");
         let x264 = encoder_args("libx264", 1920, 1080, 30.0);
         assert!(x264.windows(2).any(|pair| pair == ["-crf", "23"]));
         let system = encoder_args("h264_mf", 1920, 1080, 120.0);
-        assert!(system.windows(2).any(|pair| pair == ["-b:v", "12441600"]), "{system:?}: at most 60 frames a second");
+        assert!(
+            system.windows(2).any(|pair| pair == ["-b:v", "12441600"]),
+            "{system:?}: at most 60 frames a second"
+        );
     }
 
     #[test]
@@ -1103,16 +1307,27 @@ mod tests {
         let wanted = grab(&source, 2.5, 160, 120).unwrap().into_raw();
         let mut last = None;
         let deadline = Instant::now() + Duration::from_secs(30);
-        while Instant::now() < deadline && last.as_ref().is_none_or(|frame: &Frame| frame.rgba != wanted) {
+        while Instant::now() < deadline
+            && last
+                .as_ref()
+                .is_none_or(|frame: &Frame| frame.rgba != wanted)
+        {
             if let Some(frame) = scrubber.frame() {
                 last = Some(frame);
             }
             std::thread::sleep(Duration::from_millis(20));
         }
         let last = last.expect("a frame was shown");
-        assert_eq!((last.width, last.height), (160, 120), "made to fit the edge asked for");
+        assert_eq!(
+            (last.width, last.height),
+            (160, 120),
+            "made to fit the edge asked for"
+        );
         assert!(last.rgba == wanted, "the frame asked for last is shown");
-        assert!(woken.load(Ordering::Relaxed) >= 1, "the screen is woken for it");
+        assert!(
+            woken.load(Ordering::Relaxed) >= 1,
+            "the screen is woken for it"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -1126,22 +1341,62 @@ mod tests {
         }
         let out = dir.join("web.mp4");
         let last = std::sync::Mutex::new(0.0);
-        web_video(&source, &out, 1.0, 2.0, &AtomicBool::new(false), &|part| *last.lock().unwrap() = part).unwrap();
+        web_video(&source, &out, 1.0, 2.0, &AtomicBool::new(false), &|part| {
+            *last.lock().unwrap() = part
+        })
+        .unwrap();
         let made = info(&out).unwrap();
-        assert_eq!((made.video_codec.as_str(), made.width, made.height), ("h264", 320, 240));
+        assert_eq!(
+            (made.video_codec.as_str(), made.width, made.height),
+            ("h264", 320, 240)
+        );
         assert!((made.duration - 1.0).abs() < 0.3, "{}", made.duration);
-        assert!(made.has_audio && made.gps.is_none() && made.taken_at.is_none(), "{made:?}");
-        assert_eq!(*last.lock().unwrap(), 1.0, "progress was reported to the end");
+        assert!(
+            made.has_audio && made.gps.is_none() && made.taken_at.is_none(),
+            "{made:?}"
+        );
+        assert_eq!(
+            *last.lock().unwrap(),
+            1.0,
+            "progress was reported to the end"
+        );
         let original = info(&source).unwrap();
-        assert!(original.gps.is_some() && original.taken_at.is_some(), "the test's own clip has both: {original:?}");
+        assert!(
+            original.gps.is_some() && original.taken_at.is_some(),
+            "the test's own clip has both: {original:?}"
+        );
         let empty = dir.join("empty.mp4");
-        assert!(web_video(&source, &empty, original.duration, 0.0, &AtomicBool::new(false), &|_| {}).is_err());
+        assert!(web_video(
+            &source,
+            &empty,
+            original.duration,
+            0.0,
+            &AtomicBool::new(false),
+            &|_| {}
+        )
+        .is_err());
         assert!(!empty.exists());
-        assert!(std::fs::read_dir(&dir).unwrap().flatten().all(|entry| !entry.file_name().to_string_lossy().contains("partial")), "nothing half made is left");
+        assert!(
+            std::fs::read_dir(&dir)
+                .unwrap()
+                .flatten()
+                .all(|entry| !entry.file_name().to_string_lossy().contains("partial")),
+            "nothing half made is left"
+        );
 
         // Cancelled before it starts: nothing is made.
         let cancelled = dir.join("cancelled.mp4");
-        assert_eq!(web_video(&source, &cancelled, 0.0, 0.0, &AtomicBool::new(true), &|_| {}), Err("cancelled".into()));
+        assert_eq!(
+            web_video(
+                &source,
+                &cancelled,
+                0.0,
+                0.0,
+                &AtomicBool::new(true),
+                &|_| {}
+            ),
+            Err("cancelled".into())
+        );
         assert!(!cancelled.exists());
         let _ = std::fs::remove_dir_all(dir);
     }

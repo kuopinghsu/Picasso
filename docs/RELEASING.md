@@ -50,10 +50,13 @@ Use an unused version if its tag has already been pushed.
    git diff --check
    ```
 
-   `make ci` checks documentation links, commands and settings; dependency
+   `make ci` checks Rust formatting; documentation links, commands and settings; dependency
    advisories, licenses and sources; release-mode tests; and benchmark limits.
    The benchmark check uses 20,000 generated photos. See
    [PERFORMANCE.md](PERFORMANCE.md) for its methodology and limits.
+
+   Use `make fmt` to fix formatting differences, or `make fmt-check` to check
+   formatting alone without changing files.
 
    The release-notes command checks that the section exists, is nonempty and no
    longer says `Unreleased`. It prints the changelog portion of the notes.
@@ -103,7 +106,7 @@ and PDF guide generation.
 - **Linux:** release-mode tests, benchmark limits, and Debian package installation,
   version, startup and removal checks on x64 and Arm64.
 - **AppImage:** builds for both architectures and startup tests on AlmaLinux 8
-  and Ubuntu 24.04.
+  and Ubuntu 22.04 and 24.04.
 - **macOS:** tests on the runner and a universal application containing Apple
   silicon and Intel executables. This does not replace testing on both kinds of Mac.
 - **Documentation:** English and Traditional Chinese PDF guides. Missing font
@@ -133,23 +136,23 @@ an automatic rollback mechanism if publication or asset upload fails.
 
 ### Expected release files
 
-For Picasso `0.9.5`, the release contains these 16 files:
+Each release contains these 16 files (`<version>` is the Picasso version):
 
 ```text
-picasso-0.9.5-windows-x64.exe
-picasso-0.9.5-windows-x64.zip
-picasso-0.9.5-windows-arm64.exe
-picasso-0.9.5-windows-arm64.zip
-picasso-0.9.5-linux-x64.tar.gz
-picasso-0.9.5-linux-x64.deb
-picasso-0.9.5-linux-x64.AppImage
-picasso-0.9.5-linux-arm64.tar.gz
-picasso-0.9.5-linux-arm64.deb
-picasso-0.9.5-linux-arm64.AppImage
-picasso-0.9.5-macos-universal.dmg
-picasso-0.9.5-macos-universal.zip
-picasso-0.9.5-user-guide.pdf
-picasso-0.9.5-user-guide-zh-TW.pdf
+picasso-<version>-windows-x64.exe
+picasso-<version>-windows-x64.zip
+picasso-<version>-windows-arm64.exe
+picasso-<version>-windows-arm64.zip
+picasso-<version>-linux-x64.tar.gz
+picasso-<version>-linux-x64.deb
+picasso-<version>-x86_64.AppImage
+picasso-<version>-linux-arm64.tar.gz
+picasso-<version>-linux-arm64.deb
+picasso-<version>-aarch64.AppImage
+picasso-<version>-macos-universal.dmg
+picasso-<version>-macos-universal.zip
+picasso-<version>-user-guide.pdf
+picasso-<version>-user-guide-zh-TW.pdf
 rawler-<rawler-version>-source.tar.gz
 SHA256SUMS.txt
 ```
@@ -173,7 +176,8 @@ are separate from the files uploaded by the release workflow.
 - [ ] Both PDF guides open correctly, including screenshots and Chinese text.
 
 To verify a single download, calculate its SHA-256 checksum and compare the full
-value and filename with its entry in SHA256SUMS.txt. For example, on macOS:
+value and filename with its entry in SHA256SUMS.txt. These examples use `0.9.5`;
+replace it with the version you downloaded. On macOS:
 
 ```sh
 shasum -a 256 picasso-0.9.5-macos-universal.dmg

@@ -17,7 +17,13 @@ const NEAR: f32 = 0.3;
 
 /// The groups the Travel Map counts continents in. Antarctica goes with
 /// Oceania.
-pub const CONTINENTS: [&str; 5] = ["Africa", "Americas", "Asia", "Europe", "Oceania & Antarctica"];
+pub const CONTINENTS: [&str; 5] = [
+    "Africa",
+    "Americas",
+    "Asia",
+    "Europe",
+    "Oceania & Antarctica",
+];
 
 pub struct Area {
     /// ISO 3166 code: "TW" for a country, "US_CA" for a state.
@@ -71,14 +77,20 @@ impl Bounds {
     }
 
     fn contains(&self, lon: f32, lat: f32, margin: f32) -> bool {
-        lon >= self.west - margin && lon <= self.east + margin && lat >= self.south - margin && lat <= self.north + margin
+        lon >= self.west - margin
+            && lon <= self.east + margin
+            && lat >= self.south - margin
+            && lat <= self.north + margin
     }
 }
 
 impl Area {
     /// Name in the interface language.
     pub fn name(&self) -> &str {
-        let lang = Lang::ALL.iter().position(|lang| *lang == i18n::current()).unwrap_or(0);
+        let lang = Lang::ALL
+            .iter()
+            .position(|lang| *lang == i18n::current())
+            .unwrap_or(0);
         self.names.get(lang).unwrap_or(&self.names[0])
     }
 
@@ -149,7 +161,9 @@ pub struct World {
 /// The world map, unpacked the first time it is needed.
 pub fn world() -> &'static World {
     static WORLD: OnceLock<World> = OnceLock::new();
-    WORLD.get_or_init(|| unpack(PACKED).expect("build/world.bin is a world map from scripts/world-map.py"))
+    WORLD.get_or_init(|| {
+        unpack(PACKED).expect("build/world.bin is a world map from scripts/world-map.py")
+    })
 }
 
 impl World {
@@ -158,17 +172,26 @@ impl World {
     pub fn locate(&self, lat: f64, lon: f64) -> Option<usize> {
         let (lon, lat) = (lon as f32, lat as f32);
         let country = self.find(&self.countries, lon, lat, true)?;
-        Some(self.find(&self.children[country], lon, lat, true).unwrap_or(country))
+        Some(
+            self.find(&self.children[country], lon, lat, true)
+                .unwrap_or(country),
+        )
     }
 
     /// Like `locate`, but only on land: for what the pointer is over.
     pub fn area_at(&self, lat: f32, lon: f32) -> Option<usize> {
         let country = self.find(&self.countries, lon, lat, false)?;
-        Some(self.find(&self.children[country], lon, lat, false).unwrap_or(country))
+        Some(
+            self.find(&self.children[country], lon, lat, false)
+                .unwrap_or(country),
+        )
     }
 
     fn find(&self, candidates: &[usize], lon: f32, lat: f32, near: bool) -> Option<usize> {
-        if let Some(&inside) = candidates.iter().find(|&&index| self.areas[index].contains(lon, lat)) {
+        if let Some(&inside) = candidates
+            .iter()
+            .find(|&&index| self.areas[index].contains(lon, lat))
+        {
             return Some(inside);
         }
         if !near {
@@ -195,8 +218,13 @@ impl World {
 /// Reads the packed map. See `scripts/world-map.py` for the layout.
 fn unpack(packed: &[u8]) -> Option<World> {
     let mut bytes = Vec::new();
-    flate2::read::ZlibDecoder::new(packed).read_to_end(&mut bytes).ok()?;
-    let mut reader = Reader { bytes: &bytes, at: 0 };
+    flate2::read::ZlibDecoder::new(packed)
+        .read_to_end(&mut bytes)
+        .ok()?;
+    let mut reader = Reader {
+        bytes: &bytes,
+        at: 0,
+    };
     if reader.take(4)? != b"PWM1" {
         return None;
     }
@@ -247,17 +275,31 @@ fn unpack(packed: &[u8]) -> Option<World> {
             .iter()
             .map(|(start, len)| {
                 let mut bounds = Bounds::EMPTY;
-                points[*start as usize..(*start + *len) as usize].iter().for_each(|point| bounds.add(*point));
+                points[*start as usize..(*start + *len) as usize]
+                    .iter()
+                    .for_each(|point| bounds.add(*point));
                 bounds
             })
             .collect();
         let mut bounds = Bounds::EMPTY;
         points.iter().for_each(|point| bounds.add(*point));
-        let flat: Vec<[f32; 2]> = points.iter().map(|[lon, lat]| natural_earth(*lon, *lat)).collect();
-        let flat_bounds = flat.iter().fold([f32::INFINITY, f32::INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY], |b, [x, y]| {
-            [b[0].min(*x), b[1].min(*y), b[2].max(*x), b[3].max(*y)]
-        });
-        let sphere = points.iter().map(|[lon, lat]| unit_vector(*lon, *lat)).collect();
+        let flat: Vec<[f32; 2]> = points
+            .iter()
+            .map(|[lon, lat]| natural_earth(*lon, *lat))
+            .collect();
+        let flat_bounds = flat.iter().fold(
+            [
+                f32::INFINITY,
+                f32::INFINITY,
+                f32::NEG_INFINITY,
+                f32::NEG_INFINITY,
+            ],
+            |b, [x, y]| [b[0].min(*x), b[1].min(*y), b[2].max(*x), b[3].max(*y)],
+        );
+        let sphere = points
+            .iter()
+            .map(|[lon, lat]| unit_vector(*lon, *lat))
+            .collect();
         areas.push(Area {
             id,
             parent,
@@ -283,11 +325,18 @@ fn unpack(packed: &[u8]) -> Option<World> {
             None => countries.push(index),
         }
     }
-    Some(World { areas, countries, children })
+    Some(World {
+        areas,
+        countries,
+        children,
+    })
 }
 
 fn unquantize(x: u16, y: u16) -> [f32; 2] {
-    [f32::from(x) * 360.0 / 65535.0 - 180.0, f32::from(y) * 180.0 / 65535.0 - 90.0]
+    [
+        f32::from(x) * 360.0 / 65535.0 - 180.0,
+        f32::from(y) * 180.0 / 65535.0 - 90.0,
+    ]
 }
 
 struct Reader<'a> {
@@ -329,7 +378,8 @@ pub fn natural_earth(lon: f32, lat: f32) -> [f32; 2] {
     let (lambda, phi) = (lon.to_radians(), lat.to_radians());
     let p2 = phi * phi;
     let p4 = p2 * p2;
-    let x = lambda * (0.870700 - 0.131979 * p2 + p4 * (-0.013791 + p4 * p2 * (0.003971 - 0.001529 * p2)));
+    let x = lambda
+        * (0.870700 - 0.131979 * p2 + p4 * (-0.013791 + p4 * p2 * (0.003971 - 0.001529 * p2)));
     let y = phi * (1.007226 + p2 * (0.015085 + p4 * (-0.044475 + 0.028874 * p2 - 0.005916 * p4)));
     [x, y]
 }
@@ -341,8 +391,12 @@ pub fn natural_earth_inverse(x: f32, y: f32) -> Option<(f32, f32)> {
     for _ in 0..25 {
         let p2 = phi * phi;
         let p4 = p2 * p2;
-        let f = phi * (1.007226 + p2 * (0.015085 + p4 * (-0.044475 + 0.028874 * p2 - 0.005916 * p4))) - y;
-        let df = 1.007226 + p2 * (3.0 * 0.015085 + p4 * (-7.0 * 0.044475 + 9.0 * 0.028874 * p2 - 11.0 * 0.005916 * p4));
+        let f = phi
+            * (1.007226 + p2 * (0.015085 + p4 * (-0.044475 + 0.028874 * p2 - 0.005916 * p4)))
+            - y;
+        let df = 1.007226
+            + p2 * (3.0 * 0.015085
+                + p4 * (-7.0 * 0.044475 + 9.0 * 0.028874 * p2 - 11.0 * 0.005916 * p4));
         let step = f / df;
         phi -= step;
         if step.abs() < 1e-6 {
@@ -354,7 +408,8 @@ pub fn natural_earth_inverse(x: f32, y: f32) -> Option<(f32, f32)> {
     }
     let p2 = phi * phi;
     let p4 = p2 * p2;
-    let lambda = x / (0.870700 - 0.131979 * p2 + p4 * (-0.013791 + p4 * p2 * (0.003971 - 0.001529 * p2)));
+    let lambda =
+        x / (0.870700 - 0.131979 * p2 + p4 * (-0.013791 + p4 * p2 * (0.003971 - 0.001529 * p2)));
     if !lambda.is_finite() || lambda.abs() > PI + 1e-4 {
         return None;
     }
@@ -363,7 +418,11 @@ pub fn natural_earth_inverse(x: f32, y: f32) -> Option<(f32, f32)> {
 
 pub fn unit_vector(lon: f32, lat: f32) -> [f32; 3] {
     let (lambda, phi) = (lon.to_radians(), lat.to_radians());
-    [phi.cos() * lambda.cos(), phi.cos() * lambda.sin(), phi.sin()]
+    [
+        phi.cos() * lambda.cos(),
+        phi.cos() * lambda.sin(),
+        phi.sin(),
+    ]
 }
 
 /// The globe turned so `lon`, `lat` faces the viewer: an orthographic
@@ -392,7 +451,11 @@ impl Globe {
     pub fn project(&self, [x, y, z]: [f32; 3]) -> [f32; 3] {
         let toward = x * self.cos_lon + y * self.sin_lon;
         let across = y * self.cos_lon - x * self.sin_lon;
-        [across, self.cos_lat * z - self.sin_lat * toward, self.sin_lat * z + self.cos_lat * toward]
+        [
+            across,
+            self.cos_lat * z - self.sin_lat * toward,
+            self.sin_lat * z + self.cos_lat * toward,
+        ]
     }
 
     /// Longitude and latitude shown at a point of the unit disc.
@@ -406,7 +469,10 @@ impl Globe {
         let z = self.sin_lat * depth + self.cos_lat * y;
         let east = toward * self.cos_lon - x * self.sin_lon;
         let north = toward * self.sin_lon + x * self.cos_lon;
-        Some((north.atan2(east).to_degrees(), z.clamp(-1.0, 1.0).asin().to_degrees()))
+        Some((
+            north.atan2(east).to_degrees(),
+            z.clamp(-1.0, 1.0).asin().to_degrees(),
+        ))
     }
 }
 
@@ -452,12 +518,18 @@ mod tests {
         for (lon, lat) in [(0.0, 0.0), (121.5, 25.0), (-179.0, -60.0), (45.0, 89.0)] {
             let [x, y] = natural_earth(lon, lat);
             let (back_lon, back_lat) = natural_earth_inverse(x, y).unwrap();
-            assert!((back_lon - lon).abs() < 0.01 && (back_lat - lat).abs() < 0.01, "{lon},{lat}");
+            assert!(
+                (back_lon - lon).abs() < 0.01 && (back_lat - lat).abs() < 0.01,
+                "{lon},{lat}"
+            );
             let globe = Globe::facing(100.0, 20.0);
             let [sx, sy, depth] = globe.project(unit_vector(lon, lat));
             if depth >= 0.0 {
                 let (back_lon, back_lat) = globe.unproject(sx, sy).unwrap();
-                assert!((back_lon - lon).abs() < 0.01 && (back_lat - lat).abs() < 0.01, "{lon},{lat}");
+                assert!(
+                    (back_lon - lon).abs() < 0.01 && (back_lat - lat).abs() < 0.01,
+                    "{lon},{lat}"
+                );
             }
         }
         let [x, _] = natural_earth(180.0, 0.0);

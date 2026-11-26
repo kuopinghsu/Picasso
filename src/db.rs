@@ -10,7 +10,9 @@ use std::path::{Path, PathBuf};
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
 
 use crate::track::Track;
-use crate::types::{unix_now, Album, Folder, Nav, NewPhoto, Photo, Sort, Unreadable, EARLIEST_PHOTO};
+use crate::types::{
+    unix_now, Album, Folder, Nav, NewPhoto, Photo, Sort, Unreadable, EARLIEST_PHOTO,
+};
 
 /// Bumped whenever the scanner starts reading new metadata from files, so
 /// rows written by an older build are probed once more on the next scan.
@@ -129,7 +131,11 @@ impl Database {
     /// this connection, or a commit by another, such as the scanner's.
     /// Reading it doesn't touch the disk.
     pub fn change_stamp(&self) -> (u64, i64) {
-        let others = self.conn.prepare_cached("PRAGMA data_version").and_then(|mut statement| statement.query_row([], |row| row.get(0))).unwrap_or(-1);
+        let others = self
+            .conn
+            .prepare_cached("PRAGMA data_version")
+            .and_then(|mut statement| statement.query_row([], |row| row.get(0)))
+            .unwrap_or(-1);
         (self.conn.total_changes(), others)
     }
 
@@ -154,10 +160,16 @@ impl Database {
     /// Brings the schema up to [`SCHEMA_VERSION`] in one transaction, so an
     /// upgrade that fails or is cut short leaves the library as it was.
     fn migrate(&self) -> Result<(), String> {
-        let tx = rusqlite::Transaction::new_unchecked(&self.conn, rusqlite::TransactionBehavior::Immediate)
-            .map_err(|err| err.to_string())?;
+        let tx = rusqlite::Transaction::new_unchecked(
+            &self.conn,
+            rusqlite::TransactionBehavior::Immediate,
+        )
+        .map_err(|err| err.to_string())?;
         self.upgrade()?;
-        let found: i64 = self.conn.query_row("PRAGMA user_version", [], |row| row.get(0)).map_err(|err| err.to_string())?;
+        let found: i64 = self
+            .conn
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .map_err(|err| err.to_string())?;
         // A library a newer Picasso upgraded keeps its number; its additions
         // are only ever new tables and columns, which this build ignores.
         if found < SCHEMA_VERSION {
@@ -277,7 +289,11 @@ impl Database {
             self.ensure_column("photos", column, decl)?;
         }
         // The date taken read from the file, kept when the user changes it.
-        if !self.columns("photos").iter().any(|name| name == "file_taken_at") {
+        if !self
+            .columns("photos")
+            .iter()
+            .any(|name| name == "file_taken_at")
+        {
             self.conn
                 .execute_batch(
                     "ALTER TABLE photos ADD COLUMN file_taken_at INTEGER NOT NULL DEFAULT 0;
@@ -316,21 +332,36 @@ impl Database {
         // Older builds stored placeholder dates such as year 1. Those files
         // are probed again on the next scan, which reads the real date.
         self.conn
-            .execute("UPDATE photos SET indexed_version=0 WHERE file_taken_at < ?1", [EARLIEST_PHOTO])
+            .execute(
+                "UPDATE photos SET indexed_version=0 WHERE file_taken_at < ?1",
+                [EARLIEST_PHOTO],
+            )
             .map_err(|err| err.to_string())?;
         // Names stored before cameras were tidied, such as "NIKON CORPORATION
         // NIKON D850", become the name new scans give ("Nikon D850").
-        for old in self.map_rows("SELECT DISTINCT camera FROM photos WHERE camera <> ''", [], |row| row.get::<_, String>(0)) {
+        for old in self.map_rows(
+            "SELECT DISTINCT camera FROM photos WHERE camera <> ''",
+            [],
+            |row| row.get::<_, String>(0),
+        ) {
             let tidy = crate::image_io::tidy_camera(&old);
             if tidy != old {
-                self.conn.execute("UPDATE photos SET camera=?1 WHERE camera=?2", [&tidy, &old]).map_err(|err| err.to_string())?;
+                self.conn
+                    .execute("UPDATE photos SET camera=?1 WHERE camera=?2", [&tidy, &old])
+                    .map_err(|err| err.to_string())?;
             }
         }
         // Zoom names stored with the focal length, as "XCD 35-100E@38".
-        for old in self.map_rows("SELECT DISTINCT lens FROM photos WHERE lens LIKE '%@%'", [], |row| row.get::<_, String>(0)) {
+        for old in self.map_rows(
+            "SELECT DISTINCT lens FROM photos WHERE lens LIKE '%@%'",
+            [],
+            |row| row.get::<_, String>(0),
+        ) {
             let name = crate::image_io::lens_name(&old);
             if name != old {
-                self.conn.execute("UPDATE photos SET lens=?1 WHERE lens=?2", [&name, &old]).map_err(|err| err.to_string())?;
+                self.conn
+                    .execute("UPDATE photos SET lens=?1 WHERE lens=?2", [&name, &old])
+                    .map_err(|err| err.to_string())?;
             }
         }
         // Version 2 missed the EXIF of HEIF files that attach it to an item
@@ -363,7 +394,9 @@ impl Database {
 
     pub fn setting(&self, key: &str) -> Option<String> {
         self.conn
-            .query_row("SELECT value FROM settings WHERE key=?1", [key], |row| row.get(0))
+            .query_row("SELECT value FROM settings WHERE key=?1", [key], |row| {
+                row.get(0)
+            })
             .optional()
             .ok()
             .flatten()
@@ -380,9 +413,16 @@ impl Database {
     /// Edit steps of a photo as JSON, and how many of them are applied.
     pub fn edit_history(&self, photo_id: i64) -> Option<(String, usize)> {
         self.conn
-            .query_row("SELECT steps, applied FROM edits WHERE photo_id=?1", [photo_id], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?.max(0) as usize))
-            })
+            .query_row(
+                "SELECT steps, applied FROM edits WHERE photo_id=?1",
+                [photo_id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, i64>(1)?.max(0) as usize,
+                    ))
+                },
+            )
             .optional()
             .ok()
             .flatten()
@@ -391,14 +431,20 @@ impl Database {
     /// Every photo that has edit steps, with the steps and applied count.
     pub fn edit_histories(&self) -> Vec<(i64, String, usize)> {
         self.map_rows("SELECT photo_id, steps, applied FROM edits", [], |row| {
-            Ok((row.get(0)?, row.get(1)?, row.get::<_, i64>(2)?.max(0) as usize))
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get::<_, i64>(2)?.max(0) as usize,
+            ))
         })
     }
 
     /// Stores the edit steps of a photo; no steps removes its row.
     pub fn save_edit_history(&self, photo_id: i64, steps: &str, count: usize, applied: usize) {
         if count == 0 {
-            let _ = self.conn.execute("DELETE FROM edits WHERE photo_id=?1", [photo_id]);
+            let _ = self
+                .conn
+                .execute("DELETE FROM edits WHERE photo_id=?1", [photo_id]);
             return;
         }
         let _ = self.conn.execute(
@@ -433,7 +479,8 @@ impl Database {
         if let Ok(mut stmt) = self.conn.prepare("SELECT path FROM photos") {
             if let Ok(mut rows) = stmt.query([]) {
                 while let Ok(Some(row)) = rows.next() {
-                    let Some(path) = row.get_ref(0).ok().and_then(|value| value.as_str().ok()) else {
+                    let Some(path) = row.get_ref(0).ok().and_then(|value| value.as_str().ok())
+                    else {
                         continue;
                     };
                     let dir = path.rfind(['\\', '/']).map_or("", |at| &path[..at]);
@@ -475,21 +522,32 @@ impl Database {
     /// stay. Their stars, captions, albums, and edits are archived, so they
     /// come back if the folder is added again or turns up somewhere else.
     pub fn remove_folder(&self, id: i64) -> Result<(), String> {
-        let tx = self.conn.unchecked_transaction().map_err(|err| err.to_string())?;
+        let tx = self
+            .conn
+            .unchecked_transaction()
+            .map_err(|err| err.to_string())?;
         let archive = format!("{ARCHIVE_SQL}p.folder_id = ?1 AND {HAS_USER_DATA}");
-        tx.execute(&archive, params![id, unix_now()]).map_err(|err| err.to_string())?;
-        tx.execute("DELETE FROM folders WHERE id=?1", [id]).map_err(|err| err.to_string())?;
+        tx.execute(&archive, params![id, unix_now()])
+            .map_err(|err| err.to_string())?;
+        tx.execute("DELETE FROM folders WHERE id=?1", [id])
+            .map_err(|err| err.to_string())?;
         tx.commit().map_err(|err| err.to_string())
     }
 
     /// Gives an added folder that was renamed or moved its new path, and its
     /// photos, tracks and subfolder lists theirs, keeping every row.
     pub fn move_folder(&self, id: i64, to: &Path) -> Result<(), String> {
-        let from = self.folder_path(id).ok_or_else(|| "no such folder".to_string())?;
+        let from = self
+            .folder_path(id)
+            .ok_or_else(|| "no such folder".to_string())?;
         let to = path_text(to);
         let (start, end) = under_dir(&from);
-        let tx = self.conn.unchecked_transaction().map_err(|err| err.to_string())?;
-        tx.execute("UPDATE folders SET path=?2 WHERE id=?1", params![id, to]).map_err(|err| err.to_string())?;
+        let tx = self
+            .conn
+            .unchecked_transaction()
+            .map_err(|err| err.to_string())?;
+        tx.execute("UPDATE folders SET path=?2 WHERE id=?1", params![id, to])
+            .map_err(|err| err.to_string())?;
         for table in ["photos", "tracks", "excluded", "unreadable"] {
             tx.execute(
                 &format!(
@@ -527,19 +585,30 @@ impl Database {
         let folder_id = self
             .folders()
             .into_iter()
-            .filter(|folder| Path::new(&dir).starts_with(&folder.path) && Path::new(&dir) != Path::new(&folder.path))
+            .filter(|folder| {
+                Path::new(&dir).starts_with(&folder.path)
+                    && Path::new(&dir) != Path::new(&folder.path)
+            })
             .max_by_key(|folder| folder.path.len())
             .map(|folder| folder.id)
-            .ok_or_else(|| crate::i18n::tr("Pick a folder inside one of your photo folders").to_string())?;
+            .ok_or_else(|| {
+                crate::i18n::tr("Pick a folder inside one of your photo folders").to_string()
+            })?;
         let (start, end) = under_dir(&dir);
-        let tx = self.conn.unchecked_transaction().map_err(|err| err.to_string())?;
+        let tx = self
+            .conn
+            .unchecked_transaction()
+            .map_err(|err| err.to_string())?;
         tx.execute(
             "INSERT OR REPLACE INTO excluded(path, folder_id) VALUES(?1, ?2)",
             params![dir, folder_id],
         )
         .map_err(|err| err.to_string())?;
-        let archive = format!("{ARCHIVE_SQL}p.path >= ?1 AND p.path < ?3 AND p.folder_id = ?4 AND {HAS_USER_DATA}");
-        tx.execute(&archive, params![start, unix_now(), end, folder_id]).map_err(|err| err.to_string())?;
+        let archive = format!(
+            "{ARCHIVE_SQL}p.path >= ?1 AND p.path < ?3 AND p.folder_id = ?4 AND {HAS_USER_DATA}"
+        );
+        tx.execute(&archive, params![start, unix_now(), end, folder_id])
+            .map_err(|err| err.to_string())?;
         tx.execute(
             "DELETE FROM photos WHERE path >= ?1 AND path < ?2 AND folder_id = ?3",
             params![start, end, folder_id],
@@ -564,24 +633,34 @@ impl Database {
     pub fn include_dir(&self, dir: &str) -> Option<i64> {
         let folder_id = self
             .conn
-            .query_row("SELECT folder_id FROM excluded WHERE path=?1", [dir], |row| row.get(0))
+            .query_row(
+                "SELECT folder_id FROM excluded WHERE path=?1",
+                [dir],
+                |row| row.get(0),
+            )
             .optional()
             .ok()
             .flatten()?;
-        let _ = self.conn.execute("DELETE FROM excluded WHERE path=?1", [dir]);
+        let _ = self
+            .conn
+            .execute("DELETE FROM excluded WHERE path=?1", [dir]);
         Some(folder_id)
     }
 
     /// Excluded folders as (path, folder id), by path.
     pub fn excluded_dirs(&self) -> Vec<(String, i64)> {
-        self.map_rows("SELECT path, folder_id FROM excluded ORDER BY path COLLATE NOCASE", [], |row| {
-            Ok((row.get(0)?, row.get(1)?))
-        })
+        self.map_rows(
+            "SELECT path, folder_id FROM excluded ORDER BY path COLLATE NOCASE",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
     }
 
     fn folder_id(&self, path: &str) -> Option<i64> {
         self.conn
-            .query_row("SELECT id FROM folders WHERE path=?1", [path], |row| row.get(0))
+            .query_row("SELECT id FROM folders WHERE path=?1", [path], |row| {
+                row.get(0)
+            })
             .optional()
             .ok()
             .flatten()
@@ -589,7 +668,9 @@ impl Database {
 
     pub fn folder_path(&self, id: i64) -> Option<String> {
         self.conn
-            .query_row("SELECT path FROM folders WHERE id=?1", [id], |row| row.get(0))
+            .query_row("SELECT path FROM folders WHERE id=?1", [id], |row| {
+                row.get(0)
+            })
             .optional()
             .ok()
             .flatten()
@@ -606,7 +687,11 @@ impl Database {
     }
 
     pub fn pending_folders(&self) -> Vec<i64> {
-        self.map_rows("SELECT id FROM folders WHERE scan_pending != 0 ORDER BY id", [], |row| row.get(0))
+        self.map_rows(
+            "SELECT id FROM folders WHERE scan_pending != 0 ORDER BY id",
+            [],
+            |row| row.get(0),
+        )
     }
 
     /// Every cataloged file under `folder_path`, keyed by path. Files owned by
@@ -670,13 +755,21 @@ impl Database {
                 })
             },
         );
-        rows.into_iter().map(|item| (item.path.clone(), item)).collect()
+        rows.into_iter()
+            .map(|item| (item.path.clone(), item))
+            .collect()
     }
 
     /// Stores what a scan of `folder_id` could not read. A complete scan
     /// replaces the folder's list; a partial one only adds to it. Entries
     /// that came from [`Self::unreadable_snapshot`] keep their check time.
-    pub fn store_unreadable(&self, folder_id: i64, items: &[Unreadable], complete: bool, remembered: &HashSet<String>) {
+    pub fn store_unreadable(
+        &self,
+        folder_id: i64,
+        items: &[Unreadable],
+        complete: bool,
+        remembered: &HashSet<String>,
+    ) {
         let checked = self.checked_times(folder_id);
         let write = || -> rusqlite::Result<()> {
             let tx = self.conn.unchecked_transaction()?;
@@ -693,7 +786,11 @@ impl Database {
                 )?;
                 let now = unix_now();
                 for item in items {
-                    let at = if remembered.contains(&item.path) { checked.get(&item.path).copied().unwrap_or(now) } else { now };
+                    let at = if remembered.contains(&item.path) {
+                        checked.get(&item.path).copied().unwrap_or(now)
+                    } else {
+                        now
+                    };
                     insert.execute(params![
                         item.path,
                         folder_id,
@@ -714,9 +811,11 @@ impl Database {
     }
 
     fn checked_times(&self, folder_id: i64) -> HashMap<String, i64> {
-        self.map_rows("SELECT path, checked_at FROM unreadable WHERE folder_id=?1", [folder_id], |row| {
-            Ok((row.get(0)?, row.get(1)?))
-        })
+        self.map_rows(
+            "SELECT path, checked_at FROM unreadable WHERE folder_id=?1",
+            [folder_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
         .into_iter()
         .collect()
     }
@@ -724,7 +823,9 @@ impl Database {
     /// Drops files from the unreadable list, after they went to the trash.
     pub fn forget_unreadable(&self, paths: &[String]) {
         for path in paths {
-            let _ = self.conn.execute("DELETE FROM unreadable WHERE path=?1", [path]);
+            let _ = self
+                .conn
+                .execute("DELETE FROM unreadable WHERE path=?1", [path]);
         }
     }
 
@@ -732,7 +833,10 @@ impl Database {
     pub fn photos_with_bytes(&self, bytes: u64) -> Vec<(i64, String)> {
         self.conn
             .prepare("SELECT id, path FROM photos WHERE bytes = ?1")
-            .and_then(|mut stmt| stmt.query_map([bytes as i64], |row| Ok((row.get(0)?, row.get(1)?)))?.collect())
+            .and_then(|mut stmt| {
+                stmt.query_map([bytes as i64], |row| Ok((row.get(0)?, row.get(1)?)))?
+                    .collect()
+            })
             .unwrap_or_default()
     }
 
@@ -751,12 +855,19 @@ impl Database {
         let photos: Vec<(Photo, i64)> = self
             .conn
             .prepare(&sql)
-            .and_then(|mut stmt| stmt.query_map([], |row| Ok((read_photo(row)?, row.get(18)?)))?.collect())
+            .and_then(|mut stmt| {
+                stmt.query_map([], |row| Ok((read_photo(row)?, row.get(18)?)))?
+                    .collect()
+            })
             .unwrap_or_default();
         let mut groups: Vec<(i64, Vec<Photo>)> = Vec::new();
         for (photo, file_taken_at) in photos {
             match groups.last_mut() {
-                Some((taken, group)) if *taken == file_taken_at && (group[0].bytes, group[0].width, group[0].height) == (photo.bytes, photo.width, photo.height) => {
+                Some((taken, group))
+                    if *taken == file_taken_at
+                        && (group[0].bytes, group[0].width, group[0].height)
+                            == (photo.bytes, photo.width, photo.height) =>
+                {
                     group.push(photo)
                 }
                 _ => groups.push((file_taken_at, vec![photo])),
@@ -767,18 +878,28 @@ impl Database {
 
     /// Moves the date taken of `ids` by `seconds`. Scans keep the new date.
     pub fn shift_taken(&self, ids: &[i64], seconds: i64) {
-        let Ok(tx) = self.conn.unchecked_transaction() else { return };
+        let Ok(tx) = self.conn.unchecked_transaction() else {
+            return;
+        };
         for id in ids {
-            let _ = tx.execute("UPDATE photos SET taken_at = taken_at + ?2, date_set = 1 WHERE id = ?1", params![id, seconds]);
+            let _ = tx.execute(
+                "UPDATE photos SET taken_at = taken_at + ?2, date_set = 1 WHERE id = ?1",
+                params![id, seconds],
+            );
         }
         let _ = tx.commit();
     }
 
     /// Gives `ids` the date taken in their files back.
     pub fn reset_taken(&self, ids: &[i64]) {
-        let Ok(tx) = self.conn.unchecked_transaction() else { return };
+        let Ok(tx) = self.conn.unchecked_transaction() else {
+            return;
+        };
         for id in ids {
-            let _ = tx.execute("UPDATE photos SET taken_at = file_taken_at, date_set = 0 WHERE id = ?1", [id]);
+            let _ = tx.execute(
+                "UPDATE photos SET taken_at = file_taken_at, date_set = 0 WHERE id = ?1",
+                [id],
+            );
         }
         let _ = tx.commit();
     }
@@ -787,14 +908,23 @@ impl Database {
     /// their rows, and with them everything else Picasso knows about them.
     /// Names can pass from one photo to another.
     pub fn rename_photos(&self, renames: &[(i64, String, String)]) -> Result<(), String> {
-        let tx = self.conn.unchecked_transaction().map_err(|err| err.to_string())?;
+        let tx = self
+            .conn
+            .unchecked_transaction()
+            .map_err(|err| err.to_string())?;
         for (id, ..) in renames {
-            tx.execute("UPDATE photos SET path = ?2 WHERE id = ?1", params![id, format!("\u{1}renaming {id}")])
-                .map_err(|err| err.to_string())?;
+            tx.execute(
+                "UPDATE photos SET path = ?2 WHERE id = ?1",
+                params![id, format!("\u{1}renaming {id}")],
+            )
+            .map_err(|err| err.to_string())?;
         }
         for (id, path, filename) in renames {
-            tx.execute("UPDATE photos SET path = ?2, filename = ?3 WHERE id = ?1", params![id, path, filename])
-                .map_err(|err| err.to_string())?;
+            tx.execute(
+                "UPDATE photos SET path = ?2, filename = ?3 WHERE id = ?1",
+                params![id, path, filename],
+            )
+            .map_err(|err| err.to_string())?;
         }
         tx.commit().map_err(|err| err.to_string())
     }
@@ -804,8 +934,17 @@ impl Database {
     /// or folder, whose file is gone and that is not in `claimed`. Moving or
     /// renaming a file or folder then keeps the photo's row, and with it its
     /// trips, stories, albums and edits.
-    pub fn moved_photo(&self, path: &Path, bytes: u64, modified_at: i64, claimed: &HashSet<i64>) -> Option<i64> {
-        let filename = path.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
+    pub fn moved_photo(
+        &self,
+        path: &Path,
+        bytes: u64,
+        modified_at: i64,
+        claimed: &HashSet<i64>,
+    ) -> Option<i64> {
+        let filename = path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default();
         let rows: Vec<(i64, String, String)> = self.map_rows(
             "SELECT p.id, p.path, f.path FROM photos p JOIN folders f ON f.id = p.folder_id
              WHERE p.bytes=?1 AND p.modified_at=?2",
@@ -817,8 +956,12 @@ impl Database {
             .into_iter()
             .filter(|(id, old, root)| {
                 let (old, root) = (Path::new(old), Path::new(root));
-                let related = old.file_name() == Some(std::ffi::OsStr::new(&filename)) || old.parent() == path.parent();
-                related && !claimed.contains(id) && !old.exists() && (root.is_dir() || folder_gone(root))
+                let related = old.file_name() == Some(std::ffi::OsStr::new(&filename))
+                    || old.parent() == path.parent();
+                related
+                    && !claimed.contains(id)
+                    && !old.exists()
+                    && (root.is_dir() || folder_gone(root))
             })
             .map(|(id, ..)| id)
             .collect();
@@ -831,10 +974,16 @@ impl Database {
     /// Gives photos whose files moved their new paths, names and added
     /// folders, as (id, path, file name, folder id), keeping their rows.
     pub fn move_photos(&self, moves: &[(i64, String, String, i64)]) -> Result<(), String> {
-        let tx = self.conn.unchecked_transaction().map_err(|err| err.to_string())?;
+        let tx = self
+            .conn
+            .unchecked_transaction()
+            .map_err(|err| err.to_string())?;
         for (id, ..) in moves {
-            tx.execute("UPDATE photos SET path = ?2 WHERE id = ?1", params![id, format!("\u{1}moving {id}")])
-                .map_err(|err| err.to_string())?;
+            tx.execute(
+                "UPDATE photos SET path = ?2 WHERE id = ?1",
+                params![id, format!("\u{1}moving {id}")],
+            )
+            .map_err(|err| err.to_string())?;
         }
         for (id, path, filename, folder_id) in moves {
             tx.execute(
@@ -858,7 +1007,10 @@ impl Database {
     /// Writes probed files in one transaction. Existing rows get fresh file
     /// metadata while stars, captions, albums, and pins stay untouched.
     pub fn write_batch(&self, records: &[ScanRecord]) -> Result<BatchResult, String> {
-        let tx = self.conn.unchecked_transaction().map_err(|err| err.to_string())?;
+        let tx = self
+            .conn
+            .unchecked_transaction()
+            .map_err(|err| err.to_string())?;
         let mut result = BatchResult::default();
         {
             let mut update = tx
@@ -921,29 +1073,32 @@ impl Database {
                     }
                     None => {
                         let id: i64 = insert
-                            .query_row(params![
-                                photo.folder_id,
-                                photo.path,
-                                photo.filename,
-                                photo.width,
-                                photo.height,
-                                photo.bytes as i64,
-                                photo.taken_at,
-                                photo.modified_at,
-                                photo.camera,
-                                photo.gps_lat,
-                                photo.gps_lon,
-                                version,
-                                record.star.unwrap_or(false) as i64,
-                                record.caption.clone().unwrap_or_default(),
-                                crate::types::turn(record.rotation.unwrap_or(0), 0),
-                                photo.duration,
-                                now,
-                                photo.lens,
-                                f64::from(photo.focal_mm),
-                                record.pin.map(|(lat, _)| lat),
-                                record.pin.map(|(_, lon)| lon),
-                            ], |row| row.get(0))
+                            .query_row(
+                                params![
+                                    photo.folder_id,
+                                    photo.path,
+                                    photo.filename,
+                                    photo.width,
+                                    photo.height,
+                                    photo.bytes as i64,
+                                    photo.taken_at,
+                                    photo.modified_at,
+                                    photo.camera,
+                                    photo.gps_lat,
+                                    photo.gps_lon,
+                                    version,
+                                    record.star.unwrap_or(false) as i64,
+                                    record.caption.clone().unwrap_or_default(),
+                                    crate::types::turn(record.rotation.unwrap_or(0), 0),
+                                    photo.duration,
+                                    now,
+                                    photo.lens,
+                                    f64::from(photo.focal_mm),
+                                    record.pin.map(|(lat, _)| lat),
+                                    record.pin.map(|(_, lon)| lon),
+                                ],
+                                |row| row.get(0),
+                            )
                             .map_err(|err| err.to_string())?;
                         result.inserted += 1;
                         result.ids.push(id);
@@ -971,19 +1126,31 @@ impl Database {
     }
 
     pub fn set_pins(&self, ids: &[i64], lat: f64, lon: f64) {
-        self.for_each_id("UPDATE photos SET pin_lat=?2, pin_lon=?3 WHERE id=?1", ids, &[&lat, &lon]);
+        self.for_each_id(
+            "UPDATE photos SET pin_lat=?2, pin_lon=?3 WHERE id=?1",
+            ids,
+            &[&lat, &lon],
+        );
     }
 
     /// Pins each photo in `pins` to its own place and unpins `cleared`, all
     /// in one transaction.
     pub fn set_pin_each(&self, pins: &[(i64, f64, f64)], cleared: &[i64]) -> Result<(), String> {
-        let tx = self.conn.unchecked_transaction().map_err(|err| err.to_string())?;
+        let tx = self
+            .conn
+            .unchecked_transaction()
+            .map_err(|err| err.to_string())?;
         {
-            let mut pin = tx.prepare("UPDATE photos SET pin_lat=?2, pin_lon=?3 WHERE id=?1").map_err(|err| err.to_string())?;
+            let mut pin = tx
+                .prepare("UPDATE photos SET pin_lat=?2, pin_lon=?3 WHERE id=?1")
+                .map_err(|err| err.to_string())?;
             for (id, lat, lon) in pins {
-                pin.execute(params![id, lat, lon]).map_err(|err| err.to_string())?;
+                pin.execute(params![id, lat, lon])
+                    .map_err(|err| err.to_string())?;
             }
-            let mut unpin = tx.prepare("UPDATE photos SET pin_lat=NULL, pin_lon=NULL WHERE id=?1").map_err(|err| err.to_string())?;
+            let mut unpin = tx
+                .prepare("UPDATE photos SET pin_lat=NULL, pin_lon=NULL WHERE id=?1")
+                .map_err(|err| err.to_string())?;
             for id in cleared {
                 unpin.execute([id]).map_err(|err| err.to_string())?;
             }
@@ -992,11 +1159,19 @@ impl Database {
     }
 
     pub fn clear_pins(&self, ids: &[i64]) {
-        self.for_each_id("UPDATE photos SET pin_lat=NULL, pin_lon=NULL WHERE id=?1", ids, &[]);
+        self.for_each_id(
+            "UPDATE photos SET pin_lat=NULL, pin_lon=NULL WHERE id=?1",
+            ids,
+            &[],
+        );
     }
 
     pub fn set_stars(&self, ids: &[i64], starred: bool) {
-        self.for_each_id("UPDATE photos SET starred=?2 WHERE id=?1", ids, &[&(starred as i64)]);
+        self.for_each_id(
+            "UPDATE photos SET starred=?2 WHERE id=?1",
+            ids,
+            &[&(starred as i64)],
+        );
     }
 
     /// Deletes rows of `folder_id` whose file was not seen by a complete scan.
@@ -1005,7 +1180,10 @@ impl Database {
         let Ok(tx) = self.conn.unchecked_transaction() else {
             return 0;
         };
-        let _ = tx.execute("CREATE TEMP TABLE IF NOT EXISTS seen_paths(path TEXT PRIMARY KEY)", []);
+        let _ = tx.execute(
+            "CREATE TEMP TABLE IF NOT EXISTS seen_paths(path TEXT PRIMARY KEY)",
+            [],
+        );
         let _ = tx.execute("DELETE FROM seen_paths", []);
         if let Ok(mut stmt) = tx.prepare("INSERT OR IGNORE INTO seen_paths(path) VALUES(?1)") {
             for path in seen {
@@ -1042,7 +1220,14 @@ impl Database {
         rows.into_iter().collect()
     }
 
-    pub fn store_track(&self, folder_id: i64, path: &str, bytes: u64, modified_at: i64, track: &Track) -> Result<(), String> {
+    pub fn store_track(
+        &self,
+        folder_id: i64,
+        path: &str,
+        bytes: u64,
+        modified_at: i64,
+        track: &Track,
+    ) -> Result<(), String> {
         let span = track.time_span();
         self.conn
             .execute(
@@ -1068,18 +1253,29 @@ impl Database {
 
     /// Drops a stored track whose file can no longer be read. True if there was one.
     pub fn forget_track(&self, path: &str) -> bool {
-        self.conn.execute("DELETE FROM tracks WHERE path=?1", [path]).unwrap_or(0) > 0
+        self.conn
+            .execute("DELETE FROM tracks WHERE path=?1", [path])
+            .unwrap_or(0)
+            > 0
     }
 
     /// Deletes tracks of `folder_id` whose file a complete scan did not see.
     pub fn remove_missing_tracks(&self, folder_id: i64, seen: &[String]) -> usize {
         let seen: HashSet<&str> = seen.iter().map(String::as_str).collect();
-        let stored: Vec<(i64, String)> =
-            self.map_rows("SELECT id, path FROM tracks WHERE folder_id=?1", [folder_id], |row| Ok((row.get(0)?, row.get(1)?)));
+        let stored: Vec<(i64, String)> = self.map_rows(
+            "SELECT id, path FROM tracks WHERE folder_id=?1",
+            [folder_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        );
         stored
             .into_iter()
             .filter(|(_, path)| !seen.contains(path.as_str()))
-            .filter(|(id, _)| self.conn.execute("DELETE FROM tracks WHERE id=?1", [id]).unwrap_or(0) > 0)
+            .filter(|(id, _)| {
+                self.conn
+                    .execute("DELETE FROM tracks WHERE id=?1", [id])
+                    .unwrap_or(0)
+                    > 0
+            })
             .count()
     }
 
@@ -1091,10 +1287,14 @@ impl Database {
     /// The stored track `id` with its points.
     pub fn track(&self, id: i64) -> Option<Track> {
         self.conn
-            .query_row("SELECT name, points FROM tracks WHERE id = ?1", [id], |row| {
-                let points: Vec<u8> = row.get(1)?;
-                Ok(Track::decode(row.get(0)?, &points))
-            })
+            .query_row(
+                "SELECT name, points FROM tracks WHERE id = ?1",
+                [id],
+                |row| {
+                    let points: Vec<u8> = row.get(1)?;
+                    Ok(Track::decode(row.get(0)?, &points))
+                },
+            )
             .ok()
     }
 
@@ -1105,7 +1305,12 @@ impl Database {
             [],
             |row| {
                 let points: Vec<u8> = row.get(4)?;
-                Ok((row.get(0)?, row.get(1)?, row.get(2)?, Track::decode(row.get(3)?, &points)))
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    Track::decode(row.get(3)?, &points),
+                ))
             },
         )
     }
@@ -1123,11 +1328,14 @@ impl Database {
                 self.map_rows(&sql, [], read_photo)
             }
             Nav::Starred => {
-                let sql = format!("SELECT {PHOTO_COLS} FROM photos p WHERE p.starred=1 ORDER BY {order}");
+                let sql =
+                    format!("SELECT {PHOTO_COLS} FROM photos p WHERE p.starred=1 ORDER BY {order}");
                 self.map_rows(&sql, [], read_photo)
             }
             Nav::Folder(id) => {
-                let sql = format!("SELECT {PHOTO_COLS} FROM photos p WHERE p.folder_id=?1 ORDER BY {order}");
+                let sql = format!(
+                    "SELECT {PHOTO_COLS} FROM photos p WHERE p.folder_id=?1 ORDER BY {order}"
+                );
                 self.map_rows(&sql, [*id], read_photo)
             }
             Nav::Dir(dir) => {
@@ -1143,9 +1351,7 @@ impl Database {
                 );
                 self.map_rows(&sql, [*id], read_photo)
             }
-            Nav::Trip(id) => {
-                self.trip_photos(*id, &crate::trip::MemberQuery::default(), sort)
-            }
+            Nav::Trip(id) => self.trip_photos(*id, &crate::trip::MemberQuery::default(), sort),
             Nav::Places | Nav::TravelMap => {
                 let sql = format!(
                     "SELECT {PHOTO_COLS} FROM photos p
@@ -1171,14 +1377,21 @@ impl Database {
 
     /// Id and path of every photo, newest first.
     pub fn photo_paths(&self) -> Vec<(i64, String)> {
-        self.map_rows("SELECT id, path FROM photos ORDER BY taken_at DESC", [], |row| Ok((row.get(0)?, row.get(1)?)))
+        self.map_rows(
+            "SELECT id, path FROM photos ORDER BY taken_at DESC",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
     }
 
     /// Photos matching every word of `query`, only those with a place on
     /// the map when `located`. See [`search_terms`].
     fn search(&self, query: &str, sort: Sort, located: bool) -> Vec<Photo> {
         let mut values: Vec<rusqlite::types::Value> = Vec::new();
-        let mut clauses: Vec<String> = search_terms(query).into_iter().map(|term| term_sql(term, &mut values)).collect();
+        let mut clauses: Vec<String> = search_terms(query)
+            .into_iter()
+            .map(|term| term_sql(term, &mut values))
+            .collect();
         if clauses.is_empty() {
             return Vec::new();
         }
@@ -1206,9 +1419,10 @@ impl Database {
     }
 
     pub fn set_caption(&self, id: i64, caption: &str) {
-        let _ = self
-            .conn
-            .execute("UPDATE photos SET caption=?1 WHERE id=?2", params![caption, id]);
+        let _ = self.conn.execute(
+            "UPDATE photos SET caption=?1 WHERE id=?2",
+            params![caption, id],
+        );
     }
 
     /// Turns photos by `delta` degrees (a multiple of 90, positive is
@@ -1234,7 +1448,10 @@ impl Database {
         };
         let archive = format!("{ARCHIVE_SQL}p.id=?1 AND {HAS_USER_DATA}");
         let now = unix_now();
-        if let (Ok(mut archive), Ok(mut delete)) = (tx.prepare(&archive), tx.prepare("DELETE FROM photos WHERE id=?1")) {
+        if let (Ok(mut archive), Ok(mut delete)) = (
+            tx.prepare(&archive),
+            tx.prepare("DELETE FROM photos WHERE id=?1"),
+        ) {
             for id in ids {
                 if archive.execute(params![id, now]).is_ok() {
                     let _ = delete.execute([id]);
@@ -1252,7 +1469,16 @@ impl Database {
         let entries: Vec<(String, i64, i64, i64, String, i64)> = self.map_rows(
             "SELECT path, bytes, modified_at, taken_at, data, removed_at FROM photo_archive",
             [],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?)),
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                ))
+            },
         );
         if entries.is_empty() {
             return Vec::new();
@@ -1272,10 +1498,17 @@ impl Database {
                 return Vec::new();
             };
             for (path, bytes, modified_at, taken_at, data, removed_at) in entries {
-                let mut id: Option<i64> = by_path.query_row([&path], |row| row.get(0)).optional().ok().flatten();
+                let mut id: Option<i64> = by_path
+                    .query_row([&path], |row| row.get(0))
+                    .optional()
+                    .ok()
+                    .flatten();
                 if id.is_none() {
                     let found: Vec<i64> = moved
-                        .query_map(params![bytes, modified_at, taken_at, removed_at - 86_400], |row| row.get(0))
+                        .query_map(
+                            params![bytes, modified_at, taken_at, removed_at - 86_400],
+                            |row| row.get(0),
+                        )
                         .map(|rows| rows.filter_map(Result::ok).collect())
                         .unwrap_or_default();
                     if let [one] = found[..] {
@@ -1298,7 +1531,9 @@ impl Database {
 
     /// Drops archive entries of photos removed before `cutoff`.
     pub fn purge_archive(&self, cutoff: i64) -> usize {
-        self.conn.execute("DELETE FROM photo_archive WHERE removed_at < ?1", [cutoff]).unwrap_or(0)
+        self.conn
+            .execute("DELETE FROM photo_archive WHERE removed_at < ?1", [cutoff])
+            .unwrap_or(0)
     }
 
     pub fn albums(&self) -> Vec<Album> {
@@ -1346,7 +1581,11 @@ impl Database {
     }
 
     pub fn remove_from_album(&self, album_id: i64, photo_ids: &[i64]) {
-        self.for_each_id("DELETE FROM album_photos WHERE album_id=?2 AND photo_id=?1", photo_ids, &[&album_id]);
+        self.for_each_id(
+            "DELETE FROM album_photos WHERE album_id=?2 AND photo_id=?1",
+            photo_ids,
+            &[&album_id],
+        );
     }
 
     fn map_rows<T, P, F>(&self, sql: &str, params: P, mut map: F) -> Vec<T>
@@ -1401,7 +1640,12 @@ fn restore_user_data(conn: &Connection, id: i64, data: &str) {
             params![id, taken_at],
         );
     }
-    for album in data["albums"].as_array().into_iter().flatten().filter_map(|album| album.as_i64()) {
+    for album in data["albums"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|album| album.as_i64())
+    {
         let _ = conn.execute(
             "INSERT OR IGNORE INTO album_photos(album_id, photo_id)
              SELECT id, ?2 FROM albums WHERE id=?1",
@@ -1493,10 +1737,12 @@ enum Term {
 fn search_terms(query: &str) -> Vec<Term> {
     query
         .split_whitespace()
-        .map(|word| match word.strip_prefix('-').filter(|rest| !rest.is_empty()) {
-            Some(rest) => negated(search_term(rest)),
-            None => search_term(word),
-        })
+        .map(
+            |word| match word.strip_prefix('-').filter(|rest| !rest.is_empty()) {
+                Some(rest) => negated(search_term(rest)),
+                None => search_term(word),
+            },
+        )
         .collect()
 }
 
@@ -1544,18 +1790,30 @@ fn term_sql(term: Term, values: &mut Vec<rusqlite::types::Value>) -> String {
             )
         }
         Term::Types(extensions, matching) => {
-            let any: Vec<String> = (0..extensions.len()).map(|n| format!("p.filename LIKE ?{}", at + n)).collect();
+            let any: Vec<String> = (0..extensions.len())
+                .map(|n| format!("p.filename LIKE ?{}", at + n))
+                .collect();
             let any = any.join(" OR ");
             values.extend(extensions.iter().map(|ext| format!("%.{ext}").into()));
-            if matching { format!("({any})") } else { format!("NOT ({any})") }
+            if matching {
+                format!("({any})")
+            } else {
+                format!("NOT ({any})")
+            }
         }
         Term::Located(located) => {
             let place = "((p.pin_lat IS NOT NULL AND p.pin_lon IS NOT NULL) OR (p.gps_lat IS NOT NULL AND p.gps_lon IS NOT NULL))";
-            if located { place.into() } else { format!("NOT {place}") }
+            if located {
+                place.into()
+            } else {
+                format!("NOT {place}")
+            }
         }
         // Steps can add up to no change, so these are only a first cut; the
         // window keeps the photos [`edited_filter`] asks for.
-        Term::Edited(true) => "EXISTS (SELECT 1 FROM edits e WHERE e.photo_id = p.id AND e.applied > 0)".into(),
+        Term::Edited(true) => {
+            "EXISTS (SELECT 1 FROM edits e WHERE e.photo_id = p.id AND e.applied > 0)".into()
+        }
         Term::Edited(false) => "1".into(),
         Term::Starred(starred) => format!("p.starred = {}", i32::from(starred)),
         Term::Trip(text) => {
@@ -1583,7 +1841,11 @@ fn term_sql(term: Term, values: &mut Vec<rusqlite::types::Value>) -> String {
         }
         Term::Review => format!("{IN_TRIP} AND tm.review != 0)"),
         Term::InTrip(in_trip) => {
-            if in_trip { format!("{IN_TRIP})") } else { format!("NOT {IN_TRIP})") }
+            if in_trip {
+                format!("{IN_TRIP})")
+            } else {
+                format!("NOT {IN_TRIP})")
+            }
         }
         Term::Camera(text) => {
             values.push(like_pattern(&text).into());
@@ -1595,10 +1857,16 @@ fn term_sql(term: Term, values: &mut Vec<rusqlite::types::Value>) -> String {
         }
         Term::Focal(low, high) => {
             values.extend([f64::from(low).into(), f64::from(high).into()]);
-            format!("(p.focal_mm > 0 AND p.focal_mm >= ?{at} AND p.focal_mm <= ?{})", at + 1)
+            format!(
+                "(p.focal_mm > 0 AND p.focal_mm >= ?{at} AND p.focal_mm <= ?{})",
+                at + 1
+            )
         }
         Term::Pixels(low, high) => {
-            values.extend([(f64::from(low) * 1e6).into(), (f64::from(high) * 1e6).into()]);
+            values.extend([
+                (f64::from(low) * 1e6).into(),
+                (f64::from(high) * 1e6).into(),
+            ]);
             format!(
                 "(p.width > 0 AND p.height > 0 AND p.width * p.height >= ?{at} AND p.width * p.height <= ?{})",
                 at + 1
@@ -1613,10 +1881,13 @@ fn term_sql(term: Term, values: &mut Vec<rusqlite::types::Value>) -> String {
 /// (`is:unedited`). The search only narrows them roughly, since whether an
 /// edit changes anything is known from its settings, not from the library.
 pub fn edited_filter(query: &str) -> Option<bool> {
-    search_terms(query).into_iter().rev().find_map(|term| match term {
-        Term::Edited(edited) => Some(edited),
-        _ => None,
-    })
+    search_terms(query)
+        .into_iter()
+        .rev()
+        .find_map(|term| match term {
+            Term::Edited(edited) => Some(edited),
+            _ => None,
+        })
 }
 
 /// A word such as `type:video`, `type:raw`, `type:jpg`, `gps:no`,
@@ -1635,16 +1906,25 @@ fn search_word(word: &str) -> Option<Term> {
     };
     match key.to_lowercase().as_str() {
         "type" => match value.as_str() {
-            "photo" | "photos" | "image" | "images" => Some(Term::Types(VIDEO_EXTS.to_vec(), false)),
+            "photo" | "photos" | "image" | "images" => {
+                Some(Term::Types(VIDEO_EXTS.to_vec(), false))
+            }
             "video" | "videos" | "movie" | "movies" => Some(Term::Types(VIDEO_EXTS.to_vec(), true)),
             _ => {
                 if let Some(kind) = FileType::from_code(&value) {
                     return Some(Term::Types(kind.extensions().to_vec(), true));
                 }
-                let kind = FileType::ALL.into_iter().find(|kind| kind.extensions().contains(&value.as_str()))?;
+                let kind = FileType::ALL
+                    .into_iter()
+                    .find(|kind| kind.extensions().contains(&value.as_str()))?;
                 // One RAW or video format, such as nef or mp4; jpg and jpeg are one.
                 let extensions = match kind {
-                    FileType::Raw | FileType::Video => kind.extensions().iter().filter(|ext| **ext == value).copied().collect(),
+                    FileType::Raw | FileType::Video => kind
+                        .extensions()
+                        .iter()
+                        .filter(|ext| **ext == value)
+                        .copied()
+                        .collect(),
                     _ => kind.extensions().to_vec(),
                 };
                 Some(Term::Types(extensions, true))
@@ -1677,11 +1957,20 @@ fn search_word(word: &str) -> Option<Term> {
 /// A number such as `35`, within half a unit either way, or a range such as
 /// `24-70`, `100-`, or `-8`. Each number may end with `unit`.
 fn number_range(value: &str, unit: &str) -> Option<(f32, f32)> {
-    let number = |text: &str| text.trim_end_matches(unit).parse::<f32>().ok().filter(|n| n.is_finite() && *n >= 0.0);
+    let number = |text: &str| {
+        text.trim_end_matches(unit)
+            .parse::<f32>()
+            .ok()
+            .filter(|n| n.is_finite() && *n >= 0.0)
+    };
     match value.trim_end_matches(unit).split_once('-') {
         Some((low, high)) if !(low.is_empty() && high.is_empty()) => {
             let low = if low.is_empty() { 0.0 } else { number(low)? };
-            let high = if high.is_empty() { f32::MAX } else { number(high)? };
+            let high = if high.is_empty() {
+                f32::MAX
+            } else {
+                number(high)?
+            };
             Some((low.min(high), low.max(high)))
         }
         Some(_) => None,
@@ -1693,11 +1982,21 @@ fn date_range(word: &str) -> Option<(i64, i64)> {
     use chrono::{Months, NaiveDate, TimeZone};
 
     let parts: Vec<&str> = word.split(['-', '/', '.']).collect();
-    if parts.len() > 3 || parts[0].len() != 4 || parts.iter().any(|part| part.is_empty() || !part.bytes().all(|b| b.is_ascii_digit())) {
+    if parts.len() > 3
+        || parts[0].len() != 4
+        || parts
+            .iter()
+            .any(|part| part.is_empty() || !part.bytes().all(|b| b.is_ascii_digit()))
+    {
         return None;
     }
-    let numbers: Vec<u32> = parts.iter().map(|part| part.parse().ok()).collect::<Option<_>>()?;
-    let year = i32::try_from(numbers[0]).ok().filter(|year| (1800..=2200).contains(year))?;
+    let numbers: Vec<u32> = parts
+        .iter()
+        .map(|part| part.parse().ok())
+        .collect::<Option<_>>()?;
+    let year = i32::try_from(numbers[0])
+        .ok()
+        .filter(|year| (1800..=2200).contains(year))?;
     let month = numbers.get(1).copied().unwrap_or(1);
     let day = numbers.get(2).copied().unwrap_or(1);
     let start = NaiveDate::from_ymd_opt(year, month, day)?;
@@ -1706,7 +2005,12 @@ fn date_range(word: &str) -> Option<(i64, i64)> {
         2 => start.checked_add_months(Months::new(1))?,
         _ => start.succ_opt()?,
     };
-    let local = |date: NaiveDate| chrono::Local.from_local_datetime(&date.and_hms_opt(0, 0, 0)?).earliest().map(|at| at.timestamp());
+    let local = |date: NaiveDate| {
+        chrono::Local
+            .from_local_datetime(&date.and_hms_opt(0, 0, 0)?)
+            .earliest()
+            .map(|at| at.timestamp())
+    };
     Some((local(start)?, local(end)?))
 }
 
@@ -1747,13 +2051,18 @@ pub fn folder_gone(root: &Path) -> bool {
     };
     let mounts = ["/Volumes", "/media", "/mnt", "/run/media"].map(Path::new);
     let mount_point = parent.parent().is_none()
-        || mounts.iter().any(|dir| parent == *dir || (parent.parent() == Some(*dir) && !dir.ends_with("Volumes")));
+        || mounts.iter().any(|dir| {
+            parent == *dir || (parent.parent() == Some(*dir) && !dir.ends_with("Volumes"))
+        });
     !mount_point
 }
 
 pub fn app_dirs() -> (PathBuf, PathBuf) {
     if let Some(dirs) = directories::ProjectDirs::from("app", "Picasso", "picasso") {
-        (dirs.data_dir().to_path_buf(), dirs.cache_dir().to_path_buf())
+        (
+            dirs.data_dir().to_path_buf(),
+            dirs.cache_dir().to_path_buf(),
+        )
     } else {
         let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
         (
@@ -1767,7 +2076,8 @@ pub fn app_dirs() -> (PathBuf, PathBuf) {
 pub fn config_dir() -> PathBuf {
     match directories::ProjectDirs::from("app", "Picasso", "picasso") {
         Some(dirs) => dirs.config_dir().to_path_buf(),
-        None => PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".into())).join(".config/picasso"),
+        None => PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".into()))
+            .join(".config/picasso"),
     }
 }
 
@@ -1788,7 +2098,12 @@ mod tests {
         dir
     }
 
-    pub(super) fn record(folder_id: i64, folder: &Path, name: &str, modified_at: i64) -> ScanRecord {
+    pub(super) fn record(
+        folder_id: i64,
+        folder: &Path,
+        name: &str,
+        modified_at: i64,
+    ) -> ScanRecord {
         ScanRecord {
             photo: NewPhoto {
                 folder_id,
@@ -1840,19 +2155,39 @@ mod tests {
         assert_eq!(dirs, expected);
         assert_eq!(db.photos(&Nav::Dir(text(&trip)), "", Sort::Name).len(), 3);
         assert_eq!(db.photos(&Nav::Dir(text(&day)), "", Sort::Name).len(), 2);
-        assert_eq!(db.photos(&Nav::Dir(format!("{}x", text(&trip))), "", Sort::Name).len(), 0);
+        assert_eq!(
+            db.photos(&Nav::Dir(format!("{}x", text(&trip))), "", Sort::Name)
+                .len(),
+            0
+        );
     }
 
     #[test]
     fn folder_ranges_match_a_prefix_search() {
         let (db, id, folder) = library("ranges");
-        let names = ["trip", "trip x", "trip]", "trip^", "tripa", "旅行", "trip\\deep", "trip/deep", "z"];
+        let names = [
+            "trip",
+            "trip x",
+            "trip]",
+            "trip^",
+            "tripa",
+            "旅行",
+            "trip\\deep",
+            "trip/deep",
+            "z",
+        ];
         let records: Vec<ScanRecord> = names
             .iter()
-            .flat_map(|name| [record(id, &folder.join(name), "a.jpg", 1), record(id, &folder.join(name), "照片.heic", 1)])
+            .flat_map(|name| {
+                [
+                    record(id, &folder.join(name), "a.jpg", 1),
+                    record(id, &folder.join(name), "照片.heic", 1),
+                ]
+            })
             .collect();
         db.write_batch(&records).unwrap();
-        db.write_batch(&[record(id, &folder, "trip.jpg", 1)]).unwrap();
+        db.write_batch(&[record(id, &folder, "trip.jpg", 1)])
+            .unwrap();
         for name in names.iter().chain(&["", "tri", "nothing"]) {
             let dir = folder.join(name).to_string_lossy().into_owned();
             let mut prefix = dir.trim_end_matches(std::path::MAIN_SEPARATOR).to_string();
@@ -1863,7 +2198,11 @@ mod tests {
                 |row| row.get(0),
             );
             expected.sort();
-            let mut found: Vec<String> = db.photos(&Nav::Dir(dir.clone()), "", Sort::Name).into_iter().map(|photo| photo.path).collect();
+            let mut found: Vec<String> = db
+                .photos(&Nav::Dir(dir.clone()), "", Sort::Name)
+                .into_iter()
+                .map(|photo| photo.path)
+                .collect();
             found.sort();
             assert_eq!(found, expected, "{dir}");
             let mut snapshot: Vec<String> = db.folder_snapshot(-1, &dir).into_keys().collect();
@@ -1881,18 +2220,29 @@ mod tests {
         std::fs::create_dir_all(&folder).unwrap();
         let id = db.add_folder(&folder).unwrap();
         let folder = folder.canonicalize().unwrap();
-        let batch = |start: usize| -> Vec<ScanRecord> { (start..start + 50).map(|n| record(id, &folder, &format!("{n:04}.jpg"), 10)).collect() };
+        let batch = |start: usize| -> Vec<ScanRecord> {
+            (start..start + 50)
+                .map(|n| record(id, &folder, &format!("{n:04}.jpg"), 10))
+                .collect()
+        };
         db.write_batch(&batch(0)).unwrap();
         let reader = Database::open_reader(&path).unwrap();
         let count = || reader.photos(&Nav::Library, "", Sort::Name).len();
 
         // A write still open: the reader answers at once, with what was there before.
         db.conn.execute_batch("BEGIN IMMEDIATE").unwrap();
-        db.conn.execute("UPDATE photos SET caption = 'half done'", []).unwrap();
+        db.conn
+            .execute("UPDATE photos SET caption = 'half done'", [])
+            .unwrap();
         let started = std::time::Instant::now();
         assert_eq!(count(), 50);
-        assert!(started.elapsed() < std::time::Duration::from_secs(1), "not held up by the open write");
-        assert!(reader.photos(&Nav::Library, "half done", Sort::Name).is_empty());
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(1),
+            "not held up by the open write"
+        );
+        assert!(reader
+            .photos(&Nav::Library, "half done", Sort::Name)
+            .is_empty());
         db.conn.execute_batch("ROLLBACK").unwrap();
 
         // Batches written while it reads on another thread: each read sees whole batches.
@@ -1908,7 +2258,10 @@ mod tests {
             }
             writing.join().unwrap();
             assert!(seen.iter().all(|n| n % 50 == 0), "{seen:?}");
-            assert!(seen.windows(2).all(|pair| pair[0] <= pair[1]), "never fewer than before");
+            assert!(
+                seen.windows(2).all(|pair| pair[0] <= pair[1]),
+                "never fewer than before"
+            );
         });
         assert_eq!(count(), 1000);
         let _ = std::fs::remove_dir_all(&dir);
@@ -1929,7 +2282,9 @@ mod tests {
         assert_ne!(mine, stamp, "a write of its own");
         // Another connection, as the scanner has, writes and commits.
         let other = Database::open(&path).unwrap();
-        other.write_batch(&[record(id, &folder.canonicalize().unwrap(), "a.jpg", 10)]).unwrap();
+        other
+            .write_batch(&[record(id, &folder.canonicalize().unwrap(), "a.jpg", 10)])
+            .unwrap();
         assert_ne!(db.change_stamp(), mine, "a commit by another connection");
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -1947,8 +2302,13 @@ mod tests {
         first.star = Some(true);
         first.rotation = Some(270);
         first.caption = Some("from ini".into());
-        let result = db.write_batch(&[first, record(id, &folder, "b.jpg", 10)]).unwrap();
-        assert_eq!((result.inserted, result.updated, result.ids.len()), (2, 0, 2));
+        let result = db
+            .write_batch(&[first, record(id, &folder, "b.jpg", 10)])
+            .unwrap();
+        assert_eq!(
+            (result.inserted, result.updated, result.ids.len()),
+            (2, 0, 2)
+        );
         let snapshot = db.folder_snapshot(id, &folder.to_string_lossy());
         let known = snapshot[&folder.join("a.jpg").to_string_lossy().into_owned()];
         assert!(known.current(10, 10));
@@ -1958,7 +2318,10 @@ mod tests {
         assert_eq!(db.photo(photo_id).unwrap().caption, "from ini");
         assert_eq!(db.photo(photo_id).unwrap().rotation, 270);
         db.save_edit_history(photo_id, r#"[{"control":"exposure","value":0.5}]"#, 1, 1);
-        assert_eq!(db.edit_history(photo_id).map(|(_, applied)| applied), Some(1));
+        assert_eq!(
+            db.edit_history(photo_id).map(|(_, applied)| applied),
+            Some(1)
+        );
         assert_eq!(db.edit_histories().len(), 1);
         db.save_edit_history(photo_id, "[]", 0, 0);
         assert!(db.edit_history(photo_id).is_none());
@@ -1977,7 +2340,14 @@ mod tests {
         changed.existing = Some(photo_id);
         changed.photo.width = 300;
         let result = db.write_batch(&[changed]).unwrap();
-        assert_eq!(result, BatchResult { inserted: 0, updated: 1, ids: vec![photo_id] });
+        assert_eq!(
+            result,
+            BatchResult {
+                inserted: 0,
+                updated: 1,
+                ids: vec![photo_id]
+            }
+        );
         let photo = db.photo(photo_id).unwrap();
         assert_eq!(photo.width, 300);
         assert!(photo.starred);
@@ -2000,7 +2370,9 @@ mod tests {
     }
 
     fn archive_count(db: &Database) -> i64 {
-        db.conn.query_row("SELECT COUNT(*) FROM photo_archive", [], |row| row.get(0)).unwrap()
+        db.conn
+            .query_row("SELECT COUNT(*) FROM photo_archive", [], |row| row.get(0))
+            .unwrap()
     }
 
     pub(super) fn library(tag: &str) -> (Database, i64, PathBuf) {
@@ -2015,12 +2387,25 @@ mod tests {
     #[test]
     fn renamed_photos_keep_their_rows_and_can_swap_names() {
         let (db, folder_id, folder) = library("rename");
-        let ids = db.write_batch(&[record(folder_id, &folder, "a.jpg", 1), record(folder_id, &folder, "b.jpg", 1)]).unwrap().ids;
+        let ids = db
+            .write_batch(&[
+                record(folder_id, &folder, "a.jpg", 1),
+                record(folder_id, &folder, "b.jpg", 1),
+            ])
+            .unwrap()
+            .ids;
         db.set_star(ids[0], true);
         let path = |name: &str| folder_path(&folder, name);
-        db.rename_photos(&[(ids[0], path("b.jpg"), "b.jpg".into()), (ids[1], path("a.jpg"), "a.jpg".into())]).unwrap();
+        db.rename_photos(&[
+            (ids[0], path("b.jpg"), "b.jpg".into()),
+            (ids[1], path("a.jpg"), "a.jpg".into()),
+        ])
+        .unwrap();
         let a = db.photo(ids[0]).unwrap();
-        assert_eq!((a.path.as_str(), a.filename.as_str(), a.starred), (path("b.jpg").as_str(), "b.jpg", true));
+        assert_eq!(
+            (a.path.as_str(), a.filename.as_str(), a.starred),
+            (path("b.jpg").as_str(), "b.jpg", true)
+        );
         assert_eq!(db.photo(ids[1]).unwrap().filename, "a.jpg");
 
         // A rescan finds the files where the library says they are.
@@ -2028,14 +2413,25 @@ mod tests {
         known.existing = Some(ids[0]);
         db.write_batch(&[known]).unwrap();
         assert!(db.photo(ids[0]).unwrap().starred);
-        assert!(db.rename_photos(&[(ids[0], path("a.jpg"), "a.jpg".into())]).is_err(), "two photos can't share a path");
-        assert_eq!(db.photo(ids[0]).unwrap().filename, "b.jpg", "a failed rename changes nothing");
+        assert!(
+            db.rename_photos(&[(ids[0], path("a.jpg"), "a.jpg".into())])
+                .is_err(),
+            "two photos can't share a path"
+        );
+        assert_eq!(
+            db.photo(ids[0]).unwrap().filename,
+            "b.jpg",
+            "a failed rename changes nothing"
+        );
     }
 
     #[test]
     fn a_changed_date_taken_outlasts_rescans_and_removal() {
         let (db, folder_id, folder) = library("date-set");
-        let id = db.write_batch(&[record(folder_id, &folder, "a.jpg", 10)]).unwrap().ids[0];
+        let id = db
+            .write_batch(&[record(folder_id, &folder, "a.jpg", 10)])
+            .unwrap()
+            .ids[0];
         db.shift_taken(&[id], 3600);
         assert_eq!(db.photo(id).unwrap().taken_at, 1_700_003_600);
 
@@ -2043,18 +2439,23 @@ mod tests {
         let mut known = record(folder_id, &folder, "a.jpg", 11);
         known.existing = Some(id);
         db.write_batch(&[known]).unwrap();
-        db.write_batch(&[record(folder_id, &folder, "a.jpg", 12)]).unwrap();
+        db.write_batch(&[record(folder_id, &folder, "a.jpg", 12)])
+            .unwrap();
         assert_eq!(db.photo(id).unwrap().taken_at, 1_700_003_600);
 
         // It comes back with the photo after the file returns.
         assert_eq!(db.remove_missing(folder_id, &[]), 1);
-        let back = db.write_batch(&[record(folder_id, &folder, "a.jpg", 12)]).unwrap().ids[0];
+        let back = db
+            .write_batch(&[record(folder_id, &folder, "a.jpg", 12)])
+            .unwrap()
+            .ids[0];
         assert_eq!(db.adopt_archived(), vec![back]);
         assert_eq!(db.photo(back).unwrap().taken_at, 1_700_003_600);
 
         db.reset_taken(&[back]);
         assert_eq!(db.photo(back).unwrap().taken_at, 1_700_000_000);
-        db.write_batch(&[record(folder_id, &folder, "a.jpg", 13)]).unwrap();
+        db.write_batch(&[record(folder_id, &folder, "a.jpg", 13)])
+            .unwrap();
         assert_eq!(db.photo(back).unwrap().taken_at, 1_700_000_000);
     }
 
@@ -2074,19 +2475,32 @@ mod tests {
             .ids;
         db.set_stars(&[ids[1]], true);
 
-        assert!(db.exclude_dir(&folder).is_err(), "an added folder itself can't be excluded");
-        assert!(db.exclude_dir(&std::env::temp_dir()).is_err(), "a folder outside the library can't be excluded");
+        assert!(
+            db.exclude_dir(&folder).is_err(),
+            "an added folder itself can't be excluded"
+        );
+        assert!(
+            db.exclude_dir(&std::env::temp_dir()).is_err(),
+            "a folder outside the library can't be excluded"
+        );
         let (owner, stored) = db.exclude_dir(&skip).unwrap();
         assert_eq!(owner, folder_id);
         assert_eq!(db.excluded_dirs(), vec![(stored.clone(), folder_id)]);
-        let mut left: Vec<i64> = db.photos(&Nav::Folder(folder_id), "", Sort::Name).iter().map(|photo| photo.id).collect();
+        let mut left: Vec<i64> = db
+            .photos(&Nav::Folder(folder_id), "", Sort::Name)
+            .iter()
+            .map(|photo| photo.id)
+            .collect();
         left.sort();
         assert_eq!(left, [ids[0], ids[3]]);
         assert_eq!(archive_count(&db), 1);
 
         assert_eq!(db.include_dir(&stored), Some(folder_id));
         assert!(db.excluded_dirs().is_empty());
-        let back = db.write_batch(&[record(folder_id, &skip, "b.jpg", 10)]).unwrap().ids[0];
+        let back = db
+            .write_batch(&[record(folder_id, &skip, "b.jpg", 10)])
+            .unwrap()
+            .ids[0];
         assert_eq!(db.adopt_archived(), vec![back]);
         assert!(db.photo(back).unwrap().starred);
 
@@ -2102,32 +2516,59 @@ mod tests {
         let track = |name: &str, lat: f64| Track {
             name: name.into(),
             segments: vec![vec![
-                Point { lat, lon: 121.0, time: Some(100) },
-                Point { lat: lat + 0.01, lon: 121.0, time: Some(160) },
+                Point {
+                    lat,
+                    lon: 121.0,
+                    time: Some(100),
+                },
+                Point {
+                    lat: lat + 0.01,
+                    lon: 121.0,
+                    time: Some(160),
+                },
             ]],
         };
         let ride = folder_path(&folder, "ride.gpx");
         let walk = folder_path(&folder.join("skip"), "walk.kml");
-        db.store_track(folder_id, &ride, 10, 1, &track("Ride", 25.0)).unwrap();
-        db.store_track(folder_id, &walk, 20, 2, &track("Walk", 24.0)).unwrap();
-        db.store_track(folder_id, &ride, 11, 3, &track("Ride again", 25.5)).unwrap();
+        db.store_track(folder_id, &ride, 10, 1, &track("Ride", 25.0))
+            .unwrap();
+        db.store_track(folder_id, &walk, 20, 2, &track("Walk", 24.0))
+            .unwrap();
+        db.store_track(folder_id, &ride, 11, 3, &track("Ride again", 25.5))
+            .unwrap();
         let stored = db.tracks();
         assert_eq!(stored.len(), 2);
         let (_, owner, path, again) = stored.iter().find(|(_, _, path, _)| *path == ride).unwrap();
         assert_eq!((*owner, path.as_str()), (folder_id, ride.as_str()));
         assert_eq!(again.name, "Ride again");
-        assert_eq!(again.segments[0][0], Point { lat: 25.5, lon: 121.0, time: Some(100) });
-        assert_eq!(db.track_snapshot(folder_id, &folder.to_string_lossy()).get(&ride), Some(&(11, 3)));
+        assert_eq!(
+            again.segments[0][0],
+            Point {
+                lat: 25.5,
+                lon: 121.0,
+                time: Some(100)
+            }
+        );
+        assert_eq!(
+            db.track_snapshot(folder_id, &folder.to_string_lossy())
+                .get(&ride),
+            Some(&(11, 3))
+        );
 
-        assert_eq!(db.remove_missing_tracks(folder_id, std::slice::from_ref(&ride)), 1);
+        assert_eq!(
+            db.remove_missing_tracks(folder_id, std::slice::from_ref(&ride)),
+            1
+        );
         assert_eq!(db.tracks().len(), 1);
-        db.store_track(folder_id, &walk, 20, 2, &track("Walk", 24.0)).unwrap();
+        db.store_track(folder_id, &walk, 20, 2, &track("Walk", 24.0))
+            .unwrap();
         std::fs::create_dir_all(folder.join("skip")).unwrap();
         db.exclude_dir(&folder.join("skip")).unwrap();
         assert_eq!(db.tracks().len(), 1);
         assert!(db.forget_track(&ride));
         assert!(!db.forget_track(&ride));
-        db.store_track(folder_id, &ride, 10, 1, &track("Ride", 25.0)).unwrap();
+        db.store_track(folder_id, &ride, 10, 1, &track("Ride", 25.0))
+            .unwrap();
         db.remove_folder(folder_id).unwrap();
         assert!(db.tracks().is_empty());
     }
@@ -2135,29 +2576,49 @@ mod tests {
     #[test]
     fn photo_ids_are_never_used_again() {
         let (db, folder_id, folder) = library("id-floor");
-        let ids = db.write_batch(&[record(folder_id, &folder, "a.jpg", 10), record(folder_id, &folder, "b.jpg", 10)])
+        let ids = db
+            .write_batch(&[
+                record(folder_id, &folder, "a.jpg", 10),
+                record(folder_id, &folder, "b.jpg", 10),
+            ])
             .unwrap()
             .ids;
         db.delete_photos(&[ids[1]]);
-        let c = db.write_batch(&[record(folder_id, &folder, "c.jpg", 10)]).unwrap().ids[0];
+        let c = db
+            .write_batch(&[record(folder_id, &folder, "c.jpg", 10)])
+            .unwrap()
+            .ids[0];
         assert!(c > ids[1], "a trashed photo's id came back");
 
         let other = folder.join("other");
         std::fs::create_dir_all(&other).unwrap();
         let other_id = db.add_folder(&other).unwrap();
-        let d = db.write_batch(&[record(other_id, &other, "d.jpg", 10)]).unwrap().ids[0];
+        let d = db
+            .write_batch(&[record(other_id, &other, "d.jpg", 10)])
+            .unwrap()
+            .ids[0];
         db.remove_folder(other_id).unwrap();
-        let e = db.write_batch(&[record(folder_id, &folder, "e.jpg", 10)]).unwrap().ids[0];
+        let e = db
+            .write_batch(&[record(folder_id, &folder, "e.jpg", 10)])
+            .unwrap()
+            .ids[0];
         assert!(e > d, "an id from a removed folder came back");
         assert_eq!(db.remove_missing(folder_id, &[]), 3);
-        let f = db.write_batch(&[record(folder_id, &folder, "f.jpg", 10)]).unwrap().ids[0];
+        let f = db
+            .write_batch(&[record(folder_id, &folder, "f.jpg", 10)])
+            .unwrap()
+            .ids[0];
         assert!(f > e, "an id from a rescan came back");
     }
 
     #[test]
     fn removed_photos_get_their_data_back_at_the_same_path() {
         let (db, folder_id, folder) = library("archive-path");
-        let ids = db.write_batch(&[record(folder_id, &folder, "a.jpg", 10), record(folder_id, &folder, "plain.jpg", 10)])
+        let ids = db
+            .write_batch(&[
+                record(folder_id, &folder, "a.jpg", 10),
+                record(folder_id, &folder, "plain.jpg", 10),
+            ])
             .unwrap()
             .ids;
         let album = db.create_album("Trip").unwrap();
@@ -2169,10 +2630,17 @@ mod tests {
         db.save_edit_history(ids[0], r#"[{"control":"exposure","value":0.5}]"#, 1, 1);
 
         assert_eq!(db.remove_missing(folder_id, &[]), 2);
-        assert_eq!(archive_count(&db), 1, "only photos with user data are archived");
+        assert_eq!(
+            archive_count(&db),
+            1,
+            "only photos with user data are archived"
+        );
         assert!(db.adopt_archived().is_empty());
 
-        let back = db.write_batch(&[record(folder_id, &folder, "a.jpg", 10)]).unwrap().ids[0];
+        let back = db
+            .write_batch(&[record(folder_id, &folder, "a.jpg", 10)])
+            .unwrap()
+            .ids[0];
         assert_eq!(db.adopt_archived(), vec![back]);
         let photo = db.photo(back).unwrap();
         assert!(photo.starred);
@@ -2186,24 +2654,41 @@ mod tests {
     #[test]
     fn a_removed_folder_gives_its_data_back_when_added_again_or_moved() {
         let (db, folder_id, folder) = library("archive-folder");
-        let ids = db.write_batch(&[record(folder_id, &folder, "a.jpg", 10), record(folder_id, &folder, "plain.jpg", 11)])
+        let ids = db
+            .write_batch(&[
+                record(folder_id, &folder, "a.jpg", 10),
+                record(folder_id, &folder, "plain.jpg", 11),
+            ])
             .unwrap()
             .ids;
         let album = db.create_album("Trip").unwrap();
         db.set_stars(&[ids[0]], true);
         db.add_to_album(album, &[ids[0]]);
-        db.save_edit_history(ids[0], r#"[{"control":"light.exposure","value":0.5}]"#, 1, 1);
+        db.save_edit_history(
+            ids[0],
+            r#"[{"control":"light.exposure","value":0.5}]"#,
+            1,
+            1,
+        );
 
         db.remove_folder(folder_id).unwrap();
         assert!(db.folders().is_empty());
         assert!(db.photos(&Nav::Library, "", Sort::Name).is_empty());
-        assert_eq!(archive_count(&db), 1, "only photos with user data are archived");
+        assert_eq!(
+            archive_count(&db),
+            1,
+            "only photos with user data are archived"
+        );
 
         // The folder was moved, and its new place is added.
         let moved = folder.with_file_name("archive-folder-moved");
         std::fs::create_dir_all(&moved).unwrap();
         let moved_id = db.add_folder(&moved).unwrap();
-        let back = db.write_batch(&[record(moved_id, &moved, "a.jpg", 10), record(moved_id, &moved, "plain.jpg", 11)])
+        let back = db
+            .write_batch(&[
+                record(moved_id, &moved, "a.jpg", 10),
+                record(moved_id, &moved, "plain.jpg", 11),
+            ])
             .unwrap()
             .ids[0];
         assert_eq!(db.adopt_archived(), vec![back]);
@@ -2215,13 +2700,20 @@ mod tests {
     #[test]
     fn a_moved_photo_is_found_by_size_time_and_date() {
         let (db, folder_id, folder) = library("archive-moved");
-        let id = db.write_batch(&[record(folder_id, &folder, "a.jpg", 10)]).unwrap().ids[0];
+        let id = db
+            .write_batch(&[record(folder_id, &folder, "a.jpg", 10)])
+            .unwrap()
+            .ids[0];
         db.set_caption(id, "kept");
         db.delete_photos(&[id]);
         assert_eq!(archive_count(&db), 1);
 
-        let moved = db.write_batch(&[record(folder_id, &folder.join("sub"), "renamed.jpg", 10)]).unwrap().ids[0];
-        db.write_batch(&[record(folder_id, &folder, "other.jpg", 11)]).unwrap();
+        let moved = db
+            .write_batch(&[record(folder_id, &folder.join("sub"), "renamed.jpg", 10)])
+            .unwrap()
+            .ids[0];
+        db.write_batch(&[record(folder_id, &folder, "other.jpg", 11)])
+            .unwrap();
         assert_eq!(db.adopt_archived(), vec![moved]);
         assert_eq!(db.photo(moved).unwrap().caption, "kept");
     }
@@ -2229,10 +2721,17 @@ mod tests {
     #[test]
     fn two_matching_photos_adopt_nothing() {
         let (db, folder_id, folder) = library("archive-twins");
-        let id = db.write_batch(&[record(folder_id, &folder, "a.jpg", 10)]).unwrap().ids[0];
+        let id = db
+            .write_batch(&[record(folder_id, &folder, "a.jpg", 10)])
+            .unwrap()
+            .ids[0];
         db.set_stars(&[id], true);
         db.delete_photos(&[id]);
-        db.write_batch(&[record(folder_id, &folder, "b.jpg", 10), record(folder_id, &folder, "c.jpg", 10)]).unwrap();
+        db.write_batch(&[
+            record(folder_id, &folder, "b.jpg", 10),
+            record(folder_id, &folder, "c.jpg", 10),
+        ])
+        .unwrap();
         assert!(db.adopt_archived().is_empty());
         assert_eq!(archive_count(&db), 1);
         assert_eq!(db.photos(&Nav::Starred, "", Sort::Name).len(), 0);
@@ -2241,7 +2740,10 @@ mod tests {
     #[test]
     fn old_archive_entries_are_purged() {
         let (db, folder_id, folder) = library("archive-purge");
-        let id = db.write_batch(&[record(folder_id, &folder, "a.jpg", 10)]).unwrap().ids[0];
+        let id = db
+            .write_batch(&[record(folder_id, &folder, "a.jpg", 10)])
+            .unwrap()
+            .ids[0];
         db.set_stars(&[id], true);
         db.delete_photos(&[id]);
         assert_eq!(db.purge_archive(unix_now() - ARCHIVE_DAYS * 86_400), 0);
@@ -2255,14 +2757,22 @@ mod tests {
         let dir = temp_dir("placeholder");
         let folder = dir.join("pics");
         std::fs::create_dir_all(&folder).unwrap();
-        let path = |name: &str| folder.canonicalize().unwrap().join(name).to_string_lossy().into_owned();
+        let path = |name: &str| {
+            folder
+                .canonicalize()
+                .unwrap()
+                .join(name)
+                .to_string_lossy()
+                .into_owned()
+        };
         {
             let db = Database::open(&dir.join("t.db")).unwrap();
             let id = db.add_folder(&folder).unwrap();
             let folder = folder.canonicalize().unwrap();
             let mut year_one = record(id, &folder, "year1.jpg", 10);
             year_one.photo.taken_at = -62_135_625_600;
-            db.write_batch(&[year_one, record(id, &folder, "fine.jpg", 10)]).unwrap();
+            db.write_batch(&[year_one, record(id, &folder, "fine.jpg", 10)])
+                .unwrap();
             let snapshot = db.folder_snapshot(id, &folder.to_string_lossy());
             assert!(snapshot[&path("year1.jpg")].current(10, 10));
         }
@@ -2322,25 +2832,50 @@ mod tests {
             .unwrap();
         }
         let db = Database::open(&path).unwrap();
-        for column in ["gps_lat", "gps_lon", "pin_lat", "pin_lon", "indexed_version"] {
-            assert!(db.columns("photos").iter().any(|name| name == column), "{column}");
+        for column in [
+            "gps_lat",
+            "gps_lon",
+            "pin_lat",
+            "pin_lon",
+            "indexed_version",
+        ] {
+            assert!(
+                db.columns("photos").iter().any(|name| name == column),
+                "{column}"
+            );
         }
-        let tables: Vec<String> = db.map_rows("SELECT name FROM sqlite_master WHERE type='table'", [], |row| row.get(0));
-        assert!(!tables.iter().any(|name| name == "faces" || name == "people"));
+        let tables: Vec<String> = db.map_rows(
+            "SELECT name FROM sqlite_master WHERE type='table'",
+            [],
+            |row| row.get(0),
+        );
+        assert!(!tables
+            .iter()
+            .any(|name| name == "faces" || name == "people"));
         assert_eq!(db.pending_folders(), vec![1]);
-        assert_eq!(db.photo(7).unwrap().rotation, 90, "rotation from an older build is kept");
+        assert_eq!(
+            db.photo(7).unwrap().rotation,
+            90,
+            "rotation from an older build is kept"
+        );
         let known = db.folder_snapshot(1, "/pics")["/pics/a.jpg"];
-        assert!(!known.current(0, 0), "rows from an older build are probed again");
+        assert!(
+            !known.current(0, 0),
+            "rows from an older build are probed again"
+        );
         assert_eq!(schema_version(&db.conn), SCHEMA_VERSION);
     }
 
     fn schema_version(conn: &Connection) -> i64 {
-        conn.query_row("PRAGMA user_version", [], |row| row.get(0)).unwrap()
+        conn.query_row("PRAGMA user_version", [], |row| row.get(0))
+            .unwrap()
     }
 
     fn schema(path: &Path) -> Vec<String> {
         let conn = Connection::open(path).unwrap();
-        let mut statement = conn.prepare("SELECT coalesce(sql, name) FROM sqlite_master ORDER BY name").unwrap();
+        let mut statement = conn
+            .prepare("SELECT coalesce(sql, name) FROM sqlite_master ORDER BY name")
+            .unwrap();
         let rows = statement.query_map([], |row| row.get(0)).unwrap();
         rows.map(Result::unwrap).collect()
     }
@@ -2368,7 +2903,11 @@ mod tests {
         assert_eq!(schema(&path), before, "nothing of the upgrade is kept");
         let conn = Connection::open(&path).unwrap();
         assert_eq!(schema_version(&conn), 0);
-        let starred: i64 = conn.query_row("SELECT starred FROM photos WHERE id = 7", [], |row| row.get(0)).unwrap();
+        let starred: i64 = conn
+            .query_row("SELECT starred FROM photos WHERE id = 7", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
         assert_eq!(starred, 1);
     }
 
@@ -2384,8 +2923,19 @@ mod tests {
                 params![folder_id, pics.join("a.jpg").to_string_lossy()],
             )
             .unwrap();
-        for table in ["story_media", "story_blocks", "stories", "trip_tracks", "trip_media", "trip_days", "trips", "media_refs"] {
-            db.conn.execute_batch(&format!("DROP TABLE {table}")).unwrap();
+        for table in [
+            "story_media",
+            "story_blocks",
+            "stories",
+            "trip_tracks",
+            "trip_media",
+            "trip_days",
+            "trips",
+            "media_refs",
+        ] {
+            db.conn
+                .execute_batch(&format!("DROP TABLE {table}"))
+                .unwrap();
         }
         db.conn.execute_batch("DROP TRIGGER photos_media_hints; DROP TRIGGER photos_media_unlinked; PRAGMA user_version = 1").unwrap();
     }
@@ -2399,14 +2949,17 @@ mod tests {
             // Something in the way: a `trip_media` without the columns its
             // indexes need makes the upgrade fail after it created other tables.
             let conn = Connection::open(&path).unwrap();
-            conn.execute_batch("CREATE TABLE trip_media (x INTEGER)").unwrap();
+            conn.execute_batch("CREATE TABLE trip_media (x INTEGER)")
+                .unwrap();
         }
         let before = schema(&path);
         assert!(Database::open(&path).is_err());
         assert_eq!(schema(&path), before, "nothing of the upgrade is kept");
         let conn = Connection::open(&path).unwrap();
         assert_eq!(schema_version(&conn), 1);
-        let starred: i64 = conn.query_row("SELECT starred FROM photos", [], |row| row.get(0)).unwrap();
+        let starred: i64 = conn
+            .query_row("SELECT starred FROM photos", [], |row| row.get(0))
+            .unwrap();
         assert_eq!(starred, 1);
     }
 
@@ -2427,8 +2980,14 @@ mod tests {
                 .collect();
             let mut all = Vec::new();
             for table in tables {
-                let mut info = conn.prepare(&format!("PRAGMA table_info({table})")).unwrap();
-                let rows = info.query_map([], |row| Ok((table.clone(), row.get(1)?, row.get(2)?, row.get(4)?))).unwrap();
+                let mut info = conn
+                    .prepare(&format!("PRAGMA table_info({table})"))
+                    .unwrap();
+                let rows = info
+                    .query_map([], |row| {
+                        Ok((table.clone(), row.get(1)?, row.get(2)?, row.get(4)?))
+                    })
+                    .unwrap();
                 all.extend(rows.map(Result::unwrap));
             }
             all
@@ -2441,7 +3000,9 @@ mod tests {
         for column in &before {
             assert!(after.contains(column), "{column:?} changed or went");
         }
-        let starred: i64 = conn.query_row("SELECT starred FROM photos", [], |row| row.get(0)).unwrap();
+        let starred: i64 = conn
+            .query_row("SELECT starred FROM photos", [], |row| row.get(0))
+            .unwrap();
         assert_eq!(starred, 1);
     }
 
@@ -2461,9 +3022,16 @@ mod tests {
                 .unwrap();
         }
         let db = Database::open(&path).unwrap();
-        assert_eq!(schema_version(&db.conn), SCHEMA_VERSION + 5, "the newer number is kept");
+        assert_eq!(
+            schema_version(&db.conn),
+            SCHEMA_VERSION + 5,
+            "the newer number is kept"
+        );
         assert_eq!(db.albums().len(), 1);
-        assert!(db.columns("photos").iter().any(|name| name == "later_column"));
+        assert!(db
+            .columns("photos")
+            .iter()
+            .any(|name| name == "later_column"));
     }
 
     #[test]
@@ -2479,7 +3047,12 @@ mod tests {
     #[test]
     fn heif_files_without_a_camera_are_read_again_once() {
         let (db, folder_id, folder) = library("heif-exif");
-        for (name, camera) in [("a.heic", ""), ("b.HIF", ""), ("c.heic", "Apple iPhone 15"), ("d.jpg", "")] {
+        for (name, camera) in [
+            ("a.heic", ""),
+            ("b.HIF", ""),
+            ("c.heic", "Apple iPhone 15"),
+            ("d.jpg", ""),
+        ] {
             db.conn
                 .execute(
                     "INSERT INTO photos(folder_id, path, filename, camera, indexed_version) VALUES (?1, ?2, ?3, ?4, 2)",
@@ -2488,11 +3061,19 @@ mod tests {
                 .unwrap();
         }
         db.migrate().unwrap();
-        let versions: Vec<(String, i64)> =
-            db.map_rows("SELECT filename, indexed_version FROM photos ORDER BY filename", [], |row| Ok((row.get(0)?, row.get(1)?)));
+        let versions: Vec<(String, i64)> = db.map_rows(
+            "SELECT filename, indexed_version FROM photos ORDER BY filename",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        );
         assert_eq!(
             versions,
-            vec![("a.heic".into(), 0), ("b.HIF".into(), 0), ("c.heic".into(), INDEX_VERSION), ("d.jpg".into(), INDEX_VERSION)]
+            vec![
+                ("a.heic".into(), 0),
+                ("b.HIF".into(), 0),
+                ("c.heic".into(), INDEX_VERSION),
+                ("d.jpg".into(), INDEX_VERSION)
+            ]
         );
     }
 
@@ -2507,17 +3088,30 @@ mod tests {
             modified_at: 9,
         };
         let (bad, dir) = (item("bad.jpg", false), item("locked", true));
-        db.store_unreadable(folder_id, &[bad.clone(), dir.clone()], true, &HashSet::new());
-        assert_eq!(db.unreadable(), vec![(folder_id, bad.clone()), (folder_id, dir.clone())]);
+        db.store_unreadable(
+            folder_id,
+            &[bad.clone(), dir.clone()],
+            true,
+            &HashSet::new(),
+        );
+        assert_eq!(
+            db.unreadable(),
+            vec![(folder_id, bad.clone()), (folder_id, dir.clone())]
+        );
         let snapshot = db.unreadable_snapshot(folder_id);
         assert_eq!(snapshot.len(), 1, "folders are listed again on every scan");
         assert_eq!(snapshot[&bad.path], bad);
 
         let old = unix_now() - (UNREADABLE_RETRY_DAYS + 1) * 86_400;
-        db.conn.execute("UPDATE unreadable SET checked_at=?1", [old]).unwrap();
+        db.conn
+            .execute("UPDATE unreadable SET checked_at=?1", [old])
+            .unwrap();
         let remembered: HashSet<String> = [bad.path.clone()].into();
         db.store_unreadable(folder_id, std::slice::from_ref(&bad), false, &remembered);
-        assert!(db.unreadable_snapshot(folder_id).is_empty(), "a skipped file keeps its check time, so it is tried again");
+        assert!(
+            db.unreadable_snapshot(folder_id).is_empty(),
+            "a skipped file keeps its check time, so it is tried again"
+        );
         assert_eq!(db.unreadable().len(), 2, "a partial scan only adds");
 
         db.store_unreadable(folder_id, std::slice::from_ref(&bad), true, &HashSet::new());
@@ -2541,7 +3135,11 @@ mod tests {
         db.set_caption(ids[1], "Snow day");
 
         let found = |query: &str| -> Vec<i64> {
-            let mut ids: Vec<i64> = db.search(query, Sort::Name, false).iter().map(|photo| photo.id).collect();
+            let mut ids: Vec<i64> = db
+                .search(query, Sort::Name, false)
+                .iter()
+                .map(|photo| photo.id)
+                .collect();
             ids.sort();
             ids
         };
@@ -2552,7 +3150,10 @@ mod tests {
         assert!(found("2019-05-18").is_empty());
         assert_eq!(found("temples"), [ids[2]]);
         assert_eq!(found("snow"), [ids[1]]);
-        assert!(found("search").is_empty(), "the library folder's own name doesn't match every photo");
+        assert!(
+            found("search").is_empty(),
+            "the library folder's own name doesn't match every photo"
+        );
         assert_eq!(found("testcam").len(), 3);
     }
 
@@ -2574,7 +3175,11 @@ mod tests {
         db.save_edit_history(ids[0], "[]", 1, 1);
 
         let found = |query: &str, located: bool| -> Vec<i64> {
-            let mut ids: Vec<i64> = db.search(query, Sort::Name, located).iter().map(|photo| photo.id).collect();
+            let mut ids: Vec<i64> = db
+                .search(query, Sort::Name, located)
+                .iter()
+                .map(|photo| photo.id)
+                .collect();
             ids.sort();
             ids
         };
@@ -2582,11 +3187,18 @@ mod tests {
         assert_eq!(found("type:photo", false), [ids[0], ids[1]]);
         assert_eq!(found("type:jpg", false), [ids[0]], "jpg also finds .jpeg");
         assert_eq!(found("type:raw", false), [ids[1]]);
-        assert!(found("type:cr2", false).is_empty(), "one RAW format is only that format");
+        assert!(
+            found("type:cr2", false).is_empty(),
+            "one RAW format is only that format"
+        );
         assert_eq!(found("gps:no", false), [ids[1]]);
         assert_eq!(found("gps:yes", false), [ids[0], ids[2]]);
         assert_eq!(found("is:edited", false), [ids[0]]);
-        assert_eq!(found("is:unedited", false).len(), 3, "the window narrows unedited photos with edited_filter");
+        assert_eq!(
+            found("is:unedited", false).len(),
+            3,
+            "the window narrows unedited photos with edited_filter"
+        );
         assert_eq!(edited_filter("beach is:unedited"), Some(false));
         assert_eq!(edited_filter("beach"), None);
         assert_eq!(found("is:starred", false), [ids[1]]);
@@ -2595,8 +3207,15 @@ mod tests {
         assert_eq!(found("focal:16mm", false), [ids[0]]);
         assert_eq!(found("focal:100-", false), [ids[1]]);
         assert_eq!(found("focal:10-50", false), [ids[0]]);
-        assert_eq!(found("type:photo", true), [ids[0]], "the map leaves out photos without a place");
-        assert_eq!(search_terms("type:nothing"), [Term::Text("type:nothing".into())]);
+        assert_eq!(
+            found("type:photo", true),
+            [ids[0]],
+            "the map leaves out photos without a place"
+        );
+        assert_eq!(
+            search_terms("type:nothing"),
+            [Term::Text("type:nothing".into())]
+        );
     }
 
     #[test]
@@ -2614,7 +3233,11 @@ mod tests {
         db.save_edit_history(ids[0], "[]", 1, 1);
 
         let found = |query: &str| -> Vec<i64> {
-            let mut ids: Vec<i64> = db.search(query, Sort::Name, false).iter().map(|photo| photo.id).collect();
+            let mut ids: Vec<i64> = db
+                .search(query, Sort::Name, false)
+                .iter()
+                .map(|photo| photo.id)
+                .collect();
             ids.sort();
             ids
         };
@@ -2625,9 +3248,16 @@ mod tests {
         assert_eq!(found("mp:12"), [ids[2]]);
         assert_eq!(found("mp:10-"), [ids[0], ids[2]]);
         assert_eq!(found("mp:-3mp"), [ids[1]]);
-        assert!(!found("mp:0-").contains(&ids[3]), "an unknown size matches no size");
+        assert!(
+            !found("mp:0-").contains(&ids[3]),
+            "an unknown size matches no size"
+        );
         assert_eq!(found("-mp:10-"), [ids[1], ids[3]]);
-        assert_eq!(found("-is:edited").len(), 4, "the window narrows unedited photos with edited_filter");
+        assert_eq!(
+            found("-is:edited").len(),
+            4,
+            "the window narrows unedited photos with edited_filter"
+        );
         assert_eq!(edited_filter("-is:edited"), Some(false));
         assert_eq!(search_terms("-"), [Term::Text("-".into())]);
         assert_eq!(search_terms("-is:starred"), [Term::Starred(false)]);
@@ -2643,7 +3273,13 @@ mod tests {
         assert_eq!(span("2019-13"), None);
         assert_eq!(span("19-05"), None);
         assert_eq!(span("IMG_2019"), None);
-        assert_eq!(search_terms("temple  2019"), [Term::Text("temple".into()), Term::Dates(date_range("2019").unwrap().0, date_range("2019").unwrap().1)]);
+        assert_eq!(
+            search_terms("temple  2019"),
+            [
+                Term::Text("temple".into()),
+                Term::Dates(date_range("2019").unwrap().0, date_range("2019").unwrap().1)
+            ]
+        );
     }
 
     pub(super) fn folder_path(folder: &Path, name: &str) -> String {

@@ -12,12 +12,17 @@ use std::f32::consts::{FRAC_PI_2, TAU};
 use std::rc::Rc;
 
 use chrono::{Datelike, NaiveDate, TimeZone, Timelike};
-use eframe::egui::{self, Align2, Color32, CornerRadius, FontId, Margin, Mesh, Pos2, Rect, Response, RichText, Sense, Shape, Stroke, StrokeKind, Vec2};
+use eframe::egui::{
+    self, Align2, Color32, CornerRadius, FontId, Margin, Mesh, Pos2, Rect, Response, RichText,
+    Sense, Shape, Stroke, StrokeKind, Vec2,
+};
 
 use crate::geo;
 use crate::i18n::{tr, trf};
 use crate::track::{format_distance, Bounds};
-use crate::types::{format_bytes, format_day, format_month, short_month, short_weekday, Nav, Photo};
+use crate::types::{
+    format_bytes, format_day, format_month, short_month, short_weekday, Nav, Photo,
+};
 
 use super::places::{cluster_points, date_span, folder_summary, grouped, truncated};
 use super::theme::{self, ACCENT, WHITE};
@@ -73,7 +78,11 @@ struct Cover {
 
 impl Cover {
     fn of(photo: &Photo) -> Cover {
-        Cover { id: photo.id, path: photo.path.clone(), rotation: photo.rotation }
+        Cover {
+            id: photo.id,
+            path: photo.path.clone(),
+            rotation: photo.rotation,
+        }
     }
 }
 
@@ -203,7 +212,13 @@ impl StatsPage {
             Some(year) => Rc::new(compute(&in_year(photos, year))),
             None => Rc::clone(&all),
         };
-        StatsPage { epoch, all, shown, year, travel: Rc::new(Visits::compute(photos, epoch)) }
+        StatsPage {
+            epoch,
+            all,
+            shown,
+            year,
+            travel: Rc::new(Visits::compute(photos, epoch)),
+        }
     }
 }
 
@@ -212,7 +227,10 @@ fn local(at: i64) -> Option<chrono::DateTime<chrono::Local>> {
 }
 
 fn in_year(photos: &[Photo], year: i32) -> Vec<&Photo> {
-    photos.iter().filter(|photo| local(photo.taken_at).is_some_and(|time| time.year() == year)).collect()
+    photos
+        .iter()
+        .filter(|photo| local(photo.taken_at).is_some_and(|time| time.year() == year))
+        .collect()
 }
 
 /// Works out the statistics of `photos`.
@@ -265,8 +283,14 @@ fn compute(photos: &[&Photo]) -> Stats {
             }
             totals.bytes += photo.bytes;
             stats.months[time.month0() as usize] += 1;
-            stats.week_hours[time.weekday().num_days_from_monday() as usize][time.hour() as usize] += 1;
-            for (count, earliest) in [days.entry(time.num_days_from_ce()).or_insert((0, photo)), months.entry((time.year(), time.month())).or_insert((0, photo))] {
+            stats.week_hours[time.weekday().num_days_from_monday() as usize]
+                [time.hour() as usize] += 1;
+            for (count, earliest) in [
+                days.entry(time.num_days_from_ce()).or_insert((0, photo)),
+                months
+                    .entry((time.year(), time.month()))
+                    .or_insert((0, photo)),
+            ] {
                 *count += 1;
                 if photo.taken_at < earliest.taken_at {
                     *earliest = photo;
@@ -276,7 +300,11 @@ fn compute(photos: &[&Photo]) -> Stats {
                 first = Some(photo);
             }
             let at = photo.taken_at;
-            stats.span = Some(stats.span.map_or((at, at), |(start, end)| (start.min(at), end.max(at))));
+            stats.span = Some(
+                stats
+                    .span
+                    .map_or((at, at), |(start, end)| (start.min(at), end.max(at))),
+            );
         }
         if photo.place().is_some() {
             located.push(index);
@@ -290,7 +318,10 @@ fn compute(photos: &[&Photo]) -> Stats {
             lens => *lenses.entry(lens.to_string()).or_default() += 1,
         }
         if photo.focal_mm > 0.0 {
-            let band = FOCAL_BANDS.iter().position(|(top, _)| photo.focal_mm <= *top + 0.5).unwrap_or(FOCAL_BANDS.len() - 1);
+            let band = FOCAL_BANDS
+                .iter()
+                .position(|(top, _)| photo.focal_mm <= *top + 0.5)
+                .unwrap_or(FOCAL_BANDS.len() - 1);
             stats.focal[band] += 1;
             *focals.entry(photo.focal_mm.round() as u32).or_default() += 1;
         }
@@ -300,26 +331,66 @@ fn compute(photos: &[&Photo]) -> Stats {
             stats.totals.entry(date.year()).or_default().days += 1;
         }
     }
-    if let (Some(first), Some(last)) = (stats.totals.keys().next(), stats.totals.keys().next_back()) {
-        stats.years = (*first..=*last).map(|year| (year, stats.totals.get(&year).map_or(0, |totals| totals.photos + totals.videos))).collect();
+    if let (Some(first), Some(last)) = (stats.totals.keys().next(), stats.totals.keys().next_back())
+    {
+        stats.years = (*first..=*last)
+            .map(|year| {
+                (
+                    year,
+                    stats
+                        .totals
+                        .get(&year)
+                        .map_or(0, |totals| totals.photos + totals.videos),
+                )
+            })
+            .collect();
     }
     // Ties go to the earlier day or month.
-    let moment = |(count, photo): &(usize, &Photo)| Moment { at: photo.taken_at, count: *count, cover: Cover::of(photo) };
-    stats.busiest_day = days.values().max_by(|a, b| a.0.cmp(&b.0).then(b.1.taken_at.cmp(&a.1.taken_at))).map(moment);
-    stats.busiest_month = months.values().max_by(|a, b| a.0.cmp(&b.0).then(b.1.taken_at.cmp(&a.1.taken_at))).map(moment);
-    stats.first = first.map(|photo| Moment { at: photo.taken_at, count: 1, cover: Cover::of(photo) });
-    stats.streak = longest_run(days.keys().copied().collect()).filter(|(_, length)| *length >= 2).map(|(start, length)| {
-        let (_, opening) = days[&start];
-        let (_, closing) = days[&(start + length as i32 - 1)];
-        Streak { days: length, first: opening.taken_at, last: closing.taken_at, cover: Cover::of(opening) }
+    let moment = |(count, photo): &(usize, &Photo)| Moment {
+        at: photo.taken_at,
+        count: *count,
+        cover: Cover::of(photo),
+    };
+    stats.busiest_day = days
+        .values()
+        .max_by(|a, b| a.0.cmp(&b.0).then(b.1.taken_at.cmp(&a.1.taken_at)))
+        .map(moment);
+    stats.busiest_month = months
+        .values()
+        .max_by(|a, b| a.0.cmp(&b.0).then(b.1.taken_at.cmp(&a.1.taken_at)))
+        .map(moment);
+    stats.first = first.map(|photo| Moment {
+        at: photo.taken_at,
+        count: 1,
+        cover: Cover::of(photo),
     });
-    stats.days = days.into_iter().map(|(day, (count, _))| (day, count)).collect();
-    stats.focal_top = focals.into_iter().max_by(|a, b| a.1.cmp(&b.1).then(b.0.cmp(&a.0)));
+    stats.streak = longest_run(days.keys().copied().collect())
+        .filter(|(_, length)| *length >= 2)
+        .map(|(start, length)| {
+            let (_, opening) = days[&start];
+            let (_, closing) = days[&(start + length as i32 - 1)];
+            Streak {
+                days: length,
+                first: opening.taken_at,
+                last: closing.taken_at,
+                cover: Cover::of(opening),
+            }
+        });
+    stats.days = days
+        .into_iter()
+        .map(|(day, (count, _))| (day, count))
+        .collect();
+    stats.focal_top = focals
+        .into_iter()
+        .max_by(|a, b| a.1.cmp(&b.1).then(b.0.cmp(&a.0)));
     stats.cameras = Ranked::from_counts(cameras, no_camera);
     stats.lenses = Ranked::from_counts(lenses, no_lens);
 
     stats.geotagged = located.len();
-    let places: Vec<(f64, f64)> = located.iter().filter_map(|index| photos[*index].place()).collect();
+    let places: Vec<(f64, f64)> = located
+        .iter()
+        .filter_map(|index| photos[*index].place())
+        .collect();
     let points: Vec<[f64; 2]> = places
         .iter()
         .map(|(lat, lon)| {
@@ -340,7 +411,11 @@ fn compute(photos: &[&Photo]) -> Stats {
                 last = last.max(taken);
             }
             Place {
-                label: folder_summary(members.iter().map(|member| photos[located[*member]].path.as_str())),
+                label: folder_summary(
+                    members
+                        .iter()
+                        .map(|member| photos[located[*member]].path.as_str()),
+                ),
                 count: members.len(),
                 first,
                 last,
@@ -382,33 +457,53 @@ struct Scope<'a> {
 
 impl PicassoApp {
     pub(super) fn stats_ui(&mut self, ui: &mut egui::Ui) {
-        if self.stats.as_ref().is_none_or(|page| page.epoch != self.view_epoch) {
+        if self
+            .stats
+            .as_ref()
+            .is_none_or(|page| page.epoch != self.view_epoch)
+        {
             let year = self.stats.as_ref().and_then(|page| page.year);
             self.stats = Some(StatsPage::new(&self.photos, self.view_epoch, year));
         }
         let Some(page) = self.stats.as_ref() else {
             return;
         };
-        let (all, shown, year, travel) = (Rc::clone(&page.all), Rc::clone(&page.shown), page.year, Rc::clone(&page.travel));
-        ui.painter().rect_filled(ui.available_rect_before_wrap(), 0, page_fill());
+        let (all, shown, year, travel) = (
+            Rc::clone(&page.all),
+            Rc::clone(&page.shown),
+            page.year,
+            Rc::clone(&page.travel),
+        );
+        ui.painter()
+            .rect_filled(ui.available_rect_before_wrap(), 0, page_fill());
         let grow = shown.grow(ui.ctx());
         let mut go: Option<Go> = None;
-        egui::ScrollArea::vertical().id_salt("stats").auto_shrink([false, false]).show(ui, |ui| {
-            let room = ui.available_width();
-            let width = (room - 40.0).min(MAX_W);
-            ui.horizontal_top(|ui| {
-                ui.spacing_mut().item_spacing.x = 0.0;
-                ui.add_space(((room - width) / 2.0).max(0.0));
-                ui.vertical(|ui| {
-                    ui.spacing_mut().item_spacing.x = 8.0;
-                    ui.set_width(width);
-                    ui.add_space(20.0);
-                    let scope = Scope { all: &all, stats: &shown, year, travel: &travel, width, grow };
-                    self.stats_page(ui, &scope, &mut go);
-                    ui.add_space(32.0);
+        egui::ScrollArea::vertical()
+            .id_salt("stats")
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                let room = ui.available_width();
+                let width = (room - 40.0).min(MAX_W);
+                ui.horizontal_top(|ui| {
+                    ui.spacing_mut().item_spacing.x = 0.0;
+                    ui.add_space(((room - width) / 2.0).max(0.0));
+                    ui.vertical(|ui| {
+                        ui.spacing_mut().item_spacing.x = 8.0;
+                        ui.set_width(width);
+                        ui.add_space(20.0);
+                        let scope = Scope {
+                            all: &all,
+                            stats: &shown,
+                            year,
+                            travel: &travel,
+                            width,
+                            grow,
+                        };
+                        self.stats_page(ui, &scope, &mut go);
+                        ui.add_space(32.0);
+                    });
                 });
             });
-        });
         match go {
             Some(Go::Search(query)) => self.search_library(query),
             Some(Go::Map(bounds)) => self.show_area_on_map(bounds),
@@ -457,7 +552,11 @@ impl PicassoApp {
         });
         ui.add_space(CARD_GAP);
         bento(ui, "gear", width, &[0.5, 0.5], |ui, index| {
-            let (ranked, text) = if index == 0 { (&scope.stats.cameras, &CAMERAS) } else { (&scope.stats.lenses, &LENSES) };
+            let (ranked, text) = if index == 0 {
+                (&scope.stats.cameras, &CAMERAS)
+            } else {
+                (&scope.stats.lenses, &LENSES)
+            };
             ranked_card(ui, ranked, text, scope, go);
         });
         ui.add_space(CARD_GAP);
@@ -514,7 +613,11 @@ impl PicassoApp {
                 query: None,
             });
         }
-        if let Some((month, time)) = stats.busiest_month.as_ref().and_then(|month| Some((month, local(month.at)?))) {
+        if let Some((month, time)) = stats
+            .busiest_month
+            .as_ref()
+            .and_then(|month| Some((month, local(month.at)?)))
+        {
             cards.push(Highlight {
                 kicker: tr("Busiest month"),
                 title: format_month(time.year(), time.month()),
@@ -555,7 +658,11 @@ impl PicassoApp {
     /// One highlight on its photo. Returns whether it was clicked.
     fn highlight(&mut self, ui: &mut egui::Ui, width: f32, card: &Highlight) -> bool {
         const RADIUS: u8 = 16;
-        let sense = if card.query.is_some() { Sense::click() } else { Sense::hover() };
+        let sense = if card.query.is_some() {
+            Sense::click()
+        } else {
+            Sense::hover()
+        };
         let (rect, response) = ui.allocate_exact_size(Vec2::new(width, 168.0), sense);
         if !ui.is_rect_visible(rect) {
             return false;
@@ -563,15 +670,29 @@ impl PicassoApp {
         let painter = ui.painter().clone();
         painter.add(soft_shadow().as_shape(rect, RADIUS));
         self.photo_tile(ui, &painter, rect, card.cover, RADIUS, card.tint);
-        let kicker = painter.layout_no_wrap(card.kicker.to_string(), FontId::proportional(11.5), WHITE);
-        let pill = Rect::from_min_size(rect.min + Vec2::new(12.0, 12.0), kicker.size() + Vec2::new(18.0, 8.0));
+        let kicker =
+            painter.layout_no_wrap(card.kicker.to_string(), FontId::proportional(11.5), WHITE);
+        let pill = Rect::from_min_size(
+            rect.min + Vec2::new(12.0, 12.0),
+            kicker.size() + Vec2::new(18.0, 8.0),
+        );
         painter.rect_filled(pill, 11, Color32::from_black_alpha(120));
         painter.galley(pill.min + Vec2::new(9.0, 4.0), kicker, WHITE);
         let inner = rect.shrink(16.0);
-        let sub = truncated(&painter, card.sub.clone(), 12.0, Color32::from_white_alpha(225), inner.width());
+        let sub = truncated(
+            &painter,
+            card.sub.clone(),
+            12.0,
+            Color32::from_white_alpha(225),
+            inner.width(),
+        );
         let title = truncated(&painter, card.title.clone(), 20.0, WHITE, inner.width());
         let sub_y = inner.bottom() - sub.size().y;
-        painter.galley(Pos2::new(inner.left(), sub_y - title.size().y - 2.0), title, WHITE);
+        painter.galley(
+            Pos2::new(inner.left(), sub_y - title.size().y - 2.0),
+            title,
+            WHITE,
+        );
         painter.galley(Pos2::new(inner.left(), sub_y), sub, WHITE);
         if card.query.is_none() {
             return false;
@@ -579,26 +700,64 @@ impl PicassoApp {
         if response.hovered() {
             painter.rect_filled(rect, RADIUS, Color32::from_white_alpha(16));
         }
-        response.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(tr("Show these photos")).clicked()
+        response
+            .on_hover_cursor(egui::CursorIcon::PointingHand)
+            .on_hover_text(tr("Show these photos"))
+            .clicked()
     }
 
     /// `cover` filling `rect`, darkened toward the bottom for the words on
     /// it; `tint` until it has loaded.
-    fn photo_tile(&mut self, ui: &egui::Ui, painter: &egui::Painter, rect: Rect, cover: &Cover, radius: u8, tint: Color32) {
+    fn photo_tile(
+        &mut self,
+        ui: &egui::Ui,
+        painter: &egui::Painter,
+        rect: Rect,
+        cover: &Cover,
+        radius: u8,
+        tint: Color32,
+    ) {
         self.ensure_thumb(cover.id, &cover.path);
         let held = ui.input(|input| input.pointer.any_down());
-        self.sharpen_thumb(cover.id, &cover.path, rect.width().max(rect.height()) * ui.ctx().pixels_per_point(), held);
+        self.sharpen_thumb(
+            cover.id,
+            &cover.path,
+            rect.width().max(rect.height()) * ui.ctx().pixels_per_point(),
+            held,
+        );
         match self.thumb_texture(cover.id) {
-            Some((texture, w, h)) => theme::paint_image_rounded(painter, &texture, rect, fill_uv(w, h, cover.rotation, rect), cover.rotation, radius as f32),
+            Some((texture, w, h)) => theme::paint_image_rounded(
+                painter,
+                &texture,
+                rect,
+                fill_uv(w, h, cover.rotation, rect),
+                cover.rotation,
+                radius as f32,
+            ),
             None => {
                 painter.rect_filled(rect, radius, tint.gamma_multiply(0.75));
             }
         }
         let shade = Color32::from_black_alpha(160);
-        let fade = Rect::from_min_max(Pos2::new(rect.left(), rect.top() + rect.height() * 0.3), Pos2::new(rect.right(), rect.bottom() - radius as f32));
+        let fade = Rect::from_min_max(
+            Pos2::new(rect.left(), rect.top() + rect.height() * 0.3),
+            Pos2::new(rect.right(), rect.bottom() - radius as f32),
+        );
         painter.add(Shape::mesh(gradient(fade, Color32::TRANSPARENT, shade)));
-        let foot = Rect::from_min_max(Pos2::new(rect.left(), rect.bottom() - radius as f32), rect.max);
-        painter.rect_filled(foot, CornerRadius { nw: 0, ne: 0, sw: radius, se: radius }, shade);
+        let foot = Rect::from_min_max(
+            Pos2::new(rect.left(), rect.bottom() - radius as f32),
+            rect.max,
+        );
+        painter.rect_filled(
+            foot,
+            CornerRadius {
+                nw: 0,
+                ne: 0,
+                sw: radius,
+                se: radius,
+            },
+            shade,
+        );
     }
 
     /// How many photos have a location, the GPS tracks, and the places with
@@ -606,25 +765,63 @@ impl PicassoApp {
     fn places_card(&mut self, ui: &mut egui::Ui, scope: &Scope, go: &mut Option<Go>) {
         let stats = scope.stats;
         let total = stats.photos + stats.videos;
-        let count = (!stats.places.is_empty()).then(|| trf(if stats.places.len() == 1 { "{} place" } else { "{} places" }, &[&grouped(stats.places.len())]));
+        let count = (!stats.places.is_empty()).then(|| {
+            trf(
+                if stats.places.len() == 1 {
+                    "{} place"
+                } else {
+                    "{} places"
+                },
+                &[&grouped(stats.places.len())],
+            )
+        });
         card_title(ui, Mark::Pin, theme::PIN, tr("Places"), count.as_deref());
         ui.horizontal(|ui| {
-            ui.label(RichText::new(trf("{}% of photos have a location", &[&percent(stats.geotagged, total)])).size(13.0).color(theme::text()));
+            ui.label(
+                RichText::new(trf(
+                    "{}% of photos have a location",
+                    &[&percent(stats.geotagged, total)],
+                ))
+                .size(13.0)
+                .color(theme::text()),
+            );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.label(RichText::new(trf("{} of {} photos", &[&grouped(stats.geotagged), &grouped(total)])).size(12.0).color(theme::muted()));
+                ui.label(
+                    RichText::new(trf(
+                        "{} of {} photos",
+                        &[&grouped(stats.geotagged), &grouped(total)],
+                    ))
+                    .size(12.0)
+                    .color(theme::muted()),
+                );
             });
         });
         let (bar, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 6.0), Sense::hover());
-        meter(ui.painter(), bar, stats.geotagged as f32 / total.max(1) as f32 * scope.grow, theme::PIN);
+        meter(
+            ui.painter(),
+            bar,
+            stats.geotagged as f32 / total.max(1) as f32 * scope.grow,
+            theme::PIN,
+        );
         if !self.tracks.is_empty() {
             let meters: f64 = self.tracks.iter().map(|track| track.meters).sum();
-            let count = trf(if self.tracks.len() == 1 { "{} track" } else { "{} tracks" }, &[&self.tracks.len()]);
+            let count = trf(
+                if self.tracks.len() == 1 {
+                    "{} track"
+                } else {
+                    "{} tracks"
+                },
+                &[&self.tracks.len()],
+            );
             ui.add_space(4.0);
             muted(ui, &format!("{count} · {}", format_distance(meters)));
         }
         if stats.places.is_empty() {
             ui.add_space(10.0);
-            muted(ui, tr("Photos with a location show up here, grouped by place."));
+            muted(
+                ui,
+                tr("Photos with a location show up here, grouped by place."),
+            );
             return;
         }
         ui.add_space(14.0);
@@ -662,16 +859,33 @@ impl PicassoApp {
         let painter = ui.painter().clone();
         self.photo_tile(ui, &painter, rect, &place.cover, RADIUS, theme::PIN);
         let inner = rect.shrink(10.0);
-        let line = format!("{} · {}", grouped(place.count), date_span([place.first, place.last].into_iter()));
-        let sub = truncated(&painter, line, 11.0, Color32::from_white_alpha(225), inner.width());
+        let line = format!(
+            "{} · {}",
+            grouped(place.count),
+            date_span([place.first, place.last].into_iter())
+        );
+        let sub = truncated(
+            &painter,
+            line,
+            11.0,
+            Color32::from_white_alpha(225),
+            inner.width(),
+        );
         let title = truncated(&painter, place.label.clone(), 13.5, WHITE, inner.width());
         let sub_y = inner.bottom() - sub.size().y;
-        painter.galley(Pos2::new(inner.left(), sub_y - title.size().y - 1.0), title, WHITE);
+        painter.galley(
+            Pos2::new(inner.left(), sub_y - title.size().y - 1.0),
+            title,
+            WHITE,
+        );
         painter.galley(Pos2::new(inner.left(), sub_y), sub, WHITE);
         if response.hovered() {
             painter.rect_filled(rect, RADIUS, Color32::from_white_alpha(18));
         }
-        response.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(tr("Show on map")).clicked()
+        response
+            .on_hover_cursor(egui::CursorIcon::PointingHand)
+            .on_hover_text(tr("Show on map"))
+            .clicked()
     }
 
     /// The Library with the photos that match `query`.
@@ -716,7 +930,9 @@ struct Highlight<'a> {
 /// How many of `count` cards fit in a row of `width`, each at least
 /// `least` wide, with the rows as even as can be.
 fn balanced(count: usize, width: f32, least: f32) -> usize {
-    let most = ((width + CARD_GAP) / (least + CARD_GAP)).floor().clamp(1.0, count.max(1) as f32) as usize;
+    let most = ((width + CARD_GAP) / (least + CARD_GAP))
+        .floor()
+        .clamp(1.0, count.max(1) as f32) as usize;
     let rows = count.div_ceil(most);
     count.div_ceil(rows.max(1)).max(1)
 }
@@ -728,7 +944,9 @@ fn header(ui: &mut egui::Ui, scope: &Scope, go: &mut Option<Go>) {
     let total = super::photo_count(stats.photos + stats.videos);
     let title = match (scope.year, scope.all.years.first(), scope.all.years.last()) {
         (Some(year), _, _) => trf("{} in {}", &[&total, &year]),
-        (None, Some((first, _)), Some((last, _))) if first != last => trf("{} over {} years", &[&total, &(last - first + 1)]),
+        (None, Some((first, _)), Some((last, _))) if first != last => {
+            trf("{} over {} years", &[&total, &(last - first + 1)])
+        }
         (None, Some((first, _)), _) => trf("{} in {}", &[&total, first]),
         _ => total,
     };
@@ -739,7 +957,11 @@ fn header(ui: &mut egui::Ui, scope: &Scope, go: &mut Option<Go>) {
     details.push(format_bytes(stats.bytes));
     let width = scope.width;
     let spark = scope.all.years.len() >= 2 && width >= 560.0;
-    let spark_w = if spark { (width * 0.34).min(340.0) } else { 0.0 };
+    let spark_w = if spark {
+        (width * 0.34).min(340.0)
+    } else {
+        0.0
+    };
     let room = width - spark_w - if spark { 24.0 } else { 0.0 };
     let (rect, _) = ui.allocate_exact_size(Vec2::new(width, 64.0), Sense::hover());
     let painter = ui.painter();
@@ -747,26 +969,50 @@ fn header(ui: &mut egui::Ui, scope: &Scope, go: &mut Option<Go>) {
     let title_h = title.size().y;
     painter.galley(rect.min, title, theme::text());
     let details = truncated(painter, details.join(" · "), 13.0, theme::muted(), room);
-    painter.galley(Pos2::new(rect.left(), rect.top() + title_h + 6.0), details, theme::muted());
+    painter.galley(
+        Pos2::new(rect.left(), rect.top() + title_h + 6.0),
+        details,
+        theme::muted(),
+    );
     if spark {
         let area = Rect::from_min_max(Pos2::new(rect.right() - spark_w, rect.top()), rect.max);
         if let Some(year) = sparkline(ui, area, &scope.all.years, scope.year, scope.grow) {
-            *go = Some(Go::Year(if scope.year == Some(year) { None } else { Some(year) }));
+            *go = Some(Go::Year(if scope.year == Some(year) {
+                None
+            } else {
+                Some(year)
+            }));
         }
     }
 }
 
 /// Photos per year as a line, the chosen year marked. Returns the year
 /// clicked.
-fn sparkline(ui: &mut egui::Ui, rect: Rect, years: &[(i32, usize)], chosen: Option<i32>, grow: f32) -> Option<i32> {
+fn sparkline(
+    ui: &mut egui::Ui,
+    rect: Rect,
+    years: &[(i32, usize)],
+    chosen: Option<i32>,
+    grow: f32,
+) -> Option<i32> {
     let response = ui.interact(rect, egui::Id::unique("stats-sparkline"), Sense::click());
     let plot = rect.shrink2(Vec2::new(6.0, 6.0));
-    let most = years.iter().map(|(_, count)| *count).max().unwrap_or(0).max(1) as f32;
+    let most = years
+        .iter()
+        .map(|(_, count)| *count)
+        .max()
+        .unwrap_or(0)
+        .max(1) as f32;
     let step = plot.width() / (years.len().max(2) - 1) as f32;
     let points: Vec<Pos2> = years
         .iter()
         .enumerate()
-        .map(|(index, (_, count))| Pos2::new(plot.left() + index as f32 * step, plot.bottom() - plot.height() * *count as f32 / most * grow))
+        .map(|(index, (_, count))| {
+            Pos2::new(
+                plot.left() + index as f32 * step,
+                plot.bottom() - plot.height() * *count as f32 / most * grow,
+            )
+        })
         .collect();
     let painter = ui.painter();
     let mut area = Mesh::default();
@@ -780,26 +1026,60 @@ fn sparkline(ui: &mut egui::Ui, rect: Rect, years: &[(i32, usize)], chosen: Opti
         }
     }
     painter.add(Shape::mesh(area));
-    painter.add(Shape::line(points.clone(), Stroke::new(2.0, theme::accent())));
-    let hovered = response.hover_pos().map(|pos| (((pos.x - plot.left()) / step).round().max(0.0) as usize).min(years.len() - 1));
+    painter.add(Shape::line(
+        points.clone(),
+        Stroke::new(2.0, theme::accent()),
+    ));
+    let hovered = response
+        .hover_pos()
+        .map(|pos| (((pos.x - plot.left()) / step).round().max(0.0) as usize).min(years.len() - 1));
     if let Some(index) = hovered {
-        painter.vline(points[index].x, plot.y_range(), Stroke::new(1.0, theme::hairline()));
+        painter.vline(
+            points[index].x,
+            plot.y_range(),
+            Stroke::new(1.0, theme::hairline()),
+        );
     }
     for (index, (year, _)) in years.iter().enumerate() {
         if chosen == Some(*year) || hovered == Some(index) {
-            painter.circle(points[index], 4.5, card_fill(), Stroke::new(2.0, theme::accent()));
+            painter.circle(
+                points[index],
+                4.5,
+                card_fill(),
+                Stroke::new(2.0, theme::accent()),
+            );
         }
     }
     let index = hovered?;
     let (year, count) = years[index];
-    let foot = if chosen == Some(year) { tr("All years") } else { tr("Show this year") };
-    hover_card(ui, points[index], &year.to_string(), &super::photo_count(count), Some(foot));
-    response.on_hover_cursor(egui::CursorIcon::PointingHand).clicked().then_some(year)
+    let foot = if chosen == Some(year) {
+        tr("All years")
+    } else {
+        tr("Show this year")
+    };
+    hover_card(
+        ui,
+        points[index],
+        &year.to_string(),
+        &super::photo_count(count),
+        Some(foot),
+    );
+    response
+        .on_hover_cursor(egui::CursorIcon::PointingHand)
+        .clicked()
+        .then_some(year)
 }
 
 /// All years and each year with photos, newest first. Returns the choice.
 fn year_chips(ui: &mut egui::Ui, scope: &Scope) -> Option<Option<i32>> {
-    let years: Vec<(i32, usize)> = scope.all.years.iter().rev().filter(|(_, count)| *count > 0).copied().collect();
+    let years: Vec<(i32, usize)> = scope
+        .all
+        .years
+        .iter()
+        .rev()
+        .filter(|(_, count)| *count > 0)
+        .copied()
+        .collect();
     if years.len() < 2 {
         return None;
     }
@@ -811,11 +1091,17 @@ fn year_chips(ui: &mut egui::Ui, scope: &Scope) -> Option<Option<i32>> {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 6.0;
                 let total = scope.all.photos + scope.all.videos;
-                if chip(ui, tr("All years"), scope.year.is_none()).on_hover_text(super::photo_count(total)).clicked() {
+                if chip(ui, tr("All years"), scope.year.is_none())
+                    .on_hover_text(super::photo_count(total))
+                    .clicked()
+                {
                     chosen = Some(None);
                 }
                 for (year, count) in &years {
-                    if chip(ui, &year.to_string(), scope.year == Some(*year)).on_hover_text(super::photo_count(*count)).clicked() {
+                    if chip(ui, &year.to_string(), scope.year == Some(*year))
+                        .on_hover_text(super::photo_count(*count))
+                        .clicked()
+                    {
                         chosen = Some(Some(*year));
                     }
                 }
@@ -826,16 +1112,27 @@ fn year_chips(ui: &mut egui::Ui, scope: &Scope) -> Option<Option<i32>> {
 
 fn chip(ui: &mut egui::Ui, label: &str, active: bool) -> Response {
     let font = FontId::proportional(13.0);
-    let size = ui.painter().layout_no_wrap(label.to_string(), font.clone(), theme::text()).size();
+    let size = ui
+        .painter()
+        .layout_no_wrap(label.to_string(), font.clone(), theme::text())
+        .size();
     let (rect, response) = ui.allocate_exact_size(Vec2::new(size.x + 28.0, 30.0), Sense::click());
     let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
     let painter = ui.painter();
     let (fill, color, stroke) = if active {
         (ACCENT, WHITE, Stroke::NONE)
     } else if response.hovered() {
-        (theme::hover(), theme::text(), Stroke::new(1.0, theme::hairline()))
+        (
+            theme::hover(),
+            theme::text(),
+            Stroke::new(1.0, theme::hairline()),
+        )
     } else {
-        (card_fill(), theme::text(), Stroke::new(1.0, theme::hairline()))
+        (
+            card_fill(),
+            theme::text(),
+            Stroke::new(1.0, theme::hairline()),
+        )
     };
     painter.rect(rect, 15, fill, stroke, StrokeKind::Inside);
     painter.text(rect.center(), Align2::CENTER_CENTER, label, font, color);
@@ -863,9 +1160,13 @@ enum Note {
 fn tiles(ui: &mut egui::Ui, scope: &Scope) {
     let stats = scope.stats;
     let total = stats.photos + stats.videos;
-    let previous = scope.year.and_then(|year| Some((year - 1, *scope.all.totals.get(&(year - 1))?)));
+    let previous = scope
+        .year
+        .and_then(|year| Some((year - 1, *scope.all.totals.get(&(year - 1))?)));
     let change = |now: f64, then: fn(&Totals) -> f64| match previous {
-        Some((year, totals)) if then(&totals) > 0.0 => Note::Change(now / then(&totals) - 1.0, year),
+        Some((year, totals)) if then(&totals) > 0.0 => {
+            Note::Change(now / then(&totals) - 1.0, year)
+        }
         _ => Note::None,
     };
     let first_year = scope.all.years.first().map(|(year, _)| *year);
@@ -881,31 +1182,60 @@ fn tiles(ui: &mut egui::Ui, scope: &Scope) {
         },
     }];
     if stats.videos > 0 {
-        list.push(Tile { mark: Mark::Video, tint: ROSE, value: grouped(stats.videos), label: tr("Videos").into(), note: change(stats.videos as f64, |totals| totals.videos as f64) });
+        list.push(Tile {
+            mark: Mark::Video,
+            tint: ROSE,
+            value: grouped(stats.videos),
+            label: tr("Videos").into(),
+            note: change(stats.videos as f64, |totals| totals.videos as f64),
+        });
     }
     list.extend([
-        Tile { mark: Mark::Calendar, tint: GREEN, value: grouped(stats.days.len()), label: tr("Days with photos").into(), note: change(stats.days.len() as f64, |totals| totals.days as f64) },
-        Tile { mark: Mark::Storage, tint: theme::ALBUM, value: format_bytes(stats.bytes), label: tr("Total size").into(), note: change(stats.bytes as f64, |totals| totals.bytes as f64) },
+        Tile {
+            mark: Mark::Calendar,
+            tint: GREEN,
+            value: grouped(stats.days.len()),
+            label: tr("Days with photos").into(),
+            note: change(stats.days.len() as f64, |totals| totals.days as f64),
+        },
+        Tile {
+            mark: Mark::Storage,
+            tint: theme::ALBUM,
+            value: format_bytes(stats.bytes),
+            label: tr("Total size").into(),
+            note: change(stats.bytes as f64, |totals| totals.bytes as f64),
+        },
         Tile {
             mark: Mark::Pin,
             tint: theme::PIN,
             value: format!("{}%", percent(stats.geotagged, total)),
             label: tr("With a location").into(),
-            note: Note::Text(trf("{} of {} photos", &[&grouped(stats.geotagged), &grouped(total)])),
+            note: Note::Text(trf(
+                "{} of {} photos",
+                &[&grouped(stats.geotagged), &grouped(total)],
+            )),
         },
         Tile {
             mark: Mark::Camera,
             tint: theme::GOLD,
             value: grouped(stats.cameras.rows.len()),
             label: tr("Cameras").into(),
-            note: stats.cameras.rows.first().map_or(Note::None, |(name, _)| Note::Text(name.clone())),
+            note: stats
+                .cameras
+                .rows
+                .first()
+                .map_or(Note::None, |(name, _)| Note::Text(name.clone())),
         },
         Tile {
             mark: Mark::Lens,
             tint: SKY,
             value: grouped(stats.lenses.rows.len()),
             label: tr("Lenses").into(),
-            note: stats.lenses.rows.first().map_or(Note::None, |(name, _)| Note::Text(name.clone())),
+            note: stats
+                .lenses
+                .rows
+                .first()
+                .map_or(Note::None, |(name, _)| Note::Text(name.clone())),
         },
     ]);
     let per_row = balanced(list.len(), scope.width, 168.0);
@@ -929,26 +1259,70 @@ fn tile(ui: &mut egui::Ui, width: f32, tile: &Tile) {
     let painter = ui.painter();
     paint_card(painter, rect, 16);
     let inner = rect.shrink(16.0);
-    badge(painter, Rect::from_min_size(inner.min, Vec2::splat(30.0)), tile.mark, tile.tint);
-    let label = truncated(painter, tile.label.clone(), 12.5, theme::muted(), inner.width() - 40.0);
-    painter.galley(Pos2::new(inner.left() + 40.0, inner.top() + 15.0 - label.size().y / 2.0), label, theme::muted());
-    let value = truncated(painter, tile.value.clone(), 24.0, theme::text(), inner.width());
-    painter.galley(Pos2::new(inner.left(), inner.top() + 36.0), value, theme::text());
+    badge(
+        painter,
+        Rect::from_min_size(inner.min, Vec2::splat(30.0)),
+        tile.mark,
+        tile.tint,
+    );
+    let label = truncated(
+        painter,
+        tile.label.clone(),
+        12.5,
+        theme::muted(),
+        inner.width() - 40.0,
+    );
+    painter.galley(
+        Pos2::new(
+            inner.left() + 40.0,
+            inner.top() + 15.0 - label.size().y / 2.0,
+        ),
+        label,
+        theme::muted(),
+    );
+    let value = truncated(
+        painter,
+        tile.value.clone(),
+        24.0,
+        theme::text(),
+        inner.width(),
+    );
+    painter.galley(
+        Pos2::new(inner.left(), inner.top() + 36.0),
+        value,
+        theme::text(),
+    );
     match &tile.note {
         Note::None => {}
         Note::Text(text) => {
             let note = truncated(painter, text.clone(), 11.5, theme::muted(), inner.width());
-            painter.galley(Pos2::new(inner.left(), inner.bottom() - note.size().y), note, theme::muted());
+            painter.galley(
+                Pos2::new(inner.left(), inner.bottom() - note.size().y),
+                note,
+                theme::muted(),
+            );
         }
         Note::Change(change, year) => {
             let up = *change >= 0.0;
             let color = if up { GREEN } else { RED };
-            let text = format!("{}%  {}", (change.abs() * 100.0).round(), trf("vs {}", &[year]));
+            let text = format!(
+                "{}%  {}",
+                (change.abs() * 100.0).round(),
+                trf("vs {}", &[year])
+            );
             let note = truncated(painter, text, 11.5, color, inner.width() - 14.0);
             let top = inner.bottom() - note.size().y;
             let mid = Pos2::new(inner.left() + 4.5, top + note.size().y / 2.0);
             let (tip, base) = if up { (-4.0, 3.0) } else { (4.0, -3.0) };
-            painter.add(Shape::convex_polygon(vec![mid + Vec2::new(-4.5, base), mid + Vec2::new(4.5, base), mid + Vec2::new(0.0, tip)], color, Stroke::NONE));
+            painter.add(Shape::convex_polygon(
+                vec![
+                    mid + Vec2::new(-4.5, base),
+                    mid + Vec2::new(4.5, base),
+                    mid + Vec2::new(0.0, tip),
+                ],
+                color,
+                Stroke::NONE,
+            ));
             painter.galley(Pos2::new(inner.left() + 13.0, top), note, color);
         }
     }
@@ -958,8 +1332,19 @@ fn tile(ui: &mut egui::Ui, width: f32, tile: &Tile) {
 /// the day clicked.
 fn calendar_card(ui: &mut egui::Ui, scope: &Scope, year: i32) -> Option<String> {
     let days = &scope.stats.days;
-    let active = days.keys().filter(|day| NaiveDate::from_num_days_from_ce_opt(**day).is_some_and(|date| date.year() == year)).count();
-    card_title(ui, Mark::Calendar, GREEN, &trf("Activity in {}", &[&year]), Some(&trf("{} days with photos", &[&grouped(active)])));
+    let active = days
+        .keys()
+        .filter(|day| {
+            NaiveDate::from_num_days_from_ce_opt(**day).is_some_and(|date| date.year() == year)
+        })
+        .count();
+    card_title(
+        ui,
+        Mark::Calendar,
+        GREEN,
+        &trf("Activity in {}", &[&year]),
+        Some(&trf("{} days with photos", &[&grouped(active)])),
+    );
     calendar(ui, days, year, scope.grow)
 }
 
@@ -976,7 +1361,8 @@ fn calendar(ui: &mut egui::Ui, days: &HashMap<i32, usize>, year: i32, grow: f32)
     let weeks = (lead + length + 6) / 7;
     let width = ui.available_width();
     let cell = ((width - LABEL_W) / weeks as f32).clamp(6.0, 20.0);
-    let (rect, response) = ui.allocate_exact_size(Vec2::new(width, HEAD + 7.0 * cell + FOOT), Sense::click());
+    let (rect, response) =
+        ui.allocate_exact_size(Vec2::new(width, HEAD + 7.0 * cell + FOOT), Sense::click());
     if !ui.is_rect_visible(rect) {
         return None;
     }
@@ -984,7 +1370,11 @@ fn calendar(ui: &mut egui::Ui, days: &HashMap<i32, usize>, year: i32, grow: f32)
     let origin = Pos2::new(rect.left() + LABEL_W, rect.top() + HEAD);
     let gap = (cell * 0.18).clamp(1.5, 3.0);
     let corner = (cell * 0.22) as u8;
-    let count_of = |offset: i64| days.get(&(first.num_days_from_ce() + offset as i32)).copied().unwrap_or(0);
+    let count_of = |offset: i64| {
+        days.get(&(first.num_days_from_ce() + offset as i32))
+            .copied()
+            .unwrap_or(0)
+    };
     let slot = |offset: i64| (((lead + offset) / 7) as f32, ((lead + offset) % 7) as f32);
     let most = (0..length).map(count_of).max().unwrap_or(0);
     let hovered = response.hover_pos().and_then(|pos| {
@@ -998,20 +1388,45 @@ fn calendar(ui: &mut egui::Ui, days: &HashMap<i32, usize>, year: i32, grow: f32)
     });
     let font = FontId::proportional(10.5);
     for row in [0, 2, 4] {
-        painter.text(Pos2::new(rect.left(), origin.y + (row as f32 + 0.5) * cell), Align2::LEFT_CENTER, short_weekday(row), font.clone(), theme::muted());
+        painter.text(
+            Pos2::new(rect.left(), origin.y + (row as f32 + 0.5) * cell),
+            Align2::LEFT_CENTER,
+            short_weekday(row),
+            font.clone(),
+            theme::muted(),
+        );
     }
     for month in 1..=12 {
         if let Some(date) = NaiveDate::from_ymd_opt(year, month, 1) {
             let (column, _) = slot((date - first).num_days());
-            painter.text(Pos2::new(origin.x + column * cell, rect.top()), Align2::LEFT_TOP, short_month(month), font.clone(), theme::muted());
+            painter.text(
+                Pos2::new(origin.x + column * cell, rect.top()),
+                Align2::LEFT_TOP,
+                short_month(month),
+                font.clone(),
+                theme::muted(),
+            );
         }
     }
     for offset in 0..length {
         let (column, row) = slot(offset);
-        let square = Rect::from_min_size(origin + Vec2::new(column * cell, row * cell), Vec2::splat(cell)).shrink(gap / 2.0);
-        painter.rect_filled(square, corner, heat(count_of(offset), most).gamma_multiply(wave(grow, column / weeks as f32)));
+        let square = Rect::from_min_size(
+            origin + Vec2::new(column * cell, row * cell),
+            Vec2::splat(cell),
+        )
+        .shrink(gap / 2.0);
+        painter.rect_filled(
+            square,
+            corner,
+            heat(count_of(offset), most).gamma_multiply(wave(grow, column / weeks as f32)),
+        );
         if hovered == Some(offset) {
-            painter.rect_stroke(square, corner, Stroke::new(1.5, theme::text()), StrokeKind::Outside);
+            painter.rect_stroke(
+                square,
+                corner,
+                Stroke::new(1.5, theme::text()),
+                StrokeKind::Outside,
+            );
         }
     }
     let foot = origin.y + 7.0 * cell + 12.0;
@@ -1023,8 +1438,16 @@ fn calendar(ui: &mut egui::Ui, days: &HashMap<i32, usize>, year: i32, grow: f32)
     x -= 6.0;
     for level in (0..5).rev() {
         x -= swatch;
-        let color = if level == 0 { theme::well() } else { theme::accent().gamma_multiply(heat_alpha((level - 1) as f32 / 3.0)) };
-        painter.rect_filled(Rect::from_min_size(Pos2::new(x, foot), Vec2::splat(swatch)), 2, color);
+        let color = if level == 0 {
+            theme::well()
+        } else {
+            theme::accent().gamma_multiply(heat_alpha((level - 1) as f32 / 3.0))
+        };
+        painter.rect_filled(
+            Rect::from_min_size(Pos2::new(x, foot), Vec2::splat(swatch)),
+            2,
+            color,
+        );
         x -= 3.0;
     }
     x -= 3.0 + less.size().x;
@@ -1034,10 +1457,23 @@ fn calendar(ui: &mut egui::Ui, days: &HashMap<i32, usize>, year: i32, grow: f32)
     let date = first + chrono::Duration::days(offset);
     let count = count_of(offset);
     let (column, row) = slot(offset);
-    let at = chrono::Local.from_local_datetime(&date.and_hms_opt(12, 0, 0)?).earliest()?.timestamp();
+    let at = chrono::Local
+        .from_local_datetime(&date.and_hms_opt(12, 0, 0)?)
+        .earliest()?
+        .timestamp();
     let foot = (count > 0).then_some(tr("Show these photos"));
-    hover_card(ui, origin + Vec2::new((column + 0.5) * cell, row * cell), &format_day(at), &photos_or_none(count), foot);
-    if count > 0 && response.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+    hover_card(
+        ui,
+        origin + Vec2::new((column + 0.5) * cell, row * cell),
+        &format_day(at),
+        &photos_or_none(count),
+        foot,
+    );
+    if count > 0
+        && response
+            .on_hover_cursor(egui::CursorIcon::PointingHand)
+            .clicked()
+    {
         return Some(date.format("%Y-%m-%d").to_string());
     }
     None
@@ -1049,13 +1485,24 @@ fn timeline_card(ui: &mut egui::Ui, scope: &Scope, go: &mut Option<Go>) {
     let stats = scope.stats;
     match scope.year {
         None => {
-            card_title(ui, Mark::Chart, theme::accent(), tr("Photos per year"), None);
+            card_title(
+                ui,
+                Mark::Chart,
+                theme::accent(),
+                tr("Photos per year"),
+                None,
+            );
             if stats.years.is_empty() {
                 muted(ui, tr("Unknown date"));
                 return;
             }
-            let years: Vec<(String, usize)> = stats.years.iter().map(|(year, count)| (year.to_string(), *count)).collect();
-            if let Some(index) = columns(ui, &years, 150.0, scope.grow, Some(tr("Show this year"))) {
+            let years: Vec<(String, usize)> = stats
+                .years
+                .iter()
+                .map(|(year, count)| (year.to_string(), *count))
+                .collect();
+            if let Some(index) = columns(ui, &years, 150.0, scope.grow, Some(tr("Show this year")))
+            {
                 *go = Some(Go::Year(Some(stats.years[index].0)));
             }
             ui.add_space(16.0);
@@ -1063,8 +1510,20 @@ fn timeline_card(ui: &mut egui::Ui, scope: &Scope, go: &mut Option<Go>) {
             columns(ui, &month_bars(&stats.months), 90.0, scope.grow, None);
         }
         Some(year) => {
-            card_title(ui, Mark::Chart, theme::accent(), tr("Photos per month"), Some(&year.to_string()));
-            if let Some(index) = columns(ui, &month_bars(&stats.months), 220.0, scope.grow, Some(tr("Show these photos"))) {
+            card_title(
+                ui,
+                Mark::Chart,
+                theme::accent(),
+                tr("Photos per month"),
+                Some(&year.to_string()),
+            );
+            if let Some(index) = columns(
+                ui,
+                &month_bars(&stats.months),
+                220.0,
+                scope.grow,
+                Some(tr("Show these photos")),
+            ) {
                 *go = Some(Go::Search(format!("{year}-{:02}", index + 1)));
             }
         }
@@ -1072,21 +1531,31 @@ fn timeline_card(ui: &mut egui::Ui, scope: &Scope, go: &mut Option<Go>) {
 }
 
 fn month_bars(months: &[usize; 12]) -> Vec<(String, usize)> {
-    (1..=12).map(|month| (short_month(month), months[month as usize - 1])).collect()
+    (1..=12)
+        .map(|month| (short_month(month), months[month as usize - 1]))
+        .collect()
 }
 
 /// When in the week photos are taken, by weekday and hour.
 fn rhythm_card(ui: &mut egui::Ui, scope: &Scope) {
     card_title(ui, Mark::Clock, ROSE, tr("When you shoot"), None);
     let grid = &scope.stats.week_hours;
-    let busiest = (0..7).flat_map(|day| (0..24).map(move |hour| (day, hour, grid[day][hour]))).max_by_key(|(_, _, count)| *count);
+    let busiest = (0..7)
+        .flat_map(|day| (0..24).map(move |hour| (day, hour, grid[day][hour])))
+        .max_by_key(|(_, _, count)| *count);
     let Some((day, hour, count)) = busiest.filter(|(_, _, count)| *count > 0) else {
         muted(ui, tr("Unknown date"));
         return;
     };
     punch_card(ui, grid, count, scope.grow);
     ui.add_space(10.0);
-    muted(ui, &trf("Busiest hour: {}", &[&format!("{} {hour:02}:00", short_weekday(day))]));
+    muted(
+        ui,
+        &trf(
+            "Busiest hour: {}",
+            &[&format!("{} {hour:02}:00", short_weekday(day))],
+        ),
+    );
 }
 
 /// Photos by weekday and hour as a grid of cells, deeper with more.
@@ -1096,7 +1565,8 @@ fn punch_card(ui: &mut egui::Ui, grid: &[[usize; 24]; 7], most: usize, grow: f32
     let width = ui.available_width();
     let cell_w = (width - LABEL_W) / 24.0;
     let cell_h = cell_w.clamp(12.0, 24.0);
-    let (rect, response) = ui.allocate_exact_size(Vec2::new(width, 7.0 * cell_h + FOOT), Sense::hover());
+    let (rect, response) =
+        ui.allocate_exact_size(Vec2::new(width, 7.0 * cell_h + FOOT), Sense::hover());
     if !ui.is_rect_visible(rect) {
         return;
     }
@@ -1106,25 +1576,60 @@ fn punch_card(ui: &mut egui::Ui, grid: &[[usize; 24]; 7], most: usize, grow: f32
     let hovered = response.hover_pos().and_then(|pos| {
         let column = ((pos.x - origin.x) / cell_w).floor();
         let row = ((pos.y - origin.y) / cell_h).floor();
-        ((0.0..24.0).contains(&column) && (0.0..7.0).contains(&row)).then_some((row as usize, column as usize))
+        ((0.0..24.0).contains(&column) && (0.0..7.0).contains(&row))
+            .then_some((row as usize, column as usize))
     });
     let font = FontId::proportional(10.5);
     for (day, hours) in grid.iter().enumerate() {
-        painter.text(Pos2::new(rect.left(), origin.y + (day as f32 + 0.5) * cell_h), Align2::LEFT_CENTER, short_weekday(day), font.clone(), theme::muted());
+        painter.text(
+            Pos2::new(rect.left(), origin.y + (day as f32 + 0.5) * cell_h),
+            Align2::LEFT_CENTER,
+            short_weekday(day),
+            font.clone(),
+            theme::muted(),
+        );
         for (hour, count) in hours.iter().enumerate() {
-            let cell = Rect::from_min_size(origin + Vec2::new(hour as f32 * cell_w, day as f32 * cell_h), Vec2::new(cell_w, cell_h)).shrink(gap / 2.0);
-            painter.rect_filled(cell, 3, heat(*count, most).gamma_multiply(wave(grow, hour as f32 / 24.0)));
+            let cell = Rect::from_min_size(
+                origin + Vec2::new(hour as f32 * cell_w, day as f32 * cell_h),
+                Vec2::new(cell_w, cell_h),
+            )
+            .shrink(gap / 2.0);
+            painter.rect_filled(
+                cell,
+                3,
+                heat(*count, most).gamma_multiply(wave(grow, hour as f32 / 24.0)),
+            );
             if hovered == Some((day, hour)) {
-                painter.rect_stroke(cell, 3, Stroke::new(1.5, theme::text()), StrokeKind::Outside);
+                painter.rect_stroke(
+                    cell,
+                    3,
+                    Stroke::new(1.5, theme::text()),
+                    StrokeKind::Outside,
+                );
             }
         }
     }
     for hour in [0, 6, 12, 18] {
-        painter.text(Pos2::new(origin.x + hour as f32 * cell_w + 1.0, origin.y + 7.0 * cell_h + 4.0), Align2::LEFT_TOP, format!("{hour:02}:00"), font.clone(), theme::muted());
+        painter.text(
+            Pos2::new(
+                origin.x + hour as f32 * cell_w + 1.0,
+                origin.y + 7.0 * cell_h + 4.0,
+            ),
+            Align2::LEFT_TOP,
+            format!("{hour:02}:00"),
+            font.clone(),
+            theme::muted(),
+        );
     }
     if let Some((day, hour)) = hovered {
         let anchor = origin + Vec2::new((hour as f32 + 0.5) * cell_w, day as f32 * cell_h);
-        hover_card(ui, anchor, &format!("{} {hour:02}:00", short_weekday(day)), &photos_or_none(grid[day][hour]), None);
+        hover_card(
+            ui,
+            anchor,
+            &format!("{} {hour:02}:00", short_weekday(day)),
+            &photos_or_none(grid[day][hour]),
+            None,
+        );
     }
 }
 
@@ -1160,13 +1665,23 @@ const LENSES: RankedText = RankedText {
 
 /// The names with the most photos as a donut and a legend, the rest as one
 /// slice that opens the full list, and how many photos have no name.
-fn ranked_card(ui: &mut egui::Ui, ranked: &Ranked, text: &RankedText, scope: &Scope, go: &mut Option<Go>) {
+fn ranked_card(
+    ui: &mut egui::Ui,
+    ranked: &Ranked,
+    text: &RankedText,
+    scope: &Scope,
+    go: &mut Option<Go>,
+) {
     let count = (!ranked.rows.is_empty()).then(|| grouped(ranked.rows.len()));
     card_title(ui, text.mark, text.tint, tr(text.title), count.as_deref());
     let unknown = |ui: &mut egui::Ui| {
         if ranked.unknown > 0 {
             ui.add_space(6.0);
-            ui.label(RichText::new(trf(text.unknown, &[&grouped(ranked.unknown)])).size(11.5).color(theme::muted()));
+            ui.label(
+                RichText::new(trf(text.unknown, &[&grouped(ranked.unknown)]))
+                    .size(11.5)
+                    .color(theme::muted()),
+            );
         }
     };
     if ranked.rows.is_empty() {
@@ -1180,34 +1695,73 @@ fn ranked_card(ui: &mut egui::Ui, ranked: &Ranked, text: &RankedText, scope: &Sc
     };
     let known = ranked.known();
     let id = egui::Id::unique(("stats-ranked-all", text.key));
-    let all = ui.ctx().data(|data| data.get_temp::<bool>(id)).unwrap_or(false);
-    let rest: usize = ranked.rows.iter().skip(SLICES).map(|(_, count)| count).sum();
-    let mut parts: Vec<(f32, Color32)> = ranked.rows.iter().take(SLICES).zip(slice_colors()).map(|((_, count), color)| (*count as f32 / known.max(1) as f32, color)).collect();
+    let all = ui
+        .ctx()
+        .data(|data| data.get_temp::<bool>(id))
+        .unwrap_or(false);
+    let rest: usize = ranked
+        .rows
+        .iter()
+        .skip(SLICES)
+        .map(|(_, count)| count)
+        .sum();
+    let mut parts: Vec<(f32, Color32)> = ranked
+        .rows
+        .iter()
+        .take(SLICES)
+        .zip(slice_colors())
+        .map(|((_, count), color)| (*count as f32 / known.max(1) as f32, color))
+        .collect();
     if rest > 0 {
         parts.push((rest as f32 / known.max(1) as f32, other_color()));
     }
     let mut toggle = false;
-    let size = if ui.available_width() >= 380.0 { 136.0 } else { 112.0 };
+    let size = if ui.available_width() >= 380.0 {
+        136.0
+    } else {
+        112.0
+    };
     ui.horizontal_top(|ui| {
         ui.spacing_mut().item_spacing.x = 18.0;
-        let (donut_response, slice) = donut(ui, size, &parts, scope.grow, &grouped(known), tr("Photos"));
+        let (donut_response, slice) =
+            donut(ui, size, &parts, scope.grow, &grouped(known), tr("Photos"));
         ui.vertical(|ui| {
             ui.spacing_mut().item_spacing.y = 2.0;
-            for (index, ((name, count), color)) in ranked.rows.iter().take(SLICES).zip(slice_colors()).enumerate() {
+            for (index, ((name, count), color)) in ranked
+                .rows
+                .iter()
+                .take(SLICES)
+                .zip(slice_colors())
+                .enumerate()
+            {
                 if legend_row(ui, color, name, *count, known, slice == Some(index)).clicked() {
                     *go = Some(Go::Search(search(name)));
                 }
             }
             if rest > 0 {
                 let label = format!("{} ({})", tr("Other"), grouped(ranked.rows.len() - SLICES));
-                if legend_row(ui, other_color(), &label, rest, known, slice == Some(SLICES)).clicked() {
+                if legend_row(
+                    ui,
+                    other_color(),
+                    &label,
+                    rest,
+                    known,
+                    slice == Some(SLICES),
+                )
+                .clicked()
+                {
                     toggle = true;
                 }
             }
         });
-        if donut_response.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+        if donut_response
+            .on_hover_cursor(egui::CursorIcon::PointingHand)
+            .clicked()
+        {
             match slice {
-                Some(index) if index < SLICES => *go = Some(Go::Search(search(&ranked.rows[index].0))),
+                Some(index) if index < SLICES => {
+                    *go = Some(Go::Search(search(&ranked.rows[index].0)))
+                }
                 Some(_) => toggle = true,
                 None => {}
             }
@@ -1235,9 +1789,19 @@ fn ranked_card(ui: &mut egui::Ui, ranked: &Ranked, text: &RankedText, scope: &Sc
     if rest > 0 {
         ui.add_space(4.0);
         let toggled = if all {
-            more_link(ui, tr("Show fewer").to_string(), tr("Show only the top names"))
+            more_link(
+                ui,
+                tr("Show fewer").to_string(),
+                tr("Show only the top names"),
+            )
         } else {
-            let line = trf("and {} more · {}", &[&grouped(ranked.rows.len() - SLICES), &super::photo_count(rest)]);
+            let line = trf(
+                "and {} more · {}",
+                &[
+                    &grouped(ranked.rows.len() - SLICES),
+                    &super::photo_count(rest),
+                ],
+            );
             more_link(ui, line, tr("Show the full list"))
         };
         toggle |= toggled;
@@ -1258,24 +1822,47 @@ fn mix_card(ui: &mut egui::Ui, scope: &Scope) {
     let size = ((ui.available_width() - 28.0) / 2.0).clamp(90.0, 136.0);
     ui.horizontal_top(|ui| {
         ui.spacing_mut().item_spacing.x = 28.0;
-        mix_chart(ui, size, scope.grow, &grouped(total), [(theme::accent(), tr("Photos"), stats.photos), (ROSE, tr("Videos"), stats.videos)].map(|(color, name, count)| (share(count), color, name, count)));
+        mix_chart(
+            ui,
+            size,
+            scope.grow,
+            &grouped(total),
+            [
+                (theme::accent(), tr("Photos"), stats.photos),
+                (ROSE, tr("Videos"), stats.videos),
+            ]
+            .map(|(color, name, count)| (share(count), color, name, count)),
+        );
         let without = total - stats.geotagged;
         mix_chart(
             ui,
             size,
             scope.grow,
             &format!("{}%", percent(stats.geotagged, total)),
-            [(theme::PIN, tr("With a location"), stats.geotagged), (other_color(), tr("Without a location"), without)].map(|(color, name, count)| (share(count), color, name, count)),
+            [
+                (theme::PIN, tr("With a location"), stats.geotagged),
+                (other_color(), tr("Without a location"), without),
+            ]
+            .map(|(color, name, count)| (share(count), color, name, count)),
         );
     });
 }
 
 /// A donut of two `parts`, each a share, color, name, and count, with its
 /// legend under it.
-fn mix_chart(ui: &mut egui::Ui, size: f32, grow: f32, value: &str, parts: [(f32, Color32, &str, usize); 2]) {
+fn mix_chart(
+    ui: &mut egui::Ui,
+    size: f32,
+    grow: f32,
+    value: &str,
+    parts: [(f32, Color32, &str, usize); 2],
+) {
     ui.vertical(|ui| {
         ui.set_width(size);
-        let slices: Vec<(f32, Color32)> = parts.iter().map(|(share, color, _, _)| (*share, *color)).collect();
+        let slices: Vec<(f32, Color32)> = parts
+            .iter()
+            .map(|(share, color, _, _)| (*share, *color))
+            .collect();
         let (_, slice) = donut(ui, size, &slices, grow, value, "");
         ui.add_space(8.0);
         ui.spacing_mut().item_spacing.y = 2.0;
@@ -1283,8 +1870,16 @@ fn mix_chart(ui: &mut egui::Ui, size: f32, grow: f32, value: &str, parts: [(f32,
             ui.horizontal(|ui| {
                 let (dot, _) = ui.allocate_exact_size(Vec2::splat(10.0), Sense::hover());
                 ui.painter().circle_filled(dot.center(), 4.0, *color);
-                let tint = if slice == Some(index) { theme::text() } else { theme::muted() };
-                ui.label(RichText::new(format!("{name} · {}", grouped(*count))).size(11.5).color(tint));
+                let tint = if slice == Some(index) {
+                    theme::text()
+                } else {
+                    theme::muted()
+                };
+                ui.label(
+                    RichText::new(format!("{name} · {}", grouped(*count)))
+                        .size(11.5)
+                        .color(tint),
+                );
             });
         }
     });
@@ -1298,19 +1893,32 @@ fn focal_card(ui: &mut egui::Ui, scope: &Scope) {
         muted(ui, tr("Photos with a recorded focal length show up here."));
         return;
     }
-    let bands: Vec<(String, usize)> = FOCAL_BANDS.iter().zip(stats.focal).map(|((_, label), count)| (label.to_string(), count)).collect();
+    let bands: Vec<(String, usize)> = FOCAL_BANDS
+        .iter()
+        .zip(stats.focal)
+        .map(|((_, label), count)| (label.to_string(), count))
+        .collect();
     columns(ui, &bands, 150.0, scope.grow, None);
     ui.add_space(6.0);
     let mut note = tr("Millimeters, 35 mm equivalent").to_string();
     if let Some((mm, count)) = stats.focal_top {
-        note = format!("{note} · {}", trf("Most used: {} mm ({})", &[&mm, &super::photo_count(count)]));
+        note = format!(
+            "{note} · {}",
+            trf("Most used: {} mm ({})", &[&mm, &super::photo_count(count)])
+        );
     }
     ui.label(RichText::new(note).size(11.5).color(theme::muted()));
 }
 
 /// Cards side by side, each `shares` of `width`, as tall as the tallest
 /// one; one under the other on a narrow page.
-fn bento(ui: &mut egui::Ui, key: &str, width: f32, shares: &[f32], mut add: impl FnMut(&mut egui::Ui, usize)) {
+fn bento(
+    ui: &mut egui::Ui,
+    key: &str,
+    width: f32,
+    shares: &[f32],
+    mut add: impl FnMut(&mut egui::Ui, usize),
+) {
     if width < NARROW || shares.len() == 1 {
         for index in 0..shares.len() {
             if index > 0 {
@@ -1323,7 +1931,10 @@ fn bento(ui: &mut egui::Ui, key: &str, width: f32, shares: &[f32], mut add: impl
     // Content heights are known only once drawn, so a row is as tall as its
     // tallest card was the frame before.
     let id = egui::Id::unique(("stats-bento", key));
-    let tallest = ui.ctx().data(|data| data.get_temp::<f32>(id)).unwrap_or(0.0);
+    let tallest = ui
+        .ctx()
+        .data(|data| data.get_temp::<f32>(id))
+        .unwrap_or(0.0);
     let room = width - CARD_GAP * (shares.len() - 1) as f32;
     let mut natural = 0.0f32;
     ui.horizontal_top(|ui| {
@@ -1366,13 +1977,37 @@ fn card_title(ui: &mut egui::Ui, mark: Mark, tint: Color32, title: &str, aside: 
     let width = ui.available_width();
     let (rect, _) = ui.allocate_exact_size(Vec2::new(width, 30.0), Sense::hover());
     let painter = ui.painter();
-    badge(painter, Rect::from_min_size(rect.min, Vec2::splat(30.0)), mark, tint);
-    let aside = aside.map(|text| painter.layout_no_wrap(text.to_string(), FontId::proportional(12.0), theme::muted()));
+    badge(
+        painter,
+        Rect::from_min_size(rect.min, Vec2::splat(30.0)),
+        mark,
+        tint,
+    );
+    let aside = aside.map(|text| {
+        painter.layout_no_wrap(text.to_string(), FontId::proportional(12.0), theme::muted())
+    });
     let aside_w = aside.as_ref().map_or(0.0, |aside| aside.size().x + 12.0);
-    let title = truncated(painter, title.to_string(), 15.5, theme::text(), width - 40.0 - aside_w);
-    painter.galley(Pos2::new(rect.left() + 40.0, rect.center().y - title.size().y / 2.0), title, theme::text());
+    let title = truncated(
+        painter,
+        title.to_string(),
+        15.5,
+        theme::text(),
+        width - 40.0 - aside_w,
+    );
+    painter.galley(
+        Pos2::new(rect.left() + 40.0, rect.center().y - title.size().y / 2.0),
+        title,
+        theme::text(),
+    );
     if let Some(aside) = aside {
-        painter.galley(Pos2::new(rect.right() - aside.size().x, rect.center().y - aside.size().y / 2.0), aside, theme::muted());
+        painter.galley(
+            Pos2::new(
+                rect.right() - aside.size().x,
+                rect.center().y - aside.size().y / 2.0,
+            ),
+            aside,
+            theme::muted(),
+        );
     }
     ui.add_space(12.0);
 }
@@ -1396,7 +2031,11 @@ enum Mark {
 
 /// `mark` on a tinted square.
 fn badge(painter: &egui::Painter, rect: Rect, mark: Mark, tint: Color32) {
-    painter.rect_filled(rect, 9, tint.gamma_multiply(if theme::is_dark() { 0.22 } else { 0.12 }));
+    painter.rect_filled(
+        rect,
+        9,
+        tint.gamma_multiply(if theme::is_dark() { 0.22 } else { 0.12 }),
+    );
     paint_mark(painter, rect.center(), mark, tint);
 }
 
@@ -1407,31 +2046,73 @@ fn paint_mark(painter: &egui::Painter, center: Pos2, mark: Mark, color: Color32)
             let frame = Rect::from_center_size(center, Vec2::new(15.0, 12.0));
             painter.rect_stroke(frame, 2, line, StrokeKind::Middle);
             let corner = frame.left_bottom();
-            painter.add(Shape::convex_polygon(vec![corner + Vec2::new(2.0, -2.0), corner + Vec2::new(10.0, -2.0), corner + Vec2::new(6.0, -7.0)], color, Stroke::NONE));
+            painter.add(Shape::convex_polygon(
+                vec![
+                    corner + Vec2::new(2.0, -2.0),
+                    corner + Vec2::new(10.0, -2.0),
+                    corner + Vec2::new(6.0, -7.0),
+                ],
+                color,
+                Stroke::NONE,
+            ));
             painter.circle_filled(frame.right_top() + Vec2::new(-4.0, 3.5), 1.5, color);
         }
         Mark::Video => {
-            painter.rect_stroke(Rect::from_center_size(center, Vec2::new(15.0, 12.0)), 2, line, StrokeKind::Middle);
-            painter.add(Shape::convex_polygon(vec![center + Vec2::new(-2.0, -3.5), center + Vec2::new(3.5, 0.0), center + Vec2::new(-2.0, 3.5)], color, Stroke::NONE));
+            painter.rect_stroke(
+                Rect::from_center_size(center, Vec2::new(15.0, 12.0)),
+                2,
+                line,
+                StrokeKind::Middle,
+            );
+            painter.add(Shape::convex_polygon(
+                vec![
+                    center + Vec2::new(-2.0, -3.5),
+                    center + Vec2::new(3.5, 0.0),
+                    center + Vec2::new(-2.0, 3.5),
+                ],
+                color,
+                Stroke::NONE,
+            ));
         }
         Mark::Calendar => {
             let frame = Rect::from_center_size(center + Vec2::new(0.0, 1.0), Vec2::new(14.0, 13.0));
             painter.rect_stroke(frame, 2, line, StrokeKind::Middle);
             painter.hline(frame.x_range(), frame.top() + 4.0, line);
             for dx in [-3.5, 3.5] {
-                painter.vline(center.x + dx, (frame.top() - 2.5)..=(frame.top() + 1.5), line);
+                painter.vline(
+                    center.x + dx,
+                    (frame.top() - 2.5)..=(frame.top() + 1.5),
+                    line,
+                );
             }
         }
         Mark::Storage => {
             for dy in [-4.5, 0.0, 4.5] {
-                painter.rect_filled(Rect::from_center_size(center + Vec2::new(0.0, dy), Vec2::new(14.0, 3.2)), 1, color);
+                painter.rect_filled(
+                    Rect::from_center_size(center + Vec2::new(0.0, dy), Vec2::new(14.0, 3.2)),
+                    1,
+                    color,
+                );
             }
         }
-        Mark::Pin => theme::paint_pin(painter, center + Vec2::new(0.0, -1.0), 5.5, color, card_fill()),
+        Mark::Pin => theme::paint_pin(
+            painter,
+            center + Vec2::new(0.0, -1.0),
+            5.5,
+            color,
+            card_fill(),
+        ),
         Mark::Camera => {
             let body = Rect::from_center_size(center + Vec2::new(0.0, 1.0), Vec2::new(16.0, 11.0));
             painter.rect_stroke(body, 2, line, StrokeKind::Middle);
-            painter.rect_filled(Rect::from_center_size(Pos2::new(center.x - 3.0, body.top() - 1.0), Vec2::new(5.0, 2.5)), 1, color);
+            painter.rect_filled(
+                Rect::from_center_size(
+                    Pos2::new(center.x - 3.0, body.top() - 1.0),
+                    Vec2::new(5.0, 2.5),
+                ),
+                1,
+                color,
+            );
             painter.circle_stroke(body.center(), 3.0, line);
         }
         Mark::Lens => {
@@ -1447,7 +2128,14 @@ fn paint_mark(painter: &egui::Painter, center: Pos2, mark: Mark, color: Color32)
         Mark::Chart => {
             for (n, h) in [6.0, 12.0, 9.0].into_iter().enumerate() {
                 let left = center.x - 6.5 + n as f32 * 5.0;
-                painter.rect_filled(Rect::from_min_max(Pos2::new(left, center.y + 6.0 - h), Pos2::new(left + 3.5, center.y + 6.0)), 1, color);
+                painter.rect_filled(
+                    Rect::from_min_max(
+                        Pos2::new(left, center.y + 6.0 - h),
+                        Pos2::new(left + 3.5, center.y + 6.0),
+                    ),
+                    1,
+                    color,
+                );
             }
         }
         Mark::Globe => {
@@ -1457,8 +2145,20 @@ fn paint_mark(painter: &egui::Painter, center: Pos2, mark: Mark, color: Color32)
         }
         Mark::Focal => {
             let frame = Rect::from_center_size(center, Vec2::splat(14.0));
-            for (corner, dx, dy) in [(frame.left_top(), 1.0, 1.0), (frame.right_top(), -1.0, 1.0), (frame.left_bottom(), 1.0, -1.0), (frame.right_bottom(), -1.0, -1.0)] {
-                painter.add(Shape::line(vec![corner + Vec2::new(4.0 * dx, 0.0), corner, corner + Vec2::new(0.0, 4.0 * dy)], line));
+            for (corner, dx, dy) in [
+                (frame.left_top(), 1.0, 1.0),
+                (frame.right_top(), -1.0, 1.0),
+                (frame.left_bottom(), 1.0, -1.0),
+                (frame.right_bottom(), -1.0, -1.0),
+            ] {
+                painter.add(Shape::line(
+                    vec![
+                        corner + Vec2::new(4.0 * dx, 0.0),
+                        corner,
+                        corner + Vec2::new(0.0, 4.0 * dy),
+                    ],
+                    line,
+                ));
             }
             painter.circle_filled(center, 2.0, color);
         }
@@ -1474,27 +2174,59 @@ fn paint_mark(painter: &egui::Painter, center: Pos2, mark: Mark, color: Color32)
 /// light lines at round counts, grown `grow` of the way. The column under
 /// the pointer is lit and tells its count. Returns the column clicked, when
 /// there is a `hint` to say what a click does.
-fn columns(ui: &mut egui::Ui, bars: &[(String, usize)], height: f32, grow: f32, hint: Option<&str>) -> Option<usize> {
+fn columns(
+    ui: &mut egui::Ui,
+    bars: &[(String, usize)],
+    height: f32,
+    grow: f32,
+    hint: Option<&str>,
+) -> Option<usize> {
     const LABEL_H: f32 = 20.0;
     const SCALE_W: f32 = 34.0;
     let width = ui.available_width();
-    let sense = if hint.is_some() { Sense::click() } else { Sense::hover() };
+    let sense = if hint.is_some() {
+        Sense::click()
+    } else {
+        Sense::hover()
+    };
     let (rect, response) = ui.allocate_exact_size(Vec2::new(width, height + LABEL_H), sense);
     if bars.is_empty() || !ui.is_rect_visible(rect) {
         return None;
     }
     let painter = ui.painter();
-    let plot = Rect::from_min_max(Pos2::new(rect.left() + SCALE_W, rect.top() + 8.0), Pos2::new(rect.right(), rect.top() + height));
-    let most = bars.iter().map(|(_, count)| *count).max().unwrap_or(0).max(1);
+    let plot = Rect::from_min_max(
+        Pos2::new(rect.left() + SCALE_W, rect.top() + 8.0),
+        Pos2::new(rect.right(), rect.top() + height),
+    );
+    let most = bars
+        .iter()
+        .map(|(_, count)| *count)
+        .max()
+        .unwrap_or(0)
+        .max(1);
     let step = nice_step(most as f32 / 3.0);
     let top = (most as f32 / step).ceil() * step;
     let small = FontId::proportional(10.5);
-    painter.hline(plot.x_range(), plot.bottom(), Stroke::new(1.0, theme::hairline()));
+    painter.hline(
+        plot.x_range(),
+        plot.bottom(),
+        Stroke::new(1.0, theme::hairline()),
+    );
     let mut mark = step;
     while mark <= top + 0.5 {
         let y = plot.bottom() - plot.height() * mark / top;
-        painter.hline(plot.x_range(), y, Stroke::new(1.0, theme::hairline().gamma_multiply(0.6)));
-        painter.text(Pos2::new(plot.left() - 8.0, y), Align2::RIGHT_CENTER, grouped(mark as usize), small.clone(), theme::muted());
+        painter.hline(
+            plot.x_range(),
+            y,
+            Stroke::new(1.0, theme::hairline().gamma_multiply(0.6)),
+        );
+        painter.text(
+            Pos2::new(plot.left() - 8.0, y),
+            Align2::RIGHT_CENTER,
+            grouped(mark as usize),
+            small.clone(),
+            theme::muted(),
+        );
         mark += step;
     }
     let slot = plot.width() / bars.len() as f32;
@@ -1504,13 +2236,28 @@ fn columns(ui: &mut egui::Ui, bars: &[(String, usize)], height: f32, grow: f32, 
         .filter(|pos| plot.x_range().contains(pos.x))
         .map(|pos| (((pos.x - plot.left()) / slot).floor() as usize).min(bars.len() - 1));
     let label_font = FontId::proportional(11.0);
-    let widest = bars.iter().map(|(label, _)| painter.layout_no_wrap(label.clone(), label_font.clone(), theme::muted()).size().x).fold(0.0, f32::max);
+    let widest = bars
+        .iter()
+        .map(|(label, _)| {
+            painter
+                .layout_no_wrap(label.clone(), label_font.clone(), theme::muted())
+                .size()
+                .x
+        })
+        .fold(0.0, f32::max);
     let every = ((widest + 6.0) / slot).ceil().max(1.0) as usize;
     for (index, (label, count)) in bars.iter().enumerate() {
         let left = plot.left() + index as f32 * slot + gap / 2.0;
         let full = plot.height() * *count as f32 / top;
-        let h = if *count == 0 { 0.0 } else { (full * wave(grow, index as f32 / bars.len() as f32)).max(2.0) };
-        let bar = Rect::from_min_max(Pos2::new(left, plot.bottom() - h), Pos2::new(left + slot - gap, plot.bottom()));
+        let h = if *count == 0 {
+            0.0
+        } else {
+            (full * wave(grow, index as f32 / bars.len() as f32)).max(2.0)
+        };
+        let bar = Rect::from_min_max(
+            Pos2::new(left, plot.bottom() - h),
+            Pos2::new(left + slot - gap, plot.bottom()),
+        );
         let lit = hovered == Some(index);
         let color = match hovered {
             None => theme::accent().gamma_multiply(0.85),
@@ -1518,17 +2265,39 @@ fn columns(ui: &mut egui::Ui, bars: &[(String, usize)], height: f32, grow: f32, 
             Some(_) => theme::accent().gamma_multiply(0.35),
         };
         let radius = ((slot - gap) / 2.0).min(5.0) as u8;
-        painter.rect_filled(bar, CornerRadius { nw: radius, ne: radius, sw: 0, se: 0 }, color);
+        painter.rect_filled(
+            bar,
+            CornerRadius {
+                nw: radius,
+                ne: radius,
+                sw: 0,
+                se: 0,
+            },
+            color,
+        );
         if index % every == 0 || lit {
             let color = if lit { theme::text() } else { theme::muted() };
-            painter.text(Pos2::new(bar.center().x, plot.bottom() + 4.0), Align2::CENTER_TOP, label, label_font.clone(), color);
+            painter.text(
+                Pos2::new(bar.center().x, plot.bottom() + 4.0),
+                Align2::CENTER_TOP,
+                label,
+                label_font.clone(),
+                color,
+            );
         }
     }
     let index = hovered?;
     let (label, count) = &bars[index];
-    let anchor = Pos2::new(plot.left() + (index as f32 + 0.5) * slot, plot.bottom() - plot.height() * *count as f32 / top - 4.0);
+    let anchor = Pos2::new(
+        plot.left() + (index as f32 + 0.5) * slot,
+        plot.bottom() - plot.height() * *count as f32 / top - 4.0,
+    );
     hover_card(ui, anchor, label, &super::photo_count(*count), hint);
-    if hint.is_some() && response.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+    if hint.is_some()
+        && response
+            .on_hover_cursor(egui::CursorIcon::PointingHand)
+            .clicked()
+    {
         return Some(index);
     }
     None
@@ -1556,7 +2325,14 @@ fn nice_step(raw: f32) -> f32 {
 /// A ring cut into `parts`, each a share and a color, drawn `grow` of the
 /// way round, with `value` and `label` in the middle. Returns its response
 /// and the part under the pointer, which stands out.
-fn donut(ui: &mut egui::Ui, size: f32, parts: &[(f32, Color32)], grow: f32, value: &str, label: &str) -> (Response, Option<usize>) {
+fn donut(
+    ui: &mut egui::Ui,
+    size: f32,
+    parts: &[(f32, Color32)],
+    grow: f32,
+    value: &str,
+    label: &str,
+) -> (Response, Option<usize>) {
     let (rect, response) = ui.allocate_exact_size(Vec2::splat(size), Sense::click());
     let center = rect.center();
     let thick = size * 0.13;
@@ -1575,7 +2351,11 @@ fn donut(ui: &mut egui::Ui, size: f32, parts: &[(f32, Color32)], grow: f32, valu
     });
     let painter = ui.painter();
     painter.circle_stroke(center, radius, Stroke::new(thick, theme::well()));
-    let gap = if parts.iter().filter(|(share, _)| *share > 0.0).count() > 1 { 0.004 } else { 0.0 };
+    let gap = if parts.iter().filter(|(share, _)| *share > 0.0).count() > 1 {
+        0.004
+    } else {
+        0.0
+    };
     let mut start = 0.0;
     for (index, (share, color)) in parts.iter().enumerate() {
         let sweep = share * grow;
@@ -1584,33 +2364,78 @@ fn donut(ui: &mut egui::Ui, size: f32, parts: &[(f32, Color32)], grow: f32, valu
             Some(_) => (thick, color.gamma_multiply(0.5)),
             None => (thick, *color),
         };
-        arc(painter, center, radius, start + gap, start + sweep - gap, width, color);
+        arc(
+            painter,
+            center,
+            radius,
+            start + gap,
+            start + sweep - gap,
+            width,
+            color,
+        );
         start += sweep;
     }
     if label.is_empty() {
-        painter.text(center, Align2::CENTER_CENTER, value, FontId::proportional(size * 0.16), theme::text());
+        painter.text(
+            center,
+            Align2::CENTER_CENTER,
+            value,
+            FontId::proportional(size * 0.16),
+            theme::text(),
+        );
     } else {
-        painter.text(center - Vec2::new(0.0, size * 0.05), Align2::CENTER_CENTER, value, FontId::proportional(size * 0.15), theme::text());
-        painter.text(center + Vec2::new(0.0, size * 0.1), Align2::CENTER_CENTER, label, FontId::proportional(11.0), theme::muted());
+        painter.text(
+            center - Vec2::new(0.0, size * 0.05),
+            Align2::CENTER_CENTER,
+            value,
+            FontId::proportional(size * 0.15),
+            theme::text(),
+        );
+        painter.text(
+            center + Vec2::new(0.0, size * 0.1),
+            Align2::CENTER_CENTER,
+            label,
+            FontId::proportional(11.0),
+            theme::muted(),
+        );
     }
     (response, hovered)
 }
 
 /// A stretch of a circle from `from` to `to`, in turns from the top.
-fn arc(painter: &egui::Painter, center: Pos2, radius: f32, from: f32, to: f32, width: f32, color: Color32) {
+fn arc(
+    painter: &egui::Painter,
+    center: Pos2,
+    radius: f32,
+    from: f32,
+    to: f32,
+    width: f32,
+    color: Color32,
+) {
     if to <= from {
         return;
     }
     let steps = ((to - from) * 120.0).ceil().max(2.0) as usize;
     let points: Vec<Pos2> = (0..=steps)
-        .map(|step| center + Vec2::angled((from + (to - from) * step as f32 / steps as f32) * TAU - FRAC_PI_2) * radius)
+        .map(|step| {
+            center
+                + Vec2::angled((from + (to - from) * step as f32 / steps as f32) * TAU - FRAC_PI_2)
+                    * radius
+        })
         .collect();
     painter.add(Shape::line(points, Stroke::new(width, color)));
 }
 
 /// A name in a donut's legend with its color and share. Returns its
 /// response.
-fn legend_row(ui: &mut egui::Ui, color: Color32, name: &str, count: usize, total: usize, lit: bool) -> Response {
+fn legend_row(
+    ui: &mut egui::Ui,
+    color: Color32,
+    name: &str,
+    count: usize,
+    total: usize,
+    lit: bool,
+) -> Response {
     let width = ui.available_width();
     let (rect, response) = ui.allocate_exact_size(Vec2::new(width, 26.0), Sense::click());
     let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
@@ -1619,35 +2444,89 @@ fn legend_row(ui: &mut egui::Ui, color: Color32, name: &str, count: usize, total
         painter.rect_filled(rect, 6, theme::hover());
     }
     painter.circle_filled(Pos2::new(rect.left() + 10.0, rect.center().y), 4.5, color);
-    let figure = painter.layout_no_wrap(format!("{}  {}%", grouped(count), percent(count, total)), FontId::proportional(12.0), theme::text());
+    let figure = painter.layout_no_wrap(
+        format!("{}  {}%", grouped(count), percent(count, total)),
+        FontId::proportional(12.0),
+        theme::text(),
+    );
     let figure_w = figure.size().x;
-    painter.galley(Pos2::new(rect.right() - 6.0 - figure_w, rect.center().y - figure.size().y / 2.0), figure, theme::text());
-    let title = truncated(painter, name.to_string(), 12.5, theme::text(), width - 22.0 - figure_w - 14.0);
-    painter.galley(Pos2::new(rect.left() + 22.0, rect.center().y - title.size().y / 2.0), title, theme::text());
+    painter.galley(
+        Pos2::new(
+            rect.right() - 6.0 - figure_w,
+            rect.center().y - figure.size().y / 2.0,
+        ),
+        figure,
+        theme::text(),
+    );
+    let title = truncated(
+        painter,
+        name.to_string(),
+        12.5,
+        theme::text(),
+        width - 22.0 - figure_w - 14.0,
+    );
+    painter.galley(
+        Pos2::new(rect.left() + 22.0, rect.center().y - title.size().y / 2.0),
+        title,
+        theme::text(),
+    );
     response.on_hover_text(super::photo_count(count))
 }
 
 /// A small card above `anchor` naming what is pointed at, drawn over
 /// everything else and kept on the page.
 fn hover_card(ui: &egui::Ui, anchor: Pos2, title: &str, body: &str, foot: Option<&str>) {
-    let painter = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::unique("stats-hover")));
-    let title = painter.layout_no_wrap(title.to_string(), FontId::proportional(12.5), theme::text());
+    let painter = ui.ctx().layer_painter(egui::LayerId::new(
+        egui::Order::Tooltip,
+        egui::Id::unique("stats-hover"),
+    ));
+    let title =
+        painter.layout_no_wrap(title.to_string(), FontId::proportional(12.5), theme::text());
     let body = painter.layout_no_wrap(body.to_string(), FontId::proportional(11.5), theme::muted());
-    let foot = foot.map(|text| painter.layout_no_wrap(text.to_string(), FontId::proportional(11.0), theme::accent()));
-    let inner_w = title.size().x.max(body.size().x).max(foot.as_ref().map_or(0.0, |foot| foot.size().x));
-    let inner_h = title.size().y + 2.0 + body.size().y + foot.as_ref().map_or(0.0, |foot| foot.size().y + 2.0);
+    let foot = foot.map(|text| {
+        painter.layout_no_wrap(
+            text.to_string(),
+            FontId::proportional(11.0),
+            theme::accent(),
+        )
+    });
+    let inner_w = title
+        .size()
+        .x
+        .max(body.size().x)
+        .max(foot.as_ref().map_or(0.0, |foot| foot.size().x));
+    let inner_h = title.size().y
+        + 2.0
+        + body.size().y
+        + foot.as_ref().map_or(0.0, |foot| foot.size().y + 2.0);
     let size = Vec2::new(inner_w + 20.0, inner_h + 14.0);
     let bounds = ui.clip_rect();
     let mut min = Pos2::new(anchor.x - size.x / 2.0, anchor.y - size.y - 8.0);
     if min.y < bounds.top() + 2.0 {
         min.y = anchor.y + 22.0;
     }
-    min.x = min.x.clamp(bounds.left() + 2.0, (bounds.right() - size.x - 2.0).max(bounds.left() + 2.0));
+    min.x = min.x.clamp(
+        bounds.left() + 2.0,
+        (bounds.right() - size.x - 2.0).max(bounds.left() + 2.0),
+    );
     let rect = Rect::from_min_size(min, size);
     painter.add(theme::card_shadow().as_shape(rect, 8));
-    painter.rect(rect, 8, popup_fill(), Stroke::new(1.0, theme::hairline()), StrokeKind::Inside);
+    painter.rect(
+        rect,
+        8,
+        popup_fill(),
+        Stroke::new(1.0, theme::hairline()),
+        StrokeKind::Inside,
+    );
     let mut y = rect.top() + 7.0;
-    for (galley, color) in [Some((title, theme::text())), Some((body, theme::muted())), foot.map(|foot| (foot, theme::accent()))].into_iter().flatten() {
+    for (galley, color) in [
+        Some((title, theme::text())),
+        Some((body, theme::muted())),
+        foot.map(|foot| (foot, theme::accent())),
+    ]
+    .into_iter()
+    .flatten()
+    {
         let height = galley.size().y;
         painter.galley(Pos2::new(rect.left() + 10.0, y), galley, color);
         y += height + 2.0;
@@ -1668,7 +2547,11 @@ fn heat(count: usize, most: usize) -> Color32 {
     if count == 0 {
         return theme::well();
     }
-    let t = if most <= 1 { 1.0 } else { ((count as f32).ln() / (most as f32).ln()).clamp(0.0, 1.0) };
+    let t = if most <= 1 {
+        1.0
+    } else {
+        ((count as f32).ln() / (most as f32).ln()).clamp(0.0, 1.0)
+    };
     theme::accent().gamma_multiply(heat_alpha((t * 3.0).round() / 3.0))
 }
 
@@ -1686,12 +2569,27 @@ fn wave(grow: f32, at: f32) -> f32 {
 /// `height` texture turned by `rotation` degrees.
 fn fill_uv(width: usize, height: usize, rotation: i32, rect: Rect) -> Rect {
     let turned = rotation.div_euclid(90).rem_euclid(2) == 1;
-    let (w, h) = if turned { (height as f32, width as f32) } else { (width as f32, height as f32) };
+    let (w, h) = if turned {
+        (height as f32, width as f32)
+    } else {
+        (width as f32, height as f32)
+    };
     let image = w / h.max(1.0);
     let target = rect.width() / rect.height().max(1.0);
-    let (keep_x, keep_y) = if image > target { (target / image, 1.0) } else { (1.0, image / target) };
-    let (keep_u, keep_v) = if turned { (keep_y, keep_x) } else { (keep_x, keep_y) };
-    Rect::from_min_max(Pos2::new((1.0 - keep_u) / 2.0, (1.0 - keep_v) / 2.0), Pos2::new((1.0 + keep_u) / 2.0, (1.0 + keep_v) / 2.0))
+    let (keep_x, keep_y) = if image > target {
+        (target / image, 1.0)
+    } else {
+        (1.0, image / target)
+    };
+    let (keep_u, keep_v) = if turned {
+        (keep_y, keep_x)
+    } else {
+        (keep_x, keep_y)
+    };
+    Rect::from_min_max(
+        Pos2::new((1.0 - keep_u) / 2.0, (1.0 - keep_v) / 2.0),
+        Pos2::new((1.0 + keep_u) / 2.0, (1.0 + keep_v) / 2.0),
+    )
 }
 
 /// A rectangle shaded from `top` to `bottom`.
@@ -1741,12 +2639,23 @@ fn other_color() -> Color32 {
 }
 
 fn soft_shadow() -> egui::Shadow {
-    egui::Shadow { offset: [0, 2], blur: 12, spread: 0, color: Color32::from_black_alpha(if theme::is_dark() { 70 } else { 14 }) }
+    egui::Shadow {
+        offset: [0, 2],
+        blur: 12,
+        spread: 0,
+        color: Color32::from_black_alpha(if theme::is_dark() { 70 } else { 14 }),
+    }
 }
 
 fn paint_card(painter: &egui::Painter, rect: Rect, radius: u8) {
     painter.add(soft_shadow().as_shape(rect, radius));
-    painter.rect(rect, radius, card_fill(), Stroke::new(1.0, theme::hairline()), StrokeKind::Inside);
+    painter.rect(
+        rect,
+        radius,
+        card_fill(),
+        Stroke::new(1.0, theme::hairline()),
+        StrokeKind::Inside,
+    );
 }
 
 fn muted(ui: &mut egui::Ui, text: &str) {
@@ -1754,7 +2663,12 @@ fn muted(ui: &mut egui::Ui, text: &str) {
 }
 
 fn subheading(ui: &mut egui::Ui, text: &str) {
-    ui.label(RichText::new(text).size(12.0).strong().color(theme::muted()));
+    ui.label(
+        RichText::new(text)
+            .size(12.0)
+            .strong()
+            .color(theme::muted()),
+    );
     ui.add_space(2.0);
 }
 
@@ -1766,7 +2680,9 @@ fn bar_row(ui: &mut egui::Ui, name: &str, count: usize, most: usize, total: usiz
     if !ui.is_rect_visible(rect) {
         return false;
     }
-    let response = response.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(tr("Show these photos"));
+    let response = response
+        .on_hover_cursor(egui::CursorIcon::PointingHand)
+        .on_hover_text(tr("Show these photos"));
     let painter = ui.painter();
     if response.hovered() {
         painter.rect_filled(rect, 8, theme::hover());
@@ -1774,11 +2690,26 @@ fn bar_row(ui: &mut egui::Ui, name: &str, count: usize, most: usize, total: usiz
     let inner = rect.shrink2(Vec2::new(8.0, 6.0));
     let figure = format!("{}  {}%", grouped(count), percent(count, total));
     let figure = painter.layout_no_wrap(figure, FontId::proportional(12.0), theme::muted());
-    let title = truncated(painter, name.to_string(), 13.0, theme::text(), inner.width() - figure.size().x - 10.0);
-    painter.galley(Pos2::new(inner.right() - figure.size().x, inner.top() + 1.0), figure, theme::muted());
+    let title = truncated(
+        painter,
+        name.to_string(),
+        13.0,
+        theme::text(),
+        inner.width() - figure.size().x - 10.0,
+    );
+    painter.galley(
+        Pos2::new(inner.right() - figure.size().x, inner.top() + 1.0),
+        figure,
+        theme::muted(),
+    );
     painter.galley(inner.min, title, theme::text());
     let track = Rect::from_min_max(Pos2::new(inner.left(), inner.bottom() - 6.0), inner.max);
-    meter(painter, track, count as f32 / most.max(1) as f32, theme::accent());
+    meter(
+        painter,
+        track,
+        count as f32 / most.max(1) as f32,
+        theme::accent(),
+    );
     response.clicked()
 }
 
@@ -1787,7 +2718,13 @@ pub(super) fn meter(painter: &egui::Painter, rect: Rect, share: f32, color: Colo
     let radius = (rect.height() / 2.0) as u8;
     painter.rect_filled(rect, radius, theme::well());
     if share > 0.0 {
-        let fill = Rect::from_min_size(rect.min, Vec2::new((rect.width() * share.min(1.0)).max(rect.height()), rect.height()));
+        let fill = Rect::from_min_size(
+            rect.min,
+            Vec2::new(
+                (rect.width() * share.min(1.0)).max(rect.height()),
+                rect.height(),
+            ),
+        );
         painter.rect_filled(fill, radius, color);
     }
 }
@@ -1795,17 +2732,23 @@ pub(super) fn meter(painter: &egui::Painter, rect: Rect, share: f32, color: Colo
 /// "And {} more, {} photos" under a list cut short.
 fn more_line(ui: &mut egui::Ui, more: usize, photos: usize) {
     ui.add_space(2.0);
-    let text = trf("and {} more · {}", &[&grouped(more), &super::photo_count(photos)]);
+    let text = trf(
+        "and {} more · {}",
+        &[&grouped(more), &super::photo_count(photos)],
+    );
     ui.label(RichText::new(text).size(11.5).color(theme::muted()));
 }
 
 /// The line under a ranked list that shows all of it or cuts it short
 /// again. Returns whether it was clicked.
 fn more_link(ui: &mut egui::Ui, text: String, hint: &str) -> bool {
-    ui.add(egui::Label::new(RichText::new(text).size(11.5).color(theme::accent())).sense(Sense::click()))
-        .on_hover_cursor(egui::CursorIcon::PointingHand)
-        .on_hover_text(hint)
-        .clicked()
+    ui.add(
+        egui::Label::new(RichText::new(text).size(11.5).color(theme::accent()))
+            .sense(Sense::click()),
+    )
+    .on_hover_cursor(egui::CursorIcon::PointingHand)
+    .on_hover_text(hint)
+    .clicked()
 }
 
 /// `part` of `total` as a whole percentage, at least 1 when `part` isn't 0.
@@ -1820,7 +2763,14 @@ pub(super) fn percent(part: usize, total: usize) -> usize {
 mod tests {
     use super::*;
 
-    fn photo(id: i64, taken_at: i64, camera: &str, lens: &str, focal_mm: f32, place: Option<(f64, f64)>) -> Photo {
+    fn photo(
+        id: i64,
+        taken_at: i64,
+        camera: &str,
+        lens: &str,
+        focal_mm: f32,
+        place: Option<(f64, f64)>,
+    ) -> Photo {
         Photo {
             id,
             folder_id: 1,
@@ -1847,15 +2797,33 @@ mod tests {
 
     fn at(year: i32, month: u32, day: u32, hour: u32) -> i64 {
         use chrono::TimeZone;
-        chrono::Local.with_ymd_and_hms(year, month, day, hour, 0, 0).earliest().unwrap().timestamp()
+        chrono::Local
+            .with_ymd_and_hms(year, month, day, hour, 0, 0)
+            .earliest()
+            .unwrap()
+            .timestamp()
     }
 
     fn sample() -> Vec<Photo> {
         let capital = Some((25.03, 121.56));
         let uptown = Some((48.85, 2.35));
         vec![
-            photo(1, at(2020, 3, 2, 9), "Canon EOS R5", "RF24-105mm F4 L IS USM", 24.0, capital),
-            photo(2, at(2020, 3, 2, 10), "Canon EOS R5", "RF24-105mm F4 L IS USM", 105.0, capital),
+            photo(
+                1,
+                at(2020, 3, 2, 9),
+                "Canon EOS R5",
+                "RF24-105mm F4 L IS USM",
+                24.0,
+                capital,
+            ),
+            photo(
+                2,
+                at(2020, 3, 2, 10),
+                "Canon EOS R5",
+                "RF24-105mm F4 L IS USM",
+                105.0,
+                capital,
+            ),
             photo(3, at(2022, 7, 9, 18), "iPhone 13", "", 26.0, uptown),
             photo(4, at(2022, 7, 10, 18), " ", "", 0.0, None),
         ]
@@ -1869,9 +2837,26 @@ mod tests {
         assert_eq!(stats.years, vec![(2020, 2), (2021, 0), (2022, 2)]);
         assert_eq!(stats.months[2], 2);
         assert_eq!(stats.months[6], 2);
-        assert_eq!(stats.week_hours[0].iter().sum::<usize>(), 2, "2020-03-02 was a Monday");
-        assert_eq!(stats.week_hours.iter().map(|hours| hours[18]).sum::<usize>(), 2);
-        assert_eq!(stats.cameras.rows, vec![("Canon EOS R5".to_string(), 2), ("iPhone 13".to_string(), 1)]);
+        assert_eq!(
+            stats.week_hours[0].iter().sum::<usize>(),
+            2,
+            "2020-03-02 was a Monday"
+        );
+        assert_eq!(
+            stats
+                .week_hours
+                .iter()
+                .map(|hours| hours[18])
+                .sum::<usize>(),
+            2
+        );
+        assert_eq!(
+            stats.cameras.rows,
+            vec![
+                ("Canon EOS R5".to_string(), 2),
+                ("iPhone 13".to_string(), 1)
+            ]
+        );
         assert_eq!(stats.cameras.unknown, 1);
         assert_eq!(stats.lenses.rows.len(), 1);
         assert_eq!(stats.lenses.unknown, 2);
@@ -1890,9 +2875,16 @@ mod tests {
         let day = stats.busiest_day.as_ref().unwrap();
         assert_eq!((day.count, day.cover.id), (2, 1));
         let month = stats.busiest_month.as_ref().unwrap();
-        assert_eq!((month.count, month.at), (2, photos[0].taken_at), "ties go to the earlier month");
+        assert_eq!(
+            (month.count, month.at),
+            (2, photos[0].taken_at),
+            "ties go to the earlier month"
+        );
         let streak = stats.streak.as_ref().unwrap();
-        assert_eq!((streak.days, streak.cover.id, streak.last), (2, 3, photos[3].taken_at));
+        assert_eq!(
+            (streak.days, streak.cover.id, streak.last),
+            (2, 3, photos[3].taken_at)
+        );
         assert_eq!(stats.first.as_ref().map(|first| first.cover.id), Some(1));
         assert_eq!(stats.totals[&2022].days, 2);
         assert_eq!(stats.totals[&2020].photos, 2);
@@ -1929,7 +2921,10 @@ mod tests {
         let uv = fill_uv(100, 100, 0, wide);
         assert!((uv.width() - 1.0).abs() < 1e-4 && (uv.height() - 0.5).abs() < 1e-4);
         let uv = fill_uv(400, 100, 90, wide);
-        assert!((uv.width() - 0.125).abs() < 1e-4 && (uv.height() - 1.0).abs() < 1e-4, "a turned photo is cropped along its other side");
+        assert!(
+            (uv.width() - 0.125).abs() < 1e-4 && (uv.height() - 1.0).abs() < 1e-4,
+            "a turned photo is cropped along its other side"
+        );
     }
 
     #[test]

@@ -24,7 +24,7 @@ impl Histogram {
     /// Counts every opaque pixel of an RGBA buffer.
     pub fn from_rgba(rgba: &[u8]) -> Self {
         let mut bins = [[0u32; 256]; 4];
-        for px in rgba.chunks_exact(4) {
+        for px in rgba.as_chunks::<4>().0 {
             if px[3] == 0 {
                 continue;
             }
@@ -94,7 +94,11 @@ pub(crate) fn read_exif(path: &Path) -> Option<exif::Exif> {
         // TIFF-based RAW files keep their EXIF near the start, and reading
         // the whole container would load the sensor data too.
         let mut head = Vec::new();
-        File::open(path).ok()?.take(RAW_HEAD_BYTES).read_to_end(&mut head).ok()?;
+        File::open(path)
+            .ok()?
+            .take(RAW_HEAD_BYTES)
+            .read_to_end(&mut head)
+            .ok()?;
         if head.starts_with(b"II*\0") || head.starts_with(b"MM\0*") {
             if let Ok(exif) = exif::Reader::new().read_raw(head) {
                 return Some(exif);
@@ -102,7 +106,9 @@ pub(crate) fn read_exif(path: &Path) -> Option<exif::Exif> {
         }
     }
     let file = File::open(path).ok()?;
-    exif::Reader::new().read_from_container(&mut BufReader::new(file)).ok()
+    exif::Reader::new()
+        .read_from_container(&mut BufReader::new(file))
+        .ok()
 }
 
 /// Read from a RAW file for its EXIF.
@@ -152,34 +158,54 @@ fn rows_from_exif(exif: &exif::Exif) -> Vec<(&'static str, String)> {
     // A number stored as a fraction, as the library would print it in full
     // (f/1.7799999713880652), read to be rounded as people write it.
     let number = |tag: Tag| -> Option<f64> {
-        let field = exif.get_field(tag, exif::In::PRIMARY).or_else(|| exif.fields().find(|field| field.tag == tag))?;
+        let field = exif
+            .get_field(tag, exif::In::PRIMARY)
+            .or_else(|| exif.fields().find(|field| field.tag == tag))?;
         let value = match &field.value {
-            exif::Value::Rational(values) => values.first().filter(|r| r.denom != 0).map(|r| f64::from(r.num) / f64::from(r.denom)),
-            exif::Value::SRational(values) => values.first().filter(|r| r.denom != 0).map(|r| f64::from(r.num) / f64::from(r.denom)),
+            exif::Value::Rational(values) => values
+                .first()
+                .filter(|r| r.denom != 0)
+                .map(|r| f64::from(r.num) / f64::from(r.denom)),
+            exif::Value::SRational(values) => values
+                .first()
+                .filter(|r| r.denom != 0)
+                .map(|r| f64::from(r.num) / f64::from(r.denom)),
             _ => None,
         }?;
         value.is_finite().then_some(value)
     };
     let formatted = |tag: Tag| -> Option<String> {
         match tag {
-            Tag::FNumber => number(tag).filter(|f| *f > 0.0).map(|f| format!("f/{}", short(f, 1))),
-            Tag::FocalLength => number(tag).filter(|mm| *mm > 0.0).map(|mm| format!("{} mm", short(mm, 1))),
+            Tag::FNumber => number(tag)
+                .filter(|f| *f > 0.0)
+                .map(|f| format!("f/{}", short(f, 1))),
+            Tag::FocalLength => number(tag)
+                .filter(|mm| *mm > 0.0)
+                .map(|mm| format!("{} mm", short(mm, 1))),
             Tag::ExposureTime => number(tag).filter(|t| *t > 0.0).map(shutter_text),
             Tag::ExposureBiasValue => number(tag).map(|ev| match short(ev, 1).as_str() {
                 "0" | "-0" => "0 EV".to_string(),
                 text if ev > 0.0 => format!("+{text} EV"),
                 text => format!("{text} EV"),
             }),
-            Tag::Flash => exif.get_field(tag, exif::In::PRIMARY).and_then(|field| field.value.get_uint(0)).map(flash_text),
+            Tag::Flash => exif
+                .get_field(tag, exif::In::PRIMARY)
+                .and_then(|field| field.value.get_uint(0))
+                .map(flash_text),
             // A setting written as a number: its name in the app's language,
             // nothing for one not recorded.
             Tag::ExposureProgram | Tag::MeteringMode | Tag::WhiteBalance | Tag::ColorSpace => {
-                let code = exif.get_field(tag, exif::In::PRIMARY).and_then(|field| field.value.get_uint(0))?;
+                let code = exif
+                    .get_field(tag, exif::In::PRIMARY)
+                    .and_then(|field| field.value.get_uint(0))?;
                 return mode_name(tag, code).map(|name| crate::i18n::tr(name).to_string());
             }
             Tag::GPSAltitude => number(tag).map(|m| {
                 // A reference of 1 is below sea level.
-                let below = exif.get_field(Tag::GPSAltitudeRef, exif::In::PRIMARY).and_then(|field| field.value.get_uint(0)) == Some(1);
+                let below = exif
+                    .get_field(Tag::GPSAltitudeRef, exif::In::PRIMARY)
+                    .and_then(|field| field.value.get_uint(0))
+                    == Some(1);
                 format!("{} m", short(if below { -m } else { m }, 0))
             }),
             _ => None,
@@ -187,7 +213,11 @@ fn rows_from_exif(exif: &exif::Exif) -> Vec<(&'static str, String)> {
         .or_else(|| text(tag))
     };
     for (label, tag) in table {
-        let value = if tag == Tag::DateTimeOriginal { text(tag).and_then(real_date) } else { formatted(tag) };
+        let value = if tag == Tag::DateTimeOriginal {
+            text(tag).and_then(real_date)
+        } else {
+            formatted(tag)
+        };
         if let Some(value) = value {
             rows.push((label, value));
         }
@@ -288,7 +318,8 @@ fn rows_from_raw(path: &Path) -> Vec<(&'static str, String)> {
     let Ok(decoder) = rawler::get_decoder(&source) else {
         return Vec::new();
     };
-    let Ok(meta) = decoder.raw_metadata(&source, &rawler::decoders::RawDecodeParams::default()) else {
+    let Ok(meta) = decoder.raw_metadata(&source, &rawler::decoders::RawDecodeParams::default())
+    else {
         return Vec::new();
     };
     let exif = &meta.exif;
@@ -298,10 +329,17 @@ fn rows_from_raw(path: &Path) -> Vec<(&'static str, String)> {
     if !camera.is_empty() {
         rows.push(("Camera", camera));
     }
-    if let Some(lens) = exif.lens_model.clone().filter(|lens| !lens.trim().is_empty()) {
+    if let Some(lens) = exif
+        .lens_model
+        .clone()
+        .filter(|lens| !lens.trim().is_empty())
+    {
         rows.push(("Lens", lens));
     }
-    if let Some(taken) = [&exif.date_time_original, &exif.create_date].into_iter().find_map(|date| real_date(date.clone()?)) {
+    if let Some(taken) = [&exif.date_time_original, &exif.create_date]
+        .into_iter()
+        .find_map(|date| real_date(date.clone()?))
+    {
         rows.push(("Taken", taken));
     }
     if let Some(r) = exif.exposure_time.as_ref() {
@@ -319,7 +357,10 @@ fn rows_from_raw(path: &Path) -> Vec<(&'static str, String)> {
         rows.push(("Focal length", format!("{mm:.0} mm")));
     }
     if let Some(bias) = exif.exposure_bias.as_ref().filter(|r| r.d != 0) {
-        rows.push(("Exposure bias", format!("{:+.1} EV", bias.n as f64 / bias.d as f64)));
+        rows.push((
+            "Exposure bias",
+            format!("{:+.1} EV", bias.n as f64 / bias.d as f64),
+        ));
     }
     if let Some(flash) = exif.flash {
         rows.push(("Flash", flash_text(u32::from(flash))));
@@ -327,7 +368,11 @@ fn rows_from_raw(path: &Path) -> Vec<(&'static str, String)> {
     if let Some(artist) = exif.artist.clone().filter(|text| !text.trim().is_empty()) {
         rows.push(("Artist", artist));
     }
-    if let Some(copyright) = exif.copyright.clone().filter(|text| !text.trim().is_empty()) {
+    if let Some(copyright) = exif
+        .copyright
+        .clone()
+        .filter(|text| !text.trim().is_empty())
+    {
         rows.push(("Copyright", copyright));
     }
     rows
@@ -348,7 +393,11 @@ mod tests {
     #[test]
     fn numbers_stored_as_fractions_read_as_people_write_them() {
         use exif::{Field, In, Rational, SRational, Tag, Value};
-        let field = |tag, value| Field { tag, ifd_num: In::PRIMARY, value };
+        let field = |tag, value| Field {
+            tag,
+            ifd_num: In::PRIMARY,
+            value,
+        };
         let rational = |num, denom| Value::Rational(vec![Rational { num, denom }]);
         // As an iPhone 15 Pro Max writes them.
         let source = [
@@ -356,7 +405,10 @@ mod tests {
             field(Tag::ExposureTime, rational(1, 4608)),
             field(Tag::PhotographicSensitivity, Value::Short(vec![64])),
             field(Tag::FocalLength, rational(6765, 1000)),
-            field(Tag::ExposureBiasValue, Value::SRational(vec![SRational { num: -1, denom: 3 }])),
+            field(
+                Tag::ExposureBiasValue,
+                Value::SRational(vec![SRational { num: -1, denom: 3 }]),
+            ),
             field(Tag::GPSAltitudeRef, Value::Byte(vec![1])),
             field(Tag::GPSAltitude, rational(12345, 1000)),
             // Not fired, no return light detection, mode unknown.
@@ -368,45 +420,105 @@ mod tests {
         writer.write(&mut tiff, false).unwrap();
         let exif = exif::Reader::new().read_raw(tiff.into_inner()).unwrap();
         let rows = rows_from_exif(&exif);
-        let value = |label: &str| rows.iter().find(|(name, _)| *name == label).map(|(_, value)| value.as_str());
+        let value = |label: &str| {
+            rows.iter()
+                .find(|(name, _)| *name == label)
+                .map(|(_, value)| value.as_str())
+        };
         assert_eq!(value("Aperture"), Some("f/1.8"));
         assert_eq!(value("Exposure time"), Some("1/4608 s"));
         assert_eq!(value("ISO"), Some("64"));
         assert_eq!(value("Focal length"), Some("6.8 mm"));
         assert_eq!(value("Exposure bias"), Some("-0.3 EV"));
         assert_eq!(value("Altitude"), Some("-12 m"), "below sea level");
-        assert_eq!(value("Flash"), Some("Did not fire"), "only whether it fired");
-        assert_eq!((flash_text(0x19), flash_text(0x59), flash_text(0x10), flash_text(0x20)), ("Fired".into(), "Fired, red-eye reduction".into(), "Did not fire".into(), "No flash".into()));
-        assert_eq!((short(4.0, 1), short(2.25, 1), shutter_text(0.5), shutter_text(2.0)), ("4".into(), "2.2".into(), "0.5 s".into(), "2 s".into()));
+        assert_eq!(
+            value("Flash"),
+            Some("Did not fire"),
+            "only whether it fired"
+        );
+        assert_eq!(
+            (
+                flash_text(0x19),
+                flash_text(0x59),
+                flash_text(0x10),
+                flash_text(0x20)
+            ),
+            (
+                "Fired".into(),
+                "Fired, red-eye reduction".into(),
+                "Did not fire".into(),
+                "No flash".into()
+            )
+        );
+        assert_eq!(
+            (
+                short(4.0, 1),
+                short(2.25, 1),
+                shutter_text(0.5),
+                shutter_text(2.0)
+            ),
+            ("4".into(), "2.2".into(), "0.5 s".into(), "2 s".into())
+        );
     }
 
     #[test]
     fn settings_written_as_numbers_are_named_in_every_language() {
         use exif::Tag;
-        assert_eq!(mode_name(Tag::ExposureProgram, 3), Some("Aperture priority"));
+        assert_eq!(
+            mode_name(Tag::ExposureProgram, 3),
+            Some("Aperture priority")
+        );
         assert_eq!(mode_name(Tag::WhiteBalance, 0), Some("Auto white balance"));
         assert_eq!(mode_name(Tag::MeteringMode, 5), Some("Multi-segment"));
         assert_eq!(mode_name(Tag::ColorSpace, 1), Some("sRGB"));
-        assert_eq!((mode_name(Tag::ExposureProgram, 0), mode_name(Tag::MeteringMode, 0), mode_name(Tag::ExposureProgram, 99)), (None, None, None), "not recorded, or not defined: no row");
+        assert_eq!(
+            (
+                mode_name(Tag::ExposureProgram, 0),
+                mode_name(Tag::MeteringMode, 0),
+                mode_name(Tag::ExposureProgram, 99)
+            ),
+            (None, None, None),
+            "not recorded, or not defined: no row"
+        );
         // Every name but the colour spaces' is in every language's table.
         let zh = crate::i18n::Lang::TraditionalChinese;
-        for (tag, codes) in [(Tag::ExposureProgram, 1..=8), (Tag::MeteringMode, 1..=6), (Tag::WhiteBalance, 0..=1)] {
+        for (tag, codes) in [
+            (Tag::ExposureProgram, 1..=8),
+            (Tag::MeteringMode, 1..=6),
+            (Tag::WhiteBalance, 0..=1),
+        ] {
             for code in codes {
                 let name = mode_name(tag, code).unwrap();
-                assert!(crate::i18n::table(zh).contains_key(name), "{name} has no Chinese");
+                assert!(
+                    crate::i18n::table(zh).contains_key(name),
+                    "{name} has no Chinese"
+                );
             }
         }
-        assert_eq!(crate::i18n::table(zh).get("Aperture priority"), Some(&"光圈先決"));
-        assert_eq!(crate::i18n::table(zh).get("Auto white balance"), Some(&"自動白平衡"));
+        assert_eq!(
+            crate::i18n::table(zh).get("Aperture priority"),
+            Some(&"光圈先決")
+        );
+        assert_eq!(
+            crate::i18n::table(zh).get("Auto white balance"),
+            Some(&"自動白平衡")
+        );
     }
 
     #[test]
     fn text_padded_with_empty_parts_shows_only_its_words() {
         use exif::{Field, In, Tag, Value};
-        let field = |tag, parts: &[&[u8]]| Field { tag, ifd_num: In::PRIMARY, value: Value::Ascii(parts.iter().map(|part| part.to_vec()).collect()) };
+        let field = |tag, parts: &[&[u8]]| Field {
+            tag,
+            ifd_num: In::PRIMARY,
+            value: Value::Ascii(parts.iter().map(|part| part.to_vec()).collect()),
+        };
         // As some cameras write them: the words, then empty parts or spaces.
         let source = [
-            field(Tag::LensModel, &[b"NIKKOR Z 180-600mm f/5.6-6.3 VR", b"", b"", b""]),
+            field(
+                Tag::LensModel,
+                &[b"NIKKOR Z 180-600mm f/5.6-6.3 VR", b"", b"", b""],
+            ),
             field(Tag::Artist, &[b"", b"", b"", b"    "]),
             field(Tag::Copyright, &[b"", b"", b""]),
             field(Tag::Software, &[b"Ver.03.10", b"", b""]),
@@ -417,8 +529,23 @@ mod tests {
         writer.write(&mut tiff, false).unwrap();
         let exif = exif::Reader::new().read_raw(tiff.into_inner()).unwrap();
         let rows = rows_from_exif(&exif);
-        assert_eq!(rows, [("Lens", "NIKKOR Z 180-600mm f/5.6-6.3 VR".to_string()), ("Software", "Ver.03.10".to_string())], "no empty parts, and no row for a field with nothing in it");
-        assert_eq!(ascii_text(&[b"Ann".to_vec(), b"\0".to_vec(), b"Ann".to_vec(), b"\"Studio\"".to_vec()]), "Ann; Studio");
+        assert_eq!(
+            rows,
+            [
+                ("Lens", "NIKKOR Z 180-600mm f/5.6-6.3 VR".to_string()),
+                ("Software", "Ver.03.10".to_string())
+            ],
+            "no empty parts, and no row for a field with nothing in it"
+        );
+        assert_eq!(
+            ascii_text(&[
+                b"Ann".to_vec(),
+                b"\0".to_vec(),
+                b"Ann".to_vec(),
+                b"\"Studio\"".to_vec()
+            ]),
+            "Ann; Studio"
+        );
     }
 
     #[test]
@@ -438,7 +565,10 @@ mod tests {
     #[test]
     fn formats_camera_and_shutter() {
         assert_eq!(camera_label("NIKON CORPORATION", "NIKON Z 6"), "Nikon Z 6");
-        assert_eq!(camera_label("Hasselblad", "Hasselblad X2D 100C"), "Hasselblad X2D 100C");
+        assert_eq!(
+            camera_label("Hasselblad", "Hasselblad X2D 100C"),
+            "Hasselblad X2D 100C"
+        );
         assert_eq!(shutter_label(1, 250), "1/250 s");
         assert_eq!(shutter_label(2, 1), "2 s");
     }

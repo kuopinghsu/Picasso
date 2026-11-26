@@ -11,7 +11,11 @@ use chrono::{Local, NaiveDate, TimeZone};
 use eframe::egui::{self, Align, Key, Layout, Margin, Modifiers, RichText, Vec2};
 
 use crate::i18n::{tr, trf};
-use crate::trip::{shift_cameras, Member, TripTrack, PlaceSuggestion, suggest_trips, Shot, TripCandidate, TripQuery, AddPreview, DayFilter, DaySource, DaySuggestion, MemberQuery, Review, Story, StoryFilter, Trip, TripDay, TripDraft, TripImpact, TripPlace, ResourceKind, TripResource};
+use crate::trip::{
+    shift_cameras, suggest_trips, AddPreview, DayFilter, DaySource, DaySuggestion, Member,
+    MemberQuery, PlaceSuggestion, ResourceKind, Review, Shot, Story, StoryFilter, Trip,
+    TripCandidate, TripDay, TripDraft, TripImpact, TripPlace, TripQuery, TripResource, TripTrack,
+};
 use crate::types::{format_day, Nav, Photo};
 
 use super::story::{story_name, Group};
@@ -40,66 +44,114 @@ impl PicassoApp {
     fn reads(&mut self) -> (&crate::db::Database, &mut TripReads) {
         let stamp = Some(self.db.change_stamp());
         if self.trip_reads.stamp != stamp {
-            self.trip_reads = TripReads { stamp, ..TripReads::default() };
+            self.trip_reads = TripReads {
+                stamp,
+                ..TripReads::default()
+            };
         }
         (&self.db, &mut self.trip_reads)
     }
 
     fn trips_listed(&mut self, query: &TripQuery) -> Vec<Trip> {
         let (db, reads) = self.reads();
-        reads.trips.entry(query.clone()).or_insert_with(|| db.trips(query)).clone()
+        reads
+            .trips
+            .entry(query.clone())
+            .or_insert_with(|| db.trips(query))
+            .clone()
     }
 
     pub(super) fn days_of(&mut self, trip_id: i64) -> Vec<TripDay> {
         let (db, reads) = self.reads();
-        reads.days.entry(trip_id).or_insert_with(|| db.trip_days(trip_id)).clone()
+        reads
+            .days
+            .entry(trip_id)
+            .or_insert_with(|| db.trip_days(trip_id))
+            .clone()
     }
 
     fn stories_of(&mut self, trip_id: i64) -> Vec<Story> {
         let (db, reads) = self.reads();
-        reads.stories.entry(trip_id).or_insert_with(|| db.stories(trip_id)).clone()
+        reads
+            .stories
+            .entry(trip_id)
+            .or_insert_with(|| db.stories(trip_id))
+            .clone()
     }
 
     fn members_counted(&mut self, trip_id: i64, query: MemberQuery) -> i64 {
         let (db, reads) = self.reads();
-        *reads.counts.entry((trip_id, query)).or_insert_with(|| db.count_trip_members(trip_id, &query))
+        *reads
+            .counts
+            .entry((trip_id, query))
+            .or_insert_with(|| db.count_trip_members(trip_id, &query))
     }
 
     fn review_of(&mut self, trip_id: i64) -> Vec<(Review, usize)> {
         let (db, reads) = self.reads();
-        reads.review.entry(trip_id).or_insert_with(|| db.review_counts(trip_id)).clone()
+        reads
+            .review
+            .entry(trip_id)
+            .or_insert_with(|| db.review_counts(trip_id))
+            .clone()
     }
 
     fn places_of(&mut self, trip_id: i64) -> Vec<TripPlace> {
         let (db, reads) = self.reads();
-        reads.places.entry(trip_id).or_insert_with(|| db.trip_places(trip_id)).clone()
+        reads
+            .places
+            .entry(trip_id)
+            .or_insert_with(|| db.trip_places(trip_id))
+            .clone()
     }
 
     pub(super) fn tracks_of(&mut self, trip_id: i64) -> Vec<TripTrack> {
         let (db, reads) = self.reads();
-        reads.tracks.entry(trip_id).or_insert_with(|| db.trip_tracks(trip_id)).clone()
+        reads
+            .tracks
+            .entry(trip_id)
+            .or_insert_with(|| db.trip_tracks(trip_id))
+            .clone()
     }
 
     fn track_choices(&mut self) -> Vec<(i64, String, Option<i64>)> {
         let (db, reads) = self.reads();
-        reads.track_choices.get_or_insert_with(|| db.track_choices()).clone()
+        reads
+            .track_choices
+            .get_or_insert_with(|| db.track_choices())
+            .clone()
     }
 
     pub(super) fn resources_of(&mut self, trip_id: i64) -> Vec<TripResource> {
         let (db, reads) = self.reads();
-        reads.resources.entry(trip_id).or_insert_with(|| db.trip_resources(trip_id)).clone()
+        reads
+            .resources
+            .entry(trip_id)
+            .or_insert_with(|| db.trip_resources(trip_id))
+            .clone()
     }
 
     /// The first of the Trip's members no longer in the library.
     fn unavailable_of(&mut self, trip_id: i64) -> Vec<Member> {
-        let query = MemberQuery { unavailable: true, ..MemberQuery::default() };
+        let query = MemberQuery {
+            unavailable: true,
+            ..MemberQuery::default()
+        };
         let (db, reads) = self.reads();
-        reads.unavailable.entry(trip_id).or_insert_with(|| db.trip_members(trip_id, &query, 0, UNAVAILABLE_SHOWN)).clone()
+        reads
+            .unavailable
+            .entry(trip_id)
+            .or_insert_with(|| db.trip_members(trip_id, &query, 0, UNAVAILABLE_SHOWN))
+            .clone()
     }
 
     fn cover_of(&mut self, trip_id: i64) -> Option<Photo> {
         let (db, reads) = self.reads();
-        reads.covers.entry(trip_id).or_insert_with(|| db.trip_cover_photo(trip_id).and_then(|id| db.photo(id))).clone()
+        reads
+            .covers
+            .entry(trip_id)
+            .or_insert_with(|| db.trip_cover_photo(trip_id).and_then(|id| db.photo(id)))
+            .clone()
     }
 }
 
@@ -143,16 +195,38 @@ impl SuggestDialog {
     fn regroup(&mut self) {
         let from = parse_day(&self.from).flatten().filter(|_| self.ranged);
         let to = parse_day(&self.to).flatten().filter(|_| self.ranged);
-        let day = |at: i64| Local.timestamp_opt(at, 0).single().map(|at| at.date_naive());
+        let day = |at: i64| {
+            Local
+                .timestamp_opt(at, 0)
+                .single()
+                .map(|at| at.date_naive())
+        };
         let within = |shot: &&Shot| match day(shot.taken_at) {
             Some(taken) => from.is_none_or(|from| taken >= from) && to.is_none_or(|to| taken <= to),
             None => from.is_none() && to.is_none(),
         };
-        let shifts: std::collections::HashMap<String, i64> =
-            self.cameras.iter().filter(|(_, _, hours)| *hours != 0).map(|(name, _, hours)| (name.clone(), i64::from(*hours) * 3600)).collect();
-        let shifted = if shifts.is_empty() { self.shots.clone() } else { shift_cameras(&self.shots, &shifts) };
-        let shots: Vec<Shot> = if from.is_none() && to.is_none() { shifted } else { shifted.iter().filter(within).cloned().collect() };
-        self.found = suggest_trips(&shots, i64::from(self.gap_days) * 86_400, self.min_photos, self.skip_in_trip);
+        let shifts: std::collections::HashMap<String, i64> = self
+            .cameras
+            .iter()
+            .filter(|(_, _, hours)| *hours != 0)
+            .map(|(name, _, hours)| (name.clone(), i64::from(*hours) * 3600))
+            .collect();
+        let shifted = if shifts.is_empty() {
+            self.shots.clone()
+        } else {
+            shift_cameras(&self.shots, &shifts)
+        };
+        let shots: Vec<Shot> = if from.is_none() && to.is_none() {
+            shifted
+        } else {
+            shifted.iter().filter(within).cloned().collect()
+        };
+        self.found = suggest_trips(
+            &shots,
+            i64::from(self.gap_days) * 86_400,
+            self.min_photos,
+            self.skip_in_trip,
+        );
     }
 }
 
@@ -221,14 +295,33 @@ pub(super) struct DeleteDialog {
 impl PicassoApp {
     pub(super) fn trips_sidebar(&mut self, ui: &mut egui::Ui) {
         tree_section(ui, tr("Trips"));
-        let all = self.tree_row(ui, tr("All trips"), Glyph::Trip, self.nav == Nav::Trips, Some(self.trips.len() as i64));
-        if all.on_hover_text(tr("Find, open, and compare your trips")).clicked() {
+        let all = self.tree_row(
+            ui,
+            tr("All trips"),
+            Glyph::Trip,
+            self.nav == Nav::Trips,
+            Some(self.trips.len() as i64),
+        );
+        if all
+            .on_hover_text(tr("Find, open, and compare your trips"))
+            .clicked()
+        {
             self.set_nav(Nav::Trips);
         }
-        let active: Vec<(i64, String, i64)> =
-            self.trips.iter().filter(|trip| !trip.archived).map(|trip| (trip.id, trip.title.clone(), trip.available)).collect();
+        let active: Vec<(i64, String, i64)> = self
+            .trips
+            .iter()
+            .filter(|trip| !trip.archived)
+            .map(|trip| (trip.id, trip.title.clone(), trip.available))
+            .collect();
         for (id, title, count) in active {
-            let response = self.tree_row(ui, &title, Glyph::Trip, self.nav == Nav::Trip(id), Some(count));
+            let response = self.tree_row(
+                ui,
+                &title,
+                Glyph::Trip,
+                self.nav == Nav::Trip(id),
+                Some(count),
+            );
             if response.clicked() {
                 self.set_nav(Nav::Trip(id));
             }
@@ -252,24 +345,50 @@ impl PicassoApp {
                 }
             });
         }
-        if ui.add(egui::Button::new(RichText::new(tr("+  New trip")).color(theme::muted())).frame(false)).clicked() {
+        if ui
+            .add(
+                egui::Button::new(RichText::new(tr("+  New trip")).color(theme::muted()))
+                    .frame(false),
+            )
+            .clicked()
+        {
             self.open_new_trip(Vec::new());
         }
-        let archived: Vec<(i64, String, i64)> =
-            self.trips.iter().filter(|trip| trip.archived).map(|trip| (trip.id, trip.title.clone(), trip.available)).collect();
+        let archived: Vec<(i64, String, i64)> = self
+            .trips
+            .iter()
+            .filter(|trip| trip.archived)
+            .map(|trip| (trip.id, trip.title.clone(), trip.available))
+            .collect();
         if archived.is_empty() {
             return;
         }
-        let arrow = if self.show_archived_trips { "▾" } else { "▸" };
-        let label = format!("{arrow}  {}", trf("Archived trips ({})", &[&archived.len()]));
-        if ui.add(egui::Button::new(RichText::new(label).color(theme::muted())).frame(false)).clicked() {
+        let arrow = if self.show_archived_trips {
+            "▾"
+        } else {
+            "▸"
+        };
+        let label = format!(
+            "{arrow}  {}",
+            trf("Archived trips ({})", &[&archived.len()])
+        );
+        if ui
+            .add(egui::Button::new(RichText::new(label).color(theme::muted())).frame(false))
+            .clicked()
+        {
             self.show_archived_trips = !self.show_archived_trips;
         }
         if !self.show_archived_trips {
             return;
         }
         for (id, title, count) in archived {
-            let response = self.tree_row(ui, &title, Glyph::Trip, self.nav == Nav::Trip(id), Some(count));
+            let response = self.tree_row(
+                ui,
+                &title,
+                Glyph::Trip,
+                self.nav == Nav::Trip(id),
+                Some(count),
+            );
             if response.clicked() {
                 self.set_nav(Nav::Trip(id));
             }
@@ -291,7 +410,10 @@ impl PicassoApp {
     /// header's search finds Trips by title, destination, or description.
     pub(super) fn trips_page(&mut self, ui: &mut egui::Ui) {
         const CARD: Vec2 = Vec2::new(260.0, 250.0);
-        let query = TripQuery { archived: self.show_archived_trips, search: self.search.trim().to_string() };
+        let query = TripQuery {
+            archived: self.show_archived_trips,
+            search: self.search.trim().to_string(),
+        };
         let trips = self.trips_listed(&query);
         let mut open: Option<i64> = None;
         let mut archive: Option<(i64, bool)> = None;
@@ -331,88 +453,128 @@ impl PicassoApp {
             });
             return;
         }
-        egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-            ui.horizontal_wrapped(|ui| {
-                ui.spacing_mut().item_spacing = Vec2::splat(14.0);
-                for trip in &trips {
-                    let (rect, response) = ui.allocate_exact_size(CARD, egui::Sense::click());
-                    let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
-                    let painter = ui.painter_at(rect);
-                    // Tab reaches each card, Enter or Space opens it.
-                    let name = trip.title.clone();
-                    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &name));
-                    let hovered = response.hovered() || response.has_focus();
-                    painter.rect_filled(rect, 8, theme::sidebar());
-                    if hovered {
-                        painter.rect_stroke(rect, 8, egui::Stroke::new(2.0, theme::ACCENT), egui::StrokeKind::Inside);
-                    }
-                    let cover = egui::Rect::from_min_size(rect.min, Vec2::new(rect.width(), 150.0)).shrink(6.0);
-                    painter.rect_filled(cover, 6, theme::placeholder());
-                    if let Some(photo) = self.cover_of(trip.id) {
-                        self.ensure_thumb(photo.id, &photo.path);
-                        if let Some((texture, w, h)) = self.thumb_texture(photo.id) {
-                            theme::paint_image_rounded(&painter, &texture, cover, theme::cover_uv(w, h), photo.rotation, 6.0);
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing = Vec2::splat(14.0);
+                    for trip in &trips {
+                        let (rect, response) = ui.allocate_exact_size(CARD, egui::Sense::click());
+                        let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
+                        let painter = ui.painter_at(rect);
+                        // Tab reaches each card, Enter or Space opens it.
+                        let name = trip.title.clone();
+                        response.widget_info(|| {
+                            egui::WidgetInfo::labeled(egui::Role::Button, true, &name)
+                        });
+                        let hovered = response.hovered() || response.has_focus();
+                        painter.rect_filled(rect, 8, theme::sidebar());
+                        if hovered {
+                            painter.rect_stroke(
+                                rect,
+                                8,
+                                egui::Stroke::new(2.0, theme::ACCENT),
+                                egui::StrokeKind::Inside,
+                            );
                         }
-                    }
-                    let mut y = cover.bottom() + 8.0;
-                    let left = rect.left() + 12.0;
-                    let width = rect.width() - 24.0;
-                    // One line each, ending in "…" at the card's edge.
-                    let mut line = |text: String, size: f32, color: egui::Color32| {
-                        let mut job = egui::text::LayoutJob::simple_singleline(text, egui::FontId::proportional(size), color);
-                        job.wrap = egui::text::TextWrapping { max_width: width, max_rows: 1, break_anywhere: true, overflow_character: Some('…') };
-                        let galley = painter.layout_job(job);
-                        let height = galley.size().y;
-                        let clip = egui::Rect::from_min_size(egui::pos2(left, y), Vec2::new(width, height));
-                        painter.with_clip_rect(clip).galley(clip.min, galley, color);
-                        y += height + 4.0;
-                    };
-                    line(trip.title.clone(), 15.0, theme::text());
-                    let mut place = trip_dates(trip).into_iter().collect::<Vec<_>>();
-                    if !trip.destination.is_empty() {
-                        place.push(trip.destination.clone());
-                    }
-                    if !place.is_empty() {
-                        line(place.join(" · "), 12.5, theme::muted());
-                    }
-                    let tracks = self.tracks_of(trip.id).len();
-                    let count = |n: usize, one: &'static str, many: &'static str| trf(if n == 1 { one } else { many }, &[&n]);
-                    let counts = [
-                        super::photo_count(trip.members as usize),
-                        count(trip.days as usize, "{} day", "{} days"),
-                        count(trip.stories as usize, "{} story", "{} stories"),
-                        count(tracks, "{} track", "{} tracks"),
-                    ]
-                    .join(" · ");
-                    line(counts, 12.0, theme::muted());
-                    if trip.members > trip.available {
-                        line(trf("{} unavailable", &[&(trip.members - trip.available)]), 12.0, theme::DANGER);
-                    }
-                    if response.clicked() {
-                        open = Some(trip.id);
-                    }
-                    response.context_menu(|ui| {
-                        if ui.button(tr("Edit trip…")).clicked() {
-                            edit = Some(trip.id);
-                            ui.close();
+                        let cover =
+                            egui::Rect::from_min_size(rect.min, Vec2::new(rect.width(), 150.0))
+                                .shrink(6.0);
+                        painter.rect_filled(cover, 6, theme::placeholder());
+                        if let Some(photo) = self.cover_of(trip.id) {
+                            self.ensure_thumb(photo.id, &photo.path);
+                            if let Some((texture, w, h)) = self.thumb_texture(photo.id) {
+                                theme::paint_image_rounded(
+                                    &painter,
+                                    &texture,
+                                    cover,
+                                    theme::cover_uv(w, h),
+                                    photo.rotation,
+                                    6.0,
+                                );
+                            }
                         }
-                        if ui.button(tr("Export trip package…")).clicked() {
-                            package = Some(trip.id);
-                            ui.close();
+                        let mut y = cover.bottom() + 8.0;
+                        let left = rect.left() + 12.0;
+                        let width = rect.width() - 24.0;
+                        // One line each, ending in "…" at the card's edge.
+                        let mut line = |text: String, size: f32, color: egui::Color32| {
+                            let mut job = egui::text::LayoutJob::simple_singleline(
+                                text,
+                                egui::FontId::proportional(size),
+                                color,
+                            );
+                            job.wrap = egui::text::TextWrapping {
+                                max_width: width,
+                                max_rows: 1,
+                                break_anywhere: true,
+                                overflow_character: Some('…'),
+                            };
+                            let galley = painter.layout_job(job);
+                            let height = galley.size().y;
+                            let clip = egui::Rect::from_min_size(
+                                egui::pos2(left, y),
+                                Vec2::new(width, height),
+                            );
+                            painter.with_clip_rect(clip).galley(clip.min, galley, color);
+                            y += height + 4.0;
+                        };
+                        line(trip.title.clone(), 15.0, theme::text());
+                        let mut place = trip_dates(trip).into_iter().collect::<Vec<_>>();
+                        if !trip.destination.is_empty() {
+                            place.push(trip.destination.clone());
                         }
-                        let label = if trip.archived { tr("Unarchive trip") } else { tr("Archive trip") };
-                        if ui.button(label).clicked() {
-                            archive = Some((trip.id, !trip.archived));
-                            ui.close();
+                        if !place.is_empty() {
+                            line(place.join(" · "), 12.5, theme::muted());
                         }
-                        if ui.button(tr("Delete trip…")).clicked() {
-                            delete = Some(trip.id);
-                            ui.close();
+                        let tracks = self.tracks_of(trip.id).len();
+                        let count = |n: usize, one: &'static str, many: &'static str| {
+                            trf(if n == 1 { one } else { many }, &[&n])
+                        };
+                        let counts = [
+                            super::photo_count(trip.members as usize),
+                            count(trip.days as usize, "{} day", "{} days"),
+                            count(trip.stories as usize, "{} story", "{} stories"),
+                            count(tracks, "{} track", "{} tracks"),
+                        ]
+                        .join(" · ");
+                        line(counts, 12.0, theme::muted());
+                        if trip.members > trip.available {
+                            line(
+                                trf("{} unavailable", &[&(trip.members - trip.available)]),
+                                12.0,
+                                theme::DANGER,
+                            );
                         }
-                    });
-                }
+                        if response.clicked() {
+                            open = Some(trip.id);
+                        }
+                        response.context_menu(|ui| {
+                            if ui.button(tr("Edit trip…")).clicked() {
+                                edit = Some(trip.id);
+                                ui.close();
+                            }
+                            if ui.button(tr("Export trip package…")).clicked() {
+                                package = Some(trip.id);
+                                ui.close();
+                            }
+                            let label = if trip.archived {
+                                tr("Unarchive trip")
+                            } else {
+                                tr("Archive trip")
+                            };
+                            if ui.button(label).clicked() {
+                                archive = Some((trip.id, !trip.archived));
+                                ui.close();
+                            }
+                            if ui.button(tr("Delete trip…")).clicked() {
+                                delete = Some(trip.id);
+                                ui.close();
+                            }
+                        });
+                    }
+                });
             });
-        });
         if let Some(id) = package {
             self.export_trip_package(ui.ctx(), id);
         }
@@ -477,7 +639,12 @@ impl PicassoApp {
             if preview.photos + preview.videos == 0 {
                 self.activity = trf("All {} are already in this trip", &[&photos.len()]);
             } else {
-                self.modal = Modal::AddToTrip(AddDialog { trip_id, name, photos: photos.clone(), preview });
+                self.modal = Modal::AddToTrip(AddDialog {
+                    trip_id,
+                    name,
+                    photos: photos.clone(),
+                    preview,
+                });
             }
         }
         if create {
@@ -501,17 +668,29 @@ impl PicassoApp {
     /// on view, under its title.
     pub(super) fn trip_header(&mut self, ui: &mut egui::Ui) {
         let Nav::Trip(trip_id) = self.nav else { return };
-        let Some(trip) = self.trips.iter().find(|trip| trip.id == trip_id) else { return };
+        let Some(trip) = self.trips.iter().find(|trip| trip.id == trip_id) else {
+            return;
+        };
         let mut parts: Vec<String> = trip_dates(trip).into_iter().collect();
         if !trip.destination.is_empty() {
             parts.push(trip.destination.clone());
         }
         parts.push(trip.zone.clone());
         if trip.days > 0 {
-            parts.push(trf(if trip.days == 1 { "{} day" } else { "{} days" }, &[&trip.days]));
+            parts.push(trf(
+                if trip.days == 1 { "{} day" } else { "{} days" },
+                &[&trip.days],
+            ));
         }
         if trip.stories > 0 {
-            parts.push(trf(if trip.stories == 1 { "{} story" } else { "{} stories" }, &[&trip.stories]));
+            parts.push(trf(
+                if trip.stories == 1 {
+                    "{} story"
+                } else {
+                    "{} stories"
+                },
+                &[&trip.stories],
+            ));
         }
         let missing = trip.members - trip.available;
         let trip_members = trip.members;
@@ -573,23 +752,45 @@ impl PicassoApp {
         let mut filter = self.trip_filter;
         let mut similar = false;
         labelled_row(ui, tr("Show"), |ui| {
-            let everything = MemberQuery { day: filter.day, ..MemberQuery::default() };
-            if ui.selectable_label(filter == everything, tr("All")).clicked() {
+            let everything = MemberQuery {
+                day: filter.day,
+                ..MemberQuery::default()
+            };
+            if ui
+                .selectable_label(filter == everything, tr("All"))
+                .clicked()
+            {
                 filter = everything;
             }
-            if ui.selectable_label(filter.starred, format!("★ {}", tr("Starred"))).clicked() {
+            if ui
+                .selectable_label(filter.starred, format!("★ {}", tr("Starred")))
+                .clicked()
+            {
                 filter.starred = !filter.starred;
             }
             let no_location = ui.selectable_label(filter.no_location, tr("No location"));
-            if no_location.on_hover_text(tr("Photos without GPS from the camera or a place set by hand")).clicked() {
+            if no_location
+                .on_hover_text(tr(
+                    "Photos without GPS from the camera or a place set by hand",
+                ))
+                .clicked()
+            {
                 filter.no_location = !filter.no_location;
             }
             let no_caption = ui.selectable_label(filter.no_caption, tr("No caption"));
-            if no_caption.on_hover_text(tr("Photos without a caption, to add one where you want it")).clicked() {
+            if no_caption
+                .on_hover_text(tr("Photos without a caption, to add one where you want it"))
+                .clicked()
+            {
                 filter.no_caption = !filter.no_caption;
             }
             let unavailable = ui.selectable_label(filter.unavailable, tr("Unavailable"));
-            if unavailable.on_hover_text(tr("Photos that are no longer in the library. They stay in the trip.")).clicked() {
+            if unavailable
+                .on_hover_text(tr(
+                    "Photos that are no longer in the library. They stay in the trip.",
+                ))
+                .clicked()
+            {
                 filter.unavailable = !filter.unavailable;
             }
             let stories: Vec<Story> = self.stories_of(trip_id);
@@ -603,21 +804,37 @@ impl PicassoApp {
                     StoryFilter::Any => tr("In a story").to_string(),
                     StoryFilter::AnyStory => tr("In any story").to_string(),
                     StoryFilter::Story(id) => {
-                        let name = stories.iter().find(|story| story.id == id).map(story_name).unwrap_or_default();
+                        let name = stories
+                            .iter()
+                            .find(|story| story.id == id)
+                            .map(story_name)
+                            .unwrap_or_default();
                         trf("In “{}”", &[&name])
                     }
                 };
                 let chip = ui.selectable_label(filter.story != StoryFilter::Any, current);
                 egui::Popup::menu(&chip).show(|ui| {
-                    if ui.selectable_label(filter.story == StoryFilter::Any, tr("Any photo")).clicked() {
+                    if ui
+                        .selectable_label(filter.story == StoryFilter::Any, tr("Any photo"))
+                        .clicked()
+                    {
                         filter.story = StoryFilter::Any;
                     }
-                    if ui.selectable_label(filter.story == StoryFilter::AnyStory, tr("In any story")).clicked() {
+                    if ui
+                        .selectable_label(filter.story == StoryFilter::AnyStory, tr("In any story"))
+                        .clicked()
+                    {
                         filter.story = StoryFilter::AnyStory;
                     }
                     ui.separator();
                     for story in &stories {
-                        if ui.selectable_label(filter.story == StoryFilter::Story(story.id), story_name(story)).clicked() {
+                        if ui
+                            .selectable_label(
+                                filter.story == StoryFilter::Story(story.id),
+                                story_name(story),
+                            )
+                            .clicked()
+                        {
                             filter.story = StoryFilter::Story(story.id);
                         }
                     }
@@ -625,7 +842,11 @@ impl PicassoApp {
             }
             if filter != MemberQuery::default() {
                 let shown = self.members_counted(trip_id, filter);
-                ui.label(RichText::new(trf("{} of {}", &[&shown, &trip_members])).size(13.0).color(theme::muted()));
+                ui.label(
+                    RichText::new(trf("{} of {}", &[&shown, &trip_members]))
+                        .size(13.0)
+                        .color(theme::muted()),
+                );
             }
             if ui.button(tr("Similar photos…")).on_hover_text(tr("Find photos taken close together that look alike, such as bursts, to choose from")).clicked() {
                 similar = true;
@@ -640,13 +861,22 @@ impl PicassoApp {
                 filter.day = DayFilter::Any;
             }
         }
-        let unassigned = self.members_counted(trip_id, MemberQuery { day: DayFilter::Unassigned, ..MemberQuery::default() });
+        let unassigned = self.members_counted(
+            trip_id,
+            MemberQuery {
+                day: DayFilter::Unassigned,
+                ..MemberQuery::default()
+            },
+        );
         let mut edit_day: Option<TripDay> = None;
         let mut delete_day: Option<i64> = None;
         let mut move_day: Option<(usize, usize)> = None;
         let mut suggest = false;
         labelled_row(ui, tr("Days"), |ui| {
-            if ui.selectable_label(filter.day == DayFilter::Any, tr("All")).clicked() {
+            if ui
+                .selectable_label(filter.day == DayFilter::Any, tr("All"))
+                .clicked()
+            {
                 filter.day = DayFilter::Any;
             }
             // A few Days fit as chips; more take one line as a selector
@@ -657,15 +887,25 @@ impl PicassoApp {
                     edit_day = Some(day.clone());
                     ui.close();
                 }
-                if ui.add_enabled(index > 0, egui::Button::new(tr("Move earlier"))).clicked() {
+                if ui
+                    .add_enabled(index > 0, egui::Button::new(tr("Move earlier")))
+                    .clicked()
+                {
                     move_day = Some((index, index - 1));
                     ui.close();
                 }
-                if ui.add_enabled(index + 1 < days.len(), egui::Button::new(tr("Move later"))).clicked() {
+                if ui
+                    .add_enabled(index + 1 < days.len(), egui::Button::new(tr("Move later")))
+                    .clicked()
+                {
                     move_day = Some((index, index + 1));
                     ui.close();
                 }
-                if ui.button(tr("Delete day")).on_hover_text(tr("Its photos stay in the trip, without a day")).clicked() {
+                if ui
+                    .button(tr("Delete day"))
+                    .on_hover_text(tr("Its photos stay in the trip, without a day"))
+                    .clicked()
+                {
                     delete_day = Some(day.id);
                     ui.close();
                 }
@@ -673,31 +913,46 @@ impl PicassoApp {
             let label = |day: &TripDay| format!("{} ({})", day_name(day), day.members);
             if days.len() <= DAY_CHIPS {
                 for (index, day) in days.iter().enumerate() {
-                    let chip = ui.selectable_label(filter.day == DayFilter::Day(day.id), label(day));
+                    let chip =
+                        ui.selectable_label(filter.day == DayFilter::Day(day.id), label(day));
                     if chip.clicked() {
                         filter.day = DayFilter::Day(day.id);
                     }
                     chip.context_menu(|ui| day_actions(ui, index));
                 }
             } else if !days.is_empty() {
-                let current = days.iter().position(|day| filter.day == DayFilter::Day(day.id));
-                let previous = ui.add_enabled(current.is_some_and(|index| index > 0), egui::Button::new("◀"));
+                let current = days
+                    .iter()
+                    .position(|day| filter.day == DayFilter::Day(day.id));
+                let previous = ui.add_enabled(
+                    current.is_some_and(|index| index > 0),
+                    egui::Button::new("◀"),
+                );
                 if theme::named(previous, tr("Previous day")).clicked() {
                     if let Some(index) = current {
                         filter.day = DayFilter::Day(days[index - 1].id);
                     }
                 }
-                let shown = current.map_or_else(|| trf("{} days", &[&days.len()]), |index| label(&days[index]));
-                let picker = egui::ComboBox::from_id_salt(("trip-day", trip_id)).selected_text(shown.clone()).height(360.0).show_ui(ui, |ui| {
-                    for (index, day) in days.iter().enumerate() {
-                        let text = format!("{}  {}", index + 1, label(day));
-                        if ui.selectable_label(current == Some(index), text).clicked() {
-                            filter.day = DayFilter::Day(day.id);
+                let shown = current.map_or_else(
+                    || trf("{} days", &[&days.len()]),
+                    |index| label(&days[index]),
+                );
+                let picker = egui::ComboBox::from_id_salt(("trip-day", trip_id))
+                    .selected_text(shown.clone())
+                    .height(360.0)
+                    .show_ui(ui, |ui| {
+                        for (index, day) in days.iter().enumerate() {
+                            let text = format!("{}  {}", index + 1, label(day));
+                            if ui.selectable_label(current == Some(index), text).clicked() {
+                                filter.day = DayFilter::Day(day.id);
+                            }
                         }
-                    }
-                });
+                    });
                 theme::name_picker(&picker.response, tr("Days"), shown);
-                let next = ui.add_enabled(current.is_none_or(|index| index + 1 < days.len()), egui::Button::new("▶"));
+                let next = ui.add_enabled(
+                    current.is_none_or(|index| index + 1 < days.len()),
+                    egui::Button::new("▶"),
+                );
                 if theme::named(next, tr("Next day")).clicked() {
                     filter.day = DayFilter::Day(days[current.map_or(0, |index| index + 1)].id);
                 }
@@ -709,7 +964,10 @@ impl PicassoApp {
             let review = self.review_of(trip_id);
             let to_review: usize = review.iter().map(|(_, count)| count).sum();
             if to_review > 0 || filter.day == DayFilter::Review {
-                let chip = ui.selectable_label(filter.day == DayFilter::Review, trf("Needs review ({})", &[&to_review]));
+                let chip = ui.selectable_label(
+                    filter.day == DayFilter::Review,
+                    trf("Needs review ({})", &[&to_review]),
+                );
                 let mut why = tr("Suggest days couldn't tell which day these were taken. Put them in a day to settle them.").to_string();
                 for &(reason, count) in &review {
                     why.push('\n');
@@ -721,7 +979,10 @@ impl PicassoApp {
             }
             if unassigned > 0 || filter.day == DayFilter::Unassigned {
                 let label = trf("Not in a day ({})", &[&unassigned]);
-                if ui.selectable_label(filter.day == DayFilter::Unassigned, label).clicked() {
+                if ui
+                    .selectable_label(filter.day == DayFilter::Unassigned, label)
+                    .clicked()
+                {
                     filter.day = DayFilter::Unassigned;
                 }
             }
@@ -737,7 +998,8 @@ impl PicassoApp {
                 self.suggesting_status(ui);
             }
             if let Some((undo_trip, _)) = &self.day_undo {
-                if *undo_trip == trip_id && ui.link(RichText::new(tr("Undo")).size(13.0)).clicked() {
+                if *undo_trip == trip_id && ui.link(RichText::new(tr("Undo")).size(13.0)).clicked()
+                {
                     self.undo_day_move();
                 }
             }
@@ -785,23 +1047,31 @@ impl PicassoApp {
     /// or delete it, and a last card that starts a new one.
     pub(super) fn stories_page(&mut self, ui: &mut egui::Ui, trip_id: i64) {
         let days = self.db.trip_days(trip_id);
-        egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-            self.story_cards(ui, trip_id, &days);
-        });
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                self.story_cards(ui, trip_id, &days);
+            });
     }
 
     /// The Stories in one line above the photos, however many there are:
     /// the one last worked on, a new one, and the way to all of them.
     fn stories_line(&mut self, ui: &mut egui::Ui, trip_id: i64, days: &[TripDay]) {
         let stories = self.stories_of(trip_id);
-        let latest = stories.iter().filter(|story| !story.archived).max_by_key(|story| story.updated_at);
+        let latest = stories
+            .iter()
+            .filter(|story| !story.archived)
+            .max_by_key(|story| story.updated_at);
         let mut open: Option<i64> = None;
         let mut all = false;
         let mut new_story: Option<egui::Response> = None;
         labelled_row(ui, tr("Stories"), |ui| {
             if let Some(story) = latest {
                 let chip = ui.selectable_label(false, trf("Continue “{}”", &[&story_name(story)]));
-                if chip.on_hover_text(tr("The story you worked on last")).clicked() {
+                if chip
+                    .on_hover_text(tr("The story you worked on last"))
+                    .clicked()
+                {
                     open = Some(story.id);
                 }
             }
@@ -810,7 +1080,10 @@ impl PicassoApp {
                 // On one line, moved down whole when it doesn't fit: a link broken in two is
                 // two places to click, and screen readers get a name for only the first.
                 ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
-                if ui.link(RichText::new(trf("All {} stories ›", &[&stories.len()])).size(13.0)).clicked() {
+                if ui
+                    .link(RichText::new(trf("All {} stories ›", &[&stories.len()])).size(13.0))
+                    .clicked()
+                {
                     all = true;
                 }
             }
@@ -830,7 +1103,8 @@ impl PicassoApp {
     fn new_story_menu(&mut self, button: &egui::Response, trip_id: i64, days: &[TripDay]) {
         // The Stories tab hides the grid, so a selection there is out of sight.
         let selected = !self.selection.is_empty() && !self.trip_stories.contains(&trip_id);
-        let (mut blank, mut from_days, mut some_dates, mut from_selection) = (false, false, false, false);
+        let (mut blank, mut from_days, mut some_dates, mut from_selection) =
+            (false, false, false, false);
         let popup = egui::Popup::menu(button).show(|ui| {
             if ui.button(tr("Blank story")).clicked() {
                 blank = true;
@@ -892,14 +1166,25 @@ impl PicassoApp {
         let trip = self.trips.iter().find(|trip| trip.id == trip_id);
         let photos = trip.is_some_and(|trip| trip.members > 0);
         let dates = trip_span(trip, &days);
-        self.modal = Modal::NewStory(StoryDialog { trip_id, dates, photos, error: String::new() });
+        self.modal = Modal::NewStory(StoryDialog {
+            trip_id,
+            dates,
+            photos,
+            error: String::new(),
+        });
     }
 
     /// A Story about the dates `dates`, or the whole Trip, begun with a
     /// heading for each Day or date and its photos.
-    fn story_from_days(&mut self, trip_id: i64, dates: Option<(NaiveDate, NaiveDate)>) -> Result<i64, String> {
+    fn story_from_days(
+        &mut self,
+        trip_id: i64,
+        dates: Option<(NaiveDate, NaiveDate)>,
+    ) -> Result<i64, String> {
         let title = self.trip_title(trip_id);
-        let (id, videos) = self.db.create_story_from_days(trip_id, &title, dates, day_label)?;
+        let (id, videos) = self
+            .db
+            .create_story_from_days(trip_id, &title, dates, day_label)?;
         if videos > 0 {
             self.activity = trf("{} videos were left out of the story", &[&videos]);
         }
@@ -907,11 +1192,15 @@ impl PicassoApp {
     }
 
     pub(super) fn new_story_modal(&mut self, ctx: &egui::Context) {
-        let Modal::NewStory(dialog) = &self.modal else { return };
+        let Modal::NewStory(dialog) = &self.modal else {
+            return;
+        };
         let trip_id = dialog.trip_id;
         let days = self.days_of(trip_id);
         let span = trip_span(self.trips.iter().find(|trip| trip.id == trip_id), &days);
-        let Modal::NewStory(dialog) = &mut self.modal else { return };
+        let Modal::NewStory(dialog) = &mut self.modal else {
+            return;
+        };
         let mut close = false;
         let mut create = false;
         let response = egui::Modal::new(egui::Id::unique("new-story")).frame(about::dialog_frame()).show(ctx, |ui| {
@@ -951,7 +1240,11 @@ impl PicassoApp {
             if range == span && !photos {
                 range = None;
             }
-            let made = if photos { self.story_from_days(trip_id, range) } else { self.db.create_story_about(trip_id, "", range) };
+            let made = if photos {
+                self.story_from_days(trip_id, range)
+            } else {
+                self.db.create_story_about(trip_id, "", range)
+            };
             match made {
                 Ok(id) => {
                     self.modal = Modal::None;
@@ -984,19 +1277,34 @@ impl PicassoApp {
             for story in &stories {
                 let name = story_name(story);
                 let (rect, card) = ui.allocate_exact_size(STORY_CARD, egui::Sense::click());
-                let card = card.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(tr("Click to edit. Right-click for more."));
+                let card = card
+                    .on_hover_cursor(egui::CursorIcon::PointingHand)
+                    .on_hover_text(tr("Click to edit. Right-click for more."));
                 card.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &name));
                 let painter = ui.painter_at(rect);
                 painter.rect_filled(rect, 8, theme::sidebar());
                 if card.hovered() || card.has_focus() {
-                    painter.rect_stroke(rect, 8, egui::Stroke::new(2.0, theme::ACCENT), egui::StrokeKind::Inside);
+                    painter.rect_stroke(
+                        rect,
+                        8,
+                        egui::Stroke::new(2.0, theme::ACCENT),
+                        egui::StrokeKind::Inside,
+                    );
                 }
-                let cover = egui::Rect::from_min_size(rect.min, Vec2::new(rect.width(), 76.0)).shrink(5.0);
+                let cover =
+                    egui::Rect::from_min_size(rect.min, Vec2::new(rect.width(), 76.0)).shrink(5.0);
                 painter.rect_filled(cover, 6, theme::placeholder());
                 if let Some(photo) = self.story_cover(story).and_then(|id| self.db.photo(id)) {
                     self.ensure_thumb(photo.id, &photo.path);
                     if let Some((texture, w, h)) = self.thumb_texture(photo.id) {
-                        theme::paint_image_rounded(&painter, &texture, cover, theme::cover_uv(w, h), photo.rotation, 6.0);
+                        theme::paint_image_rounded(
+                            &painter,
+                            &texture,
+                            cover,
+                            theme::cover_uv(w, h),
+                            photo.rotation,
+                            6.0,
+                        );
                     }
                 }
                 let (status, color) = if story.archived {
@@ -1008,14 +1316,33 @@ impl PicassoApp {
                 };
                 // The title, cut short of the status badge at the right.
                 let line = cover.bottom() + 15.0;
-                let badge = painter.layout_no_wrap(status.to_string(), egui::FontId::proportional(11.0), color);
-                let badge_rect = egui::Rect::from_min_size(egui::pos2(rect.right() - 8.0 - badge.size().x - 12.0, line - badge.size().y / 2.0 - 2.0), badge.size() + Vec2::new(12.0, 4.0));
+                let badge = painter.layout_no_wrap(
+                    status.to_string(),
+                    egui::FontId::proportional(11.0),
+                    color,
+                );
+                let badge_rect = egui::Rect::from_min_size(
+                    egui::pos2(
+                        rect.right() - 8.0 - badge.size().x - 12.0,
+                        line - badge.size().y / 2.0 - 2.0,
+                    ),
+                    badge.size() + Vec2::new(12.0, 4.0),
+                );
                 painter.rect_filled(badge_rect, 8, color.gamma_multiply(0.15));
                 painter.galley(badge_rect.min + Vec2::new(6.0, 2.0), badge, color);
-                let title = painter.layout_no_wrap(name.clone(), egui::FontId::proportional(13.5), theme::text());
+                let title = painter.layout_no_wrap(
+                    name.clone(),
+                    egui::FontId::proportional(13.5),
+                    theme::text(),
+                );
                 let left = rect.left() + 9.0;
-                let clip = egui::Rect::from_min_max(egui::pos2(left, line - title.size().y / 2.0), egui::pos2(badge_rect.left() - 6.0, line + title.size().y / 2.0));
-                painter.with_clip_rect(clip).galley(clip.min, title, theme::text());
+                let clip = egui::Rect::from_min_max(
+                    egui::pos2(left, line - title.size().y / 2.0),
+                    egui::pos2(badge_rect.left() - 6.0, line + title.size().y / 2.0),
+                );
+                painter
+                    .with_clip_rect(clip)
+                    .galley(clip.min, title, theme::text());
                 if card.clicked() {
                     open = Some(story.id);
                 }
@@ -1024,7 +1351,11 @@ impl PicassoApp {
                         open = Some(story.id);
                         ui.close();
                     }
-                    let label = if story.archived { tr("Restore story") } else { tr("Archive story") };
+                    let label = if story.archived {
+                        tr("Restore story")
+                    } else {
+                        tr("Archive story")
+                    };
                     if ui.button(label).clicked() {
                         archive = Some((story.id, !story.archived));
                         ui.close();
@@ -1037,12 +1368,35 @@ impl PicassoApp {
             }
             let (rect, button) = ui.allocate_exact_size(STORY_CARD, egui::Sense::click());
             let button = button.on_hover_cursor(egui::CursorIcon::PointingHand);
-            button.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tr("New story")));
-            let color = if button.hovered() { theme::ACCENT } else { theme::muted() };
+            button.widget_info(|| {
+                egui::WidgetInfo::labeled(egui::Role::Button, true, tr("New story"))
+            });
+            let color = if button.hovered() {
+                theme::ACCENT
+            } else {
+                theme::muted()
+            };
             let painter = ui.painter_at(rect);
-            painter.rect_stroke(rect.shrink(1.0), 8, egui::Stroke::new(1.0, color.gamma_multiply(0.45)), egui::StrokeKind::Inside);
-            painter.text(rect.center() - Vec2::new(0.0, 10.0), egui::Align2::CENTER_CENTER, "+", egui::FontId::proportional(22.0), color);
-            painter.text(rect.center() + Vec2::new(0.0, 14.0), egui::Align2::CENTER_CENTER, tr("New story"), egui::FontId::proportional(13.0), color);
+            painter.rect_stroke(
+                rect.shrink(1.0),
+                8,
+                egui::Stroke::new(1.0, color.gamma_multiply(0.45)),
+                egui::StrokeKind::Inside,
+            );
+            painter.text(
+                rect.center() - Vec2::new(0.0, 10.0),
+                egui::Align2::CENTER_CENTER,
+                "+",
+                egui::FontId::proportional(22.0),
+                color,
+            );
+            painter.text(
+                rect.center() + Vec2::new(0.0, 14.0),
+                egui::Align2::CENTER_CENTER,
+                tr("New story"),
+                egui::FontId::proportional(13.0),
+                color,
+            );
             new_story = Some(button);
         });
         if let Some(button) = new_story {
@@ -1061,14 +1415,24 @@ impl PicassoApp {
 
     /// The photo on a Story's card: its cover, or else its first photo.
     fn story_cover(&self, story: &Story) -> Option<i64> {
-        let media = story.cover.or_else(|| self.db.story_blocks(story.id).iter().find_map(|block| block.block.media().first().map(|media| media.media_id)))?;
+        let media = story.cover.or_else(|| {
+            self.db
+                .story_blocks(story.id)
+                .iter()
+                .find_map(|block| block.block.media().first().map(|media| media.media_id))
+        })?;
         self.db.media_photo(media)
     }
 
     /// The toolbar menu that adds the selected photos to one of the Trip's Stories.
     pub(super) fn add_to_story_menu(&mut self, ui: &mut egui::Ui) {
         let Nav::Trip(trip_id) = self.nav else { return };
-        let stories: Vec<_> = self.db.stories(trip_id).into_iter().filter(|story| !story.archived).collect();
+        let stories: Vec<_> = self
+            .db
+            .stories(trip_id)
+            .into_iter()
+            .filter(|story| !story.archived)
+            .collect();
         if stories.is_empty() {
             return;
         }
@@ -1083,7 +1447,11 @@ impl PicassoApp {
                     if ui.button(tr("As one gallery")).clicked() {
                         pick = Some((story.id, Group::Gallery));
                     }
-                    if ui.button(tr("As a photo grid")).on_hover_text(tr("Side by side in rows, with one description")).clicked() {
+                    if ui
+                        .button(tr("As a photo grid"))
+                        .on_hover_text(tr("Side by side in rows, with one description"))
+                        .clicked()
+                    {
                         pick = Some((story.id, Group::Grid));
                     }
                 });
@@ -1110,7 +1478,9 @@ impl PicassoApp {
         let mut geotag = false;
         labelled_row(ui, tr("Tracks"), |ui| {
             for track in &linked {
-                let day = track.day_id.and_then(|id| days.iter().find(|day| day.id == id));
+                let day = track
+                    .day_id
+                    .and_then(|id| days.iter().find(|day| day.id == id));
                 let mut label = match day {
                     Some(day) => format!("{} · {}", track.name, day_name(day)),
                     None => track.name.clone(),
@@ -1126,12 +1496,18 @@ impl PicassoApp {
                 };
                 chip.context_menu(|ui| {
                     if let Some(track_id) = track.track_id {
-                        if ui.selectable_label(track.day_id.is_none(), tr("Whole trip")).clicked() {
+                        if ui
+                            .selectable_label(track.day_id.is_none(), tr("Whole trip"))
+                            .clicked()
+                        {
                             link = Some((track_id, None));
                             ui.close();
                         }
                         for day in days {
-                            if ui.selectable_label(track.day_id == Some(day.id), day_name(day)).clicked() {
+                            if ui
+                                .selectable_label(track.day_id == Some(day.id), day_name(day))
+                                .clicked()
+                            {
                                 link = Some((track_id, Some(day.id)));
                                 ui.close();
                             }
@@ -1144,22 +1520,26 @@ impl PicassoApp {
                     }
                 });
             }
-            let unlinked: Vec<_> =
-                choices.iter().filter(|(id, _, _)| !linked.iter().any(|track| track.track_id == Some(*id))).collect();
+            let unlinked: Vec<_> = choices
+                .iter()
+                .filter(|(id, _, _)| !linked.iter().any(|track| track.track_id == Some(*id)))
+                .collect();
             if !unlinked.is_empty() {
                 let button = ui.button(tr("Add track"));
                 let popup = egui::Popup::menu(&button).show(|ui| {
-                    egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
-                        for (id, name, started) in &unlinked {
-                            let label = match started {
-                                Some(at) => format!("{name} · {}", format_day(*at)),
-                                None => name.clone(),
-                            };
-                            if ui.selectable_label(false, label).clicked() {
-                                link = Some((*id, None));
+                    egui::ScrollArea::vertical()
+                        .max_height(320.0)
+                        .show(ui, |ui| {
+                            for (id, name, started) in &unlinked {
+                                let label = match started {
+                                    Some(at) => format!("{name} · {}", format_day(*at)),
+                                    None => name.clone(),
+                                };
+                                if ui.selectable_label(false, label).clicked() {
+                                    link = Some((*id, None));
+                                }
                             }
-                        }
-                    });
+                        });
                 });
                 if popup.is_none() {
                     button.on_hover_text(tr("Link a GPS track from the library to this trip. The track itself stays where it is."));
@@ -1168,7 +1548,9 @@ impl PicassoApp {
             if linked.iter().any(|track| track.track_id.is_some())
                 && ui
                     .button(tr("Geotag photos…"))
-                    .on_hover_text(tr("Give the trip's photos the places its tracks were at when they were taken"))
+                    .on_hover_text(tr(
+                        "Give the trip's photos the places its tracks were at when they were taken",
+                    ))
                     .clicked()
             {
                 geotag = true;
@@ -1188,10 +1570,15 @@ impl PicassoApp {
     }
 
     pub(super) fn unavailable_modal(&mut self, ctx: &egui::Context) {
-        let Modal::Unavailable(dialog) = &self.modal else { return };
+        let Modal::Unavailable(dialog) = &self.modal else {
+            return;
+        };
         let trip_id = dialog.trip_id;
         let error = dialog.error.clone();
-        let query = MemberQuery { unavailable: true, ..MemberQuery::default() };
+        let query = MemberQuery {
+            unavailable: true,
+            ..MemberQuery::default()
+        };
         let members = self.unavailable_of(trip_id);
         let total = self.members_counted(trip_id, query);
         let mut close = false;
@@ -1257,14 +1644,16 @@ impl PicassoApp {
         let db_path = self.data_dir.join("picasso.db");
         let events = self.events_tx.clone();
         let ctx = ctx.clone();
-        let _ = std::thread::Builder::new().name("picasso-days".into()).spawn(move || {
-            let outcome = crate::db::Database::open(&db_path).and_then(|db| {
-                read_captures(&db, trip_id, &progress, &ctx)?;
-                db.suggest_days(trip_id)
+        let _ = std::thread::Builder::new()
+            .name("picasso-days".into())
+            .spawn(move || {
+                let outcome = crate::db::Database::open(&db_path).and_then(|db| {
+                    read_captures(&db, trip_id, &progress, &ctx)?;
+                    db.suggest_days(trip_id)
+                });
+                let _ = events.send(UiEvent::DaysSuggested { trip_id, outcome });
+                ctx.request_repaint();
             });
-            let _ = events.send(UiEvent::DaysSuggested { trip_id, outcome });
-            ctx.request_repaint();
-        });
     }
 
     /// Reads the capture times the Trip's photos lack, as Suggest days
@@ -1274,14 +1663,16 @@ impl PicassoApp {
         let db_path = self.data_dir.join("picasso.db");
         let events = self.events_tx.clone();
         let ctx = ctx.clone();
-        let _ = std::thread::Builder::new().name("picasso-places".into()).spawn(move || {
-            let outcome = crate::db::Database::open(&db_path).and_then(|db| {
-                read_captures(&db, trip_id, &progress, &ctx)?;
-                db.suggest_places(trip_id, distance, gap)
+        let _ = std::thread::Builder::new()
+            .name("picasso-places".into())
+            .spawn(move || {
+                let outcome = crate::db::Database::open(&db_path).and_then(|db| {
+                    read_captures(&db, trip_id, &progress, &ctx)?;
+                    db.suggest_places(trip_id, distance, gap)
+                });
+                let _ = events.send(UiEvent::PlacesSuggested { trip_id, outcome });
+                ctx.request_repaint();
             });
-            let _ = events.send(UiEvent::PlacesSuggested { trip_id, outcome });
-            ctx.request_repaint();
-        });
     }
 
     fn start_suggesting(&mut self, trip_id: i64) -> Arc<crate::story_html::Progress> {
@@ -1301,21 +1692,42 @@ impl PicassoApp {
     /// While a suggestion runs: a spinner, how many photos' times it has
     /// read, and Cancel.
     fn suggesting_status(&self, ui: &mut egui::Ui) {
-        let Some(progress) = &self.suggest_progress else { return };
+        let Some(progress) = &self.suggest_progress else {
+            return;
+        };
         ui.add(egui::Spinner::new().size(13.0));
-        let (done, total) = (progress.done.load(Ordering::Relaxed), progress.total.load(Ordering::Relaxed));
+        let (done, total) = (
+            progress.done.load(Ordering::Relaxed),
+            progress.total.load(Ordering::Relaxed),
+        );
         if total > 0 && done < total {
-            ui.label(RichText::new(trf("Reading times: {} of {}", &[&done, &total])).size(12.0).color(theme::muted()));
+            ui.label(
+                RichText::new(trf("Reading times: {} of {}", &[&done, &total]))
+                    .size(12.0)
+                    .color(theme::muted()),
+            );
         }
-        if ui.link(RichText::new(tr("Cancel")).size(13.0)).on_hover_text(tr("Stop; the times read so far are kept for next time")).clicked() {
+        if ui
+            .link(RichText::new(tr("Cancel")).size(13.0))
+            .on_hover_text(tr("Stop; the times read so far are kept for next time"))
+            .clicked()
+        {
             progress.cancel.store(true, Ordering::Relaxed);
         }
     }
 
-    pub(super) fn on_places_suggested(&mut self, trip_id: i64, outcome: Result<PlaceSuggestion, String>) {
+    pub(super) fn on_places_suggested(
+        &mut self,
+        trip_id: i64,
+        outcome: Result<PlaceSuggestion, String>,
+    ) {
         self.end_suggesting(trip_id);
         self.activity = match outcome {
-            Ok(done) if done.from_tracks > 0 => format!("{}  ·  {}", trf("{} places", &[&done.places]), trf("{} placed by a track", &[&done.from_tracks])),
+            Ok(done) if done.from_tracks > 0 => format!(
+                "{}  ·  {}",
+                trf("{} places", &[&done.places]),
+                trf("{} placed by a track", &[&done.from_tracks])
+            ),
             Ok(done) => trf("{} places", &[&done.places]),
             Err(err) => err,
         };
@@ -1324,14 +1736,22 @@ impl PicassoApp {
 
     /// Fills the open Place dialog with the names looked up, leaving the
     /// saving to the person editing it.
-    pub(super) fn on_place_named(&mut self, place_id: i64, outcome: Result<crate::geocode::PlaceNames, String>) {
-        let Modal::PlaceDetails(dialog) = &mut self.modal else { return };
+    pub(super) fn on_place_named(
+        &mut self,
+        place_id: i64,
+        outcome: Result<crate::geocode::PlaceNames, String>,
+    ) {
+        let Modal::PlaceDetails(dialog) = &mut self.modal else {
+            return;
+        };
         if dialog.place_id != place_id {
             return;
         }
         dialog.looking_up = false;
         match outcome {
-            Ok(names) if names.name.is_empty() => dialog.error = tr("No name was found for this position").into(),
+            Ok(names) if names.name.is_empty() => {
+                dialog.error = tr("No name was found for this position").into()
+            }
             Ok(names) => {
                 dialog.name = names.name;
                 dialog.local_name = names.local_name;
@@ -1340,7 +1760,11 @@ impl PicassoApp {
         }
     }
 
-    pub(super) fn on_days_suggested(&mut self, trip_id: i64, outcome: Result<DaySuggestion, String>) {
+    pub(super) fn on_days_suggested(
+        &mut self,
+        trip_id: i64,
+        outcome: Result<DaySuggestion, String>,
+    ) {
         self.end_suggesting(trip_id);
         self.activity = match outcome {
             Ok(outcome) => {
@@ -1380,7 +1804,9 @@ impl PicassoApp {
             }
         });
         if popup.is_none() {
-            button.on_hover_text(tr("Put the selected photos in a day of this trip (Alt+1 … Alt+9, Alt+0 for no day)"));
+            button.on_hover_text(tr(
+                "Put the selected photos in a day of this trip (Alt+1 … Alt+9, Alt+0 for no day)",
+            ));
         }
         if create {
             match self.db.add_trip_day(trip_id, None, "") {
@@ -1401,7 +1827,10 @@ impl PicassoApp {
         }
         let photos = self.selection_in_order();
         let media = self.db.add_to_trip(trip_id, &photos).unwrap_or_default();
-        match self.db.move_to_day(trip_id, day_id, &media, DaySource::User) {
+        match self
+            .db
+            .move_to_day(trip_id, day_id, &media, DaySource::User)
+        {
             Ok(before) => {
                 self.activity = trf("Moved {} photos", &[&before.len()]);
                 self.day_undo = Some((trip_id, before));
@@ -1413,7 +1842,9 @@ impl PicassoApp {
 
     /// Moves the selected photos within the Day being shown.
     pub(super) fn arrange_menu(&mut self, ui: &mut egui::Ui) {
-        let (Nav::Trip(trip_id), DayFilter::Day(day_id)) = (&self.nav, self.trip_filter.day) else { return };
+        let (Nav::Trip(trip_id), DayFilter::Day(day_id)) = (&self.nav, self.trip_filter.day) else {
+            return;
+        };
         let trip_id = *trip_id;
         let mut step = None;
         let button = ui.button(tr("Arrange"));
@@ -1443,10 +1874,20 @@ impl PicassoApp {
         if self.selection.is_empty() {
             return;
         }
-        let query = MemberQuery { day: DayFilter::Day(day_id), ..MemberQuery::default() };
+        let query = MemberQuery {
+            day: DayFilter::Day(day_id),
+            ..MemberQuery::default()
+        };
         let members = self.db.trip_members(trip_id, &query, 0, usize::MAX);
         let order: Vec<i64> = members.iter().map(|member| member.media_id).collect();
-        let selected: Vec<bool> = members.iter().map(|member| member.photo_id.is_some_and(|id| self.selection.contains(&id))).collect();
+        let selected: Vec<bool> = members
+            .iter()
+            .map(|member| {
+                member
+                    .photo_id
+                    .is_some_and(|id| self.selection.contains(&id))
+            })
+            .collect();
         if let Err(err) = self.db.order_day(day_id, &arrange(&order, &selected, step)) {
             self.activity = err;
         }
@@ -1460,7 +1901,18 @@ impl PicassoApp {
     pub(super) fn trip_keys(&mut self, ctx: &egui::Context) {
         let Nav::Trip(trip_id) = self.nav else { return };
         let alt = |key| ctx.input_mut(|input| input.consume_key(Modifiers::ALT, key));
-        const DIGITS: [Key; 10] = [Key::Num0, Key::Num1, Key::Num2, Key::Num3, Key::Num4, Key::Num5, Key::Num6, Key::Num7, Key::Num8, Key::Num9];
+        const DIGITS: [Key; 10] = [
+            Key::Num0,
+            Key::Num1,
+            Key::Num2,
+            Key::Num3,
+            Key::Num4,
+            Key::Num5,
+            Key::Num6,
+            Key::Num7,
+            Key::Num8,
+            Key::Num9,
+        ];
         if let Some(n) = DIGITS.iter().position(|key| alt(*key)) {
             if n == 0 {
                 self.move_selection_to_day(trip_id, None);
@@ -1469,19 +1921,29 @@ impl PicassoApp {
             }
         }
         if let DayFilter::Day(day_id) = self.trip_filter.day {
-            let steps = [(Key::Home, Arrange::Start), (Key::ArrowUp, Arrange::Earlier), (Key::ArrowDown, Arrange::Later), (Key::End, Arrange::End)];
+            let steps = [
+                (Key::Home, Arrange::Start),
+                (Key::ArrowUp, Arrange::Earlier),
+                (Key::ArrowDown, Arrange::Later),
+                (Key::End, Arrange::End),
+            ];
             if let Some((_, step)) = steps.into_iter().find(|(key, _)| alt(*key)) {
                 self.arrange_selection(trip_id, day_id, step);
             }
         }
-        let undo = self.day_undo.as_ref().is_some_and(|(undo_trip, _)| *undo_trip == trip_id);
+        let undo = self
+            .day_undo
+            .as_ref()
+            .is_some_and(|(undo_trip, _)| *undo_trip == trip_id);
         if undo && ctx.input_mut(|input| input.consume_key(Modifiers::COMMAND, Key::Z)) {
             self.undo_day_move();
         }
     }
 
     fn undo_day_move(&mut self) {
-        let Some((trip_id, before)) = self.day_undo.take() else { return };
+        let Some((trip_id, before)) = self.day_undo.take() else {
+            return;
+        };
         if let Err(err) = self.db.restore_day_assignments(trip_id, &before) {
             self.activity = err;
         }
@@ -1492,17 +1954,26 @@ impl PicassoApp {
     /// places with how far apart and how long between photos a Place spans.
     fn places_row(&mut self, ui: &mut egui::Ui, trip_id: i64, filter: &mut MemberQuery) {
         let places = self.places_of(trip_id);
-        if filter.place.is_some_and(|id| !places.iter().any(|place| place.id == id)) {
+        if filter
+            .place
+            .is_some_and(|id| !places.iter().any(|place| place.id == id))
+        {
             filter.place = None;
         }
         let settings_id = egui::Id::unique("suggest-places-settings");
-        let (mut distance, mut hours) = ui.data(|data| data.get_temp::<(u32, u32)>(settings_id)).unwrap_or((300, 2));
+        let (mut distance, mut hours) = ui
+            .data(|data| data.get_temp::<(u32, u32)>(settings_id))
+            .unwrap_or((300, 2));
         let mut edit: Option<TripPlace> = None;
         let mut delete: Option<i64> = None;
         let mut moved: Option<(usize, usize)> = None;
         let mut suggest = false;
         labelled_row(ui, tr("Places"), |ui| {
-            if !places.is_empty() && ui.selectable_label(filter.place.is_none(), tr("All")).clicked() {
+            if !places.is_empty()
+                && ui
+                    .selectable_label(filter.place.is_none(), tr("All"))
+                    .clicked()
+            {
                 filter.place = None;
             }
             let mut actions = |ui: &mut egui::Ui, index: usize| {
@@ -1510,38 +1981,70 @@ impl PicassoApp {
                     edit = Some(places[index].clone());
                     ui.close();
                 }
-                if ui.add_enabled(index > 0, egui::Button::new(tr("Move earlier"))).clicked() {
+                if ui
+                    .add_enabled(index > 0, egui::Button::new(tr("Move earlier")))
+                    .clicked()
+                {
                     moved = Some((index, index - 1));
                     ui.close();
                 }
-                if ui.add_enabled(index + 1 < places.len(), egui::Button::new(tr("Move later"))).clicked() {
+                if ui
+                    .add_enabled(
+                        index + 1 < places.len(),
+                        egui::Button::new(tr("Move later")),
+                    )
+                    .clicked()
+                {
                     moved = Some((index, index + 1));
                     ui.close();
                 }
-                if ui.button(tr("Delete place")).on_hover_text(tr("Its photos stay in the trip, at no place")).clicked() {
+                if ui
+                    .button(tr("Delete place"))
+                    .on_hover_text(tr("Its photos stay in the trip, at no place"))
+                    .clicked()
+                {
                     delete = Some(places[index].id);
                     ui.close();
                 }
             };
-            let label = |index: usize| format!("{} ({})", place_name(&places[index], index), places[index].members);
+            let label = |index: usize| {
+                format!(
+                    "{} ({})",
+                    place_name(&places[index], index),
+                    places[index].members
+                )
+            };
             if places.len() <= DAY_CHIPS {
                 for (index, place) in places.iter().enumerate() {
-                    let chip = ui.selectable_label(filter.place == Some(place.id), label(index)).on_hover_text(place_details(place));
+                    let chip = ui
+                        .selectable_label(filter.place == Some(place.id), label(index))
+                        .on_hover_text(place_details(place));
                     if chip.clicked() {
                         filter.place = Some(place.id);
                     }
                     chip.context_menu(|ui| actions(ui, index));
                 }
             } else {
-                let current = places.iter().position(|place| filter.place == Some(place.id));
+                let current = places
+                    .iter()
+                    .position(|place| filter.place == Some(place.id));
                 let shown = current.map_or_else(|| trf("{} places", &[&places.len()]), label);
-                let picker = egui::ComboBox::from_id_salt(("trip-place", trip_id)).selected_text(shown.clone()).height(360.0).show_ui(ui, |ui| {
-                    for (index, place) in places.iter().enumerate() {
-                        if ui.selectable_label(current == Some(index), format!("{}  {}", index + 1, label(index))).clicked() {
-                            filter.place = Some(place.id);
+                let picker = egui::ComboBox::from_id_salt(("trip-place", trip_id))
+                    .selected_text(shown.clone())
+                    .height(360.0)
+                    .show_ui(ui, |ui| {
+                        for (index, place) in places.iter().enumerate() {
+                            if ui
+                                .selectable_label(
+                                    current == Some(index),
+                                    format!("{}  {}", index + 1, label(index)),
+                                )
+                                .clicked()
+                            {
+                                filter.place = Some(place.id);
+                            }
                         }
-                    }
-                });
+                    });
                 theme::name_picker(&picker.response, tr("Places"), shown);
                 if let Some(index) = current {
                     let more = theme::named(ui.button("⋯"), tr("Edit, move, or delete this place"));
@@ -1556,9 +2059,15 @@ impl PicassoApp {
             {
                 suggest = true;
             }
-            ui.add(egui::DragValue::new(&mut distance).range(25..=5000).speed(5).suffix(" m"))
-                .on_hover_text(tr("How far apart photos at one place can be"));
-            ui.add(egui::DragValue::new(&mut hours).range(1..=48).suffix(" h")).on_hover_text(tr("The longest gap between photos of one visit"));
+            ui.add(
+                egui::DragValue::new(&mut distance)
+                    .range(25..=5000)
+                    .speed(5)
+                    .suffix(" m"),
+            )
+            .on_hover_text(tr("How far apart photos at one place can be"));
+            ui.add(egui::DragValue::new(&mut hours).range(1..=48).suffix(" h"))
+                .on_hover_text(tr("The longest gap between photos of one visit"));
             if busy {
                 self.suggesting_status(ui);
             }
@@ -1589,7 +2098,12 @@ impl PicassoApp {
             }
         }
         if suggest {
-            self.suggest_places(ui.ctx(), trip_id, f64::from(distance), i64::from(hours) * 3600);
+            self.suggest_places(
+                ui.ctx(),
+                trip_id,
+                f64::from(distance),
+                i64::from(hours) * 3600,
+            );
         }
     }
 
@@ -1607,7 +2121,9 @@ impl PicassoApp {
                 if missing {
                     label = trf("{} (missing)", &[&label]);
                 }
-                let chip = ui.selectable_label(false, label).on_hover_text(resource_details(resource, missing));
+                let chip = ui
+                    .selectable_label(false, label)
+                    .on_hover_text(resource_details(resource, missing));
                 if chip.clicked() {
                     match resource.kind {
                         ResourceKind::Note => edit = Some(resource.clone()),
@@ -1618,8 +2134,14 @@ impl PicassoApp {
                     }
                 }
                 chip.context_menu(|ui| {
-                    let open = (resource.kind != ResourceKind::Note).then(|| ui.add_enabled(!missing, egui::Button::new(tr("Open"))));
-                    if open.is_some_and(|open| open.on_disabled_hover_text(tr("The file isn't where it was. Click the resource to find it.")).clicked()) {
+                    let open = (resource.kind != ResourceKind::Note)
+                        .then(|| ui.add_enabled(!missing, egui::Button::new(tr("Open"))));
+                    if open.is_some_and(|open| {
+                        open.on_disabled_hover_text(tr(
+                            "The file isn't where it was. Click the resource to find it.",
+                        ))
+                        .clicked()
+                    }) {
                         let _ = open::that(&resource.reference);
                         ui.close();
                     }
@@ -1627,11 +2149,20 @@ impl PicassoApp {
                         edit = Some(resource.clone());
                         ui.close();
                     }
-                    if resource.kind.is_file() && ui.button(tr("Locate…")).on_hover_text(tr("Choose where its file is now")).clicked() {
+                    if resource.kind.is_file()
+                        && ui
+                            .button(tr("Locate…"))
+                            .on_hover_text(tr("Choose where its file is now"))
+                            .clicked()
+                    {
                         locate = Some(resource.id);
                         ui.close();
                     }
-                    if ui.button(tr("Delete resource")).on_hover_text(tr("Its file, if any, stays where it is")).clicked() {
+                    if ui
+                        .button(tr("Delete resource"))
+                        .on_hover_text(tr("Its file, if any, stays where it is"))
+                        .clicked()
+                    {
                         delete = Some(resource.id);
                         ui.close();
                     }
@@ -1642,10 +2173,17 @@ impl PicassoApp {
             }
         });
         if let Some(resource) = edit {
-            self.modal = Modal::Resource(ResourceDialog { trip_id, resource, error: String::new() });
+            self.modal = Modal::Resource(ResourceDialog {
+                trip_id,
+                resource,
+                error: String::new(),
+            });
         }
         if let Some(id) = locate {
-            if let Some(path) = rfd::FileDialog::new().set_title(tr("Locate the file")).pick_file() {
+            if let Some(path) = rfd::FileDialog::new()
+                .set_title(tr("Locate the file"))
+                .pick_file()
+            {
                 if let Err(err) = self.db.locate_trip_resource(id, &path) {
                     self.activity = err;
                 }
@@ -1659,10 +2197,16 @@ impl PicassoApp {
     }
 
     pub(super) fn resource_modal(&mut self, ctx: &egui::Context) {
-        let Modal::Resource(dialog) = &mut self.modal else { return };
+        let Modal::Resource(dialog) = &mut self.modal else {
+            return;
+        };
         let mut close = false;
         let mut save = false;
-        let title = if dialog.resource.id == 0 { tr("Add resource") } else { tr("Edit resource") };
+        let title = if dialog.resource.id == 0 {
+            tr("Add resource")
+        } else {
+            tr("Edit resource")
+        };
         let response = egui::Modal::new(egui::Id::unique("trip-resource")).frame(about::dialog_frame()).show(ctx, |ui| {
             ui.set_width(440.0);
             about::title_bar(ui, &self.logo, title, &mut close);
@@ -1742,7 +2286,9 @@ impl PicassoApp {
     }
 
     pub(super) fn place_modal(&mut self, ctx: &egui::Context) {
-        let Modal::PlaceDetails(dialog) = &mut self.modal else { return };
+        let Modal::PlaceDetails(dialog) = &mut self.modal else {
+            return;
+        };
         let mut close = false;
         let mut save = false;
         let mut look_up = false;
@@ -1797,14 +2343,21 @@ impl PicassoApp {
             let lang = crate::i18n::current().code();
             let events = self.events_tx.clone();
             let ctx = ctx.clone();
-            let _ = std::thread::Builder::new().name("picasso-place-name".into()).spawn(move || {
-                let outcome = crate::geocode::reverse(&dir, lat, lon, lang);
-                let _ = events.send(UiEvent::PlaceNamed { place_id, outcome });
-                ctx.request_repaint();
-            });
+            let _ = std::thread::Builder::new()
+                .name("picasso-place-name".into())
+                .spawn(move || {
+                    let outcome = crate::geocode::reverse(&dir, lat, lon, lang);
+                    let _ = events.send(UiEvent::PlaceNamed { place_id, outcome });
+                    ctx.request_repaint();
+                });
         }
         if save {
-            match self.db.update_trip_place(dialog.place_id, &dialog.name, &dialog.local_name, &dialog.notes) {
+            match self.db.update_trip_place(
+                dialog.place_id,
+                &dialog.name,
+                &dialog.local_name,
+                &dialog.notes,
+            ) {
                 Ok(()) => {
                     self.modal = Modal::None;
                     self.reload();
@@ -1819,40 +2372,57 @@ impl PicassoApp {
     }
 
     pub(super) fn day_modal(&mut self, ctx: &egui::Context) {
-        let Modal::DayDetails(dialog) = &mut self.modal else { return };
+        let Modal::DayDetails(dialog) = &mut self.modal else {
+            return;
+        };
         let mut close = false;
         let mut save = false;
-        let response = egui::Modal::new(egui::Id::unique("trip-day")).frame(about::dialog_frame()).show(ctx, |ui| {
-            ui.set_width(400.0);
-            about::title_bar(ui, &self.logo, tr("Edit day"), &mut close);
-            egui::Frame::new().inner_margin(Margin::symmetric(20, 14)).show(ui, |ui| {
-                ui.spacing_mut().item_spacing.y = 6.0;
-                ui.label(tr("Title"));
-                ui.add(egui::TextEdit::singleline(&mut dialog.title).hint_text(tr("Optional")).desired_width(f32::INFINITY));
-                ui.label(tr("Date"));
-                date_field(ui, "day-date", &mut dialog.date, "2026-03-01");
-                ui.label(tr("Notes"));
-                ui.add(egui::TextEdit::multiline(&mut dialog.notes).desired_rows(3).desired_width(f32::INFINITY));
-                if !dialog.error.is_empty() {
-                    ui.label(RichText::new(&dialog.error).color(theme::DANGER));
-                }
-                ui.add_space(6.0);
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if ui.add(theme::primary_button(tr("Save"))).clicked() {
-                        save = true;
-                    }
-                    if ui.button(tr("Cancel")).clicked() {
-                        close = true;
-                    }
-                });
+        let response = egui::Modal::new(egui::Id::unique("trip-day"))
+            .frame(about::dialog_frame())
+            .show(ctx, |ui| {
+                ui.set_width(400.0);
+                about::title_bar(ui, &self.logo, tr("Edit day"), &mut close);
+                egui::Frame::new()
+                    .inner_margin(Margin::symmetric(20, 14))
+                    .show(ui, |ui| {
+                        ui.spacing_mut().item_spacing.y = 6.0;
+                        ui.label(tr("Title"));
+                        ui.add(
+                            egui::TextEdit::singleline(&mut dialog.title)
+                                .hint_text(tr("Optional"))
+                                .desired_width(f32::INFINITY),
+                        );
+                        ui.label(tr("Date"));
+                        date_field(ui, "day-date", &mut dialog.date, "2026-03-01");
+                        ui.label(tr("Notes"));
+                        ui.add(
+                            egui::TextEdit::multiline(&mut dialog.notes)
+                                .desired_rows(3)
+                                .desired_width(f32::INFINITY),
+                        );
+                        if !dialog.error.is_empty() {
+                            ui.label(RichText::new(&dialog.error).color(theme::DANGER));
+                        }
+                        ui.add_space(6.0);
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            if ui.add(theme::primary_button(tr("Save"))).clicked() {
+                                save = true;
+                            }
+                            if ui.button(tr("Cancel")).clicked() {
+                                close = true;
+                            }
+                        });
+                    });
             });
-        });
         if save {
             let Some(date) = parse_day(&dialog.date) else {
                 dialog.error = tr("Type dates such as 2026-03-01").into();
                 return;
             };
-            match self.db.update_trip_day(dialog.day_id, date, &dialog.title, &dialog.notes) {
+            match self
+                .db
+                .update_trip_day(dialog.day_id, date, &dialog.title, &dialog.notes)
+            {
                 Ok(()) => {
                     self.modal = Modal::None;
                     self.reload();
@@ -1869,7 +2439,10 @@ impl PicassoApp {
     /// Asks for the file of an unavailable member and links it, if the
     /// library has that file. Returns why it couldn't, or nothing.
     fn locate_member(&mut self, media_id: i64) -> String {
-        let Some(file) = rfd::FileDialog::new().set_title(tr("Locate the photo")).pick_file() else {
+        let Some(file) = rfd::FileDialog::new()
+            .set_title(tr("Locate the photo"))
+            .pick_file()
+        else {
             return String::new();
         };
         let Some(photo_id) = self.db.photo_at_path(&file) else {
@@ -1886,7 +2459,11 @@ impl PicassoApp {
     }
 
     pub(super) fn open_new_trip(&mut self, photos: Vec<i64>) {
-        let preview = if photos.is_empty() { AddPreview::default() } else { self.db.preview_add_to_trip(0, &photos) };
+        let preview = if photos.is_empty() {
+            AddPreview::default()
+        } else {
+            self.db.preview_add_to_trip(0, &photos)
+        };
         self.modal = Modal::Trip(TripDialog {
             editing: None,
             title: String::new(),
@@ -1912,13 +2489,25 @@ impl PicassoApp {
             }
         }
         cameras.sort_by_key(|(_, count, _)| std::cmp::Reverse(*count));
-        let mut dialog = SuggestDialog { shots, cameras, gap_days: 2, min_photos: 10, skip_in_trip: true, ranged: false, from: String::new(), to: String::new(), found: Vec::new() };
+        let mut dialog = SuggestDialog {
+            shots,
+            cameras,
+            gap_days: 2,
+            min_photos: 10,
+            skip_in_trip: true,
+            ranged: false,
+            from: String::new(),
+            to: String::new(),
+            found: Vec::new(),
+        };
         dialog.regroup();
         self.modal = Modal::SuggestTrips(dialog);
     }
 
     pub(super) fn suggest_trips_modal(&mut self, ctx: &egui::Context) {
-        let Modal::SuggestTrips(dialog) = &mut self.modal else { return };
+        let Modal::SuggestTrips(dialog) = &mut self.modal else {
+            return;
+        };
         let mut close = false;
         let mut create: Option<TripCandidate> = None;
         let response = egui::Modal::new(egui::Id::unique("suggest-trips")).frame(about::dialog_frame()).show(ctx, |ui| {
@@ -2019,7 +2608,13 @@ impl PicassoApp {
             self.open_new_trip(candidate.photos.clone());
             // The group's dates and main folder start the dialog, to change there.
             if let Modal::Trip(trip) = &mut self.modal {
-                let day = |at: i64| Local.timestamp_opt(at, 0).single().map(|at| at.date_naive().to_string()).unwrap_or_default();
+                let day = |at: i64| {
+                    Local
+                        .timestamp_opt(at, 0)
+                        .single()
+                        .map(|at| at.date_naive().to_string())
+                        .unwrap_or_default()
+                };
                 trip.first_day = day(candidate.first);
                 trip.last_day = day(candidate.last);
                 trip.title = candidate.folders.first().cloned().unwrap_or_default();
@@ -2032,10 +2627,15 @@ impl PicassoApp {
     }
 
     fn open_edit_trip(&mut self, trip_id: i64) {
-        let Some(trip) = self.db.trip(trip_id) else { return };
+        let Some(trip) = self.db.trip(trip_id) else {
+            return;
+        };
         self.modal = Modal::Trip(TripDialog {
             editing: Some(trip.id),
-            first_day: trip.first_day.map(|day| day.to_string()).unwrap_or_default(),
+            first_day: trip
+                .first_day
+                .map(|day| day.to_string())
+                .unwrap_or_default(),
             last_day: trip.last_day.map(|day| day.to_string()).unwrap_or_default(),
             title: trip.title,
             zone: trip.zone,
@@ -2049,15 +2649,27 @@ impl PicassoApp {
     }
 
     fn open_delete_trip(&mut self, trip_id: i64) {
-        let Some(trip) = self.db.trip(trip_id) else { return };
-        self.modal = Modal::DeleteTrip(DeleteDialog { trip_id, name: trip.title, impact: self.db.trip_impact(trip_id) });
+        let Some(trip) = self.db.trip(trip_id) else {
+            return;
+        };
+        self.modal = Modal::DeleteTrip(DeleteDialog {
+            trip_id,
+            name: trip.title,
+            impact: self.db.trip_impact(trip_id),
+        });
     }
 
     pub(super) fn trip_modal(&mut self, ctx: &egui::Context) {
-        let Modal::Trip(dialog) = &mut self.modal else { return };
+        let Modal::Trip(dialog) = &mut self.modal else {
+            return;
+        };
         let mut close = false;
         let mut submit = false;
-        let title = if dialog.editing.is_some() { tr("Edit trip") } else { tr("New trip") };
+        let title = if dialog.editing.is_some() {
+            tr("Edit trip")
+        } else {
+            tr("New trip")
+        };
         let response = egui::Modal::new(egui::Id::unique("trip-details")).frame(about::dialog_frame()).show(ctx, |ui| {
             ui.set_width(460.0);
             about::title_bar(ui, &self.logo, title, &mut close);
@@ -2131,8 +2743,12 @@ impl PicassoApp {
     }
 
     fn save_trip_dialog(&mut self) {
-        let Modal::Trip(dialog) = &mut self.modal else { return };
-        let (Some(first_day), Some(last_day)) = (parse_day(&dialog.first_day), parse_day(&dialog.last_day)) else {
+        let Modal::Trip(dialog) = &mut self.modal else {
+            return;
+        };
+        let (Some(first_day), Some(last_day)) =
+            (parse_day(&dialog.first_day), parse_day(&dialog.last_day))
+        else {
             dialog.error = tr("Type dates such as 2026-03-01").into();
             return;
         };
@@ -2171,30 +2787,48 @@ impl PicassoApp {
     }
 
     pub(super) fn add_to_trip_modal(&mut self, ctx: &egui::Context) {
-        let Modal::AddToTrip(dialog) = &self.modal else { return };
+        let Modal::AddToTrip(dialog) = &self.modal else {
+            return;
+        };
         let mut close = false;
         let mut add = false;
-        let response = egui::Modal::new(egui::Id::unique("add-to-trip")).frame(about::dialog_frame()).show(ctx, |ui| {
-            ui.set_width(400.0);
-            about::title_bar(ui, &self.logo, &trf("Add to “{}”", &[&dialog.name]), &mut close);
-            egui::Frame::new().inner_margin(Margin::symmetric(20, 14)).show(ui, |ui| {
-                ui.spacing_mut().item_spacing.y = 6.0;
-                preview_lines(ui, &dialog.preview);
-                ui.add_space(6.0);
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if ui.add(theme::primary_button(tr("Add"))).clicked() {
-                        add = true;
-                    }
-                    if ui.button(tr("Cancel")).clicked() {
-                        close = true;
-                    }
-                });
+        let response = egui::Modal::new(egui::Id::unique("add-to-trip"))
+            .frame(about::dialog_frame())
+            .show(ctx, |ui| {
+                ui.set_width(400.0);
+                about::title_bar(
+                    ui,
+                    &self.logo,
+                    &trf("Add to “{}”", &[&dialog.name]),
+                    &mut close,
+                );
+                egui::Frame::new()
+                    .inner_margin(Margin::symmetric(20, 14))
+                    .show(ui, |ui| {
+                        ui.spacing_mut().item_spacing.y = 6.0;
+                        preview_lines(ui, &dialog.preview);
+                        ui.add_space(6.0);
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            if ui.add(theme::primary_button(tr("Add"))).clicked() {
+                                add = true;
+                            }
+                            if ui.button(tr("Cancel")).clicked() {
+                                close = true;
+                            }
+                        });
+                    });
             });
-        });
         if add {
-            let Modal::AddToTrip(dialog) = std::mem::replace(&mut self.modal, Modal::None) else { return };
+            let Modal::AddToTrip(dialog) = std::mem::replace(&mut self.modal, Modal::None) else {
+                return;
+            };
             match self.db.add_to_trip(dialog.trip_id, &dialog.photos) {
-                Ok(_) => self.activity = trf("Added {} to trip", &[&(dialog.preview.photos + dialog.preview.videos)]),
+                Ok(_) => {
+                    self.activity = trf(
+                        "Added {} to trip",
+                        &[&(dialog.preview.photos + dialog.preview.videos)],
+                    )
+                }
                 Err(err) => self.activity = err,
             }
             self.reload();
@@ -2206,7 +2840,9 @@ impl PicassoApp {
     }
 
     pub(super) fn delete_trip_modal(&mut self, ctx: &egui::Context) {
-        let Modal::DeleteTrip(dialog) = &self.modal else { return };
+        let Modal::DeleteTrip(dialog) = &self.modal else {
+            return;
+        };
         let mut close = false;
         let mut delete = false;
         let response = egui::Modal::new(egui::Id::unique("delete-trip")).frame(about::dialog_frame()).show(ctx, |ui| {
@@ -2231,7 +2867,9 @@ impl PicassoApp {
             });
         });
         if delete {
-            let Modal::DeleteTrip(dialog) = std::mem::replace(&mut self.modal, Modal::None) else { return };
+            let Modal::DeleteTrip(dialog) = std::mem::replace(&mut self.modal, Modal::None) else {
+                return;
+            };
             match self.db.delete_trip(dialog.trip_id) {
                 Ok(()) => {
                     if self.nav == Nav::Trip(dialog.trip_id) {
@@ -2250,7 +2888,11 @@ impl PicassoApp {
 
     /// The name of the Trip on view, for the title.
     pub(super) fn trip_title(&self, trip_id: i64) -> String {
-        self.trips.iter().find(|trip| trip.id == trip_id).map(|trip: &Trip| trip.title.clone()).unwrap_or_else(|| tr("Trip").into())
+        self.trips
+            .iter()
+            .find(|trip| trip.id == trip_id)
+            .map(|trip: &Trip| trip.title.clone())
+            .unwrap_or_else(|| tr("Trip").into())
     }
 }
 
@@ -2273,10 +2915,14 @@ fn labelled_row<R>(ui: &mut egui::Ui, text: &str, add: impl FnOnce(&mut egui::Ui
 
 /// The name of one of the trip's rows, in a column of its own.
 fn row_label(ui: &mut egui::Ui, text: &str) {
-    ui.allocate_ui_with_layout(Vec2::new(ROW_LABEL, ui.spacing().interact_size.y), Layout::left_to_right(Align::Center), |ui| {
-        ui.set_min_width(ROW_LABEL);
-        ui.label(RichText::new(text).size(13.0).color(theme::muted()));
-    });
+    ui.allocate_ui_with_layout(
+        Vec2::new(ROW_LABEL, ui.spacing().interact_size.y),
+        Layout::left_to_right(Align::Center),
+        |ui| {
+            ui.set_min_width(ROW_LABEL);
+            ui.label(RichText::new(text).size(13.0).color(theme::muted()));
+        },
+    );
 }
 
 /// What adding photos to a Trip will do.
@@ -2303,7 +2949,14 @@ fn resource_details(resource: &TripResource, missing: bool) -> String {
     if !resource.notes.is_empty() && resource.kind != ResourceKind::Note {
         lines.push(resource.notes.clone());
     }
-    lines.push(if resource.publish { tr("May be published") } else { tr("Private") }.into());
+    lines.push(
+        if resource.publish {
+            tr("May be published")
+        } else {
+            tr("Private")
+        }
+        .into(),
+    );
     lines.join("\n")
 }
 
@@ -2330,14 +2983,24 @@ fn few(names: &[String]) -> String {
 }
 
 fn preview_lines(ui: &mut egui::Ui, preview: &AddPreview) {
-    ui.label(trf("{} photos and {} videos to add", &[&preview.photos, &preview.videos]));
+    ui.label(trf(
+        "{} photos and {} videos to add",
+        &[&preview.photos, &preview.videos],
+    ));
     if let Some((first, last)) = preview.taken {
         let (first, last) = (format_day(first), format_day(last));
-        let when = if first == last { first } else { format!("{first} – {last}") };
+        let when = if first == last {
+            first
+        } else {
+            format!("{first} – {last}")
+        };
         ui.label(RichText::new(trf("Taken {}", &[&when])).color(theme::muted()));
     }
     if preview.already > 0 {
-        ui.label(RichText::new(trf("Already in this trip: {}", &[&preview.already])).color(theme::muted()));
+        ui.label(
+            RichText::new(trf("Already in this trip: {}", &[&preview.already]))
+                .color(theme::muted()),
+        );
     }
     let mut notes = Vec::new();
     if preview.photos + preview.videos > 0 {
@@ -2347,10 +3010,16 @@ fn preview_lines(ui: &mut egui::Ui, preview: &AddPreview) {
         notes.push(trf("{} also in another trip", &[&preview.in_other_trip]));
     }
     if preview.no_time > 0 {
-        notes.push(trf("{} with no date, to place by hand", &[&preview.no_time]));
+        notes.push(trf(
+            "{} with no date, to place by hand",
+            &[&preview.no_time],
+        ));
     }
     if preview.duplicates > 0 {
-        notes.push(trf("{} may be copies of another (same size and date)", &[&preview.duplicates]));
+        notes.push(trf(
+            "{} may be copies of another (same size and date)",
+            &[&preview.duplicates],
+        ));
     }
     if !notes.is_empty() {
         ui.add(egui::Label::new(RichText::new(notes.join("  ·  ")).color(theme::muted())).wrap());
@@ -2363,7 +3032,9 @@ fn parse_day(text: &str) -> Option<Option<NaiveDate>> {
     if text.is_empty() {
         return Some(None);
     }
-    NaiveDate::parse_from_str(&text.replace(['/', '.'], "-"), "%Y-%m-%d").ok().map(Some)
+    NaiveDate::parse_from_str(&text.replace(['/', '.'], "-"), "%Y-%m-%d")
+        .ok()
+        .map(Some)
 }
 
 /// A Day's title, else its date, else its number in the Trip.
@@ -2380,8 +3051,12 @@ pub(super) fn day_name(day: &TripDay) -> String {
 /// The Trip's dates: its first and last day, or else those of its dated Days.
 pub(super) fn trip_span(trip: Option<&Trip>, days: &[TripDay]) -> Option<(NaiveDate, NaiveDate)> {
     let dated = || days.iter().filter_map(|day| day.day);
-    let first = trip.and_then(|trip| trip.first_day).or_else(|| dated().min());
-    let last = trip.and_then(|trip| trip.last_day).or_else(|| dated().max());
+    let first = trip
+        .and_then(|trip| trip.first_day)
+        .or_else(|| dated().min());
+    let last = trip
+        .and_then(|trip| trip.last_day)
+        .or_else(|| dated().max());
     match (first, last) {
         (Some(first), Some(last)) => Some((first.min(last), first.max(last))),
         (Some(day), None) | (None, Some(day)) => Some((day, day)),
@@ -2407,7 +3082,12 @@ fn typed_range(first: &str, last: &str) -> Option<Option<(NaiveDate, NaiveDate)>
 /// Choosing a first date after the last moves the last with it, and the
 /// other way round. Returns `None` while what is typed can't be read, else
 /// whether the dates changed.
-pub(super) fn date_range(ui: &mut egui::Ui, salt: &str, dates: &mut Option<(NaiveDate, NaiveDate)>, start: Option<NaiveDate>) -> Option<bool> {
+pub(super) fn date_range(
+    ui: &mut egui::Ui,
+    salt: &str,
+    dates: &mut Option<(NaiveDate, NaiveDate)>,
+    start: Option<NaiveDate>,
+) -> Option<bool> {
     type Typed = (Option<(NaiveDate, NaiveDate)>, String, String);
     let id = ui.make_persistent_id(("date-range", salt));
     let text = |day: Option<NaiveDate>| day.map(|day| day.to_string()).unwrap_or_default();
@@ -2416,13 +3096,32 @@ pub(super) fn date_range(ui: &mut egui::Ui, salt: &str, dates: &mut Option<(Naiv
     let (_, mut first, mut last) = ui
         .data(|data| data.get_temp::<Typed>(id))
         .filter(|(seen, ..)| seen == dates)
-        .unwrap_or_else(|| (*dates, text(dates.map(|dates| dates.0)), text(dates.map(|dates| dates.1))));
+        .unwrap_or_else(|| {
+            (
+                *dates,
+                text(dates.map(|dates| dates.0)),
+                text(dates.map(|dates| dates.1)),
+            )
+        });
     // The hints name the fields, for screen readers too.
     let typing = ui
         .horizontal(|ui| {
-            let typing = date_field_from(ui, &format!("{salt}-first"), &mut first, tr("First day"), start);
+            let typing = date_field_from(
+                ui,
+                &format!("{salt}-first"),
+                &mut first,
+                tr("First day"),
+                start,
+            );
             ui.label(tr("to"));
-            typing | date_field_from(ui, &format!("{salt}-last"), &mut last, tr("Last day"), parse_day(&first).flatten().or(start))
+            typing
+                | date_field_from(
+                    ui,
+                    &format!("{salt}-last"),
+                    &mut last,
+                    tr("Last day"),
+                    parse_day(&first).flatten().or(start),
+                )
         })
         .inner;
     let typed = typed_range(&first, &last);
@@ -2444,7 +3143,11 @@ pub(super) fn date_range(ui: &mut egui::Ui, salt: &str, dates: &mut Option<(Naiv
                 last = text(parse_day(&last).flatten());
             }
             None => {
-                ui.label(RichText::new(tr("Type dates such as 2026-03-01")).size(12.0).color(theme::DANGER));
+                ui.label(
+                    RichText::new(tr("Type dates such as 2026-03-01"))
+                        .size(12.0)
+                        .color(theme::DANGER),
+                );
             }
         }
     }
@@ -2474,8 +3177,18 @@ enum Arrange {
 /// `order` with its `selected` items moved by `step`, keeping the order
 /// among the selected and among the others.
 fn arrange(order: &[i64], selected: &[bool], step: Arrange) -> Vec<i64> {
-    let pick = |want: bool| order.iter().zip(selected).filter(move |(_, &chosen)| chosen == want).map(|(&id, _)| id);
-    let mut items: Vec<(i64, bool)> = order.iter().copied().zip(selected.iter().copied()).collect();
+    let pick = |want: bool| {
+        order
+            .iter()
+            .zip(selected)
+            .filter(move |(_, &chosen)| chosen == want)
+            .map(|(&id, _)| id)
+    };
+    let mut items: Vec<(i64, bool)> = order
+        .iter()
+        .copied()
+        .zip(selected.iter().copied())
+        .collect();
     match step {
         Arrange::Start => return pick(true).chain(pick(false)).collect(),
         Arrange::End => return pick(false).chain(pick(true)).collect(),
@@ -2503,7 +3216,10 @@ pub(super) fn trip_dates(trip: &Trip) -> Option<String> {
 }
 
 /// The dates of a Story about `dates` as shown, or of the whole `trip`.
-pub(super) fn story_dates(trip: Option<&Trip>, dates: Option<(NaiveDate, NaiveDate)>) -> Option<String> {
+pub(super) fn story_dates(
+    trip: Option<&Trip>,
+    dates: Option<(NaiveDate, NaiveDate)>,
+) -> Option<String> {
     match dates {
         Some((first, last)) => date_span(Some(first), Some(last)),
         None => trip.and_then(trip_dates),
@@ -2512,7 +3228,9 @@ pub(super) fn story_dates(trip: Option<&Trip>, dates: Option<(NaiveDate, NaiveDa
 
 fn date_span(first: Option<NaiveDate>, last: Option<NaiveDate>) -> Option<String> {
     match (first, last) {
-        (Some(first), Some(last)) if first != last => Some(format!("{} – {}", day_label(first), day_label(last))),
+        (Some(first), Some(last)) if first != last => {
+            Some(format!("{} – {}", day_label(first), day_label(last)))
+        }
         (Some(day), _) | (None, Some(day)) => Some(day_label(day)),
         (None, None) => None,
     }
@@ -2525,24 +3243,43 @@ fn date_field(ui: &mut egui::Ui, id: &str, text: &mut String, hint: &str) {
 
 /// [`date_field`], opening at `start` while no date is typed. Returns
 /// whether the text is being typed in.
-fn date_field_from(ui: &mut egui::Ui, id: &str, text: &mut String, hint: &str, start: Option<NaiveDate>) -> bool {
+fn date_field_from(
+    ui: &mut egui::Ui,
+    id: &str,
+    text: &mut String,
+    hint: &str,
+    start: Option<NaiveDate>,
+) -> bool {
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 4.0;
-        let typing = ui.add(egui::TextEdit::singleline(text).hint_text(hint).desired_width(96.0)).has_focus();
+        let typing = ui
+            .add(
+                egui::TextEdit::singleline(text)
+                    .hint_text(hint)
+                    .desired_width(96.0),
+            )
+            .has_focus();
         let button = theme::named(ui.add(egui::Button::new("    ")), tr("Choose a date"));
         paint_calendar_icon(ui, button.rect);
         // Made outside the popup, whose own ids are not the field's.
         let view_id = ui.make_persistent_id(("calendar-view", id));
-        let popup = egui::Popup::menu(&button).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
-            let typed = parse_day(text).flatten();
-            let today = Local::now().date_naive();
-            let view = ui.data(|data| data.get_temp::<CalendarView>(view_id)).unwrap_or(CalendarView { shown: typed.or(start).unwrap_or(today), zoom: Zoom::Days });
-            if let Some(picked) = calendar(ui, view_id, view, typed, today) {
-                *text = picked.map(|day| day.to_string()).unwrap_or_default();
-                ui.data_mut(|data| data.remove::<CalendarView>(view_id));
-                ui.close();
-            }
-        });
+        let popup = egui::Popup::menu(&button)
+            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+            .show(|ui| {
+                let typed = parse_day(text).flatten();
+                let today = Local::now().date_naive();
+                let view = ui
+                    .data(|data| data.get_temp::<CalendarView>(view_id))
+                    .unwrap_or(CalendarView {
+                        shown: typed.or(start).unwrap_or(today),
+                        zoom: Zoom::Days,
+                    });
+                if let Some(picked) = calendar(ui, view_id, view, typed, today) {
+                    *text = picked.map(|day| day.to_string()).unwrap_or_default();
+                    ui.data_mut(|data| data.remove::<CalendarView>(view_id));
+                    ui.close();
+                }
+            });
         if popup.is_none() {
             // Opening again starts from the date in the field, at its month.
             ui.data_mut(|data| data.remove::<CalendarView>(view_id));
@@ -2583,14 +3320,28 @@ impl CalendarView {
             Zoom::Months => 12,
             Zoom::Years => 120,
         };
-        let shown = if by < 0 { self.shown.checked_sub_months(Months::new(months)) } else { self.shown.checked_add_months(Months::new(months)) };
-        CalendarView { shown: shown.unwrap_or(self.shown), ..self }
+        let shown = if by < 0 {
+            self.shown.checked_sub_months(Months::new(months))
+        } else {
+            self.shown.checked_add_months(Months::new(months))
+        };
+        CalendarView {
+            shown: shown.unwrap_or(self.shown),
+            ..self
+        }
     }
 
     /// The month or year picked at this zoom, one step in.
     fn zoomed_in(self, year: i32, month: u32) -> Option<CalendarView> {
-        let zoom = if self.zoom == Zoom::Years { Zoom::Months } else { Zoom::Days };
-        Some(CalendarView { shown: NaiveDate::from_ymd_opt(year, month, 1)?, zoom })
+        let zoom = if self.zoom == Zoom::Years {
+            Zoom::Months
+        } else {
+            Zoom::Days
+        };
+        Some(CalendarView {
+            shown: NaiveDate::from_ymd_opt(year, month, 1)?,
+            zoom,
+        })
     }
 }
 
@@ -2598,7 +3349,13 @@ impl CalendarView {
 /// month shows the year's months, and that of a year its decade; picking one
 /// zooms back in. Returns `Some(day)` for a picked day,
 /// `Some(None)` for Clear.
-fn calendar(ui: &mut egui::Ui, view_id: egui::Id, view: CalendarView, selected: Option<NaiveDate>, today: NaiveDate) -> Option<Option<NaiveDate>> {
+fn calendar(
+    ui: &mut egui::Ui,
+    view_id: egui::Id,
+    view: CalendarView,
+    selected: Option<NaiveDate>,
+    today: NaiveDate,
+) -> Option<Option<NaiveDate>> {
     use chrono::{Datelike, Duration};
     let (shown, year) = (view.shown, view.shown.year());
     let mut picked = None;
@@ -2610,9 +3367,24 @@ fn calendar(ui: &mut egui::Ui, view_id: egui::Id, view: CalendarView, selected: 
     let width = 7.0 * CELL + 6.0 * GAP;
     ui.set_width(width);
     let (title, back, forward, out) = match view.zoom {
-        Zoom::Days => (crate::types::format_month(year, shown.month()), tr("Previous month"), tr("Next month"), Some((Zoom::Months, tr("Choose a month")))),
-        Zoom::Months => (year.to_string(), tr("Previous year"), tr("Next year"), Some((Zoom::Years, tr("Choose a year")))),
-        Zoom::Years => (format!("{} – {}", view.decade(), view.decade() + 9), tr("Earlier years"), tr("Later years"), None),
+        Zoom::Days => (
+            crate::types::format_month(year, shown.month()),
+            tr("Previous month"),
+            tr("Next month"),
+            Some((Zoom::Months, tr("Choose a month"))),
+        ),
+        Zoom::Months => (
+            year.to_string(),
+            tr("Previous year"),
+            tr("Next year"),
+            Some((Zoom::Years, tr("Choose a year"))),
+        ),
+        Zoom::Years => (
+            format!("{} – {}", view.decade(), view.decade() + 9),
+            tr("Earlier years"),
+            tr("Later years"),
+            None,
+        ),
     };
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 0.0;
@@ -2623,8 +3395,14 @@ fn calendar(ui: &mut egui::Ui, view_id: egui::Id, view: CalendarView, selected: 
         let size = Vec2::new(width - 2.0 * CELL, 22.0);
         match out {
             Some((zoom, hint)) => {
-                let label = RichText::new(format!("{title}  ▾")).strong().color(theme::accent());
-                if ui.add_sized(size, egui::Button::new(label).frame(false)).on_hover_text(hint).clicked() {
+                let label = RichText::new(format!("{title}  ▾"))
+                    .strong()
+                    .color(theme::accent());
+                if ui
+                    .add_sized(size, egui::Button::new(label).frame(false))
+                    .on_hover_text(hint)
+                    .clicked()
+                {
                     next = CalendarView { zoom, ..view };
                 }
             }
@@ -2642,72 +3420,103 @@ fn calendar(ui: &mut egui::Ui, view_id: egui::Id, view: CalendarView, selected: 
         Zoom::Days => {
             let first = shown.with_day(1).unwrap_or(shown);
             // Without these a column is as wide as a button, wider than a day.
-            let grid = egui::Grid::new(("calendar", view_id)).spacing([GAP, GAP]).min_col_width(CELL).max_col_width(CELL).show(ui, |ui| {
-                for weekday in 0..7 {
-                    let name = RichText::new(crate::types::short_weekday(weekday)).size(11.0).color(theme::muted());
-                    ui.add_sized([CELL, 16.0], egui::Label::new(name));
-                }
-                ui.end_row();
-                let lead = first.weekday().num_days_from_monday() as i64;
-                let mut day = first - Duration::days(lead);
-                for _ in 0..6 {
-                    for _ in 0..7 {
-                        let in_month = day.month() == first.month();
-                        let mut label = RichText::new(day.day().to_string()).size(12.5);
-                        if !in_month {
-                            label = label.color(theme::muted().gamma_multiply(0.6));
-                        }
-                        if day == today {
-                            label = label.strong().underline();
-                        }
-                        let cell = ui.add_sized([CELL, 24.0], egui::Button::selectable(selected == Some(day), label));
-                        if cell.clicked() {
-                            picked = Some(Some(day));
-                        }
-                        day += Duration::days(1);
+            let grid = egui::Grid::new(("calendar", view_id))
+                .spacing([GAP, GAP])
+                .min_col_width(CELL)
+                .max_col_width(CELL)
+                .show(ui, |ui| {
+                    for weekday in 0..7 {
+                        let name = RichText::new(crate::types::short_weekday(weekday))
+                            .size(11.0)
+                            .color(theme::muted());
+                        ui.add_sized([CELL, 16.0], egui::Label::new(name));
                     }
                     ui.end_row();
-                    if day.month() != first.month() {
-                        break;
+                    let lead = first.weekday().num_days_from_monday() as i64;
+                    let mut day = first - Duration::days(lead);
+                    for _ in 0..6 {
+                        for _ in 0..7 {
+                            let in_month = day.month() == first.month();
+                            let mut label = RichText::new(day.day().to_string()).size(12.5);
+                            if !in_month {
+                                label = label.color(theme::muted().gamma_multiply(0.6));
+                            }
+                            if day == today {
+                                label = label.strong().underline();
+                            }
+                            let cell = ui.add_sized(
+                                [CELL, 24.0],
+                                egui::Button::selectable(selected == Some(day), label),
+                            );
+                            if cell.clicked() {
+                                picked = Some(Some(day));
+                            }
+                            day += Duration::days(1);
+                        }
+                        ui.end_row();
+                        if day.month() != first.month() {
+                            break;
+                        }
                     }
-                }
-            });
+                });
             let height = grid.response.rect.height();
             ui.data_mut(|d| d.insert_temp(days_height, height));
         }
         // Twelve months or years in four rows of three, as tall as the month of days.
         Zoom::Months | Zoom::Years => {
             let height = ui.data(|d| d.get_temp::<f32>(days_height)).unwrap_or(0.0);
-            let cell = Vec2::new((width - 2.0 * GAP) / 3.0, ((height - 3.0 * GAP) / 4.0).max(40.0));
+            let cell = Vec2::new(
+                (width - 2.0 * GAP) / 3.0,
+                ((height - 3.0 * GAP) / 4.0).max(40.0),
+            );
             // The one picked, or else the one zoomed out of, so it is plain where you were.
             let marked = selected.unwrap_or(shown);
-            egui::Grid::new(("calendar-zoom", view_id, view.zoom == Zoom::Years)).spacing([GAP, GAP]).min_col_width(cell.x).max_col_width(cell.x).show(ui, |ui| {
-                for n in 0..12 {
-                    let (text, chosen, now, inside, zoomed) = if view.zoom == Zoom::Months {
-                        let month = n + 1;
-                        let at = |day: NaiveDate| day.year() == year && day.month() == month;
-                        (crate::types::short_month(month), at(marked), at(today), true, view.zoomed_in(year, month))
-                    } else {
-                        let year = view.decade() - 1 + n as i32;
-                        let inside = (0..10).contains(&(n as i32 - 1));
-                        (year.to_string(), marked.year() == year, today.year() == year, inside, view.zoomed_in(year, shown.month()))
-                    };
-                    let mut label = RichText::new(text).size(13.0);
-                    if !inside {
-                        label = label.color(theme::muted().gamma_multiply(0.6));
+            egui::Grid::new(("calendar-zoom", view_id, view.zoom == Zoom::Years))
+                .spacing([GAP, GAP])
+                .min_col_width(cell.x)
+                .max_col_width(cell.x)
+                .show(ui, |ui| {
+                    for n in 0..12 {
+                        let (text, chosen, now, inside, zoomed) = if view.zoom == Zoom::Months {
+                            let month = n + 1;
+                            let at = |day: NaiveDate| day.year() == year && day.month() == month;
+                            (
+                                crate::types::short_month(month),
+                                at(marked),
+                                at(today),
+                                true,
+                                view.zoomed_in(year, month),
+                            )
+                        } else {
+                            let year = view.decade() - 1 + n as i32;
+                            let inside = (0..10).contains(&(n as i32 - 1));
+                            (
+                                year.to_string(),
+                                marked.year() == year,
+                                today.year() == year,
+                                inside,
+                                view.zoomed_in(year, shown.month()),
+                            )
+                        };
+                        let mut label = RichText::new(text).size(13.0);
+                        if !inside {
+                            label = label.color(theme::muted().gamma_multiply(0.6));
+                        }
+                        if now {
+                            label = label.strong().underline();
+                        }
+                        let button = ui.add_enabled(
+                            zoomed.is_some(),
+                            egui::Button::selectable(chosen, label).min_size(cell),
+                        );
+                        if button.clicked() {
+                            next = zoomed.unwrap_or(view);
+                        }
+                        if n % 3 == 2 {
+                            ui.end_row();
+                        }
                     }
-                    if now {
-                        label = label.strong().underline();
-                    }
-                    let button = ui.add_enabled(zoomed.is_some(), egui::Button::selectable(chosen, label).min_size(cell));
-                    if button.clicked() {
-                        next = zoomed.unwrap_or(view);
-                    }
-                    if n % 3 == 2 {
-                        ui.end_row();
-                    }
-                }
-            });
+                });
         }
     }
     ui.horizontal(|ui| {
@@ -2732,11 +3541,23 @@ fn paint_calendar_icon(ui: &egui::Ui, rect: egui::Rect) {
     let painter = ui.painter();
     let color = theme::text();
     let page = egui::Rect::from_center_size(rect.center(), egui::vec2(12.0, 11.0));
-    painter.rect_stroke(page, 1.5, egui::Stroke::new(1.2, color), egui::StrokeKind::Inside);
-    painter.rect_filled(egui::Rect::from_min_max(page.min, egui::pos2(page.max.x, page.min.y + 3.0)), 1.0, color);
+    painter.rect_stroke(
+        page,
+        1.5,
+        egui::Stroke::new(1.2, color),
+        egui::StrokeKind::Inside,
+    );
+    painter.rect_filled(
+        egui::Rect::from_min_max(page.min, egui::pos2(page.max.x, page.min.y + 3.0)),
+        1.0,
+        color,
+    );
     for row in 0..2 {
         for col in 0..3 {
-            let at = egui::pos2(page.min.x + 3.0 + col as f32 * 3.0, page.min.y + 5.5 + row as f32 * 2.8);
+            let at = egui::pos2(
+                page.min.x + 3.0 + col as f32 * 3.0,
+                page.min.y + 5.5 + row as f32 * 2.8,
+            );
             painter.circle_filled(at, 0.7, color);
         }
     }
@@ -2744,13 +3565,20 @@ fn paint_calendar_icon(ui: &egui::Ui, rect: egui::Rect) {
 
 fn day_label(day: NaiveDate) -> String {
     // Noon is on the same day in every time zone the computer may be in.
-    let noon = day.and_hms_opt(12, 0, 0).and_then(|time| Local.from_local_datetime(&time).earliest());
+    let noon = day
+        .and_hms_opt(12, 0, 0)
+        .and_then(|time| Local.from_local_datetime(&time).earliest());
     noon.map_or_else(|| day.to_string(), |time| format_day(time.timestamp()))
 }
 
 /// Reads the capture times the Trip's photos lack, repainting as the count
 /// goes up; a cancel stops it with what was read kept.
-fn read_captures(db: &crate::db::Database, trip_id: i64, progress: &crate::story_html::Progress, ctx: &egui::Context) -> Result<(), String> {
+fn read_captures(
+    db: &crate::db::Database,
+    trip_id: i64,
+    progress: &crate::story_html::Progress,
+    ctx: &egui::Context,
+) -> Result<(), String> {
     if db.read_captures(trip_id, progress, || ctx.request_repaint()) {
         Ok(())
     } else {
@@ -2765,33 +3593,88 @@ mod tests {
     #[test]
     fn the_calendar_turns_a_page_at_each_zoom_and_steps_in_from_years_to_days() {
         let date = |text| NaiveDate::parse_from_str(text, "%Y-%m-%d").unwrap();
-        let view = |shown, zoom| CalendarView { shown: date(shown), zoom };
-        assert_eq!(view("2026-03-31", Zoom::Days).turned(-1), view("2026-02-28", Zoom::Days), "a short month takes its last day");
-        assert_eq!(view("2026-03-15", Zoom::Months).turned(1), view("2027-03-15", Zoom::Months));
-        assert_eq!(view("2026-03-15", Zoom::Years).turned(-1), view("2016-03-15", Zoom::Years));
+        let view = |shown, zoom| CalendarView {
+            shown: date(shown),
+            zoom,
+        };
+        assert_eq!(
+            view("2026-03-31", Zoom::Days).turned(-1),
+            view("2026-02-28", Zoom::Days),
+            "a short month takes its last day"
+        );
+        assert_eq!(
+            view("2026-03-15", Zoom::Months).turned(1),
+            view("2027-03-15", Zoom::Months)
+        );
+        assert_eq!(
+            view("2026-03-15", Zoom::Years).turned(-1),
+            view("2016-03-15", Zoom::Years)
+        );
         assert_eq!(view("2026-03-15", Zoom::Years).decade(), 2020);
-        assert_eq!(view("2026-03-15", Zoom::Years).zoomed_in(2019, 3), Some(view("2019-03-01", Zoom::Months)), "a year shows its months");
-        assert_eq!(view("2019-03-01", Zoom::Months).zoomed_in(2019, 7), Some(view("2019-07-01", Zoom::Days)), "a month shows its days");
+        assert_eq!(
+            view("2026-03-15", Zoom::Years).zoomed_in(2019, 3),
+            Some(view("2019-03-01", Zoom::Months)),
+            "a year shows its months"
+        );
+        assert_eq!(
+            view("2019-03-01", Zoom::Months).zoomed_in(2019, 7),
+            Some(view("2019-07-01", Zoom::Days)),
+            "a month shows its days"
+        );
     }
 
     #[test]
     fn a_storys_dates_are_typed_in_either_order_or_are_the_trips() {
         let date = |text| NaiveDate::parse_from_str(text, "%Y-%m-%d").unwrap();
         let (may1, may3) = (date("2026-05-01"), date("2026-05-03"));
-        assert_eq!(typed_range("2026-05-03", "2026/5/1"), Some(Some((may1, may3))), "earlier first");
-        assert_eq!(typed_range("", "2026-05-03"), Some(Some((may3, may3))), "one date is a day");
+        assert_eq!(
+            typed_range("2026-05-03", "2026/5/1"),
+            Some(Some((may1, may3))),
+            "earlier first"
+        );
+        assert_eq!(
+            typed_range("", "2026-05-03"),
+            Some(Some((may3, may3))),
+            "one date is a day"
+        );
         assert_eq!(typed_range("", " "), Some(None), "none is the whole trip");
         assert_eq!(typed_range("2026-05-01", "May 3"), None);
 
-        let day = |id, at: Option<&'static str>| TripDay { id, trip_id: 1, position: id - 1, day: at.map(date), title: String::new(), notes: String::new(), members: 0 };
-        let days = [day(1, Some("2026-05-03")), day(2, None), day(3, Some("2026-05-01"))];
-        assert_eq!(trip_span(None, &days), Some((may1, may3)), "without the trip's own dates, its Days'");
+        let day = |id, at: Option<&'static str>| TripDay {
+            id,
+            trip_id: 1,
+            position: id - 1,
+            day: at.map(date),
+            title: String::new(),
+            notes: String::new(),
+            members: 0,
+        };
+        let days = [
+            day(1, Some("2026-05-03")),
+            day(2, None),
+            day(3, Some("2026-05-01")),
+        ];
+        assert_eq!(
+            trip_span(None, &days),
+            Some((may1, may3)),
+            "without the trip's own dates, its Days'"
+        );
         assert_eq!(trip_span(None, &days[1..2]), None);
 
         let label = |text| day_label(date(text));
-        assert_eq!(story_dates(None, Some((may1, may3))), Some(format!("{} – {}", label("2026-05-01"), label("2026-05-03"))));
-        assert_eq!(story_dates(None, Some((may3, may3))), Some(label("2026-05-03")));
-        assert_eq!(story_dates(None, None), None, "a Story about the whole Trip has the Trip's dates");
+        assert_eq!(
+            story_dates(None, Some((may1, may3))),
+            Some(format!("{} – {}", label("2026-05-01"), label("2026-05-03")))
+        );
+        assert_eq!(
+            story_dates(None, Some((may3, may3))),
+            Some(label("2026-05-03"))
+        );
+        assert_eq!(
+            story_dates(None, None),
+            None,
+            "a Story about the whole Trip has the Trip's dates"
+        );
     }
 
     #[test]
@@ -2811,9 +3694,16 @@ mod tests {
         let selected = [false, true, false, true, false];
         assert_eq!(arrange(&order, &selected, Arrange::Start), [2, 4, 1, 3, 5]);
         assert_eq!(arrange(&order, &selected, Arrange::End), [1, 3, 5, 2, 4]);
-        assert_eq!(arrange(&order, &selected, Arrange::Earlier), [2, 1, 4, 3, 5]);
+        assert_eq!(
+            arrange(&order, &selected, Arrange::Earlier),
+            [2, 1, 4, 3, 5]
+        );
         assert_eq!(arrange(&order, &selected, Arrange::Later), [1, 3, 2, 5, 4]);
         let first = [true, false, false, false, false];
-        assert_eq!(arrange(&order, &first, Arrange::Earlier), order, "the first stays first");
+        assert_eq!(
+            arrange(&order, &first, Arrange::Earlier),
+            order,
+            "the first stays first"
+        );
     }
 }

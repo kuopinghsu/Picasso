@@ -50,11 +50,19 @@ impl PicasaIni {
                 }
                 let name = line[1..line.len() - 1].trim().to_lowercase();
                 let skip = matches!(name.as_str(), "picasa" | "contacts" | "contacts2");
-                current = if skip { None } else { Some((name, IniPhoto::default())) };
+                current = if skip {
+                    None
+                } else {
+                    Some((name, IniPhoto::default()))
+                };
                 continue;
             }
-            let Some((_, photo)) = current.as_mut() else { continue };
-            let Some((key, value)) = line.split_once('=') else { continue };
+            let Some((_, photo)) = current.as_mut() else {
+                continue;
+            };
+            let Some((key, value)) = line.split_once('=') else {
+                continue;
+            };
             match key.trim().to_ascii_lowercase().as_str() {
                 "star" => photo.star = parse_star(value),
                 "caption" => photo.caption = Some(value.trim().to_string()),

@@ -17,21 +17,23 @@ pub fn box_blur(src: &[f32], w: usize, h: usize, r: usize) -> Vec<f32> {
 
 fn blur_rows(src: &[f32], w: usize, r: usize) -> Vec<f32> {
     let mut out = vec![0.0; src.len()];
-    out.par_chunks_mut(w).zip(src.par_chunks(w)).for_each(|(out, line)| {
-        let mut prefix = Vec::with_capacity(line.len() + 1);
-        let mut sum = 0.0f64;
-        prefix.push(0.0);
-        for value in line {
-            sum += f64::from(*value);
-            prefix.push(sum);
-        }
-        let n = line.len();
-        for (index, slot) in out.iter_mut().enumerate() {
-            let start = index.saturating_sub(r);
-            let end = (index + r + 1).min(n);
-            *slot = ((prefix[end] - prefix[start]) / (end - start) as f64) as f32;
-        }
-    });
+    out.par_chunks_mut(w)
+        .zip(src.par_chunks(w))
+        .for_each(|(out, line)| {
+            let mut prefix = Vec::with_capacity(line.len() + 1);
+            let mut sum = 0.0f64;
+            prefix.push(0.0);
+            for value in line {
+                sum += f64::from(*value);
+                prefix.push(sum);
+            }
+            let n = line.len();
+            for (index, slot) in out.iter_mut().enumerate() {
+                let start = index.saturating_sub(r);
+                let end = (index + r + 1).min(n);
+                *slot = ((prefix[end] - prefix[start]) / (end - start) as f64) as f32;
+            }
+        });
     out
 }
 
@@ -75,13 +77,18 @@ pub fn min_filter(src: &[f32], w: usize, h: usize, r: usize) -> Vec<f32> {
     }
     let min_rows = |src: &[f32], w: usize| -> Vec<f32> {
         let mut out = vec![0.0; src.len()];
-        out.par_chunks_mut(w).zip(src.par_chunks(w)).for_each(|(out, line)| {
-            for (index, slot) in out.iter_mut().enumerate() {
-                let start = index.saturating_sub(r);
-                let end = (index + r + 1).min(line.len());
-                *slot = line[start..end].iter().copied().fold(f32::INFINITY, f32::min);
-            }
-        });
+        out.par_chunks_mut(w)
+            .zip(src.par_chunks(w))
+            .for_each(|(out, line)| {
+                for (index, slot) in out.iter_mut().enumerate() {
+                    let start = index.saturating_sub(r);
+                    let end = (index + r + 1).min(line.len());
+                    *slot = line[start..end]
+                        .iter()
+                        .copied()
+                        .fold(f32::INFINITY, f32::min);
+                }
+            });
         out
     };
     let rows = min_rows(src, w);
@@ -145,12 +152,17 @@ mod tests {
     #[test]
     fn blur_and_guided_filter_keep_steps() {
         let (w, h) = (40, 10);
-        let step: Vec<f32> = (0..w * h).map(|i| if i % w < 20 { 0.0 } else { 4.0 }).collect();
+        let step: Vec<f32> = (0..w * h)
+            .map(|i| if i % w < 20 { 0.0 } else { 4.0 })
+            .collect();
         let blurred = box_blur(&step, w, h, 3);
         assert!((blurred[5 * w + 2] - 0.0).abs() < 1e-6);
         assert!(blurred[5 * w + 19] > 0.5 && blurred[5 * w + 19] < 3.5);
         let kept = guided(&step, w, h, 3, 0.01);
-        assert!(kept[5 * w + 19] < 0.2 && kept[5 * w + 20] > 3.8, "edges survive");
+        assert!(
+            kept[5 * w + 19] < 0.2 && kept[5 * w + 20] > 3.8,
+            "edges survive"
+        );
         let minimum = min_filter(&step, w, h, 2);
         assert_eq!(minimum[5 * w + 21], 0.0);
         let (small, sw, sh) = shrink(&step, w, h, 10);

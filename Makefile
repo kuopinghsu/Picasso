@@ -46,7 +46,7 @@ endif
 # `make` alone builds the release binary; `make help` lists every target.
 .DEFAULT_GOAL := release
 
-.PHONY: help release debug run run-stats version check lint test corpus bench bench-check check-docs deny ci translations \
+.PHONY: help release debug run run-stats version fmt fmt-check check lint test corpus bench bench-check check-docs deny ci translations \
 	sign-identity notices release-notes guide guide-pdf user-guide-pdf theme appimage appimage-docker appimage-docker-check install uninstall world-map clean
 
 # Each target's `##` text is what `make help` prints; `##@` starts a section.
@@ -85,6 +85,12 @@ version: ## Print the version in Cargo.toml
 	@echo $(VERSION)
 
 ##@ Check
+
+fmt: ## Format the Rust code
+	$(CARGO) fmt
+
+fmt-check: ## Check Rust formatting without changing files
+	$(CARGO) fmt --check
 
 check: ## Type-check the program and its tests without building
 	$(CARGO) check --locked --all-targets
@@ -126,7 +132,7 @@ deny: ## Check the dependencies' advisories and licenses (needs cargo-deny)
 	$(CARGO) deny --locked check
 
 # What CI checks before it packages, so a failure shows up before a push.
-ci: check-docs deny test bench-check ## Run the checks CI runs: docs, deny, tests, bench-check (needs cargo-deny)
+ci: fmt-check check-docs deny test bench-check ## Run the checks CI runs: formatting, docs, deny, tests, bench-check (needs cargo-deny)
 
 ##@ Package
 

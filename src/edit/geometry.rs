@@ -71,7 +71,10 @@ impl Projective {
     fn apply(&self, x: f32, y: f32) -> (f32, f32) {
         let m = &self.0;
         let depth = self.depth(x, y);
-        ((m[0] * x + m[1] * y + m[2]) / depth, (m[3] * x + m[4] * y + m[5]) / depth)
+        (
+            (m[0] * x + m[1] * y + m[2]) / depth,
+            (m[3] * x + m[4] * y + m[5]) / depth,
+        )
     }
 }
 
@@ -103,7 +106,10 @@ impl Tilt {
 
     fn ray(&self, x: f32, y: f32) -> (f32, f32, f32) {
         let ((sin_v, cos_v), (sin_h, cos_h)) = (self.vertical, self.horizontal);
-        let (y1, z1) = (y * cos_v + self.focal * sin_v, -y * sin_v + self.focal * cos_v);
+        let (y1, z1) = (
+            y * cos_v + self.focal * sin_v,
+            -y * sin_v + self.focal * cos_v,
+        );
         (x * cos_h - z1 * sin_h, y1, x * sin_h + z1 * cos_h)
     }
 
@@ -114,7 +120,10 @@ impl Tilt {
         if rz <= self.focal * 1e-3 {
             return None;
         }
-        Some((self.focal * (rx / rz - self.center.0), self.focal * (ry / rz - self.center.1)))
+        Some((
+            self.focal * (rx / rz - self.center.0),
+            self.focal * (ry / rz - self.center.1),
+        ))
     }
 }
 
@@ -160,7 +169,12 @@ impl Geometry {
             angle: settings.get(Control::STRAIGHTEN),
             vertical: settings.get(Control::PERSPECTIVE_V),
             horizontal: settings.get(Control::PERSPECTIVE_H),
-            corners: std::array::from_fn(|corner| [settings.get(Control::corner(corner, 0)), settings.get(Control::corner(corner, 1))]),
+            corners: std::array::from_fn(|corner| {
+                [
+                    settings.get(Control::corner(corner, 0)),
+                    settings.get(Control::corner(corner, 1)),
+                ]
+            }),
             flip_h: settings.get(Control::FLIP_H) >= 0.5,
             flip_v: settings.get(Control::FLIP_V) >= 0.5,
             crop: settings.crop(),
@@ -191,7 +205,12 @@ impl Geometry {
     /// Where the canvas corners land, clockwise from the top left, in
     /// canvas fractions.
     pub fn quad(&self) -> [[f32; 2]; 4] {
-        std::array::from_fn(|i| [SQUARE[i][0] + self.corners[i][0], SQUARE[i][1] + self.corners[i][1]])
+        std::array::from_fn(|i| {
+            [
+                SQUARE[i][0] + self.corners[i][0],
+                SQUARE[i][1] + self.corners[i][1],
+            ]
+        })
     }
 
     /// Size of the result for a `w`×`h` photo.
@@ -277,10 +296,12 @@ pub fn inside(crop: [f32; 4], turn: &Geometry, cw: f32, ch: f32) -> bool {
     let [w, h] = canvas_size(turn.angle, cw, ch);
     let [left, top, right, bottom] = crop;
     let to_source = turn.mapper(cw, ch);
-    [(left, top), (right, top), (left, bottom), (right, bottom)].into_iter().all(|(fx, fy)| {
-        let (x, y) = to_source(fx * cw, fy * ch);
-        x >= -0.5 && y >= -0.5 && x <= w + 0.5 && y <= h + 0.5
-    })
+    [(left, top), (right, top), (left, bottom), (right, bottom)]
+        .into_iter()
+        .all(|(fx, fy)| {
+            let (x, y) = to_source(fx * cw, fy * ch);
+            x >= -0.5 && y >= -0.5 && x <= w + 0.5 && y <= h + 0.5
+        })
 }
 
 /// `crop` shrunk about its center, keeping its shape, until no corner shows
@@ -293,7 +314,12 @@ pub fn constrain(crop: [f32; 4], turn: &Geometry, w: f32, h: f32) -> [f32; 4] {
     let [left, top, right, bottom] = crop;
     let scaled = |center: [f32; 2], scale: f32| {
         let (half_w, half_h) = ((right - left) * 0.5 * scale, (bottom - top) * 0.5 * scale);
-        [center[0] - half_w, center[1] - half_h, center[0] + half_w, center[1] + half_h]
+        [
+            center[0] - half_w,
+            center[1] - half_h,
+            center[0] + half_w,
+            center[1] + half_h,
+        ]
     };
     let mut center = [(left + right) * 0.5, (top + bottom) * 0.5];
     if !inside(scaled(center, 0.01), turn, w, h) {
@@ -316,7 +342,11 @@ pub fn constrain(crop: [f32; 4], turn: &Geometry, w: f32, h: f32) -> [f32; 4] {
 pub fn with_aspect(crop: [f32; 4], ratio: f32, w: f32, h: f32) -> [f32; 4] {
     let [left, top, right, bottom] = crop;
     let (width, height) = ((right - left) * w, (bottom - top) * h);
-    let (new_w, new_h) = if width / height > ratio { (height * ratio, height) } else { (width, width / ratio) };
+    let (new_w, new_h) = if width / height > ratio {
+        (height * ratio, height)
+    } else {
+        (width, width / ratio)
+    };
     let (cx, cy) = ((left + right) * 0.5, (top + bottom) * 0.5);
     let (half_w, half_h) = (new_w / w * 0.5, new_h / h * 0.5);
     [cx - half_w, cy - half_h, cx + half_w, cy + half_h]
@@ -329,33 +359,38 @@ pub fn warp(source: &RgbaImage, geometry: &Geometry) -> RgbaImage {
     let [left, top, right, bottom] = geometry.crop;
     let (fw, fh) = (w as f32, h as f32);
     let [cw, ch] = canvas_size(geometry.angle, fw, fh);
-    let (step_x, step_y) = ((right - left) * cw / out_w as f32, (bottom - top) * ch / out_h as f32);
+    let (step_x, step_y) = (
+        (right - left) * cw / out_w as f32,
+        (bottom - top) * ch / out_h as f32,
+    );
     let to_source = geometry.mapper(cw, ch);
     let src = source.as_raw();
     let stride = w as usize * 4;
     let mut out = vec![0u8; out_w as usize * out_h as usize * 4];
-    out.par_chunks_mut(out_w as usize * 4).enumerate().for_each(|(y, row)| {
-        let cy = top * ch + (y as f32 + 0.5) * step_y;
-        for (x, pixel) in row.chunks_exact_mut(4).enumerate() {
-            let cx = left * cw + (x as f32 + 0.5) * step_x;
-            let (sx, sy) = to_source(cx, cy);
-            let (sx, sy) = (sx - 0.5, sy - 0.5);
-            if sx < -0.5 || sy < -0.5 || sx > fw - 0.5 || sy > fh - 0.5 {
-                pixel.copy_from_slice(&[0, 0, 0, 255]);
-                continue;
+    out.par_chunks_mut(out_w as usize * 4)
+        .enumerate()
+        .for_each(|(y, row)| {
+            let cy = top * ch + (y as f32 + 0.5) * step_y;
+            for (x, pixel) in row.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+                let cx = left * cw + (x as f32 + 0.5) * step_x;
+                let (sx, sy) = to_source(cx, cy);
+                let (sx, sy) = (sx - 0.5, sy - 0.5);
+                if sx < -0.5 || sy < -0.5 || sx > fw - 0.5 || sy > fh - 0.5 {
+                    pixel.copy_from_slice(&[0, 0, 0, 255]);
+                    continue;
+                }
+                let (sx, sy) = (sx.clamp(0.0, fw - 1.0), sy.clamp(0.0, fh - 1.0));
+                let (x0, y0) = (sx as usize, sy as usize);
+                let (x1, y1) = ((x0 + 1).min(w as usize - 1), (y0 + 1).min(h as usize - 1));
+                let (tx, ty) = (sx - x0 as f32, sy - y0 as f32);
+                for channel in 0..4 {
+                    let at = |x: usize, y: usize| f32::from(src[y * stride + x * 4 + channel]);
+                    let top = at(x0, y0) + (at(x1, y0) - at(x0, y0)) * tx;
+                    let bottom = at(x0, y1) + (at(x1, y1) - at(x0, y1)) * tx;
+                    pixel[channel] = (top + (bottom - top) * ty).round() as u8;
+                }
             }
-            let (sx, sy) = (sx.clamp(0.0, fw - 1.0), sy.clamp(0.0, fh - 1.0));
-            let (x0, y0) = (sx as usize, sy as usize);
-            let (x1, y1) = ((x0 + 1).min(w as usize - 1), (y0 + 1).min(h as usize - 1));
-            let (tx, ty) = (sx - x0 as f32, sy - y0 as f32);
-            for channel in 0..4 {
-                let at = |x: usize, y: usize| f32::from(src[y * stride + x * 4 + channel]);
-                let top = at(x0, y0) + (at(x1, y0) - at(x0, y0)) * tx;
-                let bottom = at(x0, y1) + (at(x1, y1) - at(x0, y1)) * tx;
-                pixel[channel] = (top + (bottom - top) * ty).round() as u8;
-            }
-        }
-    });
+        });
     RgbaImage::from_raw(out_w, out_h, out).expect("buffer matches the output size")
 }
 
@@ -386,14 +421,27 @@ mod tests {
             corners: [[0.15, 0.05], [-0.1, 0.0], [0.05, -0.1], [0.0, 0.1]],
             ..turn(0.0)
         };
-        for geometry in [sheared, keystone, Geometry { angle: 20.0, ..keystone }] {
+        for geometry in [
+            sheared,
+            keystone,
+            Geometry {
+                angle: 20.0,
+                ..keystone
+            },
+        ] {
             let quad = geometry.quad();
             assert!(is_convex(quad));
-            let unturned = Geometry { corners: [[0.0; 2]; 4], ..geometry };
+            let unturned = Geometry {
+                corners: [[0.0; 2]; 4],
+                ..geometry
+            };
             for (i, corner) in quad.iter().enumerate() {
                 let (x, y) = geometry.canvas_to_source(corner[0] * w, corner[1] * h, w, h);
                 let (ex, ey) = unturned.canvas_to_source(SQUARE[i][0] * w, SQUARE[i][1] * h, w, h);
-                assert!((x - ex).abs() < 0.05 && (y - ey).abs() < 0.05, "corner {i}: {x},{y} not {ex},{ey}");
+                assert!(
+                    (x - ex).abs() < 0.05 && (y - ey).abs() < 0.05,
+                    "corner {i}: {x},{y} not {ex},{ey}"
+                );
             }
             assert!(!inside(FULL, &geometry, w, h));
             let kept = constrain(FULL, &geometry, w, h);
@@ -411,18 +459,36 @@ mod tests {
             ..turn(0.0)
         };
         let (x, y) = inward.canvas_to_source(0.05 * w, 0.05 * h, w, h);
-        assert!(x < 0.0 || y < 0.0, "the widened top stays cut at the outline");
+        assert!(
+            x < 0.0 || y < 0.0,
+            "the widened top stays cut at the outline"
+        );
 
-        assert!(!is_convex([[0.0, 0.0], [1.0, 1.0], [1.0, 0.0], [0.0, 1.0]]), "crossed");
-        assert!(!is_convex([[0.0, 0.0], [1.0, 0.0], [0.4, 0.4], [0.0, 1.0]]), "dented");
-        assert!(!is_convex([[0.0, 0.0], [1.0, 0.0], [1.0, 0.01], [0.0, 0.01]]), "a sliver");
+        assert!(
+            !is_convex([[0.0, 0.0], [1.0, 1.0], [1.0, 0.0], [0.0, 1.0]]),
+            "crossed"
+        );
+        assert!(
+            !is_convex([[0.0, 0.0], [1.0, 0.0], [0.4, 0.4], [0.0, 1.0]]),
+            "dented"
+        );
+        assert!(
+            !is_convex([[0.0, 0.0], [1.0, 0.0], [1.0, 0.01], [0.0, 0.01]]),
+            "a sliver"
+        );
     }
 
     #[test]
     fn crops_flip_and_stay_on_the_photo() {
         let mut source = RgbaImage::new(4, 2);
         source.put_pixel(0, 0, image::Rgba([255, 0, 0, 255]));
-        let flipped = warp(&source, &Geometry { flip_h: true, ..turn(0.0) });
+        let flipped = warp(
+            &source,
+            &Geometry {
+                flip_h: true,
+                ..turn(0.0)
+            },
+        );
         assert_eq!(flipped.get_pixel(3, 0)[0], 255);
         let half = Geometry {
             crop: [0.0, 0.0, 0.5, 1.0],
@@ -440,29 +506,51 @@ mod tests {
     #[test]
     fn perspective_widens_one_side_and_keeps_the_center() {
         let (w, h) = (400.0, 300.0);
-        let up = Geometry { vertical: 12.0, ..turn(0.0) };
+        let up = Geometry {
+            vertical: 12.0,
+            ..turn(0.0)
+        };
         let (cx, cy) = up.canvas_to_source(w / 2.0, h / 2.0, w, h);
         assert!((cx - w / 2.0).abs() < 0.01 && (cy - h / 2.0).abs() < 0.01);
         let (top_left, _) = up.canvas_to_source(0.0, 0.0, w, h);
         let (bottom_left, _) = up.canvas_to_source(0.0, h, w, h);
-        assert!(top_left > 0.0, "the top shows less of the photo, so it is widened");
-        assert!(bottom_left < 0.0, "the bottom shows more, past the photo's edge");
+        assert!(
+            top_left > 0.0,
+            "the top shows less of the photo, so it is widened"
+        );
+        assert!(
+            bottom_left < 0.0,
+            "the bottom shows more, past the photo's edge"
+        );
 
-        let right = Geometry { horizontal: 12.0, ..turn(0.0) };
+        let right = Geometry {
+            horizontal: 12.0,
+            ..turn(0.0)
+        };
         let (_, right_top) = right.canvas_to_source(w, 0.0, w, h);
         let (_, left_top) = right.canvas_to_source(0.0, 0.0, w, h);
         assert!(right_top > 0.0 && left_top < 0.0);
 
-        let both = Geometry { horizontal: -20.0, ..up };
+        let both = Geometry {
+            horizontal: -20.0,
+            ..up
+        };
         assert!(!inside(FULL, &both, w, h));
         let kept = constrain(FULL, &both, w, h);
         assert!(inside(kept, &both, w, h));
         assert!(kept[2] - kept[0] > 0.4);
         assert_eq!(warp(&RgbaImage::new(40, 30), &both).dimensions(), (40, 30));
 
-        let steep = Geometry { vertical: 45.0, horizontal: 45.0, ..turn(0.0) };
+        let steep = Geometry {
+            vertical: 45.0,
+            horizontal: 45.0,
+            ..turn(0.0)
+        };
         let kept = constrain(FULL, &steep, w, h);
-        assert!(inside(kept, &steep, w, h), "even the steepest tilt leaves a crop");
+        assert!(
+            inside(kept, &steep, w, h),
+            "even the steepest tilt leaves a crop"
+        );
     }
 
     #[test]
@@ -472,14 +560,26 @@ mod tests {
         let turned = |angle: f32| warp(&source, &turn(angle));
         let quarter = turned(90.0);
         assert_eq!(quarter.dimensions(), (2, 4));
-        assert_eq!(quarter.get_pixel(1, 0)[0], 255, "the top-left corner turns to the top right");
+        assert_eq!(
+            quarter.get_pixel(1, 0)[0],
+            255,
+            "the top-left corner turns to the top right"
+        );
         let left = turned(-90.0);
-        assert_eq!(left.get_pixel(0, 3)[0], 255, "and to the bottom left the other way");
+        assert_eq!(
+            left.get_pixel(0, 3)[0],
+            255,
+            "and to the bottom left the other way"
+        );
         let half = turned(180.0);
         assert_eq!(half.dimensions(), (4, 2));
         assert_eq!(half.get_pixel(3, 1)[0], 255);
 
-        assert_eq!(canvas_size(45.0, 400.0, 300.0), [400.0, 300.0], "edits at the old ±45° limit keep their canvas");
+        assert_eq!(
+            canvas_size(45.0, 400.0, 300.0),
+            [400.0, 300.0],
+            "edits at the old ±45° limit keep their canvas"
+        );
         assert_eq!(canvas_size(-45.0, 400.0, 300.0), [400.0, 300.0]);
         assert_eq!(canvas_size(46.0, 400.0, 300.0), [300.0, 400.0]);
         assert_eq!(canvas_size(-120.0, 400.0, 300.0), [300.0, 400.0]);

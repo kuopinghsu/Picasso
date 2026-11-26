@@ -5,13 +5,17 @@
 use std::cell::Cell;
 use std::collections::HashMap;
 
-use eframe::egui::{self, epaint::TextShape, Align2, Color32, FontId, Pos2, Rect, Sense, TextureHandle, Vec2};
+use eframe::egui::{
+    self, epaint::TextShape, Align2, Color32, FontId, Pos2, Rect, Sense, TextureHandle, Vec2,
+};
 
 use crate::geo::{self, TileJob, TILE_PX};
 use crate::i18n::{tr, trf};
 use crate::liberty::{LabelKind, MapLabel};
 use crate::track::{format_distance, Bounds, MapTrack};
-use crate::types::{day_key, folder_label, format_day, format_duration, format_month, format_timestamp, Photo};
+use crate::types::{
+    day_key, folder_label, format_day, format_duration, format_month, format_timestamp, Photo,
+};
 
 use super::theme::{self, ACCENT, STAR, WHITE};
 use super::PicassoApp;
@@ -47,7 +51,9 @@ impl PicassoApp {
     /// search again, then the photo open in the viewer, or selected and
     /// scrolled to in the grid, once that view has loaded.
     pub(super) fn return_from_places(&mut self) {
-        let Some(back) = self.places_return.take() else { return };
+        let Some(back) = self.places_return.take() else {
+            return;
+        };
         self.set_nav(back.nav.clone());
         // Places may hand its own search on to the Library; the view's own comes back.
         if self.search != back.search {
@@ -60,12 +66,16 @@ impl PicassoApp {
 
     /// Completes [`Self::return_from_places`] once the view's photos are in.
     pub(super) fn finish_return(&mut self) {
-        let Some(back) = self.returning.take() else { return };
+        let Some(back) = self.returning.take() else {
+            return;
+        };
         // Only the load asked for last arrives, and it is of this view and search.
         if self.nav != back.nav || self.search != back.search {
             return;
         }
-        let Some(index) = self.index_of(back.photo) else { return };
+        let Some(index) = self.index_of(back.photo) else {
+            return;
+        };
         if back.viewing {
             self.open_at(index);
         } else {
@@ -78,7 +88,9 @@ impl PicassoApp {
 
     pub(super) fn places_ui(&mut self, ui: &mut egui::Ui) {
         // Back to the photo Show in Places came from, also with Alt+Left.
-        if self.places_return.is_some() && ui.input_mut(|input| input.consume_key(egui::Modifiers::ALT, egui::Key::ArrowLeft)) {
+        if self.places_return.is_some()
+            && ui.input_mut(|input| input.consume_key(egui::Modifiers::ALT, egui::Key::ArrowLeft))
+        {
             self.return_from_places();
             return;
         }
@@ -129,7 +141,8 @@ impl PicassoApp {
         ui.add_space(4.0);
 
         let size = ui.available_size();
-        let (rect, response) = ui.allocate_exact_size(size.max(Vec2::new(80.0, 80.0)), Sense::click_and_drag());
+        let (rect, response) =
+            ui.allocate_exact_size(size.max(Vec2::new(80.0, 80.0)), Sense::click_and_drag());
         self.map_size = rect.size();
         if response.dragged() {
             self.map_pan += response.drag_delta();
@@ -139,8 +152,10 @@ impl PicassoApp {
             self.bake_map_pan();
         }
         if response.hovered() {
-            let (scroll, pinch) = ui.input(|input| (input.smooth_scroll_delta.y, input.zoom_delta()));
-            let steps = wheel_steps(&mut self.map_wheel, scroll) + pinch_steps(&mut self.map_pinch, pinch);
+            let (scroll, pinch) =
+                ui.input(|input| (input.smooth_scroll_delta.y, input.zoom_delta()));
+            let steps =
+                wheel_steps(&mut self.map_wheel, scroll) + pinch_steps(&mut self.map_pinch, pinch);
             if let Some(pointer) = response.hover_pos().filter(|_| steps != 0) {
                 self.zoom_map_at(steps, pointer, rect);
             }
@@ -155,10 +170,20 @@ impl PicassoApp {
         };
         let painter = ui.painter_at(rect);
         self.paint_tiles(&painter, rect, view);
-        let on_track = if self.show_tracks { self.paint_tracks(&painter, rect, view, response.hover_pos()) } else { None };
+        let on_track = if self.show_tracks {
+            self.paint_tracks(&painter, rect, view, response.hover_pos())
+        } else {
+            None
+        };
         let clusters = self.map_clusters(rect);
-        let hovered = response.hover_pos().filter(|_| !response.dragged()).and_then(|pointer| hovered_cluster(&clusters, pointer));
-        let hot = self.map_hot.take().and_then(|key| clusters.iter().position(|cluster| cluster.key == key));
+        let hovered = response
+            .hover_pos()
+            .filter(|_| !response.dragged())
+            .and_then(|pointer| hovered_cluster(&clusters, pointer));
+        let hot = self
+            .map_hot
+            .take()
+            .and_then(|key| clusters.iter().position(|cluster| cluster.key == key));
         self.paint_clusters(&painter, &clusters, hovered.or(hot));
         self.track_hot = None;
         self.paint_selected_pins(&painter, rect);
@@ -170,15 +195,19 @@ impl PicassoApp {
         if let Some(track) = on_track.and_then(|index| self.tracks.get(index)) {
             response.clone().on_hover_ui_at_pointer(|ui| {
                 track_tooltip(ui, track);
-                let hint = tr("Click to select the photos taken along it. Double-click to zoom to it.");
+                let hint =
+                    tr("Click to select the photos taken along it. Double-click to zoom to it.");
                 ui.label(egui::RichText::new(hint).small().color(theme::muted()));
             });
         }
         let hit = hovered.map(|index| clusters[index].members.as_slice());
         if response.double_clicked() {
             if let Some(&[index]) = hit {
-                    self.open_at(index);
-            } else if let Some(bounds) = on_track.and_then(|index| self.tracks.get(index)).map(|track| track.bounds) {
+                self.open_at(index);
+            } else if let Some(bounds) = on_track
+                .and_then(|index| self.tracks.get(index))
+                .map(|track| track.bounds)
+            {
                 self.frame_bounds(bounds);
             }
         } else if response.clicked() && !response.dragged() {
@@ -200,7 +229,11 @@ impl PicassoApp {
                     let ids: Vec<i64> = self.selection.iter().copied().collect();
                     self.db.set_pins(&ids, lat, lon);
                     self.map_place = false;
-                    let text = if ids.len() == 1 { "Geotagged {} photo" } else { "Geotagged {} photos" };
+                    let text = if ids.len() == 1 {
+                        "Geotagged {} photo"
+                    } else {
+                        "Geotagged {} photos"
+                    };
                     self.activity = trf(text, &[&ids.len()]);
                     self.map_lat = lat;
                     self.map_lon = lon;
@@ -220,11 +253,18 @@ impl PicassoApp {
             self.map_hover = hover;
             ui.ctx().request_repaint();
         }
-        self.map_view_clusters = clusters.into_iter().filter(|cluster| rect.contains(cluster.pos)).collect();
+        self.map_view_clusters = clusters
+            .into_iter()
+            .filter(|cluster| rect.contains(cluster.pos))
+            .collect();
 
         let tracks_shown = self.show_tracks && !self.tracks.is_empty();
         let narrowed = self.map_starred || !self.search.trim().is_empty();
-        if self.photos.is_empty() && self.selection.is_empty() && !self.loading && (narrowed || !tracks_shown) {
+        if self.photos.is_empty()
+            && self.selection.is_empty()
+            && !self.loading
+            && (narrowed || !tracks_shown)
+        {
             ui.painter().text(
                 rect.center(),
                 Align2::CENTER_CENTER,
@@ -240,7 +280,11 @@ impl PicassoApp {
     }
 
     pub(super) fn frame_map(&mut self) {
-        let chosen = self.photos.iter().filter(|photo| self.selection.contains(&photo.id)).find_map(Photo::place);
+        let chosen = self
+            .photos
+            .iter()
+            .filter(|photo| self.selection.contains(&photo.id))
+            .find_map(Photo::place);
         let places: Vec<(f64, f64)> = self.photos.iter().filter_map(Photo::place).collect();
         if chosen.is_none() && !self.search.trim().is_empty() && !places.is_empty() {
             let mut bounds = Bounds::EMPTY;
@@ -255,7 +299,10 @@ impl PicassoApp {
             self.map_lon = lon;
             self.map_zoom = if places.len() <= 1 { 12 } else { 4 };
         } else if self.show_tracks && !self.tracks.is_empty() {
-            let all = self.tracks.iter().fold(Bounds::EMPTY, |all, track| all.union(track.bounds));
+            let all = self
+                .tracks
+                .iter()
+                .fold(Bounds::EMPTY, |all, track| all.union(track.bounds));
             self.frame_bounds(all);
         }
         self.map_pan = Vec2::ZERO;
@@ -272,7 +319,10 @@ impl PicassoApp {
         let [w, h] = bounds.size();
         let room = self.map_size * 0.85;
         let mut zoom = 16u8;
-        while zoom > 2 && (w * f64::from(1u32 << zoom) > f64::from(room.x) || h * f64::from(1u32 << zoom) > f64::from(room.y)) {
+        while zoom > 2
+            && (w * f64::from(1u32 << zoom) > f64::from(room.x)
+                || h * f64::from(1u32 << zoom) > f64::from(room.y))
+        {
             zoom -= 1;
         }
         self.map_lat = lat;
@@ -283,12 +333,19 @@ impl PicassoApp {
 
     /// Draws the GPS tracks over the tiles of `view`. Returns the index of
     /// the track within a few points of `pointer`, drawn on top.
-    pub(super) fn paint_tracks(&self, painter: &egui::Painter, rect: Rect, view: MapView, pointer: Option<Pos2>) -> Option<usize> {
+    pub(super) fn paint_tracks(
+        &self,
+        painter: &egui::Painter,
+        rect: Rect,
+        view: MapView,
+        pointer: Option<Pos2>,
+    ) -> Option<usize> {
         const REACH: f32 = 6.0;
         let scale = f64::from(1u32 << view.zoom);
         let (cx, cy) = geo::latlon_to_world(view.lat, view.lon, view.zoom);
         let middle = rect.center() + view.pan;
-        let to_screen = |[x, y]: [f64; 2]| middle + Vec2::new((x * scale - cx) as f32, (y * scale - cy) as f32);
+        let to_screen =
+            |[x, y]: [f64; 2]| middle + Vec2::new((x * scale - cx) as f32, (y * scale - cy) as f32);
         let area = rect.expand(8.0);
         let pointer = pointer.filter(|pointer| rect.contains(*pointer));
         let mut drawn: Vec<(usize, Vec<Vec<Pos2>>)> = Vec::new();
@@ -297,16 +354,26 @@ impl PicassoApp {
         for (index, track) in self.tracks.iter().enumerate() {
             let mut runs = Vec::new();
             for segment in &track.segments {
-                let seen = Rect::from_two_pos(to_screen(segment.bounds.min), to_screen(segment.bounds.max));
+                let seen = Rect::from_two_pos(
+                    to_screen(segment.bounds.min),
+                    to_screen(segment.bounds.max),
+                );
                 if seen.intersects(area) {
-                    visible_runs(segment.points.iter().map(|point| to_screen(*point)), area, &mut runs);
+                    visible_runs(
+                        segment.points.iter().map(|point| to_screen(*point)),
+                        area,
+                        &mut runs,
+                    );
                 }
             }
             if runs.is_empty() {
                 continue;
             }
             if let Some(pointer) = pointer {
-                let distance = runs.iter().map(|run| distance_to_run(pointer, run)).fold(f32::INFINITY, f32::min);
+                let distance = runs
+                    .iter()
+                    .map(|run| distance_to_run(pointer, run))
+                    .fold(f32::INFINITY, f32::min);
                 if distance < best {
                     best = distance;
                     hovered = Some(index);
@@ -314,7 +381,9 @@ impl PicassoApp {
             }
             drawn.push((index, runs));
         }
-        let picked = self.picked_track.and_then(|id| self.tracks.iter().position(|track| track.id == id));
+        let picked = self
+            .picked_track
+            .and_then(|id| self.tracks.iter().position(|track| track.id == id));
         let lit = hovered.or(self.track_hot).or(picked);
         drawn.sort_by_key(|(index, _)| Some(*index) == lit);
         for (index, runs) in &drawn {
@@ -326,11 +395,17 @@ impl PicassoApp {
                     painter.circle_filled(run[0], casing / 2.0, Color32::WHITE);
                     painter.circle_filled(run[0], line / 2.0, color);
                 } else {
-                    painter.add(egui::Shape::line(run.clone(), egui::Stroke::new(casing, Color32::from_white_alpha(220))));
+                    painter.add(egui::Shape::line(
+                        run.clone(),
+                        egui::Stroke::new(casing, Color32::from_white_alpha(220)),
+                    ));
                 }
             }
             for run in runs.iter().filter(|run| run.len() > 1) {
-                painter.add(egui::Shape::line(run.clone(), egui::Stroke::new(line, color)));
+                painter.add(egui::Shape::line(
+                    run.clone(),
+                    egui::Stroke::new(line, color),
+                ));
             }
         }
         hovered
@@ -352,7 +427,12 @@ impl PicassoApp {
     pub(super) fn show_on_map(&mut self, id: i64) {
         // Remembered, so Back to photo returns to it where it was.
         if self.nav != crate::types::Nav::Places {
-            self.places_return = Some(super::PlacesReturn { nav: self.nav.clone(), search: self.search.clone(), photo: id, viewing: self.mode == super::Mode::View });
+            self.places_return = Some(super::PlacesReturn {
+                nav: self.nav.clone(),
+                search: self.search.clone(),
+                photo: id,
+                viewing: self.mode == super::Mode::View,
+            });
         }
         let place = self.db.photo(id).and_then(|photo| photo.place());
         self.selection.clear();
@@ -369,7 +449,11 @@ impl PicassoApp {
 
     fn bake_map_pan(&mut self) {
         let (x, y) = geo::latlon_to_world(self.map_lat, self.map_lon, self.map_zoom);
-        let (lat, lon) = geo::world_to_latlon(x - f64::from(self.map_pan.x), y - f64::from(self.map_pan.y), self.map_zoom);
+        let (lat, lon) = geo::world_to_latlon(
+            x - f64::from(self.map_pan.x),
+            y - f64::from(self.map_pan.y),
+            self.map_zoom,
+        );
         self.map_lat = lat;
         self.map_lon = lon;
         self.map_pan = Vec2::ZERO;
@@ -378,14 +462,16 @@ impl PicassoApp {
     /// Zooms the Places map by `steps` levels, keeping the place under
     /// `pointer` where it is.
     fn zoom_map_at(&mut self, steps: i32, pointer: Pos2, rect: Rect) {
-        let next = (self.map_zoom as i32 + steps).clamp(i32::from(MIN_ZOOM), i32::from(MAX_ZOOM)) as u8;
+        let next =
+            (self.map_zoom as i32 + steps).clamp(i32::from(MIN_ZOOM), i32::from(MAX_ZOOM)) as u8;
         if next == self.map_zoom {
             return;
         }
         let (lat, lon) = self.screen_to_latlon(pointer, rect);
         let (x, y) = geo::latlon_to_world(lat, lon, next);
         let offset = pointer - rect.center();
-        let (lat, lon) = geo::world_to_latlon(x - f64::from(offset.x), y - f64::from(offset.y), next);
+        let (lat, lon) =
+            geo::world_to_latlon(x - f64::from(offset.x), y - f64::from(offset.y), next);
         self.map_lat = lat;
         self.map_lon = lon;
         self.map_zoom = next;
@@ -405,13 +491,27 @@ impl PicassoApp {
         self.paint_map_tiles(painter, rect, view, 1.0, 8, false);
     }
 
-    pub(super) fn paint_preview_tiles(&mut self, painter: &egui::Painter, rect: Rect, view: MapView, scale: f64) {
+    pub(super) fn paint_preview_tiles(
+        &mut self,
+        painter: &egui::Painter,
+        rect: Rect,
+        view: MapView,
+        scale: f64,
+    ) {
         // Keep scrolling through a folder from filling the map workers' queue.
         let requests = 16usize.saturating_sub(self.tile_wait.len()).min(8);
         self.paint_map_tiles(painter, rect, view, scale, requests, true);
     }
 
-    fn paint_map_tiles(&mut self, painter: &egui::Painter, rect: Rect, view: MapView, scale: f64, requests: usize, preview: bool) {
+    fn paint_map_tiles(
+        &mut self,
+        painter: &egui::Painter,
+        rect: Rect,
+        view: MapView,
+        scale: f64,
+        requests: usize,
+        preview: bool,
+    ) {
         let source = self.map_source;
         if self.map_key_missing() {
             return;
@@ -422,22 +522,32 @@ impl PicassoApp {
         let origin_x = f64::from(rect.center().x + view.pan.x) - cx * scale;
         let origin_y = f64::from(rect.center().y + view.pan.y) - cy * scale;
         let side = TILE_PX * scale;
-        let left = ((f64::from(rect.left()) - origin_x) / side).floor().max(0.0) as u32;
+        let left = ((f64::from(rect.left()) - origin_x) / side)
+            .floor()
+            .max(0.0) as u32;
         let top = ((f64::from(rect.top()) - origin_y) / side).floor().max(0.0) as u32;
-        let right = ((f64::from(rect.right()) - origin_x) / side).ceil().min(f64::from(n)) as u32;
-        let bottom = ((f64::from(rect.bottom()) - origin_y) / side).ceil().min(f64::from(n)) as u32;
+        let right = ((f64::from(rect.right()) - origin_x) / side)
+            .ceil()
+            .min(f64::from(n)) as u32;
+        let bottom = ((f64::from(rect.bottom()) - origin_y) / side)
+            .ceil()
+            .min(f64::from(n)) as u32;
         let mut wanted = Vec::new();
         let mut labels = Vec::new();
         for x in left..right.min(n) {
             for y in top..bottom.min(n) {
                 let tile = Rect::from_min_size(
-                    Pos2::new((origin_x + f64::from(x) * side) as f32, (origin_y + f64::from(y) * side) as f32),
+                    Pos2::new(
+                        (origin_x + f64::from(x) * side) as f32,
+                        (origin_y + f64::from(y) * side) as f32,
+                    ),
                     Vec2::splat(side as f32),
                 );
                 // A tile the source doesn't have, such as imagery closer
                 // than a place was photographed from the air, is drawn as
                 // the enlarged part of the closest tile above it that it has.
-                let Some(depth) = (0..=MAX_ENLARGE.min(z)).find(|depth| !self.tile_fail.contains(&covering(z, x, y, *depth)))
+                let Some(depth) = (0..=MAX_ENLARGE.min(z))
+                    .find(|depth| !self.tile_fail.contains(&covering(z, x, y, *depth)))
                 else {
                     continue;
                 };
@@ -455,10 +565,18 @@ impl PicassoApp {
                 let cells = (1u32 << depth) as f32;
                 let mask = (1u32 << depth) - 1;
                 let min = egui::pos2((x & mask) as f32 / cells, (y & mask) as f32 / cells);
-                painter.image(loaded.texture.id(), tile, Rect::from_min_size(min, Vec2::splat(1.0 / cells)), Color32::WHITE);
+                painter.image(
+                    loaded.texture.id(),
+                    tile,
+                    Rect::from_min_size(min, Vec2::splat(1.0 / cells)),
+                    Color32::WHITE,
+                );
                 if depth == 0 {
                     labels.extend(
-                        loaded.labels.iter().map(|label| (tile.min + Vec2::from(label.pos) * side as f32, label)),
+                        loaded
+                            .labels
+                            .iter()
+                            .map(|label| (tile.min + Vec2::from(label.pos) * side as f32, label)),
                     );
                 }
             }
@@ -468,7 +586,12 @@ impl PicassoApp {
             self.tile_wait.insert(key, preview);
             let (z, x, y) = key;
             let _ = self.tile_tx.send(TileJob {
-                source, generation: self.tile_generation, key: self.carto_key.clone(), z, x, y,
+                source,
+                generation: self.tile_generation,
+                key: self.carto_key.clone(),
+                z,
+                x,
+                y,
             });
         }
     }
@@ -484,13 +607,20 @@ impl PicassoApp {
         let ink = Color32::from_gray(60);
         if self.map_key_missing() {
             let galley = painter.layout(
-                trf("{} needs an API key. Add it in Settings → Map.", &[&self.map_source.name()]),
+                trf(
+                    "{} needs an API key. Add it in Settings → Map.",
+                    &[&self.map_source.name()],
+                ),
                 FontId::proportional(13.0),
                 ink,
                 (rect.width() - 48.0).clamp(80.0, 320.0),
             );
             let at = rect.center() - galley.size() / 2.0;
-            painter.rect_filled(Rect::from_min_size(at, galley.size()).expand(10.0), 6, Color32::from_white_alpha(235));
+            painter.rect_filled(
+                Rect::from_min_size(at, galley.size()).expand(10.0),
+                6,
+                Color32::from_white_alpha(235),
+            );
             painter.galley(at, galley, ink);
         }
         let credit = self.paint_map_credit(painter, rect, 10.0);
@@ -516,20 +646,37 @@ impl PicassoApp {
     /// middle of the map, above `credit` when they would overlap.
     fn paint_scale_bar(&self, painter: &egui::Painter, rect: Rect, view: MapView, credit: Rect) {
         let (cx, cy) = geo::latlon_to_world(view.lat, view.lon, view.zoom);
-        let (lat, _) = geo::world_to_latlon(cx - f64::from(view.pan.x), cy - f64::from(view.pan.y), view.zoom);
+        let (lat, _) = geo::world_to_latlon(
+            cx - f64::from(view.pan.x),
+            cy - f64::from(view.pan.y),
+            view.zoom,
+        );
         let (meters, width) = scale_bar(geo::meters_per_point(lat, view.zoom), 100.0);
-        let label = if meters >= 1000.0 { format!("{} km", meters / 1000.0) } else { format!("{meters} m") };
+        let label = if meters >= 1000.0 {
+            format!("{} km", meters / 1000.0)
+        } else {
+            format!("{meters} m")
+        };
         let ink = Color32::from_gray(50);
         let galley = painter.layout_no_wrap(label, FontId::proportional(10.5), ink);
         let size = Vec2::new(width.max(galley.size().x) + 8.0, galley.size().y + 11.0);
-        let mut back = Rect::from_min_size(rect.left_bottom() + Vec2::new(6.0, -size.y - 4.0), size);
+        let mut back =
+            Rect::from_min_size(rect.left_bottom() + Vec2::new(6.0, -size.y - 4.0), size);
         if back.intersects(credit) {
             back = back.translate(Vec2::new(0.0, credit.top() - 4.0 - back.bottom()));
         }
         painter.rect_filled(back, 3, Color32::from_white_alpha(190));
         let base = back.left_bottom() + Vec2::new(4.0, -4.0);
         let stroke = egui::Stroke::new(1.5, ink);
-        painter.line(vec![base - Vec2::new(0.0, 5.0), base, base + Vec2::new(width, 0.0), base + Vec2::new(width, -5.0)], stroke);
+        painter.line(
+            vec![
+                base - Vec2::new(0.0, 5.0),
+                base,
+                base + Vec2::new(width, 0.0),
+                base + Vec2::new(width, -5.0),
+            ],
+            stroke,
+        );
         painter.galley(back.left_top() + Vec2::new(4.0, 2.0), galley, ink);
     }
 
@@ -550,7 +697,9 @@ impl PicassoApp {
         let mut indices = Vec::new();
         let mut points = Vec::new();
         for (index, photo) in self.photos.iter().enumerate() {
-            let Some((lat, lon)) = photo.place() else { continue };
+            let Some((lat, lon)) = photo.place() else {
+                continue;
+            };
             let (x, y) = geo::latlon_to_world(lat, lon, self.map_zoom);
             if area.contains(middle + Vec2::new((x - cx) as f32, (y - cy) as f32)) {
                 indices.push(index);
@@ -560,7 +709,8 @@ impl PicassoApp {
         cluster_points(&points, CLUSTER_CELL)
             .into_iter()
             .map(|(members, [x, y])| {
-                let members: Vec<usize> = members.into_iter().map(|member| indices[member]).collect();
+                let members: Vec<usize> =
+                    members.into_iter().map(|member| indices[member]).collect();
                 Cluster {
                     pos: middle + Vec2::new((x - cx) as f32, (y - cy) as f32),
                     key: cluster_key(members.iter().map(|member| self.photos[*member].id)),
@@ -572,11 +722,19 @@ impl PicassoApp {
 
     /// Draws one dot per photo on its own and one circle, sized by the
     /// count, per cluster. Smaller clusters go on top.
-    fn paint_clusters(&self, painter: &egui::Painter, clusters: &[Cluster], hovered: Option<usize>) {
+    fn paint_clusters(
+        &self,
+        painter: &egui::Painter,
+        clusters: &[Cluster],
+        hovered: Option<usize>,
+    ) {
         for (index, cluster) in clusters.iter().enumerate() {
             let lit = Some(index) == hovered;
             let count = cluster.members.len();
-            let pinned = cluster.members.iter().all(|member| self.photos[*member].pinned());
+            let pinned = cluster
+                .members
+                .iter()
+                .all(|member| self.photos[*member].pinned());
             let color = if pinned { STAR } else { ACCENT };
             if count == 1 {
                 let grow = if lit { 2.0 } else { 0.0 };
@@ -585,22 +743,46 @@ impl PicassoApp {
                 continue;
             }
             let radius = cluster_radius(count) + if lit { 2.0 } else { 0.0 };
-            painter.circle_filled(cluster.pos + Vec2::new(0.0, 1.5), radius + 1.0, Color32::from_black_alpha(50));
-            painter.circle_filled(cluster.pos, radius, color.gamma_multiply(if lit { 1.0 } else { 0.85 }));
-            painter.circle_stroke(cluster.pos, radius, egui::Stroke::new(2.0, Color32::from_white_alpha(230)));
+            painter.circle_filled(
+                cluster.pos + Vec2::new(0.0, 1.5),
+                radius + 1.0,
+                Color32::from_black_alpha(50),
+            );
+            painter.circle_filled(
+                cluster.pos,
+                radius,
+                color.gamma_multiply(if lit { 1.0 } else { 0.85 }),
+            );
+            painter.circle_stroke(
+                cluster.pos,
+                radius,
+                egui::Stroke::new(2.0, Color32::from_white_alpha(230)),
+            );
             let size = if count >= 1000 { 11.0 } else { 12.5 };
-            painter.text(cluster.pos, Align2::CENTER_CENTER, short_count(count), FontId::proportional(size), WHITE);
+            painter.text(
+                cluster.pos,
+                Align2::CENTER_CENTER,
+                short_count(count),
+                FontId::proportional(size),
+                WHITE,
+            );
         }
     }
 
     /// Selects the photos on the map taken along track `index`, and lights
     /// the track.
     fn select_along_track(&mut self, index: usize) {
-        let Some(track) = self.tracks.get(index) else { return };
+        let Some(track) = self.tracks.get(index) else {
+            return;
+        };
         let ids: Vec<i64> = self
             .photos
             .iter()
-            .filter(|photo| photo.place().is_some_and(|(lat, lon)| track.passes(lat, lon, photo.taken_at)))
+            .filter(|photo| {
+                photo
+                    .place()
+                    .is_some_and(|(lat, lon)| track.passes(lat, lon, photo.taken_at))
+            })
             .map(|photo| photo.id)
             .collect();
         self.activity = match ids.len() {
@@ -624,7 +806,10 @@ impl PicassoApp {
     /// would still form one cluster at the closest zoom.
     fn split_closer(&self, indices: &[usize]) -> bool {
         let mut bounds = Bounds::EMPTY;
-        for (lat, lon) in indices.iter().filter_map(|index| self.photos[*index].place()) {
+        for (lat, lon) in indices
+            .iter()
+            .filter_map(|index| self.photos[*index].place())
+        {
             let (x, y) = geo::latlon_to_world(lat, lon, MAX_ZOOM);
             bounds.add([x, y]);
         }
@@ -635,7 +820,10 @@ impl PicassoApp {
     /// Frames the photos at `indices`, at least two levels closer than now.
     fn zoom_to_photos(&mut self, indices: &[usize]) {
         let mut bounds = Bounds::EMPTY;
-        for (lat, lon) in indices.iter().filter_map(|index| self.photos[*index].place()) {
+        for (lat, lon) in indices
+            .iter()
+            .filter_map(|index| self.photos[*index].place())
+        {
             let (x, y) = geo::latlon_to_world(lat, lon, 0);
             bounds.add([x, y]);
         }
@@ -655,8 +843,18 @@ impl PicassoApp {
 
     /// Opens the card of the cluster under the pointer, and closes it a
     /// moment after the pointer leaves both, so it can reach the card.
-    fn update_map_card(&mut self, ui: &egui::Ui, rect: Rect, clusters: &[Cluster], hovered: Option<usize>) {
-        if self.map_card.as_ref().is_some_and(|card| card.zoom != self.map_zoom) {
+    fn update_map_card(
+        &mut self,
+        ui: &egui::Ui,
+        rect: Rect,
+        clusters: &[Cluster],
+        hovered: Option<usize>,
+    ) {
+        if self
+            .map_card
+            .as_ref()
+            .is_some_and(|card| card.zoom != self.map_zoom)
+        {
             self.map_card = None;
         }
         let now = ui.input(|input| input.time);
@@ -668,18 +866,26 @@ impl PicassoApp {
                 let (lat, lon) = self.screen_to_latlon(cluster.pos, rect);
                 let count = cluster.members.len();
                 self.map_card = Some(MapCard {
-                    ids: cluster.members.iter().map(|member| self.photos[*member].id).collect(),
+                    ids: cluster
+                        .members
+                        .iter()
+                        .map(|member| self.photos[*member].id)
+                        .collect(),
                     key,
                     lat,
                     lon,
                     zoom: self.map_zoom,
-                    reach: if count == 1 { 7.0 } else { cluster_radius(count) + 2.0 },
+                    reach: if count == 1 {
+                        7.0
+                    } else {
+                        cluster_radius(count) + 2.0
+                    },
                     rect: Rect::NOTHING,
                     left: None,
                 });
             }
         } else if let Some(card) = self.map_card.as_mut() {
-        let pointer = ui.input(|input| input.pointer.hover_pos());
+            let pointer = ui.input(|input| input.pointer.hover_pos());
             if pointer.is_some_and(|pointer| card.rect.expand(6.0).contains(pointer)) {
                 card.left = None;
             } else {
@@ -688,7 +894,8 @@ impl PicassoApp {
                 if remaining <= 0.0 {
                     self.map_card = None;
                 } else {
-                    ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(remaining));
+                    ui.ctx()
+                        .request_repaint_after(std::time::Duration::from_secs_f64(remaining));
                 }
             }
         }
@@ -700,9 +907,15 @@ impl PicassoApp {
         const WIDTH: f32 = 288.0;
         const GAP: f32 = 4.0;
         const SHOWN: usize = 6;
-        let Some(card) = self.map_card.as_ref() else { return };
+        let Some(card) = self.map_card.as_ref() else {
+            return;
+        };
         let (lat, lon, reach, height) = (card.lat, card.lon, card.reach, card.rect.height());
-        let mut indices: Vec<usize> = card.ids.iter().filter_map(|id| self.index_of(*id)).collect();
+        let mut indices: Vec<usize> = card
+            .ids
+            .iter()
+            .filter_map(|id| self.index_of(*id))
+            .collect();
         if indices.is_empty() {
             self.map_card = None;
             return;
@@ -715,7 +928,11 @@ impl PicassoApp {
         } else {
             (
                 date_span(indices.iter().map(|index| self.photos[*index].taken_at)),
-                folder_summary(indices.iter().map(|index| self.photos[*index].path.as_str())),
+                folder_summary(
+                    indices
+                        .iter()
+                        .map(|index| self.photos[*index].path.as_str()),
+                ),
             )
         };
         let picks = spread(&indices, SHOWN);
@@ -744,66 +961,113 @@ impl PicassoApp {
             .fixed_pos(at)
             .constrain_to(rect.shrink(6.0))
             .show(ctx, |ui| {
-                egui::Frame::popup(ui.style()).inner_margin(12.0).corner_radius(10.0).show(ui, |ui| {
-                    ui.set_width(WIDTH);
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new(&title).strong().size(14.0).color(theme::text()));
-                        if count > 1 {
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                ui.label(egui::RichText::new(trf("{} photos", &[&grouped(count)])).color(theme::muted()));
-                            });
-                        }
-                    });
-                    ui.label(egui::RichText::new(&detail).size(12.0).color(theme::muted()));
-                    ui.add_space(6.0);
-
-                    let columns = if count == 1 { 1 } else { 3 };
-                    let tile_w = (WIDTH - GAP * (columns - 1) as f32) / columns as f32;
-                    let tile_h = if count == 1 { WIDTH * 2.0 / 3.0 } else { tile_w * 0.75 };
-                    let rows = tiles.len().div_ceil(columns);
-                    let grid_h = rows as f32 * tile_h + rows.saturating_sub(1) as f32 * GAP;
-                    let (grid, _) = ui.allocate_exact_size(Vec2::new(WIDTH, grid_h), Sense::hover());
-                    for (n, (index, id, rotation, texture)) in tiles.iter().enumerate() {
-                        let offset = Vec2::new((n % columns) as f32 * (tile_w + GAP), (n / columns) as f32 * (tile_h + GAP));
-                        let tile = Rect::from_min_size(grid.min + offset, Vec2::new(tile_w, tile_h));
-                        let response = ui
-                            .interact(tile, egui::Id::unique(("map-card-photo", *id)), Sense::click())
-                            .on_hover_cursor(egui::CursorIcon::PointingHand);
-                        let painter = ui.painter();
-                        painter.rect_filled(tile, 4, theme::placeholder());
-                        if let Some((texture, w, h)) = texture {
-                            let uv = cover_uv_sized(*w, *h, *rotation, tile.size());
-                            theme::paint_image_rounded(painter, texture, tile, uv, *rotation, 4.0);
-                        }
-                        let hidden = count - tiles.len();
-                        if hidden > 0 && n + 1 == tiles.len() {
-                            painter.rect_filled(tile, 4, Color32::from_black_alpha(130));
-                            painter.text(tile.center(), Align2::CENTER_CENTER, format!("+{}", grouped(hidden + 1)), FontId::proportional(15.0), WHITE);
-                        }
-                        if response.hovered() {
-                            painter.rect_stroke(tile, 4, egui::Stroke::new(2.0, ACCENT), egui::StrokeKind::Inside);
-                        }
-                        if response.clicked() {
-                            action = Some(CardAction::Open(*index));
-                        }
-                    }
-
-                    ui.add_space(8.0);
-                    ui.horizontal(|ui| {
-                        if count == 1 {
-                            if ui.button(tr("Open")).clicked() {
-                                action = Some(CardAction::Open(indices[0]));
+                egui::Frame::popup(ui.style())
+                    .inner_margin(12.0)
+                    .corner_radius(10.0)
+                    .show(ui, |ui| {
+                        ui.set_width(WIDTH);
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                egui::RichText::new(&title)
+                                    .strong()
+                                    .size(14.0)
+                                    .color(theme::text()),
+                            );
+                            if count > 1 {
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| {
+                                        ui.label(
+                                            egui::RichText::new(trf(
+                                                "{} photos",
+                                                &[&grouped(count)],
+                                            ))
+                                            .color(theme::muted()),
+                                        );
+                                    },
+                                );
                             }
-                            return;
+                        });
+                        ui.label(
+                            egui::RichText::new(&detail)
+                                .size(12.0)
+                                .color(theme::muted()),
+                        );
+                        ui.add_space(6.0);
+
+                        let columns = if count == 1 { 1 } else { 3 };
+                        let tile_w = (WIDTH - GAP * (columns - 1) as f32) / columns as f32;
+                        let tile_h = if count == 1 {
+                            WIDTH * 2.0 / 3.0
+                        } else {
+                            tile_w * 0.75
+                        };
+                        let rows = tiles.len().div_ceil(columns);
+                        let grid_h = rows as f32 * tile_h + rows.saturating_sub(1) as f32 * GAP;
+                        let (grid, _) =
+                            ui.allocate_exact_size(Vec2::new(WIDTH, grid_h), Sense::hover());
+                        for (n, (index, id, rotation, texture)) in tiles.iter().enumerate() {
+                            let offset = Vec2::new(
+                                (n % columns) as f32 * (tile_w + GAP),
+                                (n / columns) as f32 * (tile_h + GAP),
+                            );
+                            let tile =
+                                Rect::from_min_size(grid.min + offset, Vec2::new(tile_w, tile_h));
+                            let response = ui
+                                .interact(
+                                    tile,
+                                    egui::Id::unique(("map-card-photo", *id)),
+                                    Sense::click(),
+                                )
+                                .on_hover_cursor(egui::CursorIcon::PointingHand);
+                            let painter = ui.painter();
+                            painter.rect_filled(tile, 4, theme::placeholder());
+                            if let Some((texture, w, h)) = texture {
+                                let uv = cover_uv_sized(*w, *h, *rotation, tile.size());
+                                theme::paint_image_rounded(
+                                    painter, texture, tile, uv, *rotation, 4.0,
+                                );
+                            }
+                            let hidden = count - tiles.len();
+                            if hidden > 0 && n + 1 == tiles.len() {
+                                painter.rect_filled(tile, 4, Color32::from_black_alpha(130));
+                                painter.text(
+                                    tile.center(),
+                                    Align2::CENTER_CENTER,
+                                    format!("+{}", grouped(hidden + 1)),
+                                    FontId::proportional(15.0),
+                                    WHITE,
+                                );
+                            }
+                            if response.hovered() {
+                                painter.rect_stroke(
+                                    tile,
+                                    4,
+                                    egui::Stroke::new(2.0, ACCENT),
+                                    egui::StrokeKind::Inside,
+                                );
+                            }
+                            if response.clicked() {
+                                action = Some(CardAction::Open(*index));
+                            }
                         }
-                        if ui.button(tr("Select these photos")).clicked() {
-                            action = Some(CardAction::Select);
-                        }
-                        if ui.button(tr("Zoom in")).clicked() {
-                            action = Some(CardAction::Zoom);
-                        }
+
+                        ui.add_space(8.0);
+                        ui.horizontal(|ui| {
+                            if count == 1 {
+                                if ui.button(tr("Open")).clicked() {
+                                    action = Some(CardAction::Open(indices[0]));
+                                }
+                                return;
+                            }
+                            if ui.button(tr("Select these photos")).clicked() {
+                                action = Some(CardAction::Select);
+                            }
+                            if ui.button(tr("Zoom in")).clicked() {
+                                action = Some(CardAction::Zoom);
+                            }
+                        });
                     });
-                });
             });
         if let Some(card) = self.map_card.as_mut() {
             card.rect = area.response.rect;
@@ -822,19 +1086,31 @@ impl PicassoApp {
     /// The right-hand panel on Places: what the map shows, or the details
     /// of the selected photo with a way back.
     pub(super) fn places_side_ui(&mut self, ui: &mut egui::Ui) {
-        let photo = if self.selection.is_empty() { None } else { self.side_photo() };
+        let photo = if self.selection.is_empty() {
+            None
+        } else {
+            self.side_photo()
+        };
         ui.horizontal(|ui| {
             if photo.is_some() {
-                let text = egui::RichText::new(format!("‹  {}", tr("In this area"))).color(theme::accent());
+                let text = egui::RichText::new(format!("‹  {}", tr("In this area")))
+                    .color(theme::accent());
                 if ui.add(egui::Button::new(text).frame(false)).clicked() {
                     self.selection.clear();
                     self.anchor = None;
                 }
             } else {
-                ui.label(egui::RichText::new(tr("In this area")).size(15.0).strong().color(theme::text()));
+                ui.label(
+                    egui::RichText::new(tr("In this area"))
+                        .size(15.0)
+                        .strong()
+                        .color(theme::text()),
+                );
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let close = egui::Button::new(egui::RichText::new("×").size(18.0).color(theme::muted())).frame(false);
+                let close =
+                    egui::Button::new(egui::RichText::new("×").size(18.0).color(theme::muted()))
+                        .frame(false);
                 if ui.add(close).on_hover_text(tr("Close panel")).clicked() {
                     self.toggle_side(self.side);
                 }
@@ -872,8 +1148,15 @@ impl PicassoApp {
             .collect();
         let tracks: Vec<usize> = if self.show_tracks {
             let view = self.view_bounds();
-            let seen = |bounds: &Bounds| bounds.min[0] <= view.max[0] && bounds.max[0] >= view.min[0] && bounds.min[1] <= view.max[1] && bounds.max[1] >= view.min[1];
-            (0..self.tracks.len()).filter(|index| seen(&self.tracks[*index].bounds)).collect()
+            let seen = |bounds: &Bounds| {
+                bounds.min[0] <= view.max[0]
+                    && bounds.max[0] >= view.min[0]
+                    && bounds.min[1] <= view.max[1]
+                    && bounds.max[1] >= view.min[1]
+            };
+            (0..self.tracks.len())
+                .filter(|index| seen(&self.tracks[*index].bounds))
+                .collect()
         } else {
             Vec::new()
         };
@@ -882,35 +1165,66 @@ impl PicassoApp {
             ui.vertical_centered(|ui| {
                 ui.label(egui::RichText::new(tr("No photos in this area")).color(theme::text()));
                 ui.add_space(2.0);
-                ui.label(egui::RichText::new(tr("Zoom out or move the map to find your photos.")).size(12.0).color(theme::muted()));
+                ui.label(
+                    egui::RichText::new(tr("Zoom out or move the map to find your photos."))
+                        .size(12.0)
+                        .color(theme::muted()),
+                );
             });
             return;
         }
         let total: usize = groups.iter().map(|(_, members)| members.len()).sum();
         if total > 0 {
-            let photos = trf(if total == 1 { "{} photo" } else { "{} photos" }, &[&grouped(total)]);
-            let places = trf(if groups.len() == 1 { "{} place" } else { "{} places" }, &[&groups.len()]);
-            ui.label(egui::RichText::new(format!("{photos} · {places}")).size(12.0).color(theme::muted()));
-            let span = date_span(groups.iter().flat_map(|(_, members)| members.iter()).map(|member| self.photos[*member].taken_at));
+            let photos = trf(
+                if total == 1 { "{} photo" } else { "{} photos" },
+                &[&grouped(total)],
+            );
+            let places = trf(
+                if groups.len() == 1 {
+                    "{} place"
+                } else {
+                    "{} places"
+                },
+                &[&groups.len()],
+            );
+            ui.label(
+                egui::RichText::new(format!("{photos} · {places}"))
+                    .size(12.0)
+                    .color(theme::muted()),
+            );
+            let span = date_span(
+                groups
+                    .iter()
+                    .flat_map(|(_, members)| members.iter())
+                    .map(|member| self.photos[*member].taken_at),
+            );
             ui.label(egui::RichText::new(span).size(12.0).color(theme::muted()));
         }
         ui.add_space(6.0);
 
         let mut action = None;
-        egui::ScrollArea::vertical().id_salt("places-area").auto_shrink([false, false]).show(ui, |ui| {
-            ui.spacing_mut().item_spacing.y = 2.0;
-            for (key, members) in &groups {
-                self.area_row(ui, *key, members, &mut action);
-            }
-            if !tracks.is_empty() {
-                ui.add_space(10.0);
-                ui.label(egui::RichText::new(tr("Tracks")).size(12.0).strong().color(theme::muted()));
-                ui.add_space(2.0);
-                for index in &tracks {
-                    self.track_row(ui, *index, &mut action);
+        egui::ScrollArea::vertical()
+            .id_salt("places-area")
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                ui.spacing_mut().item_spacing.y = 2.0;
+                for (key, members) in &groups {
+                    self.area_row(ui, *key, members, &mut action);
                 }
-            }
-        });
+                if !tracks.is_empty() {
+                    ui.add_space(10.0);
+                    ui.label(
+                        egui::RichText::new(tr("Tracks"))
+                            .size(12.0)
+                            .strong()
+                            .color(theme::muted()),
+                    );
+                    ui.add_space(2.0);
+                    for index in &tracks {
+                        self.track_row(ui, *index, &mut action);
+                    }
+                }
+            });
         match action {
             Some(AreaAction::Zoom(members)) => self.zoom_to_photos(&members),
             Some(AreaAction::Open(index)) => self.open_at(index),
@@ -926,12 +1240,21 @@ impl PicassoApp {
 
     /// One cluster: when, where, how many, and a strip of thumbnails.
     /// Click it to zoom the map to it, or a thumbnail to open that photo.
-    fn area_row(&mut self, ui: &mut egui::Ui, key: ClusterKey, members: &[usize], action: &mut Option<AreaAction>) {
+    fn area_row(
+        &mut self,
+        ui: &mut egui::Ui,
+        key: ClusterKey,
+        members: &[usize],
+        action: &mut Option<AreaAction>,
+    ) {
         const THUMBS: usize = 5;
         const GAP: f32 = 4.0;
         let width = ui.available_width();
-        let thumb = ((width - 16.0 - GAP * (THUMBS - 1) as f32) / THUMBS as f32).floor().max(16.0);
-        let (rect, response) = ui.allocate_exact_size(Vec2::new(width, 56.0 + thumb), Sense::click());
+        let thumb = ((width - 16.0 - GAP * (THUMBS - 1) as f32) / THUMBS as f32)
+            .floor()
+            .max(16.0);
+        let (rect, response) =
+            ui.allocate_exact_size(Vec2::new(width, 56.0 + thumb), Sense::click());
         if !ui.is_rect_visible(rect) {
             return;
         }
@@ -950,19 +1273,44 @@ impl PicassoApp {
         } else {
             (
                 date_span(members.iter().map(|member| self.photos[*member].taken_at)),
-                folder_summary(members.iter().map(|member| self.photos[*member].path.as_str())),
+                folder_summary(
+                    members
+                        .iter()
+                        .map(|member| self.photos[*member].path.as_str()),
+                ),
             )
         };
         let painter = ui.painter().clone();
-        let number = painter.layout_no_wrap(if count > 1 { grouped(count) } else { String::new() }, FontId::proportional(12.0), theme::muted());
-        let title = truncated(&painter, title, 13.0, theme::text(), inner.width() - number.size().x - 8.0);
+        let number = painter.layout_no_wrap(
+            if count > 1 {
+                grouped(count)
+            } else {
+                String::new()
+            },
+            FontId::proportional(12.0),
+            theme::muted(),
+        );
+        let title = truncated(
+            &painter,
+            title,
+            13.0,
+            theme::text(),
+            inner.width() - number.size().x - 8.0,
+        );
         let detail = truncated(&painter, detail, 11.5, theme::muted(), inner.width());
-        painter.galley(Pos2::new(inner.right() - number.size().x, inner.top() + 1.0), number, theme::muted());
+        painter.galley(
+            Pos2::new(inner.right() - number.size().x, inner.top() + 1.0),
+            number,
+            theme::muted(),
+        );
         painter.galley(inner.min, title, theme::text());
         painter.galley(inner.min + Vec2::new(0.0, 19.0), detail, theme::muted());
 
         for (n, index) in spread(members, THUMBS).into_iter().enumerate() {
-            let tile = Rect::from_min_size(Pos2::new(inner.left() + n as f32 * (thumb + GAP), inner.top() + 40.0), Vec2::splat(thumb));
+            let tile = Rect::from_min_size(
+                Pos2::new(inner.left() + n as f32 * (thumb + GAP), inner.top() + 40.0),
+                Vec2::splat(thumb),
+            );
             let (id, path, rotation) = {
                 let photo = &self.photos[index];
                 (photo.id, photo.path.clone(), photo.rotation)
@@ -973,16 +1321,31 @@ impl PicassoApp {
                 .on_hover_cursor(egui::CursorIcon::PointingHand);
             painter.rect_filled(tile, 4, theme::placeholder());
             if let Some((texture, w, h)) = self.thumb_texture(id) {
-                theme::paint_image_rounded(&painter, &texture, tile, theme::cover_uv(w, h), rotation, 4.0);
+                theme::paint_image_rounded(
+                    &painter,
+                    &texture,
+                    tile,
+                    theme::cover_uv(w, h),
+                    rotation,
+                    4.0,
+                );
             }
             if tile_response.hovered() {
-                painter.rect_stroke(tile, 4, egui::Stroke::new(2.0, ACCENT), egui::StrokeKind::Inside);
+                painter.rect_stroke(
+                    tile,
+                    4,
+                    egui::Stroke::new(2.0, ACCENT),
+                    egui::StrokeKind::Inside,
+                );
             }
             if tile_response.clicked() {
                 *action = Some(AreaAction::Open(index));
             }
         }
-        if response.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+        if response
+            .on_hover_cursor(egui::CursorIcon::PointingHand)
+            .clicked()
+        {
             *action = Some(AreaAction::Zoom(members.to_vec()));
         }
     }
@@ -1013,11 +1376,25 @@ impl PicassoApp {
             painter.rect_filled(rect, 8, theme::select());
         }
         let mid = rect.left() + 15.0;
-        painter.line_segment([Pos2::new(mid - 7.0, rect.center().y), Pos2::new(mid + 7.0, rect.center().y)], egui::Stroke::new(4.0, color));
+        painter.line_segment(
+            [
+                Pos2::new(mid - 7.0, rect.center().y),
+                Pos2::new(mid + 7.0, rect.center().y),
+            ],
+            egui::Stroke::new(4.0, color),
+        );
         let text_left = rect.left() + 30.0;
         let room = rect.right() - 8.0 - text_left;
-        painter.galley(Pos2::new(text_left, rect.top() + 6.0), truncated(painter, name, 13.0, theme::text(), room), theme::text());
-        painter.galley(Pos2::new(text_left, rect.top() + 24.0), truncated(painter, detail, 11.5, theme::muted(), room), theme::muted());
+        painter.galley(
+            Pos2::new(text_left, rect.top() + 6.0),
+            truncated(painter, name, 13.0, theme::text(), room),
+            theme::text(),
+        );
+        painter.galley(
+            Pos2::new(text_left, rect.top() + 24.0),
+            truncated(painter, detail, 11.5, theme::muted(), room),
+            theme::muted(),
+        );
         let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
         if response.clicked() {
             *action = Some(AreaAction::Track(index));
@@ -1039,9 +1416,18 @@ impl PicassoApp {
     fn view_bounds(&self) -> Bounds {
         let scale = f64::from(1u32 << self.map_zoom);
         let (cx, cy) = geo::latlon_to_world(self.map_lat, self.map_lon, self.map_zoom);
-        let (cx, cy) = (cx - f64::from(self.map_pan.x), cy - f64::from(self.map_pan.y));
-        let (half_w, half_h) = (f64::from(self.map_size.x) / 2.0, f64::from(self.map_size.y) / 2.0);
-        Bounds { min: [(cx - half_w) / scale, (cy - half_h) / scale], max: [(cx + half_w) / scale, (cy + half_h) / scale] }
+        let (cx, cy) = (
+            cx - f64::from(self.map_pan.x),
+            cy - f64::from(self.map_pan.y),
+        );
+        let (half_w, half_h) = (
+            f64::from(self.map_size.x) / 2.0,
+            f64::from(self.map_size.y) / 2.0,
+        );
+        Bounds {
+            min: [(cx - half_w) / scale, (cy - half_h) / scale],
+            max: [(cx + half_w) / scale, (cy + half_h) / scale],
+        }
     }
 
     /// The zoom control in the top-left corner of the map.
@@ -1049,7 +1435,11 @@ impl PicassoApp {
         let corner = rect.left_top() + Vec2::new(10.0, 10.0);
         let step = zoom_step(rect.height() - 40.0);
         if let Some(next) = zoom_control(ui, corner, self.map_zoom, step, "places-zoom") {
-            self.zoom_map_at(i32::from(next) - i32::from(self.map_zoom), rect.center(), rect);
+            self.zoom_map_at(
+                i32::from(next) - i32::from(self.map_zoom),
+                rect.center(),
+                rect,
+            );
             self.map_card = None;
             ui.ctx().request_repaint();
         }
@@ -1064,8 +1454,14 @@ impl PicassoApp {
         let (cx, cy) = geo::latlon_to_world(self.map_lat, self.map_lon, self.map_zoom);
         let middle = rect.center() + self.map_pan;
         let mut chosen = Vec::new();
-        for photo in self.photos.iter().filter(|photo| self.selection.contains(&photo.id)) {
-            let Some((lat, lon)) = photo.place() else { continue };
+        for photo in self
+            .photos
+            .iter()
+            .filter(|photo| self.selection.contains(&photo.id))
+        {
+            let Some((lat, lon)) = photo.place() else {
+                continue;
+            };
             let (x, y) = geo::latlon_to_world(lat, lon, self.map_zoom);
             let pos = middle + Vec2::new((x - cx) as f32, (y - cy) as f32);
             if rect.contains(pos) {
@@ -1090,23 +1486,41 @@ impl PicassoApp {
                     theme::text(),
                 );
             }
-                }
+        }
     }
 
     pub(super) fn pump_tiles(&mut self, ctx: &egui::Context) {
         for _ in 0..4 {
             match self.tile_rx.try_recv() {
                 // A settings reset may requeue the same coordinate on the same source.
-                Ok(done) if done.generation != self.tile_generation || done.source != self.map_source => {}
+                Ok(done)
+                    if done.generation != self.tile_generation
+                        || done.source != self.map_source => {}
                 Ok(done) => {
                     let key = (done.z, done.x, done.y);
-                    let Some(preview) = self.tile_wait.remove(&key) else { continue };
+                    let Some(preview) = self.tile_wait.remove(&key) else {
+                        continue;
+                    };
                     if let Some(image) = done.image {
-                        let name = format!("tile-{}-{}-{}-{}", done.source.code(), done.z, done.x, done.y);
-                        if let Some(texture) = super::upload(ctx, &name, image.w, image.h, &image.rgba) {
-                            self.tiles.insert(key, MapTile {
-                                texture, labels: image.labels, preview: Cell::new(preview), used_at: Cell::new(self.tile_frame),
-                            });
+                        let name = format!(
+                            "tile-{}-{}-{}-{}",
+                            done.source.code(),
+                            done.z,
+                            done.x,
+                            done.y
+                        );
+                        if let Some(texture) =
+                            super::upload(ctx, &name, image.w, image.h, &image.rgba)
+                        {
+                            self.tiles.insert(
+                                key,
+                                MapTile {
+                                    texture,
+                                    labels: image.labels,
+                                    preview: Cell::new(preview),
+                                    used_at: Cell::new(self.tile_frame),
+                                },
+                            );
                         }
                     } else {
                         self.tile_fail.insert(key);
@@ -1126,12 +1540,21 @@ impl PicassoApp {
     }
 }
 
-fn trim_tiles(tiles: &mut HashMap<(u8, u32, u32), MapTile>, preview: bool, limit: usize, frame: u64) {
-    let count = tiles.values().filter(|tile| tile.preview.get() == preview).count();
+fn trim_tiles(
+    tiles: &mut HashMap<(u8, u32, u32), MapTile>,
+    preview: bool,
+    limit: usize,
+    frame: u64,
+) {
+    let count = tiles
+        .values()
+        .filter(|tile| tile.preview.get() == preview)
+        .count();
     if count <= limit {
         return;
     }
-    let mut used: Vec<_> = tiles.iter()
+    let mut used: Vec<_> = tiles
+        .iter()
         .filter(|(_, tile)| tile.preview.get() == preview && tile.used_at.get() < frame)
         .map(|(&key, tile)| (tile.used_at.get(), key))
         .collect();
@@ -1153,7 +1576,10 @@ impl PinCells {
 
     /// True for the first pin in the cell at `pos`.
     pub(super) fn first(&mut self, pos: Pos2) -> bool {
-        self.0.insert(((pos.x / Self::SIZE).floor() as i32, (pos.y / Self::SIZE).floor() as i32))
+        self.0.insert((
+            (pos.x / Self::SIZE).floor() as i32,
+            (pos.y / Self::SIZE).floor() as i32,
+        ))
     }
 }
 
@@ -1181,7 +1607,13 @@ pub(super) fn zoom_step(room: f32) -> f32 {
 /// A + button, a bar with one stop per zoom level, and a − button, from
 /// `top_left` down. Clicking or dragging along the bar goes straight to a
 /// level. Returns the level picked, if it differs from `zoom`.
-pub(super) fn zoom_control(ui: &mut egui::Ui, top_left: Pos2, zoom: u8, step: f32, id: &str) -> Option<u8> {
+pub(super) fn zoom_control(
+    ui: &mut egui::Ui,
+    top_left: Pos2,
+    zoom: u8,
+    step: f32,
+    id: &str,
+) -> Option<u8> {
     let levels = f32::from(MAX_ZOOM - MIN_ZOOM);
     let height = 2.0 * (ZOOM_BUTTON + 4.0) + levels * step + 2.0 * ZOOM_BAR_PAD;
     let area = Rect::from_min_size(top_left, Vec2::new(ZOOM_BUTTON, height));
@@ -1189,34 +1621,53 @@ pub(super) fn zoom_control(ui: &mut egui::Ui, top_left: Pos2, zoom: u8, step: f3
     // or the zoom changes some other way, such as a pinch or the wheel.
     let now = ui.input(|input| input.time);
     let memory = egui::Id::unique((id, "zoomed"));
-    let (seen, changed_at) = ui.ctx().data(|data| data.get_temp::<(u8, f64)>(memory)).unwrap_or((zoom, f64::NEG_INFINITY));
+    let (seen, changed_at) = ui
+        .ctx()
+        .data(|data| data.get_temp::<(u8, f64)>(memory))
+        .unwrap_or((zoom, f64::NEG_INFINITY));
     let changed_at = if seen == zoom { changed_at } else { now };
-    ui.ctx().data_mut(|data| data.insert_temp(memory, (zoom, changed_at)));
+    ui.ctx()
+        .data_mut(|data| data.insert_temp(memory, (zoom, changed_at)));
     let zooming = now - changed_at < ZOOM_LINGER;
     if zooming {
-        ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(ZOOM_LINGER - (now - changed_at)));
+        ui.ctx()
+            .request_repaint_after(std::time::Duration::from_secs_f64(
+                ZOOM_LINGER - (now - changed_at),
+            ));
     }
-    let active = zooming || ui.rect_contains_pointer(area.expand(8.0)) || ui.ctx().is_being_dragged(egui::Id::unique(id));
-    let presence = ui.ctx().animate_bool_with_time(egui::Id::unique((id, "fade")), active, 0.15);
+    let active = zooming
+        || ui.rect_contains_pointer(area.expand(8.0))
+        || ui.ctx().is_being_dragged(egui::Id::unique(id));
+    let presence = ui
+        .ctx()
+        .animate_bool_with_time(egui::Id::unique((id, "fade")), active, 0.15);
     // Over the map, without moving what the map's parent lays out after it.
     let ui = &mut ui.new_child(egui::UiBuilder::new().max_rect(area));
     ui.set_opacity(0.5 + 0.5 * presence);
     let button = |ui: &mut egui::Ui, at: Pos2, label: &str, tip: &'static str| {
         let text = egui::RichText::new(label).size(16.0);
-        ui.put(Rect::from_min_size(at, Vec2::splat(ZOOM_BUTTON)), egui::Button::new(text).fill(theme::bg()))
-            .on_hover_text(tr(tip))
-            .clicked()
+        ui.put(
+            Rect::from_min_size(at, Vec2::splat(ZOOM_BUTTON)),
+            egui::Button::new(text).fill(theme::bg()),
+        )
+        .on_hover_text(tr(tip))
+        .clicked()
     };
     let mut next = None;
     if button(ui, top_left, "+", "Zoom in") {
         next = Some(zoom.saturating_add(1));
     }
-    let bar = Rect::from_min_size(top_left + Vec2::new(0.0, ZOOM_BUTTON + 4.0), Vec2::new(ZOOM_BUTTON, levels * step + 2.0 * ZOOM_BAR_PAD));
+    let bar = Rect::from_min_size(
+        top_left + Vec2::new(0.0, ZOOM_BUTTON + 4.0),
+        Vec2::new(ZOOM_BUTTON, levels * step + 2.0 * ZOOM_BAR_PAD),
+    );
     if button(ui, bar.left_bottom() + Vec2::new(0.0, 4.0), "−", "Zoom out") {
         next = Some(zoom.saturating_sub(1));
     }
     let bottom = bar.bottom() - ZOOM_BAR_PAD;
-    let response = ui.interact(bar, egui::Id::unique(id), Sense::click_and_drag()).on_hover_cursor(egui::CursorIcon::PointingHand);
+    let response = ui
+        .interact(bar, egui::Id::unique(id), Sense::click_and_drag())
+        .on_hover_cursor(egui::CursorIcon::PointingHand);
     if response.clicked() || response.dragged() {
         if let Some(pointer) = response.interact_pointer_pos() {
             next = Some(MIN_ZOOM + ((bottom - pointer.y) / step).round().clamp(0.0, levels) as u8);
@@ -1224,21 +1675,42 @@ pub(super) fn zoom_control(ui: &mut egui::Ui, top_left: Pos2, zoom: u8, step: f3
     }
 
     let painter = ui.painter_at(bar.expand(2.0));
-    painter.rect(bar, 6, theme::bg(), egui::Stroke::new(1.0, theme::hairline()), egui::StrokeKind::Inside);
+    painter.rect(
+        bar,
+        6,
+        theme::bg(),
+        egui::Stroke::new(1.0, theme::hairline()),
+        egui::StrokeKind::Inside,
+    );
     let x = bar.center().x;
     let shown = next.unwrap_or(zoom).clamp(MIN_ZOOM, MAX_ZOOM);
     let knob = Pos2::new(x, bottom - f32::from(shown - MIN_ZOOM) * step);
     if step >= 5.0 {
         for level in 0..=MAX_ZOOM - MIN_ZOOM {
             let y = bottom - f32::from(level) * step;
-            painter.line_segment([Pos2::new(x - 4.0, y), Pos2::new(x + 4.0, y)], egui::Stroke::new(1.0, theme::hairline()));
+            painter.line_segment(
+                [Pos2::new(x - 4.0, y), Pos2::new(x + 4.0, y)],
+                egui::Stroke::new(1.0, theme::hairline()),
+            );
         }
     }
-    painter.line_segment([Pos2::new(x, bar.top() + ZOOM_BAR_PAD), Pos2::new(x, bottom)], egui::Stroke::new(3.0, theme::hairline()));
-    painter.line_segment([knob, Pos2::new(x, bottom)], egui::Stroke::new(3.0, theme::accent()));
+    painter.line_segment(
+        [Pos2::new(x, bar.top() + ZOOM_BAR_PAD), Pos2::new(x, bottom)],
+        egui::Stroke::new(3.0, theme::hairline()),
+    );
+    painter.line_segment(
+        [knob, Pos2::new(x, bottom)],
+        egui::Stroke::new(3.0, theme::accent()),
+    );
     let lit = response.hovered() || response.dragged();
-    painter.circle(knob, if lit { 6.5 } else { 5.5 }, theme::accent(), egui::Stroke::new(2.0, Color32::WHITE));
-    next.map(|level| level.clamp(MIN_ZOOM, MAX_ZOOM)).filter(|level| *level != zoom)
+    painter.circle(
+        knob,
+        if lit { 6.5 } else { 5.5 },
+        theme::accent(),
+        egui::Stroke::new(2.0, Color32::WHITE),
+    );
+    next.map(|level| level.clamp(MIN_ZOOM, MAX_ZOOM))
+        .filter(|level| *level != zoom)
 }
 
 /// Levels a tile may be enlarged by to stand in for a closer one the
@@ -1255,7 +1727,11 @@ fn covering(z: u8, x: u32, y: u32, depth: u8) -> (u8, u32, u32) {
 fn scale_bar(meters_per_point: f64, room: f32) -> (f64, f32) {
     let most = meters_per_point * f64::from(room);
     let power = 10f64.powf(most.log10().floor());
-    let meters = [5.0, 2.0, 1.0].into_iter().map(|step| step * power).find(|meters| *meters <= most).unwrap_or(power);
+    let meters = [5.0, 2.0, 1.0]
+        .into_iter()
+        .map(|step| step * power)
+        .find(|meters| *meters <= most)
+        .unwrap_or(power);
     (meters, (meters / meters_per_point) as f32)
 }
 
@@ -1304,14 +1780,22 @@ enum AreaAction {
 }
 
 /// `text` on one line, cut short with an ellipsis past `width`.
-pub(super) fn truncated(painter: &egui::Painter, text: String, size: f32, color: Color32, width: f32) -> std::sync::Arc<egui::Galley> {
+pub(super) fn truncated(
+    painter: &egui::Painter,
+    text: String,
+    size: f32,
+    color: Color32,
+    width: f32,
+) -> std::sync::Arc<egui::Galley> {
     let mut job = egui::text::LayoutJob::simple_singleline(text, FontId::proportional(size), color);
     job.wrap = egui::text::TextWrapping::truncate_at_width(width.max(10.0));
     painter.layout_job(job)
 }
 
 fn cluster_key(ids: impl Iterator<Item = i64>) -> ClusterKey {
-    ids.fold((0, i64::MAX, i64::MIN), |(count, low, high), id| (count + 1, low.min(id), high.max(id)))
+    ids.fold((0, i64::MAX, i64::MIN), |(count, low, high), id| {
+        (count + 1, low.min(id), high.max(id))
+    })
 }
 
 /// Radius of a cluster's circle, growing with the log of its count.
@@ -1330,13 +1814,18 @@ fn cluster_radius(count: usize) -> f32 {
 pub(super) fn cluster_points(points: &[[f64; 2]], cell: f64) -> Vec<(Vec<usize>, [f64; 2])> {
     let mut cells: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
     for (index, [x, y]) in points.iter().enumerate() {
-        cells.entry(((x / cell).floor() as i64, (y / cell).floor() as i64)).or_default().push(index);
+        cells
+            .entry(((x / cell).floor() as i64, (y / cell).floor() as i64))
+            .or_default()
+            .push(index);
     }
     let mut groups: Vec<(Vec<usize>, [f64; 2])> = cells
         .into_values()
         .map(|members| {
             let n = members.len() as f64;
-            let (x, y) = members.iter().fold((0.0, 0.0), |(x, y), member| (x + points[*member][0], y + points[*member][1]));
+            let (x, y) = members.iter().fold((0.0, 0.0), |(x, y), member| {
+                (x + points[*member][0], y + points[*member][1])
+            });
             (members, [x / n, y / n])
         })
         .collect();
@@ -1352,7 +1841,10 @@ pub(super) fn cluster_points(points: &[[f64; 2]], cell: f64) -> Vec<(Vec<usize>,
             Some(index) => {
                 let (other, middle) = &mut kept[index];
                 let (a, b) = (other.len() as f64, members.len() as f64);
-                *middle = [(middle[0] * a + at[0] * b) / (a + b), (middle[1] * a + at[1] * b) / (a + b)];
+                *middle = [
+                    (middle[0] * a + at[0] * b) / (a + b),
+                    (middle[1] * a + at[1] * b) / (a + b),
+                ];
                 other.extend(members);
             }
             None => kept.push((members, at)),
@@ -1395,7 +1887,9 @@ pub(super) fn grouped(count: usize) -> String {
 /// The day the photos were taken, or the months they span.
 pub(super) fn date_span(times: impl Iterator<Item = i64>) -> String {
     use chrono::Datelike;
-    let (first, last) = times.fold((i64::MAX, i64::MIN), |(first, last), time| (first.min(time), last.max(time)));
+    let (first, last) = times.fold((i64::MAX, i64::MIN), |(first, last), time| {
+        (first.min(time), last.max(time))
+    });
     if first > last {
         return String::new();
     }
@@ -1420,11 +1914,18 @@ pub(super) fn date_span(times: impl Iterator<Item = i64>) -> String {
 pub(super) fn folder_summary<'a>(paths: impl Iterator<Item = &'a str>) -> String {
     let mut counts: HashMap<String, usize> = HashMap::new();
     for path in paths {
-        let folder = std::path::Path::new(path).parent().map(|parent| folder_label(&parent.to_string_lossy())).unwrap_or_default();
+        let folder = std::path::Path::new(path)
+            .parent()
+            .map(|parent| folder_label(&parent.to_string_lossy()))
+            .unwrap_or_default();
         *counts.entry(folder).or_default() += 1;
     }
     let others = counts.len().saturating_sub(1);
-    let top = counts.into_iter().max_by(|a, b| a.1.cmp(&b.1).then(b.0.cmp(&a.0))).map(|(folder, _)| folder).unwrap_or_default();
+    let top = counts
+        .into_iter()
+        .max_by(|a, b| a.1.cmp(&b.1).then(b.0.cmp(&a.0)))
+        .map(|(folder, _)| folder)
+        .unwrap_or_default();
     if others == 0 {
         top
     } else {
@@ -1447,7 +1948,11 @@ fn cover_uv_sized(w: usize, h: usize, rotation: i32, size: Vec2) -> Rect {
     let (w, h) = (w.max(1) as f32, h.max(1) as f32);
     let (shown_w, shown_h) = if turned { (h, w) } else { (w, h) };
     let aspect = size.x / size.y.max(1.0);
-    let (fx, fy) = if shown_w / shown_h > aspect { (aspect * shown_h / shown_w, 1.0) } else { (1.0, shown_w / aspect / shown_h) };
+    let (fx, fy) = if shown_w / shown_h > aspect {
+        (aspect * shown_h / shown_w, 1.0)
+    } else {
+        (1.0, shown_w / aspect / shown_h)
+    };
     let (fx, fy) = if turned { (fy, fx) } else { (fx, fy) };
     Rect::from_center_size(Pos2::new(0.5, 0.5), Vec2::new(fx, fy))
 }
@@ -1554,14 +2059,24 @@ pub(super) fn track_tooltip(ui: &mut egui::Ui, track: &MapTrack) {
     match track.time_span {
         Some((start, end)) => {
             ui.label(format_timestamp(start));
-            ui.label(format!("{} · {}", format_distance(track.meters), format_duration((end - start) as f64)));
+            ui.label(format!(
+                "{} · {}",
+                format_distance(track.meters),
+                format_duration((end - start) as f64)
+            ));
         }
         None => {
             ui.label(format_distance(track.meters));
         }
     }
-    let file = std::path::Path::new(&track.path).file_name().map(|name| name.to_string_lossy().into_owned());
-    ui.label(egui::RichText::new(file.unwrap_or_default()).small().color(theme::muted()));
+    let file = std::path::Path::new(&track.path)
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned());
+    ui.label(
+        egui::RichText::new(file.unwrap_or_default())
+            .small()
+            .color(theme::muted()),
+    );
 }
 
 /// Writes map names over the tiles, most important first, skipping any that
@@ -1589,7 +2104,11 @@ fn paint_labels(painter: &egui::Painter, rect: Rect, mut labels: Vec<(Pos2, &Map
             continue;
         }
         // The same street comes back from every tile and piece it crosses.
-        if road && roads.iter().any(|(text, at)| *text == label.text && at.distance(pos) < 200.0) {
+        if road
+            && roads
+                .iter()
+                .any(|(text, at)| *text == label.text && at.distance(pos) < 200.0)
+        {
             continue;
         }
         let (size, color) = label_style(label.kind);
@@ -1599,7 +2118,10 @@ fn paint_labels(painter: &egui::Painter, rect: Rect, mut labels: Vec<(Pos2, &Map
             continue;
         }
         let (sin, cos) = label.angle.sin_cos();
-        let reach = Vec2::new(half.x * cos.abs() + half.y * sin.abs(), half.x * sin.abs() + half.y * cos.abs());
+        let reach = Vec2::new(
+            half.x * cos.abs() + half.y * sin.abs(),
+            half.x * sin.abs() + half.y * cos.abs(),
+        );
         let bounds = Rect::from_center_size(pos, reach * 2.0).expand(3.0);
         if taken.iter().any(|other| other.intersects(bounds)) {
             continue;
@@ -1638,7 +2160,9 @@ fn label_style(kind: LabelKind) -> (f32, Color32) {
 }
 
 pub(super) fn open_osm(lat: f64, lon: f64, zoom: u8) {
-    let url = format!("https://www.openstreetmap.org/?mlat={lat:.6}&mlon={lon:.6}#map={zoom}/{lat:.6}/{lon:.6}");
+    let url = format!(
+        "https://www.openstreetmap.org/?mlat={lat:.6}&mlon={lon:.6}#map={zoom}/{lat:.6}/{lon:.6}"
+    );
     let _ = open::that(url);
 }
 
@@ -1649,15 +2173,28 @@ mod tests {
     #[test]
     fn evicting_editor_tiles_preserves_library_previews() {
         let ctx = egui::Context::default();
-        let texture = ctx.load_texture("test-tile", egui::ColorImage::filled([1, 1], Color32::WHITE), Default::default());
+        let texture = ctx.load_texture(
+            "test-tile",
+            egui::ColorImage::filled([1, 1], Color32::WHITE),
+            Default::default(),
+        );
         let mut tiles = HashMap::new();
-        for (x, preview, used_at) in [(0, true, 1), (1, true, 2), (2, false, 3), (3, false, 4), (4, false, 4)] {
-            tiles.insert((2, x, 0), MapTile {
-                texture: texture.clone(),
-                labels: Vec::new(),
-                preview: Cell::new(preview),
-                used_at: Cell::new(used_at),
-            });
+        for (x, preview, used_at) in [
+            (0, true, 1),
+            (1, true, 2),
+            (2, false, 3),
+            (3, false, 4),
+            (4, false, 4),
+        ] {
+            tiles.insert(
+                (2, x, 0),
+                MapTile {
+                    texture: texture.clone(),
+                    labels: Vec::new(),
+                    preview: Cell::new(preview),
+                    used_at: Cell::new(used_at),
+                },
+            );
         }
         trim_tiles(&mut tiles, false, 1, 4);
         assert!(!tiles.contains_key(&(2, 2, 0)));
@@ -1696,20 +2233,36 @@ mod tests {
     fn a_wheel_notch_spread_over_frames_zooms_one_level() {
         let mut wheel = 0.0;
         // One 40-point notch, as egui smooths it.
-        let steps: i32 = [12.0, 10.0, 8.0, 5.0, 3.0, 1.5, 0.5, 0.0].iter().map(|delta| wheel_steps(&mut wheel, *delta)).sum();
+        let steps: i32 = [12.0, 10.0, 8.0, 5.0, 3.0, 1.5, 0.5, 0.0]
+            .iter()
+            .map(|delta| wheel_steps(&mut wheel, *delta))
+            .sum();
         assert_eq!(steps, 1);
-        let steps: i32 = [-20.0, -20.0, -20.0, -20.0, 0.0].iter().map(|delta| wheel_steps(&mut wheel, *delta)).sum();
+        let steps: i32 = [-20.0, -20.0, -20.0, -20.0, 0.0]
+            .iter()
+            .map(|delta| wheel_steps(&mut wheel, *delta))
+            .sum();
         assert_eq!(steps, -2);
         assert_eq!(wheel_steps(&mut wheel, 10.0), 0);
-        assert_eq!(wheel_steps(&mut wheel, -10.0), 0, "turning back starts over");
+        assert_eq!(
+            wheel_steps(&mut wheel, -10.0),
+            0,
+            "turning back starts over"
+        );
     }
 
     #[test]
     fn a_pinch_zooms_one_level_per_step_of_spread() {
         let mut pinch = 0.0;
-        let steps: i32 = [1.1_f32; 8].iter().map(|factor| pinch_steps(&mut pinch, *factor)).sum();
+        let steps: i32 = [1.1_f32; 8]
+            .iter()
+            .map(|factor| pinch_steps(&mut pinch, *factor))
+            .sum();
         assert_eq!(steps, 2, "spreading 2.1 times");
-        let steps: i32 = [0.9_f32; 4].iter().map(|factor| pinch_steps(&mut pinch, *factor)).sum();
+        let steps: i32 = [0.9_f32; 4]
+            .iter()
+            .map(|factor| pinch_steps(&mut pinch, *factor))
+            .sum();
         assert_eq!(steps, -1, "pinching back to 0.66 times");
         assert_eq!(pinch_steps(&mut pinch, 1.0), 0);
     }
@@ -1717,12 +2270,22 @@ mod tests {
     #[test]
     fn nearby_photos_share_a_cluster_and_distant_ones_do_not() {
         // Two either side of a cell edge, two in one cell, and one alone.
-        let points = [[62.0, 10.0], [66.0, 12.0], [300.0, 300.0], [302.0, 303.0], [600.0, 20.0]];
+        let points = [
+            [62.0, 10.0],
+            [66.0, 12.0],
+            [300.0, 300.0],
+            [302.0, 303.0],
+            [600.0, 20.0],
+        ];
         let clusters = cluster_points(&points, 64.0);
         let sizes: Vec<usize> = clusters.iter().map(|(members, _)| members.len()).collect();
         assert_eq!(sizes, [2, 2, 1]);
         let (members, middle) = &clusters[1];
-        assert_eq!(members, &[0, 1], "dots that would overlap merge across the edge");
+        assert_eq!(
+            members,
+            &[0, 1],
+            "dots that would overlap merge across the edge"
+        );
         assert!((middle[0] - 64.0).abs() < 1e-9 && (middle[1] - 11.0).abs() < 1e-9);
     }
 

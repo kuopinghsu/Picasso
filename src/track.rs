@@ -37,8 +37,12 @@ pub fn is_track_path(path: &Path) -> bool {
 /// Photos has one for every photo, so they are left out by name rather
 /// than opened.
 fn is_photo_sidecar(path: &Path) -> bool {
-    let Some(stem) = path.file_stem().and_then(|stem| stem.to_str()) else { return false };
-    stem.split('.').skip(1).any(|part| crate::types::FileType::of(Path::new(&format!("x.{part}"))).is_some())
+    let Some(stem) = path.file_stem().and_then(|stem| stem.to_str()) else {
+        return false;
+    };
+    stem.split('.')
+        .skip(1)
+        .any(|part| crate::types::FileType::of(Path::new(&format!("x.{part}"))).is_some())
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -68,7 +72,10 @@ impl Track {
             _ => Track::parse_kml(&text)?,
         };
         if track.name.is_empty() {
-            track.name = path.file_stem().map(|stem| stem.to_string_lossy().into_owned()).unwrap_or_default();
+            track.name = path
+                .file_stem()
+                .map(|stem| stem.to_string_lossy().into_owned())
+                .unwrap_or_default();
         }
         Ok(track)
     }
@@ -87,7 +94,11 @@ impl Track {
     fn from_polarsteps(text: &str) -> Result<Track, String> {
         let points = crate::track_edit::parse_polarsteps(text)?
             .into_iter()
-            .map(|point| Point { lat: point.lat, lon: point.lon, time: point.time.map(|ms| ms.div_euclid(1000)) })
+            .map(|point| Point {
+                lat: point.lat,
+                lon: point.lon,
+                time: point.time.map(|ms| ms.div_euclid(1000)),
+            })
             .collect();
         let mut track = Track::default();
         track.add(points);
@@ -106,15 +117,29 @@ impl Track {
                         track.name = child_text(node, "name");
                     }
                     if node.tag_name().name() == "rte" {
-                        track.add(node.children().filter(|child| child.has_tag_name_local("rtept")).filter_map(gpx_point).collect());
+                        track.add(
+                            node.children()
+                                .filter(|child| child.has_tag_name_local("rtept"))
+                                .filter_map(gpx_point)
+                                .collect(),
+                        );
                     }
                 }
-                "trkseg" => track.add(node.children().filter(|child| child.has_tag_name_local("trkpt")).filter_map(gpx_point).collect()),
+                "trkseg" => track.add(
+                    node.children()
+                        .filter(|child| child.has_tag_name_local("trkpt"))
+                        .filter_map(gpx_point)
+                        .collect(),
+                ),
                 _ => {}
             }
         }
         if track.name.is_empty() {
-            if let Some(metadata) = doc.root_element().children().find(|child| child.has_tag_name_local("metadata")) {
+            if let Some(metadata) = doc
+                .root_element()
+                .children()
+                .find(|child| child.has_tag_name_local("metadata"))
+            {
                 track.name = child_text(metadata, "name");
             }
         }
@@ -137,14 +162,20 @@ impl Track {
                 _ => continue,
             };
             if points.len() >= 2 && track.name.is_empty() {
-                if let Some(placemark) = node.ancestors().find(|parent| parent.has_tag_name_local("Placemark")) {
+                if let Some(placemark) = node
+                    .ancestors()
+                    .find(|parent| parent.has_tag_name_local("Placemark"))
+                {
                     track.name = child_text(placemark, "name");
                 }
             }
             track.add(points);
         }
         if track.name.is_empty() {
-            if let Some(document) = doc.descendants().find(|node| node.has_tag_name_local("Document")) {
+            if let Some(document) = doc
+                .descendants()
+                .find(|node| node.has_tag_name_local("Document"))
+            {
                 track.name = child_text(document, "name");
             }
         }
@@ -173,7 +204,9 @@ impl Track {
     pub fn time_span(&self) -> Option<(i64, i64)> {
         let mut times = self.points().filter_map(|point| point.time);
         let first = times.next()?;
-        Some(times.fold((first, first), |(start, end), time| (start.min(time), end.max(time))))
+        Some(times.fold((first, first), |(start, end), time| {
+            (start.min(time), end.max(time))
+        }))
     }
 
     /// Length along the segments, in meters.
@@ -206,11 +239,17 @@ impl Track {
         let mut rest = bytes;
         while let Some((head, tail)) = rest.split_first_chunk::<4>() {
             let count = u32::from_le_bytes(*head) as usize;
-            let Some(body) = tail.get(..count.saturating_mul(POINT_BYTES)) else { break };
+            let Some(body) = tail.get(..count.saturating_mul(POINT_BYTES)) else {
+                break;
+            };
             let points = body
-                .chunks_exact(POINT_BYTES)
+                .as_chunks::<POINT_BYTES>()
+                .0
+                .iter()
                 .map(|chunk| {
-                    let int = |at: usize| i32::from_le_bytes(chunk[at..at + 4].try_into().unwrap_or_default());
+                    let int = |at: usize| {
+                        i32::from_le_bytes(chunk[at..at + 4].try_into().unwrap_or_default())
+                    };
                     let time = i64::from_le_bytes(chunk[8..16].try_into().unwrap_or_default());
                     Point {
                         lat: f64::from(int(0)) / 1e7,
@@ -252,7 +291,10 @@ pub struct Bounds {
 }
 
 impl Bounds {
-    pub const EMPTY: Bounds = Bounds { min: [f64::INFINITY; 2], max: [f64::NEG_INFINITY; 2] };
+    pub const EMPTY: Bounds = Bounds {
+        min: [f64::INFINITY; 2],
+        max: [f64::NEG_INFINITY; 2],
+    };
 
     pub fn add(&mut self, [x, y]: [f64; 2]) {
         self.min = [self.min[0].min(x), self.min[1].min(y)];
@@ -271,7 +313,10 @@ impl Bounds {
     }
 
     pub fn center(&self) -> [f64; 2] {
-        [(self.min[0] + self.max[0]) / 2.0, (self.min[1] + self.max[1]) / 2.0]
+        [
+            (self.min[0] + self.max[0]) / 2.0,
+            (self.min[1] + self.max[1]) / 2.0,
+        ]
     }
 
     pub fn size(&self) -> [f64; 2] {
@@ -297,7 +342,9 @@ impl MapTrack {
                 MapSegment { points, bounds }
             })
             .collect();
-        let bounds = segments.iter().fold(Bounds::EMPTY, |all, segment| all.union(segment.bounds));
+        let bounds = segments
+            .iter()
+            .fold(Bounds::EMPTY, |all, segment| all.union(segment.bounds));
         MapTrack {
             id,
             folder_id,
@@ -322,15 +369,23 @@ impl MapTrack {
         let (x, y) = geo::latlon_to_world(lat, lon, 0);
         let reach = ALONG_METERS / (EQUATOR_M * lat.to_radians().cos().max(0.01) / 256.0);
         let near = |bounds: &Bounds| {
-            x >= bounds.min[0] - reach && x <= bounds.max[0] + reach && y >= bounds.min[1] - reach && y <= bounds.max[1] + reach
+            x >= bounds.min[0] - reach
+                && x <= bounds.max[0] + reach
+                && y >= bounds.min[1] - reach
+                && y <= bounds.max[1] + reach
         };
         if !near(&self.bounds) {
             return false;
         }
-        self.segments.iter().filter(|segment| near(&segment.bounds)).any(|segment| match segment.points.as_slice() {
-            [only] => (only[0] - x).hypot(only[1] - y) <= reach,
-            points => points.windows(2).any(|pair| distance_to_segment([x, y], pair[0], pair[1]) <= reach),
-        })
+        self.segments
+            .iter()
+            .filter(|segment| near(&segment.bounds))
+            .any(|segment| match segment.points.as_slice() {
+                [only] => (only[0] - x).hypot(only[1] - y) <= reach,
+                points => points
+                    .windows(2)
+                    .any(|pair| distance_to_segment([x, y], pair[0], pair[1]) <= reach),
+            })
     }
 }
 
@@ -344,7 +399,11 @@ const EQUATOR_M: f64 = 40_075_016.686;
 fn distance_to_segment(p: [f64; 2], a: [f64; 2], b: [f64; 2]) -> f64 {
     let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
     let length = dx * dx + dy * dy;
-    let t = if length > 0.0 { (((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / length).clamp(0.0, 1.0) } else { 0.0 };
+    let t = if length > 0.0 {
+        (((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / length).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
     (a[0] + t * dx - p[0]).hypot(a[1] + t * dy - p[1])
 }
 
@@ -370,13 +429,18 @@ pub fn format_distance(meters: f64) -> String {
 }
 
 fn extension(path: &Path) -> String {
-    path.extension().and_then(|ext| ext.to_str()).unwrap_or_default().to_ascii_lowercase()
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase()
 }
 
 /// The text of a track file, unpacked from a KMZ archive. Files over
 /// [`MAX_BYTES`] are refused.
 pub(crate) fn read_text(path: &Path) -> Result<String, String> {
-    let bytes = std::fs::metadata(path).map_err(|err| err.to_string())?.len();
+    let bytes = std::fs::metadata(path)
+        .map_err(|err| err.to_string())?
+        .len();
     if bytes > MAX_BYTES {
         return Err(tr("The track file is too large").to_string());
     }
@@ -392,7 +456,8 @@ pub(crate) fn read_text(path: &Path) -> Result<String, String> {
 /// `Records.json` starts with `locations` too, but names `latitudeE7`.
 fn names_locations(path: &Path) -> bool {
     let mut head = Vec::new();
-    let read = std::fs::File::open(path).and_then(|file| file.take(SNIFF_BYTES).read_to_end(&mut head));
+    let read =
+        std::fs::File::open(path).and_then(|file| file.take(SNIFF_BYTES).read_to_end(&mut head));
     let names = |key: &[u8]| head.windows(key.len()).any(|window| window == key);
     read.is_ok() && names(b"\"locations\"") && (names(b"\"lat\"") || names(b"\"latitude\""))
 }
@@ -401,12 +466,24 @@ fn names_locations(path: &Path) -> bool {
 /// otherwise the first `.kml` entry. Stored and deflated entries are read.
 fn kmz_document(zip: &[u8]) -> Result<Vec<u8>, String> {
     let broken = || tr("The KMZ file is damaged").to_string();
-    let u16_at = |at: usize| zip.get(at..at + 2).map(|b| u16::from_le_bytes([b[0], b[1]]) as usize);
-    let u32_at = |at: usize| zip.get(at..at + 4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]) as usize);
+    let u16_at = |at: usize| {
+        zip.get(at..at + 2)
+            .map(|b| u16::from_le_bytes([b[0], b[1]]) as usize)
+    };
+    let u32_at = |at: usize| {
+        zip.get(at..at + 4)
+            .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]) as usize)
+    };
     // The end record sits in the last 64 KB, after an optional comment.
     let floor = zip.len().saturating_sub(22 + 65_535);
-    let end = (floor..zip.len().saturating_sub(21)).rev().find(|&at| u32_at(at) == Some(0x0605_4b50)).ok_or_else(broken)?;
-    let (count, mut at) = (u16_at(end + 10).ok_or_else(broken)?, u32_at(end + 16).ok_or_else(broken)?);
+    let end = (floor..zip.len().saturating_sub(21))
+        .rev()
+        .find(|&at| u32_at(at) == Some(0x0605_4b50))
+        .ok_or_else(broken)?;
+    let (count, mut at) = (
+        u16_at(end + 10).ok_or_else(broken)?,
+        u32_at(end + 16).ok_or_else(broken)?,
+    );
     let mut found: Option<(String, usize, usize, usize)> = None;
     for _ in 0..count {
         if u32_at(at) != Some(0x0201_4b50) {
@@ -415,24 +492,34 @@ fn kmz_document(zip: &[u8]) -> Result<Vec<u8>, String> {
         let method = u16_at(at + 10).ok_or_else(broken)?;
         let packed = u32_at(at + 20).ok_or_else(broken)?;
         let name_len = u16_at(at + 28).ok_or_else(broken)?;
-        let skip = name_len + u16_at(at + 30).ok_or_else(broken)? + u16_at(at + 32).ok_or_else(broken)?;
+        let skip =
+            name_len + u16_at(at + 30).ok_or_else(broken)? + u16_at(at + 32).ok_or_else(broken)?;
         let local = u32_at(at + 42).ok_or_else(broken)?;
-        let name = String::from_utf8_lossy(zip.get(at + 46..at + 46 + name_len).ok_or_else(broken)?).into_owned();
+        let name =
+            String::from_utf8_lossy(zip.get(at + 46..at + 46 + name_len).ok_or_else(broken)?)
+                .into_owned();
         let lower = name.to_ascii_lowercase();
         let better = match &found {
             None => true,
-            Some((current, ..)) => lower.rsplit('/').next() == Some("doc.kml") && !current.to_ascii_lowercase().ends_with("doc.kml"),
+            Some((current, ..)) => {
+                lower.rsplit('/').next() == Some("doc.kml")
+                    && !current.to_ascii_lowercase().ends_with("doc.kml")
+            }
         };
         if lower.ends_with(".kml") && better {
             found = Some((name, method, packed, local));
         }
         at += 46 + skip;
     }
-    let (_, method, packed, local) = found.ok_or_else(|| tr("No KML document in the KMZ file").to_string())?;
+    let (_, method, packed, local) =
+        found.ok_or_else(|| tr("No KML document in the KMZ file").to_string())?;
     if u32_at(local) != Some(0x0403_4b50) {
         return Err(broken());
     }
-    let start = local + 30 + u16_at(local + 26).ok_or_else(broken)? + u16_at(local + 28).ok_or_else(broken)?;
+    let start = local
+        + 30
+        + u16_at(local + 26).ok_or_else(broken)?
+        + u16_at(local + 28).ok_or_else(broken)?;
     let body = zip.get(start..start + packed).ok_or_else(broken)?;
     match method {
         0 => Ok(body.to_vec()),
@@ -493,7 +580,11 @@ fn kml_coordinates(text: &str) -> Vec<Point> {
             let mut parts = tuple.split(',');
             let lon = parts.next()?.parse().ok()?;
             let lat = parts.next()?.parse().ok()?;
-            valid(Point { lat, lon, time: None })
+            valid(Point {
+                lat,
+                lon,
+                time: None,
+            })
         })
         .collect()
 }
@@ -512,13 +603,20 @@ fn kml_track(node: roxmltree::Node<'_, '_>) -> Vec<Point> {
             let mut parts = child.text()?.split_whitespace();
             let lon = parts.next()?.parse().ok()?;
             let lat = parts.next()?.parse().ok()?;
-            valid(Point { lat, lon, time: whens.get(index).copied().flatten() })
+            valid(Point {
+                lat,
+                lon,
+                time: whens.get(index).copied().flatten(),
+            })
         })
         .collect()
 }
 
 fn valid(point: Point) -> Option<Point> {
-    let fine = point.lat.is_finite() && point.lon.is_finite() && point.lat.abs() <= 90.0 && point.lon.abs() <= 180.0;
+    let fine = point.lat.is_finite()
+        && point.lon.is_finite()
+        && point.lat.abs() <= 90.0
+        && point.lon.abs() <= 180.0;
     fine.then_some(point)
 }
 
@@ -534,10 +632,14 @@ pub(crate) fn parse_time_ms(text: &str) -> Option<i64> {
     if let Ok(time) = chrono::DateTime::parse_from_rfc3339(text) {
         return Some(time.timestamp_millis());
     }
-    ["%Y-%m-%dT%H:%M:%S%.f", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S"]
-        .iter()
-        .find_map(|format| chrono::NaiveDateTime::parse_from_str(text, format).ok())
-        .map(|time| time.and_utc().timestamp_millis())
+    [
+        "%Y-%m-%dT%H:%M:%S%.f",
+        "%Y-%m-%dT%H:%M:%S",
+        "%Y-%m-%d %H:%M:%S",
+    ]
+    .iter()
+    .find_map(|format| chrono::NaiveDateTime::parse_from_str(text, format).ok())
+    .map(|time| time.and_utc().timestamp_millis())
 }
 
 #[cfg(test)]
@@ -573,8 +675,29 @@ mod tests {
         // The one-point segment is not a path.
         assert_eq!(track.segments.len(), 3);
         assert_eq!(track.segments[0].len(), 2);
-        assert_eq!(track.segments[0][0], Point { lat: 25.033, lon: 121.5654, time: Some(1_714_550_400) });
-        assert_eq!(track.segments[2], vec![Point { lat: 0.0, lon: 0.0, time: None }, Point { lat: 0.0, lon: 1.0, time: None }]);
+        assert_eq!(
+            track.segments[0][0],
+            Point {
+                lat: 25.033,
+                lon: 121.5654,
+                time: Some(1_714_550_400)
+            }
+        );
+        assert_eq!(
+            track.segments[2],
+            vec![
+                Point {
+                    lat: 0.0,
+                    lon: 0.0,
+                    time: None
+                },
+                Point {
+                    lat: 0.0,
+                    lon: 1.0,
+                    time: None
+                }
+            ]
+        );
         assert_eq!(track.time_span(), Some((1_714_550_400, 1_714_550_460)));
     }
 
@@ -618,9 +741,19 @@ mod tests {
         assert_eq!(track.name, "Walk");
         assert_eq!(track.segments.len(), 2);
         assert_eq!(track.segments[0].len(), 3);
-        assert_eq!(track.segments[0][2], Point { lat: 25.2, lon: 121.7, time: None });
+        assert_eq!(
+            track.segments[0][2],
+            Point {
+                lat: 25.2,
+                lon: 121.7,
+                time: None
+            }
+        );
         assert_eq!(track.segments[1][1].time, Some(1_714_550_410));
-        assert!(Track::parse_kml(r#"<kml><Placemark><Point><coordinates>1,2</coordinates></Point></Placemark></kml>"#).is_err());
+        assert!(Track::parse_kml(
+            r#"<kml><Placemark><Point><coordinates>1,2</coordinates></Point></Placemark></kml>"#
+        )
+        .is_err());
     }
 
     /// A zip archive of `entries`, deflated when `deflate` is set.
@@ -629,7 +762,8 @@ mod tests {
         let (mut out, mut central) = (Vec::new(), Vec::new());
         for (name, data) in entries {
             let body = if deflate {
-                let mut encoder = flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::default());
+                let mut encoder =
+                    flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::default());
                 encoder.write_all(data).unwrap();
                 encoder.finish().unwrap()
             } else {
@@ -674,7 +808,14 @@ mod tests {
     fn kmz_archives_are_unpacked() {
         let kml = br#"<kml><Document><name>Run</name><Placemark><LineString><coordinates>1,2 3,4</coordinates></LineString></Placemark></Document></kml>"#;
         for deflate in [false, true] {
-            let archive = zip(&[("files/icon.png", b"png"), ("other.kml", b"<kml/>"), ("doc.kml", kml)], deflate);
+            let archive = zip(
+                &[
+                    ("files/icon.png", b"png"),
+                    ("other.kml", b"<kml/>"),
+                    ("doc.kml", kml),
+                ],
+                deflate,
+            );
             assert_eq!(kmz_document(&archive).unwrap(), kml.to_vec());
         }
         let dir = std::env::temp_dir().join(format!("picasso-kmz-{}", std::process::id()));
@@ -683,7 +824,14 @@ mod tests {
         std::fs::write(&path, zip(&[("doc.kml", kml)], true)).unwrap();
         let track = Track::read(&path).unwrap();
         assert_eq!(track.name, "Run");
-        assert_eq!(track.segments[0][1], Point { lat: 4.0, lon: 3.0, time: None });
+        assert_eq!(
+            track.segments[0][1],
+            Point {
+                lat: 4.0,
+                lon: 3.0,
+                time: None
+            }
+        );
         assert!(kmz_document(b"not a zip").is_err());
         assert!(kmz_document(&zip(&[("a.txt", b"x")], false)).is_err());
         let _ = std::fs::remove_dir_all(&dir);
@@ -700,37 +848,104 @@ mod tests {
             assert_eq!(a.time, b.time);
         }
         // A cut-off blob keeps the whole segments before the cut.
-        assert_eq!(Track::decode(String::new(), &bytes[..bytes.len() - 3]).segments.len(), 2);
+        assert_eq!(
+            Track::decode(String::new(), &bytes[..bytes.len() - 3])
+                .segments
+                .len(),
+            2
+        );
     }
 
     #[test]
     fn distance_and_bounds() {
-        let a = Point { lat: 0.0, lon: 0.0, time: None };
-        let b = Point { lat: 0.0, lon: 1.0, time: None };
+        let a = Point {
+            lat: 0.0,
+            lon: 0.0,
+            time: None,
+        };
+        let b = Point {
+            lat: 0.0,
+            lon: 1.0,
+            time: None,
+        };
         assert!((distance_m(&a, &b) - 111_195.0).abs() < 10.0);
         assert_eq!(format_distance(850.4), "850 m");
         assert_eq!(format_distance(12_345.0), "12.3 km");
-        let map = MapTrack::new(1, 1, String::new(), &Track { name: "x".into(), segments: vec![vec![a, b]] });
+        let map = MapTrack::new(
+            1,
+            1,
+            String::new(),
+            &Track {
+                name: "x".into(),
+                segments: vec![vec![a, b]],
+            },
+        );
         assert_eq!(map.bounds.min, [128.0, 128.0]);
         assert!((map.bounds.max[0] - 128.0 - 256.0 / 360.0).abs() < 1e-9);
-        assert!(is_track_path(Path::new("ride.GPX")) && is_track_path(Path::new("a.kml")) && !is_track_path(Path::new("a.kmz")));
-        assert!(is_track_path(Path::new("/trip/locations.json")) && is_track_path(Path::new("/2025.07.Coast/coast.JSON")));
-        assert!(!is_track_path(Path::new("IMG_0001.jpg.json")) && !is_track_path(Path::new("IMG_0001.HEIC.supplemental-metadata.json")));
+        assert!(
+            is_track_path(Path::new("ride.GPX"))
+                && is_track_path(Path::new("a.kml"))
+                && !is_track_path(Path::new("a.kmz"))
+        );
+        assert!(
+            is_track_path(Path::new("/trip/locations.json"))
+                && is_track_path(Path::new("/2025.07.Coast/coast.JSON"))
+        );
+        assert!(
+            !is_track_path(Path::new("IMG_0001.jpg.json"))
+                && !is_track_path(Path::new("IMG_0001.HEIC.supplemental-metadata.json"))
+        );
     }
 
     #[test]
     fn photos_near_the_track_and_its_times_were_taken_along_it() {
-        let a = Point { lat: 48.0, lon: 2.0, time: Some(1_700_000_000) };
-        let b = Point { lat: 48.0, lon: 2.1, time: Some(1_700_003_600) };
-        let map = MapTrack::new(1, 1, String::new(), &Track { name: "x".into(), segments: vec![vec![a, b]] });
+        let a = Point {
+            lat: 48.0,
+            lon: 2.0,
+            time: Some(1_700_000_000),
+        };
+        let b = Point {
+            lat: 48.0,
+            lon: 2.1,
+            time: Some(1_700_003_600),
+        };
+        let map = MapTrack::new(
+            1,
+            1,
+            String::new(),
+            &Track {
+                name: "x".into(),
+                segments: vec![vec![a, b]],
+            },
+        );
         // 0.001° of latitude is about 111 m.
-        assert!(map.passes(48.001, 2.05, 1_700_001_000), "beside the middle of a segment");
+        assert!(
+            map.passes(48.001, 2.05, 1_700_001_000),
+            "beside the middle of a segment"
+        );
         assert!(!map.passes(48.01, 2.05, 1_700_001_000), "a kilometer away");
         assert!(!map.passes(48.0, 2.2, 1_700_001_000), "past the end");
-        assert!(map.passes(48.0, 2.05, 1_700_003_600 + 9 * 3600), "a camera clock nine hours off");
-        assert!(!map.passes(48.0, 2.05, 1_700_003_600 + 2 * 86_400), "two days later");
-        let untimed = MapTrack::new(2, 1, String::new(), &Track { name: "y".into(), segments: vec![vec![Point { time: None, ..a }]] });
-        assert!(untimed.passes(48.0, 2.0, 0), "a track without times only asks for the place");
+        assert!(
+            map.passes(48.0, 2.05, 1_700_003_600 + 9 * 3600),
+            "a camera clock nine hours off"
+        );
+        assert!(
+            !map.passes(48.0, 2.05, 1_700_003_600 + 2 * 86_400),
+            "two days later"
+        );
+        let untimed = MapTrack::new(
+            2,
+            1,
+            String::new(),
+            &Track {
+                name: "y".into(),
+                segments: vec![vec![Point { time: None, ..a }]],
+            },
+        );
+        assert!(
+            untimed.passes(48.0, 2.0, 0),
+            "a track without times only asks for the place"
+        );
     }
 
     #[test]
@@ -741,7 +956,14 @@ mod tests {
         std::fs::write(&steps, r#"{"locations": [{"lat": 40.4, "lon": -3.5, "time": 1751110826}, {"lat": 40.5, "lon": -3.6, "time": 1751115143}]}"#).unwrap();
         let track = Track::read_scanned(&steps).unwrap().unwrap();
         assert_eq!(track.name, "trip");
-        assert_eq!(track.segments[0][1], Point { lat: 40.5, lon: -3.6, time: Some(1_751_115_143) });
+        assert_eq!(
+            track.segments[0][1],
+            Point {
+                lat: 40.5,
+                lon: -3.6,
+                time: Some(1_751_115_143)
+            }
+        );
         let other = dir.join("package.json");
         std::fs::write(&other, r#"{"name": "app", "version": "1.0.0"}"#).unwrap();
         assert!(Track::read_scanned(&other).is_none());
@@ -750,7 +972,11 @@ mod tests {
         assert!(Track::read_scanned(&takeout).is_none());
         // One location is a Polarsteps export, but no track.
         let single = dir.join("single.json");
-        std::fs::write(&single, r#"{"locations": [{"lat": 40.4, "lon": -3.5, "time": 1751110826}]}"#).unwrap();
+        std::fs::write(
+            &single,
+            r#"{"locations": [{"lat": 40.4, "lon": -3.5, "time": 1751110826}]}"#,
+        )
+        .unwrap();
         assert!(Track::read_scanned(&single).unwrap().is_err());
         let _ = std::fs::remove_dir_all(&dir);
     }

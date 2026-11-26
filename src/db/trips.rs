@@ -18,8 +18,11 @@ use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use super::{order_sql, path_text, read_photo, Database, PHOTO_COLS};
 use crate::i18n::tr;
 use crate::trip::{
-    capture_day, capture_instant, cluster_places, PlaceSuggestion, valid_position, AddPreview, Capture, Located, Shot, TripPlace, DaySuggestion, Review, TripZone, Block, DayAssignment, DayFilter, DaySource, MediaUse, Member, MemberQuery, Story, StoryBlock, StoryFilter, Trip, TripDay,
-    TripDraft, TripImpact, ResourceKind, TripResource, TripQuery, TripTrack, DEFAULT_TEMPLATE,
+    capture_day, capture_instant, cluster_places, valid_position, AddPreview, Block, Capture,
+    DayAssignment, DayFilter, DaySource, DaySuggestion, Located, MediaUse, Member, MemberQuery,
+    PlaceSuggestion, ResourceKind, Review, Shot, Story, StoryBlock, StoryFilter, Trip, TripDay,
+    TripDraft, TripImpact, TripPlace, TripQuery, TripResource, TripTrack, TripZone,
+    DEFAULT_TEMPLATE,
 };
 use crate::types::{is_video_path, unix_now, Photo, Sort};
 
@@ -201,7 +204,11 @@ pub(super) fn upgrade(db: &Database) -> Result<(), String> {
     db.ensure_column("trip_media", "review", "INTEGER NOT NULL DEFAULT 0")?;
     // The member's Place: `place_source` is 0 without one, 1 suggested, 2
     // chosen by the user, as `day_source` is for Days.
-    db.ensure_column("trip_media", "place_id", "INTEGER REFERENCES trip_places(id) ON DELETE SET NULL")?;
+    db.ensure_column(
+        "trip_media",
+        "place_id",
+        "INTEGER REFERENCES trip_places(id) ON DELETE SET NULL",
+    )?;
     db.ensure_column("trip_media", "place_source", "INTEGER NOT NULL DEFAULT 0")?;
     // 1 once the author marks the Story finished; a draft until then.
     db.ensure_column("stories", "finished", "INTEGER NOT NULL DEFAULT 0")?;
@@ -218,9 +225,15 @@ pub(super) fn upgrade(db: &Database) -> Result<(), String> {
 
 const CLOCK_FORMAT: &str = "%Y-%m-%d %H:%M:%S";
 
-fn read_capture_row(kind: i64, clock: Option<String>, offset: Option<i32>, utc: Option<i64>) -> Capture {
+fn read_capture_row(
+    kind: i64,
+    clock: Option<String>,
+    offset: Option<i32>,
+    utc: Option<i64>,
+) -> Capture {
     match (kind, clock, utc) {
-        (1, Some(clock), _) => NaiveDateTime::parse_from_str(&clock, CLOCK_FORMAT).map_or(Capture::Missing, |clock| Capture::Clock { clock, offset }),
+        (1, Some(clock), _) => NaiveDateTime::parse_from_str(&clock, CLOCK_FORMAT)
+            .map_or(Capture::Missing, |clock| Capture::Clock { clock, offset }),
         (2, _, Some(utc)) => Capture::Utc(utc),
         (3, ..) => Capture::Missing,
         _ => Capture::Unread,
@@ -301,7 +314,11 @@ fn read_story(row: &rusqlite::Row) -> rusqlite::Result<Story> {
 /// The media reference of catalog photo `photo_id`, made when it has none.
 fn media_ref(tx: &Connection, photo_id: i64) -> Result<i64, String> {
     let found = tx
-        .query_row("SELECT id FROM media_refs WHERE photo_id = ?1", [photo_id], |row| row.get(0))
+        .query_row(
+            "SELECT id FROM media_refs WHERE photo_id = ?1",
+            [photo_id],
+            |row| row.get(0),
+        )
         .optional()
         .map_err(sql_err)?;
     if let Some(id) = found {
@@ -321,7 +338,12 @@ fn media_ref(tx: &Connection, photo_id: i64) -> Result<i64, String> {
 }
 
 fn touch_trip(tx: &Connection, trip_id: i64) -> Result<(), String> {
-    tx.execute("UPDATE trips SET updated_at = ?2 WHERE id = ?1", params![trip_id, unix_now()]).map(|_| ()).map_err(sql_err)
+    tx.execute(
+        "UPDATE trips SET updated_at = ?2 WHERE id = ?1",
+        params![trip_id, unix_now()],
+    )
+    .map(|_| ())
+    .map_err(sql_err)
 }
 
 /// Numbers the Trip's Places 0, 1, … in their order.
@@ -337,8 +359,15 @@ fn renumber_places(tx: &Connection, trip_id: i64) -> Result<(), String> {
 }
 
 fn check_trip(tx: &Connection, trip_id: i64) -> Result<(), String> {
-    let found: Option<i64> = tx.query_row("SELECT id FROM trips WHERE id = ?1", [trip_id], |row| row.get(0)).optional().map_err(sql_err)?;
-    found.map(|_| ()).ok_or_else(|| format!("trip {trip_id} is gone"))
+    let found: Option<i64> = tx
+        .query_row("SELECT id FROM trips WHERE id = ?1", [trip_id], |row| {
+            row.get(0)
+        })
+        .optional()
+        .map_err(sql_err)?;
+    found
+        .map(|_| ())
+        .ok_or_else(|| format!("trip {trip_id} is gone"))
 }
 
 /// The `WHERE` condition of a [`MemberQuery`] on `trip_media tm` joined
@@ -381,9 +410,22 @@ fn member_filter(query: &MemberQuery) -> String {
 
 /// [`member_filter`] for [`DayFilter::Dates`], with the members of `dated`
 /// from `first` to `last` listed.
-fn dated_filter(query: &MemberQuery, dated: &[(i64, NaiveDate)], first: NaiveDate, last: NaiveDate) -> String {
-    let ids: Vec<String> = dated.iter().filter(|(_, date)| (first..=last).contains(date)).map(|(id, _)| id.to_string()).collect();
-    format!("{} AND tm.media_id IN ({})", member_filter(query), ids.join(","))
+fn dated_filter(
+    query: &MemberQuery,
+    dated: &[(i64, NaiveDate)],
+    first: NaiveDate,
+    last: NaiveDate,
+) -> String {
+    let ids: Vec<String> = dated
+        .iter()
+        .filter(|(_, date)| (first..=last).contains(date))
+        .map(|(id, _)| id.to_string())
+        .collect();
+    format!(
+        "{} AND tm.media_id IN ({})",
+        member_filter(query),
+        ids.join(",")
+    )
 }
 
 /// The order of members on some dates: when they were taken.
@@ -458,15 +500,22 @@ impl Database {
         let tx = self.conn.unchecked_transaction().map_err(sql_err)?;
         if let Some(media_id) = media_id {
             let member: Option<i64> = tx
-                .query_row("SELECT 1 FROM trip_media WHERE trip_id = ?1 AND media_id = ?2", params![trip_id, media_id], |row| row.get(0))
+                .query_row(
+                    "SELECT 1 FROM trip_media WHERE trip_id = ?1 AND media_id = ?2",
+                    params![trip_id, media_id],
+                    |row| row.get(0),
+                )
                 .optional()
                 .map_err(sql_err)?;
             if member.is_none() {
                 return Err(format!("media {media_id} is not in trip {trip_id}"));
             }
         }
-        tx.execute("UPDATE trips SET cover_ref = ?2, updated_at = ?3 WHERE id = ?1", params![trip_id, media_id, unix_now()])
-            .map_err(sql_err)?;
+        tx.execute(
+            "UPDATE trips SET cover_ref = ?2, updated_at = ?3 WHERE id = ?1",
+            params![trip_id, media_id, unix_now()],
+        )
+        .map_err(sql_err)?;
         tx.execute(UNUSED_REFS, []).map_err(sql_err)?;
         tx.commit().map_err(sql_err)
     }
@@ -487,18 +536,31 @@ impl Database {
     /// photos, their files, and their catalog data stay.
     pub fn delete_trip(&self, id: i64) -> Result<(), String> {
         let tx = self.conn.unchecked_transaction().map_err(sql_err)?;
-        tx.execute("DELETE FROM trips WHERE id = ?1", [id]).map_err(sql_err)?;
+        tx.execute("DELETE FROM trips WHERE id = ?1", [id])
+            .map_err(sql_err)?;
         tx.execute(UNUSED_REFS, []).map_err(sql_err)?;
         tx.commit().map_err(sql_err)
     }
 
     pub fn trip(&self, id: i64) -> Option<Trip> {
-        self.conn.query_row(&format!("SELECT {TRIP_COLS} FROM trips t WHERE t.id = ?1"), [id], read_trip).optional().ok().flatten()
+        self.conn
+            .query_row(
+                &format!("SELECT {TRIP_COLS} FROM trips t WHERE t.id = ?1"),
+                [id],
+                read_trip,
+            )
+            .optional()
+            .ok()
+            .flatten()
     }
 
     /// Trips matching `query`, the most recently changed first.
     pub fn trips(&self, query: &TripQuery) -> Vec<Trip> {
-        let words: Vec<String> = query.search.split_whitespace().map(|word| format!("%{}%", like_escape(word))).collect();
+        let words: Vec<String> = query
+            .search
+            .split_whitespace()
+            .map(|word| format!("%{}%", like_escape(word)))
+            .collect();
         let mut sql = format!("SELECT {TRIP_COLS} FROM trips t WHERE t.archived = ?1");
         for at in 0..words.len() {
             let n = at + 2;
@@ -547,8 +609,14 @@ impl Database {
         let mut copies = HashSet::new();
         for &id in photo_ids.iter().filter(|id| seen.insert(**id)) {
             let Ok((path, taken_at, located, copy)) = photo.query_row([id], |row| {
-                let copy: (i64, i64, i64, i64) = (row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?);
-                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?, row.get::<_, bool>(2)?, copy))
+                let copy: (i64, i64, i64, i64) =
+                    (row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?);
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, bool>(2)?,
+                    copy,
+                ))
             }) else {
                 continue;
             };
@@ -574,7 +642,9 @@ impl Database {
                 preview.no_time += 1;
                 continue;
             }
-            preview.taken = Some(preview.taken.map_or((taken_at, taken_at), |(first, last)| (first.min(taken_at), last.max(taken_at))));
+            preview.taken = Some(preview.taken.map_or((taken_at, taken_at), |(first, last)| {
+                (first.min(taken_at), last.max(taken_at))
+            }));
         }
         preview
     }
@@ -586,7 +656,11 @@ impl Database {
         let tx = self.conn.unchecked_transaction().map_err(sql_err)?;
         check_trip(&tx, trip_id)?;
         let mut next: i64 = tx
-            .query_row("SELECT coalesce(max(position), -1) + 1 FROM trip_media WHERE trip_id = ?1", [trip_id], |row| row.get(0))
+            .query_row(
+                "SELECT coalesce(max(position), -1) + 1 FROM trip_media WHERE trip_id = ?1",
+                [trip_id],
+                |row| row.get(0),
+            )
             .map_err(sql_err)?;
         let mut refs = Vec::with_capacity(photo_ids.len());
         {
@@ -596,7 +670,11 @@ impl Database {
             let now = unix_now();
             for &photo_id in photo_ids {
                 let media_id = media_ref(&tx, photo_id)?;
-                if insert.execute(params![trip_id, media_id, next, now]).map_err(sql_err)? > 0 {
+                if insert
+                    .execute(params![trip_id, media_id, next, now])
+                    .map_err(sql_err)?
+                    > 0
+                {
                     next += 1;
                 }
                 refs.push(media_id);
@@ -612,9 +690,13 @@ impl Database {
         let tx = self.conn.unchecked_transaction().map_err(sql_err)?;
         let mut removed = 0;
         {
-            let mut delete = tx.prepare("DELETE FROM trip_media WHERE trip_id = ?1 AND media_id = ?2").map_err(sql_err)?;
+            let mut delete = tx
+                .prepare("DELETE FROM trip_media WHERE trip_id = ?1 AND media_id = ?2")
+                .map_err(sql_err)?;
             for media_id in media_ids {
-                removed += delete.execute(params![trip_id, media_id]).map_err(sql_err)?;
+                removed += delete
+                    .execute(params![trip_id, media_id])
+                    .map_err(sql_err)?;
             }
             tx.execute("UPDATE trips SET cover_ref = NULL WHERE id = ?1 AND cover_ref NOT IN (SELECT media_id FROM trip_media WHERE trip_id = ?1)", [trip_id])
                 .map_err(sql_err)?;
@@ -626,10 +708,22 @@ impl Database {
     }
 
     /// Takes catalog photos out of a Trip; see [`Database::remove_from_trip`].
-    pub fn remove_photos_from_trip(&self, trip_id: i64, photo_ids: &[i64]) -> Result<usize, String> {
+    pub fn remove_photos_from_trip(
+        &self,
+        trip_id: i64,
+        photo_ids: &[i64],
+    ) -> Result<usize, String> {
         let media: Vec<i64> = photo_ids
             .iter()
-            .filter_map(|id| self.conn.query_row("SELECT id FROM media_refs WHERE photo_id = ?1", [id], |row| row.get(0)).ok())
+            .filter_map(|id| {
+                self.conn
+                    .query_row(
+                        "SELECT id FROM media_refs WHERE photo_id = ?1",
+                        [id],
+                        |row| row.get(0),
+                    )
+                    .ok()
+            })
             .collect();
         self.remove_from_trip(trip_id, &media)
     }
@@ -637,7 +731,9 @@ impl Database {
     /// [`member_filter`], with the members on [`DayFilter::Dates`] listed.
     fn member_where(&self, trip_id: i64, query: &MemberQuery) -> String {
         match query.day {
-            DayFilter::Dates(first, last) => dated_filter(query, &self.member_dates(trip_id), first, last),
+            DayFilter::Dates(first, last) => {
+                dated_filter(query, &self.member_dates(trip_id), first, last)
+            }
             _ => member_filter(query),
         }
     }
@@ -661,8 +757,16 @@ impl Database {
         );
         rows.into_iter()
             .filter_map(|(media_id, day, capture, shift, taken_at)| {
-                let taken = zone.as_ref().and_then(|zone| capture_day(capture, shift, zone, trip_time).ok());
-                let shown = || chrono::Local.timestamp_opt(taken_at, 0).earliest().map(|at| at.date_naive()).filter(|_| taken_at > 0);
+                let taken = zone
+                    .as_ref()
+                    .and_then(|zone| capture_day(capture, shift, zone, trip_time).ok());
+                let shown = || {
+                    chrono::Local
+                        .timestamp_opt(taken_at, 0)
+                        .earliest()
+                        .map(|at| at.date_naive())
+                        .filter(|_| taken_at > 0)
+                };
                 Some((media_id, read_day(day).or(taken).or_else(shown)?))
             })
             .collect()
@@ -671,12 +775,31 @@ impl Database {
     /// Members matching `query`, `limit` of them from `offset`: in a Day,
     /// in its order; on some dates, in the order they were taken; otherwise
     /// in the order they joined the Trip.
-    pub fn trip_members(&self, trip_id: i64, query: &MemberQuery, offset: usize, limit: usize) -> Vec<Member> {
-        self.members_where(trip_id, query, &self.member_where(trip_id, query), offset, limit)
+    pub fn trip_members(
+        &self,
+        trip_id: i64,
+        query: &MemberQuery,
+        offset: usize,
+        limit: usize,
+    ) -> Vec<Member> {
+        self.members_where(
+            trip_id,
+            query,
+            &self.member_where(trip_id, query),
+            offset,
+            limit,
+        )
     }
 
     /// [`Database::trip_members`] with `filter`, the condition `query` makes.
-    fn members_where(&self, trip_id: i64, query: &MemberQuery, filter: &str, offset: usize, limit: usize) -> Vec<Member> {
+    fn members_where(
+        &self,
+        trip_id: i64,
+        query: &MemberQuery,
+        filter: &str,
+        offset: usize,
+        limit: usize,
+    ) -> Vec<Member> {
         let order = match query.day {
             DayFilter::Day(_) => "tm.day_position, tm.position",
             DayFilter::Dates(..) => DATES_ORDER,
@@ -687,18 +810,22 @@ impl Database {
              FROM trip_media tm JOIN media_refs m ON m.id = tm.media_id LEFT JOIN photos p ON p.id = m.photo_id
              WHERE {filter} ORDER BY {order} LIMIT ?3 OFFSET ?4"
         );
-        self.map_rows(&sql, params![trip_id, day_param(query), limit as i64, offset as i64], |row| {
-            let path: String = row.get(2)?;
-            Ok(Member {
-                media_id: row.get(0)?,
-                photo_id: row.get(1)?,
-                is_video: is_video_path(std::path::Path::new(&path)),
-                path,
-                filename: row.get(3)?,
-                day_id: row.get(4)?,
-                day_source: DaySource::from_code(row.get(5)?),
-            })
-        })
+        self.map_rows(
+            &sql,
+            params![trip_id, day_param(query), limit as i64, offset as i64],
+            |row| {
+                let path: String = row.get(2)?;
+                Ok(Member {
+                    media_id: row.get(0)?,
+                    photo_id: row.get(1)?,
+                    is_video: is_video_path(std::path::Path::new(&path)),
+                    path,
+                    filename: row.get(3)?,
+                    day_id: row.get(4)?,
+                    day_source: DaySource::from_code(row.get(5)?),
+                })
+            },
+        )
     }
 
     /// The catalog photos of the members matching `query`, for the photo
@@ -721,7 +848,13 @@ impl Database {
     /// The catalog photo of the file at `path`, to link an unavailable member to.
     pub fn photo_at_path(&self, path: &std::path::Path) -> Option<i64> {
         let path = path_text(&path.canonicalize().unwrap_or_else(|_| path.to_path_buf()));
-        self.conn.query_row("SELECT id FROM photos WHERE path = ?1", [path], |row| row.get(0)).optional().ok().flatten()
+        self.conn
+            .query_row("SELECT id FROM photos WHERE path = ?1", [path], |row| {
+                row.get(0)
+            })
+            .optional()
+            .ok()
+            .flatten()
     }
 
     /// How many members match `query`; the same members [`Database::trip_members`] lists.
@@ -730,18 +863,31 @@ impl Database {
             "SELECT COUNT(*) FROM trip_media tm JOIN media_refs m ON m.id = tm.media_id LEFT JOIN photos p ON p.id = m.photo_id WHERE {}",
             self.member_where(trip_id, query)
         );
-        self.conn.query_row(&sql, params![trip_id, day_param(query)], |row| row.get(0)).unwrap_or(0)
+        self.conn
+            .query_row(&sql, params![trip_id, day_param(query)], |row| row.get(0))
+            .unwrap_or(0)
     }
 
     /// Adds an empty Day after the Trip's last one.
-    pub fn add_trip_day(&self, trip_id: i64, day: Option<NaiveDate>, title: &str) -> Result<i64, String> {
+    pub fn add_trip_day(
+        &self,
+        trip_id: i64,
+        day: Option<NaiveDate>,
+        title: &str,
+    ) -> Result<i64, String> {
         let tx = self.conn.unchecked_transaction().map_err(sql_err)?;
         let id = insert_day(&tx, trip_id, day, title)?;
         tx.commit().map_err(sql_err)?;
         Ok(id)
     }
 
-    pub fn update_trip_day(&self, id: i64, day: Option<NaiveDate>, title: &str, notes: &str) -> Result<(), String> {
+    pub fn update_trip_day(
+        &self,
+        id: i64,
+        day: Option<NaiveDate>,
+        title: &str,
+        notes: &str,
+    ) -> Result<(), String> {
         let changed = self
             .conn
             .execute(
@@ -794,7 +940,13 @@ impl Database {
     }
 
     /// Names a Place and keeps it, with its members, when Places are suggested again.
-    pub fn update_trip_place(&self, id: i64, name: &str, local_name: &str, notes: &str) -> Result<(), String> {
+    pub fn update_trip_place(
+        &self,
+        id: i64,
+        name: &str,
+        local_name: &str,
+        notes: &str,
+    ) -> Result<(), String> {
         let tx = self.conn.unchecked_transaction().map_err(sql_err)?;
         let changed = tx
             .execute(
@@ -805,8 +957,18 @@ impl Database {
         if changed == 0 {
             return Err(format!("place {id} is gone"));
         }
-        tx.execute("UPDATE trip_media SET place_source = 2 WHERE place_id = ?1", [id]).map_err(sql_err)?;
-        let trip_id: i64 = tx.query_row("SELECT trip_id FROM trip_places WHERE id = ?1", [id], |row| row.get(0)).map_err(sql_err)?;
+        tx.execute(
+            "UPDATE trip_media SET place_source = 2 WHERE place_id = ?1",
+            [id],
+        )
+        .map_err(sql_err)?;
+        let trip_id: i64 = tx
+            .query_row(
+                "SELECT trip_id FROM trip_places WHERE id = ?1",
+                [id],
+                |row| row.get(0),
+            )
+            .map_err(sql_err)?;
         touch_trip(&tx, trip_id)?;
         tx.commit().map_err(sql_err)
     }
@@ -816,8 +978,12 @@ impl Database {
     pub fn reorder_trip_places(&self, trip_id: i64, place_ids: &[i64]) -> Result<(), String> {
         let tx = self.conn.unchecked_transaction().map_err(sql_err)?;
         let mut current: Vec<i64> = {
-            let mut stmt = tx.prepare("SELECT id FROM trip_places WHERE trip_id = ?1").map_err(sql_err)?;
-            let rows = stmt.query_map([trip_id], |row| row.get(0)).map_err(sql_err)?;
+            let mut stmt = tx
+                .prepare("SELECT id FROM trip_places WHERE trip_id = ?1")
+                .map_err(sql_err)?;
+            let rows = stmt
+                .query_map([trip_id], |row| row.get(0))
+                .map_err(sql_err)?;
             rows.collect::<Result<_, _>>().map_err(sql_err)?
         };
         let mut wanted = place_ids.to_vec();
@@ -827,9 +993,17 @@ impl Database {
             return Err("the places changed meanwhile".into());
         }
         for (position, id) in place_ids.iter().enumerate() {
-            tx.execute("UPDATE trip_places SET position = ?2, kept = 1 WHERE id = ?1", params![id, position as i64]).map_err(sql_err)?;
+            tx.execute(
+                "UPDATE trip_places SET position = ?2, kept = 1 WHERE id = ?1",
+                params![id, position as i64],
+            )
+            .map_err(sql_err)?;
         }
-        tx.execute("UPDATE trip_media SET place_source = 2 WHERE trip_id = ?1 AND place_id IS NOT NULL", [trip_id]).map_err(sql_err)?;
+        tx.execute(
+            "UPDATE trip_media SET place_source = 2 WHERE trip_id = ?1 AND place_id IS NOT NULL",
+            [trip_id],
+        )
+        .map_err(sql_err)?;
         touch_trip(&tx, trip_id)?;
         tx.commit().map_err(sql_err)
     }
@@ -897,18 +1071,32 @@ impl Database {
     }
 
     pub fn delete_trip_resource(&self, id: i64) -> Result<(), String> {
-        self.conn.execute("DELETE FROM trip_resources WHERE id = ?1", [id]).map_err(sql_err).map(|_| ())
+        self.conn
+            .execute("DELETE FROM trip_resources WHERE id = ?1", [id])
+            .map_err(sql_err)
+            .map(|_| ())
     }
 
     pub fn delete_trip_place(&self, id: i64) -> Result<(), String> {
         let tx = self.conn.unchecked_transaction().map_err(sql_err)?;
-        let trip_id: Option<i64> =
-            tx.query_row("SELECT trip_id FROM trip_places WHERE id = ?1", [id], |row| row.get(0)).optional().map_err(sql_err)?;
+        let trip_id: Option<i64> = tx
+            .query_row(
+                "SELECT trip_id FROM trip_places WHERE id = ?1",
+                [id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(sql_err)?;
         let Some(trip_id) = trip_id else {
             return Ok(());
         };
-        tx.execute("UPDATE trip_media SET place_id = NULL, place_source = 0 WHERE place_id = ?1", [id]).map_err(sql_err)?;
-        tx.execute("DELETE FROM trip_places WHERE id = ?1", [id]).map_err(sql_err)?;
+        tx.execute(
+            "UPDATE trip_media SET place_id = NULL, place_source = 0 WHERE place_id = ?1",
+            [id],
+        )
+        .map_err(sql_err)?;
+        tx.execute("DELETE FROM trip_places WHERE id = ?1", [id])
+            .map_err(sql_err)?;
         renumber_places(&tx, trip_id)?;
         touch_trip(&tx, trip_id)?;
         tx.commit().map_err(sql_err)
@@ -922,8 +1110,15 @@ impl Database {
     /// Trip's tracks was when it was taken, its time read in the Trip's zone
     /// as Suggest days reads it; that position is used here only, never
     /// stored as a pin. Camera GPS and pins are read, never changed.
-    pub fn suggest_places(&self, trip_id: i64, distance: f64, gap: i64) -> Result<PlaceSuggestion, String> {
-        let trip = self.trip(trip_id).ok_or_else(|| format!("trip {trip_id} is gone"))?;
+    pub fn suggest_places(
+        &self,
+        trip_id: i64,
+        distance: f64,
+        gap: i64,
+    ) -> Result<PlaceSuggestion, String> {
+        let trip = self
+            .trip(trip_id)
+            .ok_or_else(|| format!("trip {trip_id} is gone"))?;
         let zone = TripZone::parse(&trip.zone);
         let timelines: Vec<crate::geotag::Timeline> = self
             .trip_tracks(trip_id)
@@ -953,8 +1148,16 @@ impl Database {
                 .map_err(sql_err)?;
             let rows = stmt
                 .query_map([trip_id], |row| {
-                    let capture = read_capture_row(row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?);
-                    Ok((row.get(0)?, row.get(1)?, capture, row.get(6)?, row.get(7)?, row.get(8)?))
+                    let capture =
+                        read_capture_row(row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?);
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        capture,
+                        row.get(6)?,
+                        row.get(7)?,
+                        row.get(8)?,
+                    ))
                 })
                 .map_err(sql_err)?;
             rows.collect::<Result<_, _>>().map_err(sql_err)?
@@ -962,32 +1165,67 @@ impl Database {
         let mut from_tracks = 0;
         let mut points: Vec<Located> = Vec::new();
         for (media_id, taken_at, capture, shift, lat, lon) in rows {
-            let instant = zone.as_ref().and_then(|zone| capture_instant(capture, zone, trip.trip_time).ok()).map(|at| at + shift);
+            let instant = zone
+                .as_ref()
+                .and_then(|zone| capture_instant(capture, zone, trip.trip_time).ok())
+                .map(|at| at + shift);
             let at = instant.unwrap_or(taken_at);
             match (lat, lon) {
-                (Some(lat), Some(lon)) => points.push(Located { media_id, at, lat, lon }),
+                (Some(lat), Some(lon)) => points.push(Located {
+                    media_id,
+                    at,
+                    lat,
+                    lon,
+                }),
                 _ => {
                     let Some(instant) = instant else { continue };
-                    if let Some((lat, lon)) = timelines.iter().find_map(|line| line.locate(instant)) {
+                    if let Some((lat, lon)) = timelines.iter().find_map(|line| line.locate(instant))
+                    {
                         from_tracks += 1;
-                        points.push(Located { media_id, at, lat, lon });
+                        points.push(Located {
+                            media_id,
+                            at,
+                            lat,
+                            lon,
+                        });
                     }
                 }
             }
         }
         let kept: Vec<(i64, f64, f64)> = {
-            let mut stmt = tx.prepare("SELECT id, lat, lon FROM trip_places WHERE trip_id = ?1").map_err(sql_err)?;
-            let rows = stmt.query_map([trip_id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))).map_err(sql_err)?;
+            let mut stmt = tx
+                .prepare("SELECT id, lat, lon FROM trip_places WHERE trip_id = ?1")
+                .map_err(sql_err)?;
+            let rows = stmt
+                .query_map([trip_id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+                .map_err(sql_err)?;
             rows.collect::<Result<_, _>>().map_err(sql_err)?
         };
         let mut next: i64 = tx
-            .query_row("SELECT coalesce(max(position) + 1, 0) FROM trip_places WHERE trip_id = ?1", [trip_id], |row| row.get(0))
+            .query_row(
+                "SELECT coalesce(max(position) + 1, 0) FROM trip_places WHERE trip_id = ?1",
+                [trip_id],
+                |row| row.get(0),
+            )
             .map_err(sql_err)?;
         let mut clusters = cluster_places(&points, distance, gap);
         clusters.sort_by_key(|cluster| cluster.first);
         for cluster in clusters {
-            let at = crate::track::Point { lat: cluster.lat, lon: cluster.lon, time: None };
-            let near = kept.iter().find(|(_, lat, lon)| crate::track::distance_m(&at, &crate::track::Point { lat: *lat, lon: *lon, time: None }) <= distance);
+            let at = crate::track::Point {
+                lat: cluster.lat,
+                lon: cluster.lon,
+                time: None,
+            };
+            let near = kept.iter().find(|(_, lat, lon)| {
+                crate::track::distance_m(
+                    &at,
+                    &crate::track::Point {
+                        lat: *lat,
+                        lon: *lon,
+                        time: None,
+                    },
+                ) <= distance
+            });
             let place_id = match near {
                 Some((id, ..)) => *id,
                 None if valid_position(cluster.lat, cluster.lon) => {
@@ -1010,22 +1248,36 @@ impl Database {
             }
         }
         renumber_places(&tx, trip_id)?;
-        let count: i64 = tx.query_row("SELECT COUNT(*) FROM trip_places WHERE trip_id = ?1", [trip_id], |row| row.get(0)).map_err(sql_err)?;
+        let count: i64 = tx
+            .query_row(
+                "SELECT COUNT(*) FROM trip_places WHERE trip_id = ?1",
+                [trip_id],
+                |row| row.get(0),
+            )
+            .map_err(sql_err)?;
         touch_trip(&tx, trip_id)?;
         tx.commit().map_err(sql_err)?;
-        Ok(PlaceSuggestion { places: count as usize, from_tracks })
+        Ok(PlaceSuggestion {
+            places: count as usize,
+            from_tracks,
+        })
     }
 
     pub fn delete_trip_day(&self, id: i64) -> Result<(), String> {
         let tx = self.conn.unchecked_transaction().map_err(sql_err)?;
-        let trip_id: Option<i64> =
-            tx.query_row("SELECT trip_id FROM trip_days WHERE id = ?1", [id], |row| row.get(0)).optional().map_err(sql_err)?;
+        let trip_id: Option<i64> = tx
+            .query_row("SELECT trip_id FROM trip_days WHERE id = ?1", [id], |row| {
+                row.get(0)
+            })
+            .optional()
+            .map_err(sql_err)?;
         let Some(trip_id) = trip_id else {
             return Ok(());
         };
         tx.execute("UPDATE trip_media SET day_id = NULL, day_source = 0, day_position = 0 WHERE day_id = ?1", [id])
             .map_err(sql_err)?;
-        tx.execute("DELETE FROM trip_days WHERE id = ?1", [id]).map_err(sql_err)?;
+        tx.execute("DELETE FROM trip_days WHERE id = ?1", [id])
+            .map_err(sql_err)?;
         tx.execute(
             "UPDATE trip_days SET position = (SELECT COUNT(*) FROM trip_days d WHERE d.trip_id = trip_days.trip_id
                 AND (d.position < trip_days.position OR (d.position = trip_days.position AND d.id < trip_days.id)))
@@ -1062,8 +1314,12 @@ impl Database {
     pub fn reorder_trip_days(&self, trip_id: i64, day_ids: &[i64]) -> Result<(), String> {
         let tx = self.conn.unchecked_transaction().map_err(sql_err)?;
         let mut current: Vec<i64> = {
-            let mut stmt = tx.prepare("SELECT id FROM trip_days WHERE trip_id = ?1").map_err(sql_err)?;
-            let rows = stmt.query_map([trip_id], |row| row.get(0)).map_err(sql_err)?;
+            let mut stmt = tx
+                .prepare("SELECT id FROM trip_days WHERE trip_id = ?1")
+                .map_err(sql_err)?;
+            let rows = stmt
+                .query_map([trip_id], |row| row.get(0))
+                .map_err(sql_err)?;
             rows.collect::<Result<_, _>>().map_err(sql_err)?
         };
         let mut given = day_ids.to_vec();
@@ -1073,7 +1329,11 @@ impl Database {
             return Err(format!("the days given are not those of trip {trip_id}"));
         }
         for (position, id) in day_ids.iter().enumerate() {
-            tx.execute("UPDATE trip_days SET position = ?2 WHERE id = ?1", params![id, position as i64]).map_err(sql_err)?;
+            tx.execute(
+                "UPDATE trip_days SET position = ?2 WHERE id = ?1",
+                params![id, position as i64],
+            )
+            .map_err(sql_err)?;
         }
         touch_trip(&tx, trip_id)?;
         tx.commit().map_err(sql_err)
@@ -1108,7 +1368,13 @@ impl Database {
     /// put in a Day where they are; the user placing members ends their
     /// review. Returns the members moved and where each
     /// was before, for Undo.
-    pub fn move_to_day(&self, trip_id: i64, day_id: Option<i64>, media_ids: &[i64], source: DaySource) -> Result<Vec<DayAssignment>, String> {
+    pub fn move_to_day(
+        &self,
+        trip_id: i64,
+        day_id: Option<i64>,
+        media_ids: &[i64],
+        source: DaySource,
+    ) -> Result<Vec<DayAssignment>, String> {
         let before = self.day_assignments(trip_id, media_ids);
         let tx = self.conn.unchecked_transaction().map_err(sql_err)?;
         let moved = move_members(&tx, trip_id, day_id, before, source)?;
@@ -1117,7 +1383,11 @@ impl Database {
     }
 
     /// Puts members back where [`Database::day_assignments`] or [`Database::move_to_day`] found them.
-    pub fn restore_day_assignments(&self, trip_id: i64, assignments: &[DayAssignment]) -> Result<(), String> {
+    pub fn restore_day_assignments(
+        &self,
+        trip_id: i64,
+        assignments: &[DayAssignment],
+    ) -> Result<(), String> {
         let tx = self.conn.unchecked_transaction().map_err(sql_err)?;
         {
             let mut update = tx
@@ -1126,7 +1396,14 @@ impl Database {
             for assignment in assignments {
                 let code = assignment.source.map_or(0, DaySource::code);
                 update
-                    .execute(params![trip_id, assignment.media_id, assignment.day_id, code, assignment.position, assignment.review.map_or(0, Review::code)])
+                    .execute(params![
+                        trip_id,
+                        assignment.media_id,
+                        assignment.day_id,
+                        code,
+                        assignment.position,
+                        assignment.review.map_or(0, Review::code)
+                    ])
                     .map_err(sql_err)?;
             }
         }
@@ -1140,28 +1417,47 @@ impl Database {
         let tx = self.conn.unchecked_transaction().map_err(sql_err)?;
         let current: Vec<i64> = {
             let mut stmt = tx.prepare("SELECT media_id FROM trip_media WHERE day_id = ?1 ORDER BY day_position, position").map_err(sql_err)?;
-            let rows = stmt.query_map([day_id], |row| row.get(0)).map_err(sql_err)?;
+            let rows = stmt
+                .query_map([day_id], |row| row.get(0))
+                .map_err(sql_err)?;
             rows.collect::<Result<_, _>>().map_err(sql_err)?
         };
         let named: HashSet<i64> = media_ids.iter().copied().collect();
         if let Some(stray) = media_ids.iter().find(|id| !current.contains(id)) {
             return Err(format!("media {stray} is not in day {day_id}"));
         }
-        let order = media_ids.iter().copied().chain(current.into_iter().filter(|id| !named.contains(id)));
+        let order = media_ids
+            .iter()
+            .copied()
+            .chain(current.into_iter().filter(|id| !named.contains(id)));
         for (position, media_id) in order.enumerate() {
-            tx.execute("UPDATE trip_media SET day_position = ?3 WHERE day_id = ?1 AND media_id = ?2", params![day_id, media_id, position as i64])
-                .map_err(sql_err)?;
+            tx.execute(
+                "UPDATE trip_media SET day_position = ?3 WHERE day_id = ?1 AND media_id = ?2",
+                params![day_id, media_id, position as i64],
+            )
+            .map_err(sql_err)?;
         }
         tx.commit().map_err(sql_err)
     }
 
     /// Links a library track to a Trip, and optionally to one of its Days.
-    pub fn link_trip_track(&self, trip_id: i64, track_id: i64, day_id: Option<i64>) -> Result<i64, String> {
+    pub fn link_trip_track(
+        &self,
+        trip_id: i64,
+        track_id: i64,
+        day_id: Option<i64>,
+    ) -> Result<i64, String> {
         let tx = self.conn.unchecked_transaction().map_err(sql_err)?;
         check_trip(&tx, trip_id)?;
         if let Some(day_id) = day_id {
-            let owner: Option<i64> =
-                tx.query_row("SELECT trip_id FROM trip_days WHERE id = ?1", [day_id], |row| row.get(0)).optional().map_err(sql_err)?;
+            let owner: Option<i64> = tx
+                .query_row(
+                    "SELECT trip_id FROM trip_days WHERE id = ?1",
+                    [day_id],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(sql_err)?;
             if owner != Some(trip_id) {
                 return Err(format!("day {day_id} is not in trip {trip_id}"));
             }
@@ -1191,9 +1487,11 @@ impl Database {
     /// The library's tracks to pick from, without their points: (id,
     /// name, start time), the most recent first.
     pub fn track_choices(&self) -> Vec<(i64, String, Option<i64>)> {
-        self.map_rows("SELECT id, name, started_at FROM tracks ORDER BY started_at DESC, name", [], |row| {
-            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
-        })
+        self.map_rows(
+            "SELECT id, name, started_at FROM tracks ORDER BY started_at DESC, name",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
     }
 
     /// The photo to show for a Trip: its cover, or else its first member
@@ -1214,11 +1512,21 @@ impl Database {
 
     /// The catalog photo a media reference points to now.
     pub fn media_photo(&self, media_id: i64) -> Option<i64> {
-        self.conn.query_row("SELECT photo_id FROM media_refs WHERE id = ?1", [media_id], |row| row.get(0)).optional().ok().flatten()
+        self.conn
+            .query_row(
+                "SELECT photo_id FROM media_refs WHERE id = ?1",
+                [media_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .ok()
+            .flatten()
     }
 
     pub fn unlink_trip_track(&self, link_id: i64) {
-        let _ = self.conn.execute("DELETE FROM trip_tracks WHERE id = ?1", [link_id]);
+        let _ = self
+            .conn
+            .execute("DELETE FROM trip_tracks WHERE id = ?1", [link_id]);
     }
 
     pub fn trip_tracks(&self, trip_id: i64) -> Vec<TripTrack> {
@@ -1246,7 +1554,9 @@ impl Database {
         let mut linked = 0;
         if !unlinked.is_empty() {
             let free = "NOT EXISTS (SELECT 1 FROM media_refs r WHERE r.photo_id = p.id)";
-            let by_path = tx.prepare(&format!("SELECT p.id FROM photos p WHERE p.path = ?1 AND {free}"));
+            let by_path = tx.prepare(&format!(
+                "SELECT p.id FROM photos p WHERE p.path = ?1 AND {free}"
+            ));
             let moved = tx.prepare(&format!(
                 "SELECT p.id FROM photos p WHERE p.bytes = ?1 AND p.modified_at = ?2 AND p.file_taken_at = ?3
                  AND p.added_at >= ?4 AND {free} LIMIT 2"
@@ -1260,10 +1570,17 @@ impl Database {
                 return 0;
             };
             for (id, path, bytes, modified_at, taken_at, unlinked_at) in unlinked {
-                let mut photo: Option<i64> = by_path.query_row([&path], |row| row.get(0)).optional().ok().flatten();
+                let mut photo: Option<i64> = by_path
+                    .query_row([&path], |row| row.get(0))
+                    .optional()
+                    .ok()
+                    .flatten();
                 if photo.is_none() {
                     let found: Vec<i64> = moved
-                        .query_map(params![bytes, modified_at, taken_at, unlinked_at - 86_400], |row| row.get(0))
+                        .query_map(
+                            params![bytes, modified_at, taken_at, unlinked_at - 86_400],
+                            |row| row.get(0),
+                        )
                         .map(|rows| rows.filter_map(Result::ok).collect())
                         .unwrap_or_default();
                     if let [one] = found[..] {
@@ -1331,7 +1648,12 @@ impl Database {
     /// them in `progress` and calling `report` every few photos. Returns
     /// false when cancelled: it stops between photos, and what was read is
     /// kept, so the next call reads only the rest.
-    pub fn read_captures(&self, trip_id: i64, progress: &crate::story_html::Progress, mut report: impl FnMut()) -> bool {
+    pub fn read_captures(
+        &self,
+        trip_id: i64,
+        progress: &crate::story_html::Progress,
+        mut report: impl FnMut(),
+    ) -> bool {
         use std::sync::atomic::Ordering;
         const REPORT_EVERY: usize = 25;
         let captures = self.captures_to_read(trip_id);
@@ -1340,7 +1662,11 @@ impl Database {
             if progress.cancel.load(Ordering::Relaxed) {
                 return false;
             }
-            self.store_capture(media_id, crate::trip::read_capture(std::path::Path::new(&path), modified_at), modified_at);
+            self.store_capture(
+                media_id,
+                crate::trip::read_capture(std::path::Path::new(&path), modified_at),
+                modified_at,
+            );
             progress.done.store(done + 1, Ordering::Relaxed);
             if done % REPORT_EVERY == 0 {
                 report();
@@ -1353,7 +1679,12 @@ impl Database {
     pub fn store_capture(&self, media_id: i64, capture: Capture, read_for: i64) {
         let (kind, clock, offset, utc) = match capture {
             Capture::Unread => (0, None, None, None),
-            Capture::Clock { clock, offset } => (1, Some(clock.format(CLOCK_FORMAT).to_string()), offset, None),
+            Capture::Clock { clock, offset } => (
+                1,
+                Some(clock.format(CLOCK_FORMAT).to_string()),
+                offset,
+                None,
+            ),
             Capture::Utc(utc) => (2, None, None, Some(utc)),
             Capture::Missing => (3, None, None, None),
         };
@@ -1369,8 +1700,11 @@ impl Database {
     /// whose day is uncertain lose any earlier suggestion and are counted
     /// for review. The catalog's dates are not changed.
     pub fn suggest_days(&self, trip_id: i64) -> Result<DaySuggestion, String> {
-        let trip = self.trip(trip_id).ok_or_else(|| format!("trip {trip_id} is gone"))?;
-        let zone = TripZone::parse(&trip.zone).ok_or_else(|| tr("Pick the trip's time zone").to_string())?;
+        let trip = self
+            .trip(trip_id)
+            .ok_or_else(|| format!("trip {trip_id} is gone"))?;
+        let zone = TripZone::parse(&trip.zone)
+            .ok_or_else(|| tr("Pick the trip's time zone").to_string())?;
         let rows: Vec<(i64, i64, Capture, i64)> = self.map_rows(
             "SELECT tm.media_id, tm.day_source, m.clock_kind, m.clock, m.clock_offset, m.clock_utc,
                     coalesce(p.taken_at - p.file_taken_at, 0)
@@ -1412,13 +1746,29 @@ impl Database {
                     insert_day(&tx, trip_id, Some(date), "")?
                 }
             };
-            outcome.assigned += move_members(&tx, trip_id, Some(day_id), self.day_assignments(trip_id, &members), DaySource::Suggested)?.len();
+            outcome.assigned += move_members(
+                &tx,
+                trip_id,
+                Some(day_id),
+                self.day_assignments(trip_id, &members),
+                DaySource::Suggested,
+            )?
+            .len();
         }
-        move_members(&tx, trip_id, None, self.day_assignments(trip_id, &unsure), DaySource::Suggested)?;
+        move_members(
+            &tx,
+            trip_id,
+            None,
+            self.day_assignments(trip_id, &unsure),
+            DaySource::Suggested,
+        )?;
         {
-            let mut mark = tx.prepare("UPDATE trip_media SET review = ?3 WHERE trip_id = ?1 AND media_id = ?2").map_err(sql_err)?;
+            let mut mark = tx
+                .prepare("UPDATE trip_media SET review = ?3 WHERE trip_id = ?1 AND media_id = ?2")
+                .map_err(sql_err)?;
             for (media_id, code) in reasons {
-                mark.execute(params![trip_id, media_id, code]).map_err(sql_err)?;
+                mark.execute(params![trip_id, media_id, code])
+                    .map_err(sql_err)?;
             }
         }
         tx.commit().map_err(sql_err)?;
@@ -1433,7 +1783,12 @@ impl Database {
     }
 
     /// A Story about the dates `dates`, first to last, or about the whole Trip.
-    pub fn create_story_about(&self, trip_id: i64, title: &str, dates: Option<(NaiveDate, NaiveDate)>) -> Result<i64, String> {
+    pub fn create_story_about(
+        &self,
+        trip_id: i64,
+        title: &str,
+        dates: Option<(NaiveDate, NaiveDate)>,
+    ) -> Result<i64, String> {
         let tx = self.conn.unchecked_transaction().map_err(sql_err)?;
         check_trip(&tx, trip_id)?;
         let id = insert_story(&tx, trip_id, title, dates)?;
@@ -1463,17 +1818,31 @@ impl Database {
         match dates {
             None => {
                 for day in all.iter().filter(|day| day.members > 0) {
-                    let heading = if day.title.is_empty() { day.day.map(&date_heading).unwrap_or_default() } else { day.title.clone() };
-                    let query = MemberQuery { day: DayFilter::Day(day.id), ..MemberQuery::default() };
-                    groups.push((heading, self.trip_members(trip_id, &query, 0, usize::MAX >> 1)));
+                    let heading = if day.title.is_empty() {
+                        day.day.map(&date_heading).unwrap_or_default()
+                    } else {
+                        day.title.clone()
+                    };
+                    let query = MemberQuery {
+                        day: DayFilter::Day(day.id),
+                        ..MemberQuery::default()
+                    };
+                    groups.push((
+                        heading,
+                        self.trip_members(trip_id, &query, 0, usize::MAX >> 1),
+                    ));
                 }
             }
             Some((first, last)) => {
                 let dated = self.member_dates(trip_id);
                 let on: std::collections::HashMap<i64, NaiveDate> = dated.iter().copied().collect();
-                let query = MemberQuery { day: DayFilter::Dates(first, last), ..MemberQuery::default() };
+                let query = MemberQuery {
+                    day: DayFilter::Dates(first, last),
+                    ..MemberQuery::default()
+                };
                 let filter = dated_filter(&query, &dated, first, last);
-                let mut by_date: std::collections::BTreeMap<NaiveDate, Vec<Member>> = Default::default();
+                let mut by_date: std::collections::BTreeMap<NaiveDate, Vec<Member>> =
+                    Default::default();
                 for member in self.members_where(trip_id, &query, &filter, 0, usize::MAX >> 1) {
                     if let Some(date) = on.get(&member.media_id) {
                         by_date.entry(*date).or_default().push(member);
@@ -1481,8 +1850,14 @@ impl Database {
                 }
                 for (date, members) in by_date {
                     // The title of the Day the date's photos are all in, if it has one.
-                    let day = members.first().and_then(|member| member.day_id).filter(|id| members.iter().all(|member| member.day_id == Some(*id)));
-                    let titled = day.and_then(|id| all.iter().find(|day| day.id == id)).map(|day| day.title.clone()).filter(|title| !title.is_empty());
+                    let day = members
+                        .first()
+                        .and_then(|member| member.day_id)
+                        .filter(|id| members.iter().all(|member| member.day_id == Some(*id)));
+                    let titled = day
+                        .and_then(|id| all.iter().find(|day| day.id == id))
+                        .map(|day| day.title.clone())
+                        .filter(|title| !title.is_empty());
                     groups.push((titled.unwrap_or_else(|| date_heading(date)), members));
                 }
             }
@@ -1497,7 +1872,9 @@ impl Database {
                 if member.is_video {
                     videos += 1;
                 } else {
-                    blocks.push(StoryBlock::new(Block::Photo(MediaUse::new(member.media_id))));
+                    blocks.push(StoryBlock::new(Block::Photo(MediaUse::new(
+                        member.media_id,
+                    ))));
                 }
             }
         }
@@ -1602,7 +1979,9 @@ impl Database {
             let mut blocks = blocks.clone();
             for block in &mut blocks {
                 let media = match &mut block.block {
-                    Block::Photo(one) | Block::Video { media: one, .. } => std::slice::from_mut(one),
+                    Block::Photo(one) | Block::Video { media: one, .. } => {
+                        std::slice::from_mut(one)
+                    }
                     Block::Gallery(items)
                     | Block::Grid { media: items, .. }
                     | Block::Unknown { media: items, .. } => items.as_mut_slice(),
@@ -1631,7 +2010,15 @@ impl Database {
     }
 
     pub fn story(&self, id: i64) -> Option<Story> {
-        self.conn.query_row(&format!("SELECT {STORY_COLS} FROM stories WHERE id = ?1"), [id], read_story).optional().ok().flatten()
+        self.conn
+            .query_row(
+                &format!("SELECT {STORY_COLS} FROM stories WHERE id = ?1"),
+                [id],
+                read_story,
+            )
+            .optional()
+            .ok()
+            .flatten()
     }
 
     /// The Trip's Stories, the most recently changed first.
@@ -1646,16 +2033,27 @@ impl Database {
             [story_id],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
         );
-        let Ok(mut media) = self.conn.prepare("SELECT media_id, caption, alt FROM story_media WHERE block_id = ?1 ORDER BY position") else {
+        let Ok(mut media) = self.conn.prepare(
+            "SELECT media_id, caption, alt FROM story_media WHERE block_id = ?1 ORDER BY position",
+        ) else {
             return Vec::new();
         };
         rows.into_iter()
             .map(|(id, uid, kind, version, payload)| {
                 let uses: Vec<MediaUse> = media
-                    .query_map([id], |row| Ok(MediaUse { media_id: row.get(0)?, caption: row.get(1)?, alt: row.get(2)? }))
+                    .query_map([id], |row| {
+                        Ok(MediaUse {
+                            media_id: row.get(0)?,
+                            caption: row.get(1)?,
+                            alt: row.get(2)?,
+                        })
+                    })
                     .map(|rows| rows.filter_map(Result::ok).collect())
                     .unwrap_or_default();
-                StoryBlock { uid, block: Block::read(&kind, version, &payload, uses) }
+                StoryBlock {
+                    uid,
+                    block: Block::read(&kind, version, &payload, uses),
+                }
             })
             .collect()
     }
@@ -1676,14 +2074,25 @@ impl Database {
     /// blocks as one change: all of it, or nothing when any part fails, so a
     /// save that fails can be tried again as it was. Fails without a change
     /// if the Story was saved since `revision`. Returns its new revision.
-    pub fn save_story(&self, story: &Story, cover_changed: bool, blocks: &[StoryBlock], revision: i64) -> Result<i64, String> {
+    pub fn save_story(
+        &self,
+        story: &Story,
+        cover_changed: bool,
+        blocks: &[StoryBlock],
+        revision: i64,
+    ) -> Result<i64, String> {
         let tx = self.conn.unchecked_transaction().map_err(sql_err)?;
         let next = next_revision(&tx, story.id, revision)?;
         write_details(&tx, story)?;
         if cover_changed {
-            tx.execute("UPDATE stories SET cover_ref = ?2 WHERE id = ?1", params![story.id, story.cover]).map_err(sql_err)?;
+            tx.execute(
+                "UPDATE stories SET cover_ref = ?2 WHERE id = ?1",
+                params![story.id, story.cover],
+            )
+            .map_err(sql_err)?;
         }
-        tx.execute("DELETE FROM story_blocks WHERE story_id = ?1", [story.id]).map_err(sql_err)?;
+        tx.execute("DELETE FROM story_blocks WHERE story_id = ?1", [story.id])
+            .map_err(sql_err)?;
         write_blocks(&tx, story.id, blocks)?;
         tx.execute(UNUSED_REFS, []).map_err(sql_err)?;
         tx.commit().map_err(sql_err)?;
@@ -1692,10 +2101,19 @@ impl Database {
 
     /// Makes `media_id` the Story's cover, or clears it. The cover is the
     /// Story's own: stars and other Stories are left as they are.
-    pub fn set_story_cover(&self, story_id: i64, media_id: Option<i64>, revision: i64) -> Result<i64, String> {
+    pub fn set_story_cover(
+        &self,
+        story_id: i64,
+        media_id: Option<i64>,
+        revision: i64,
+    ) -> Result<i64, String> {
         let tx = self.conn.unchecked_transaction().map_err(sql_err)?;
         let next = next_revision(&tx, story_id, revision)?;
-        tx.execute("UPDATE stories SET cover_ref = ?2 WHERE id = ?1", params![story_id, media_id]).map_err(sql_err)?;
+        tx.execute(
+            "UPDATE stories SET cover_ref = ?2 WHERE id = ?1",
+            params![story_id, media_id],
+        )
+        .map_err(sql_err)?;
         tx.execute(UNUSED_REFS, []).map_err(sql_err)?;
         tx.commit().map_err(sql_err)?;
         Ok(next)
@@ -1703,10 +2121,16 @@ impl Database {
 
     /// Replaces the Story's blocks with `blocks`. Fails without a change if
     /// the Story was saved since `revision`. Returns its new revision.
-    pub fn save_story_blocks(&self, story_id: i64, revision: i64, blocks: &[StoryBlock]) -> Result<i64, String> {
+    pub fn save_story_blocks(
+        &self,
+        story_id: i64,
+        revision: i64,
+        blocks: &[StoryBlock],
+    ) -> Result<i64, String> {
         let tx = self.conn.unchecked_transaction().map_err(sql_err)?;
         let next = next_revision(&tx, story_id, revision)?;
-        tx.execute("DELETE FROM story_blocks WHERE story_id = ?1", [story_id]).map_err(sql_err)?;
+        tx.execute("DELETE FROM story_blocks WHERE story_id = ?1", [story_id])
+            .map_err(sql_err)?;
         write_blocks(&tx, story_id, blocks)?;
         tx.execute(UNUSED_REFS, []).map_err(sql_err)?;
         tx.commit().map_err(sql_err)?;
@@ -1715,19 +2139,28 @@ impl Database {
 
     /// Archives a Story, or brings it back.
     pub fn set_story_archived(&self, id: i64, archived: bool) {
-        let _ = self.conn.execute("UPDATE stories SET archived = ?2, updated_at = ?3 WHERE id = ?1", params![id, archived, unix_now()]);
+        let _ = self.conn.execute(
+            "UPDATE stories SET archived = ?2, updated_at = ?3 WHERE id = ?1",
+            params![id, archived, unix_now()],
+        );
     }
 
     /// Deletes a Story and its blocks. Its photos stay in the Trip.
     pub fn delete_story(&self, id: i64) -> Result<(), String> {
         let tx = self.conn.unchecked_transaction().map_err(sql_err)?;
-        tx.execute("DELETE FROM stories WHERE id = ?1", [id]).map_err(sql_err)?;
+        tx.execute("DELETE FROM stories WHERE id = ?1", [id])
+            .map_err(sql_err)?;
         tx.execute(UNUSED_REFS, []).map_err(sql_err)?;
         tx.commit().map_err(sql_err)
     }
 }
 
-fn insert_story(tx: &Transaction, trip_id: i64, title: &str, dates: Option<(NaiveDate, NaiveDate)>) -> Result<i64, String> {
+fn insert_story(
+    tx: &Transaction,
+    trip_id: i64,
+    title: &str,
+    dates: Option<(NaiveDate, NaiveDate)>,
+) -> Result<i64, String> {
     let now = unix_now();
     let (first, last) = dates_text(dates);
     tx.execute(
@@ -1741,7 +2174,12 @@ fn insert_story(tx: &Transaction, trip_id: i64, title: &str, dates: Option<(Naiv
 }
 
 /// Adds a Day after the Trip's last one, as part of `tx`.
-fn insert_day(tx: &Connection, trip_id: i64, day: Option<NaiveDate>, title: &str) -> Result<i64, String> {
+fn insert_day(
+    tx: &Connection,
+    trip_id: i64,
+    day: Option<NaiveDate>,
+    title: &str,
+) -> Result<i64, String> {
     check_trip(tx, trip_id)?;
     tx.execute(
         "INSERT INTO trip_days(trip_id, position, day, title)
@@ -1756,15 +2194,32 @@ fn insert_day(tx: &Connection, trip_id: i64, day: Option<NaiveDate>, title: &str
 
 /// Moves the members found as `before` to `day_id`, or out of any Day, at
 /// its end. A suggestion leaves members the user placed where they are.
-fn move_members(tx: &Connection, trip_id: i64, day_id: Option<i64>, before: Vec<DayAssignment>, source: DaySource) -> Result<Vec<DayAssignment>, String> {
+fn move_members(
+    tx: &Connection,
+    trip_id: i64,
+    day_id: Option<i64>,
+    before: Vec<DayAssignment>,
+    source: DaySource,
+) -> Result<Vec<DayAssignment>, String> {
     if let Some(day_id) = day_id {
-        let owner: Option<i64> = tx.query_row("SELECT trip_id FROM trip_days WHERE id = ?1", [day_id], |row| row.get(0)).optional().map_err(sql_err)?;
+        let owner: Option<i64> = tx
+            .query_row(
+                "SELECT trip_id FROM trip_days WHERE id = ?1",
+                [day_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(sql_err)?;
         if owner != Some(trip_id) {
             return Err(format!("day {day_id} is not in trip {trip_id}"));
         }
     }
     let mut next: i64 = tx
-        .query_row("SELECT coalesce(max(day_position), -1) + 1 FROM trip_media WHERE day_id IS ?1", [day_id], |row| row.get(0))
+        .query_row(
+            "SELECT coalesce(max(day_position), -1) + 1 FROM trip_media WHERE day_id IS ?1",
+            [day_id],
+            |row| row.get(0),
+        )
         .map_err(sql_err)?;
     let mut moved = Vec::new();
     {
@@ -1777,7 +2232,18 @@ fn move_members(tx: &Connection, trip_id: i64, day_id: Option<i64>, before: Vec<
         let code = if day_id.is_some() { source.code() } else { 0 };
         let suggestion = source == DaySource::Suggested;
         for assignment in before {
-            if update.execute(params![trip_id, assignment.media_id, day_id, code, next, suggestion]).map_err(sql_err)? > 0 {
+            if update
+                .execute(params![
+                    trip_id,
+                    assignment.media_id,
+                    day_id,
+                    code,
+                    next,
+                    suggestion
+                ])
+                .map_err(sql_err)?
+                > 0
+            {
                 next += 1;
                 moved.push(assignment);
             }
@@ -1790,7 +2256,10 @@ fn move_members(tx: &Connection, trip_id: i64, day_id: Option<i64>, before: Vec<
 /// A Story's first and last dates as stored, earlier first.
 fn dates_text(dates: Option<(NaiveDate, NaiveDate)>) -> (Option<String>, Option<String>) {
     let dates = dates.map(|(first, last)| (first.min(last), first.max(last)));
-    (day_text(dates.map(|dates| dates.0)), day_text(dates.map(|dates| dates.1)))
+    (
+        day_text(dates.map(|dates| dates.0)),
+        day_text(dates.map(|dates| dates.1)),
+    )
 }
 
 fn write_details(tx: &Transaction, story: &Story) -> Result<(), String> {
@@ -1819,14 +2288,26 @@ fn write_details(tx: &Transaction, story: &Story) -> Result<(), String> {
 
 /// Checks that the Story is still at `revision`, and moves it to the next.
 fn next_revision(tx: &Transaction, story_id: i64, revision: i64) -> Result<i64, String> {
-    let current: Option<i64> =
-        tx.query_row("SELECT revision FROM stories WHERE id = ?1", [story_id], |row| row.get(0)).optional().map_err(sql_err)?;
+    let current: Option<i64> = tx
+        .query_row(
+            "SELECT revision FROM stories WHERE id = ?1",
+            [story_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(sql_err)?;
     match current {
         None => Err(format!("story {story_id} is gone")),
-        Some(current) if current != revision => Err(tr("This story was changed elsewhere. Open it again to see the latest version.").into()),
+        Some(current) if current != revision => Err(tr(
+            "This story was changed elsewhere. Open it again to see the latest version.",
+        )
+        .into()),
         Some(current) => {
-            tx.execute("UPDATE stories SET revision = ?2, updated_at = ?3 WHERE id = ?1", params![story_id, current + 1, unix_now()])
-                .map_err(sql_err)?;
+            tx.execute(
+                "UPDATE stories SET revision = ?2, updated_at = ?3 WHERE id = ?1",
+                params![story_id, current + 1, unix_now()],
+            )
+            .map_err(sql_err)?;
             Ok(current + 1)
         }
     }
@@ -1845,11 +2326,26 @@ fn write_blocks(tx: &Transaction, story_id: i64, blocks: &[StoryBlock]) -> Resul
             return Err(format!("two blocks share the id {}", item.uid));
         }
         block
-            .execute(params![story_id, item.uid, position as i64, item.block.kind(), item.block.version(), item.block.payload()])
+            .execute(params![
+                story_id,
+                item.uid,
+                position as i64,
+                item.block.kind(),
+                item.block.version(),
+                item.block.payload()
+            ])
             .map_err(sql_err)?;
         let block_id = tx.last_insert_rowid();
         for (at, used) in item.block.media().iter().enumerate() {
-            media.execute(params![block_id, at as i64, used.media_id, used.caption, used.alt]).map_err(sql_err)?;
+            media
+                .execute(params![
+                    block_id,
+                    at as i64,
+                    used.media_id,
+                    used.caption,
+                    used.alt
+                ])
+                .map_err(sql_err)?;
         }
     }
     Ok(())
@@ -1857,7 +2353,9 @@ fn write_blocks(tx: &Transaction, story_id: i64, blocks: &[StoryBlock]) -> Resul
 
 /// `text` with the wildcards of `LIKE` escaped by a backslash.
 fn like_escape(text: &str) -> String {
-    text.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_")
+    text.replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_")
 }
 
 #[cfg(test)]
@@ -1876,11 +2374,18 @@ mod tests {
         let refs = db.add_to_trip(trip_id, &ids[..2]).unwrap();
         db.set_caption(ids[0], "Harbor at dawn");
         db.set_caption(ids[1], "  ");
-        let no_caption = MemberQuery { no_caption: true, ..MemberQuery::default() };
+        let no_caption = MemberQuery {
+            no_caption: true,
+            ..MemberQuery::default()
+        };
         assert_eq!(db.count_trip_members(trip_id, &no_caption), 1);
 
         let found = |query: &str| -> Vec<i64> {
-            let mut found: Vec<i64> = db.search(query, Sort::Name, false).iter().map(|photo| photo.id).collect();
+            let mut found: Vec<i64> = db
+                .search(query, Sort::Name, false)
+                .iter()
+                .map(|photo| photo.id)
+                .collect();
             found.sort();
             found
         };
@@ -1889,11 +2394,22 @@ mod tests {
         assert_eq!(found("-is:intrip"), vec![ids[2]]);
 
         let day = db.add_trip_day(trip_id, None, "Harbor day").unwrap();
-        db.move_to_day(trip_id, Some(day), &refs[..1], DaySource::User).unwrap();
+        db.move_to_day(trip_id, Some(day), &refs[..1], DaySource::User)
+            .unwrap();
         db.conn.execute("INSERT INTO trip_places (id, trip_id, position, name, local_name, lat, lon) VALUES (7, ?1, 0, 'Old town', 'Alfama', 38.7, -9.1)", [trip_id]).unwrap();
-        db.conn.execute("UPDATE trip_media SET place_id = 7, review = 1 WHERE media_id = ?1", [refs[1]]).unwrap();
+        db.conn
+            .execute(
+                "UPDATE trip_media SET place_id = 7, review = 1 WHERE media_id = ?1",
+                [refs[1]],
+            )
+            .unwrap();
         let story = db.create_story(trip_id, "Seaport walk").unwrap();
-        db.save_story_blocks(story, 1, &[StoryBlock::new(Block::Photo(MediaUse::new(refs[1])))]).unwrap();
+        db.save_story_blocks(
+            story,
+            1,
+            &[StoryBlock::new(Block::Photo(MediaUse::new(refs[1])))],
+        )
+        .unwrap();
         assert_eq!(found("trip:coa"), ids[..2].to_vec());
         assert!(found("trip:peaks").is_empty());
         assert_eq!(found("day:harbor"), vec![ids[0]]);
@@ -1908,26 +2424,63 @@ mod tests {
     fn trip_resources_stay_private_until_allowed() {
         let (db, _, _, _) = photos("resources", &[]);
         let trip_id = trip(&db, "Coast");
-        let link = TripResource { kind: ResourceKind::Link, reference: "https://example.com/ferry".into(), title: "Ferry".into(), ..Default::default() };
+        let link = TripResource {
+            kind: ResourceKind::Link,
+            reference: "https://example.com/ferry".into(),
+            title: "Ferry".into(),
+            ..Default::default()
+        };
         let id = db.save_trip_resource(trip_id, &link).unwrap();
-        assert!(db.save_trip_resource(trip_id, &TripResource { kind: ResourceKind::Link, reference: "ferry".into(), ..Default::default() }).is_err());
+        assert!(db
+            .save_trip_resource(
+                trip_id,
+                &TripResource {
+                    kind: ResourceKind::Link,
+                    reference: "ferry".into(),
+                    ..Default::default()
+                }
+            )
+            .is_err());
         let saved = db.trip_resources(trip_id);
         assert_eq!(saved, vec![TripResource { id, ..link.clone() }]);
         assert!(!saved[0].publish, "private unless allowed");
 
-        db.save_trip_resource(trip_id, &TripResource { id, publish: true, ..link }).unwrap();
+        db.save_trip_resource(
+            trip_id,
+            &TripResource {
+                id,
+                publish: true,
+                ..link
+            },
+        )
+        .unwrap();
         assert!(db.trip_resources(trip_id)[0].publish);
 
-        let doc = TripResource { kind: ResourceKind::Document, reference: "/gone/tickets.pdf".into(), ..Default::default() };
+        let doc = TripResource {
+            kind: ResourceKind::Document,
+            reference: "/gone/tickets.pdf".into(),
+            ..Default::default()
+        };
         let doc_id = db.save_trip_resource(trip_id, &doc).unwrap();
-        db.locate_trip_resource(doc_id, std::path::Path::new("/found/tickets.pdf")).unwrap();
-        assert!(db.locate_trip_resource(id, std::path::Path::new("/x")).is_err(), "a link has no file to locate");
-        assert_eq!(db.trip_resources(trip_id)[1].reference, "/found/tickets.pdf");
+        db.locate_trip_resource(doc_id, std::path::Path::new("/found/tickets.pdf"))
+            .unwrap();
+        assert!(
+            db.locate_trip_resource(id, std::path::Path::new("/x"))
+                .is_err(),
+            "a link has no file to locate"
+        );
+        assert_eq!(
+            db.trip_resources(trip_id)[1].reference,
+            "/found/tickets.pdf"
+        );
 
         db.delete_trip_resource(doc_id).unwrap();
         assert_eq!(db.trip_resources(trip_id).len(), 1);
         db.delete_trip(trip_id).unwrap();
-        assert!(db.trip_resources(trip_id).is_empty(), "they go with their trip");
+        assert!(
+            db.trip_resources(trip_id).is_empty(),
+            "they go with their trip"
+        );
     }
 
     #[test]
@@ -1936,30 +2489,71 @@ mod tests {
         let trip_id = trip(&db, "Coast");
         db.add_to_trip(trip_id, &ids).unwrap();
         db.set_pins(&ids[2..], 38.0, 140.0);
-        assert_eq!(db.suggest_places(trip_id, 300.0, 3 * 3600).unwrap().places, 2);
+        assert_eq!(
+            db.suggest_places(trip_id, 300.0, 3 * 3600).unwrap().places,
+            2
+        );
         let places = db.trip_places(trip_id);
-        assert_eq!(places.iter().map(|place| place.members).collect::<Vec<_>>(), vec![2, 2]);
+        assert_eq!(
+            places.iter().map(|place| place.members).collect::<Vec<_>>(),
+            vec![2, 2]
+        );
         let near = places.iter().find(|place| place.lat == 38.0).unwrap().id;
-        let days: Vec<i64> = db.member_places(trip_id).iter().filter(|(_, place, _)| *place == near).map(|(.., day)| *day).collect();
-        assert_eq!(days, [0, 0], "two members at the Place, neither in a Day yet");
-        let filtered = MemberQuery { place: Some(near), ..MemberQuery::default() };
+        let days: Vec<i64> = db
+            .member_places(trip_id)
+            .iter()
+            .filter(|(_, place, _)| *place == near)
+            .map(|(.., day)| *day)
+            .collect();
+        assert_eq!(
+            days,
+            [0, 0],
+            "two members at the Place, neither in a Day yet"
+        );
+        let filtered = MemberQuery {
+            place: Some(near),
+            ..MemberQuery::default()
+        };
         assert_eq!(db.count_trip_members(trip_id, &filtered), 2);
 
-        db.update_trip_place(near, "Matsushima", "松島", "Boat at noon").unwrap();
-        let order: Vec<i64> = db.trip_places(trip_id).iter().rev().map(|place| place.id).collect();
+        db.update_trip_place(near, "Matsushima", "松島", "Boat at noon")
+            .unwrap();
+        let order: Vec<i64> = db
+            .trip_places(trip_id)
+            .iter()
+            .rev()
+            .map(|place| place.id)
+            .collect();
         db.reorder_trip_places(trip_id, &order).unwrap();
         // Suggesting again, even with a narrower distance, leaves the named one as it was.
         db.suggest_places(trip_id, 50.0, 3600).unwrap();
         let again = db.trip_places(trip_id);
         let named = again.iter().find(|place| place.id == near).unwrap();
-        assert_eq!((named.name.as_str(), named.local_name.as_str(), named.notes.as_str(), named.members, named.kept), ("Matsushima", "松島", "Boat at noon", 2, true));
+        assert_eq!(
+            (
+                named.name.as_str(),
+                named.local_name.as_str(),
+                named.notes.as_str(),
+                named.members,
+                named.kept
+            ),
+            ("Matsushima", "松島", "Boat at noon", 2, true)
+        );
         assert_eq!(again.len(), 2);
         let photo = db.photo(ids[2]).unwrap();
-        assert_eq!((photo.pin_lat, photo.pin_lon), (Some(38.0), Some(140.0)), "positions are never changed");
+        assert_eq!(
+            (photo.pin_lat, photo.pin_lon),
+            (Some(38.0), Some(140.0)),
+            "positions are never changed"
+        );
 
         db.delete_trip_place(near).unwrap();
         assert_eq!(db.trip_places(trip_id).len(), 1);
-        assert_eq!(db.count_trip_members(trip_id, &MemberQuery::default()), 4, "its photos stay in the trip");
+        assert_eq!(
+            db.count_trip_members(trip_id, &MemberQuery::default()),
+            4,
+            "its photos stay in the trip"
+        );
         assert!(db.update_trip_place(near, "Gone", "", "").is_err());
         assert!(db.reorder_trip_places(trip_id, &[near]).is_err());
     }
@@ -1976,45 +2570,96 @@ mod tests {
         let refs = db.add_to_trip(trip_id, &ids).unwrap();
         // Just after the clocks went forward: 03:30 in Midtown is 01:30 UTC.
         let clock = NaiveDateTime::parse_from_str("2025-03-30 03:30:00", CLOCK_FORMAT).unwrap();
-        db.store_capture(refs[0], Capture::Clock { clock, offset: None }, 1);
-        let utc = |text: &str| NaiveDateTime::parse_from_str(text, CLOCK_FORMAT).unwrap().and_utc().timestamp();
+        db.store_capture(
+            refs[0],
+            Capture::Clock {
+                clock,
+                offset: None,
+            },
+            1,
+        );
+        let utc = |text: &str| {
+            NaiveDateTime::parse_from_str(text, CLOCK_FORMAT)
+                .unwrap()
+                .and_utc()
+                .timestamp()
+        };
         let points = vec![
-            Point { lat: 40.0, lon: -3.0, time: Some(utc("2025-03-30 01:20:00")) },
-            Point { lat: 40.1, lon: -3.0, time: Some(utc("2025-03-30 01:40:00")) },
+            Point {
+                lat: 40.0,
+                lon: -3.0,
+                time: Some(utc("2025-03-30 01:20:00")),
+            },
+            Point {
+                lat: 40.1,
+                lon: -3.0,
+                time: Some(utc("2025-03-30 01:40:00")),
+            },
         ];
         let path = folder_path(&folder, "walk.gpx");
-        db.store_track(folder_id, &path, 1, 1, &Track { name: "Walk".into(), segments: vec![points] }).unwrap();
+        db.store_track(
+            folder_id,
+            &path,
+            1,
+            1,
+            &Track {
+                name: "Walk".into(),
+                segments: vec![points],
+            },
+        )
+        .unwrap();
         db.link_trip_track(trip_id, db.tracks()[0].0, None).unwrap();
 
         let done = db.suggest_places(trip_id, 300.0, 3600).unwrap();
         assert_eq!((done.places, done.from_tracks), (1, 1));
         let place = &db.trip_places(trip_id)[0];
-        assert!((place.lat - 40.05).abs() < 1e-6, "halfway along the track, not an hour off: {}", place.lat);
+        assert!(
+            (place.lat - 40.05).abs() < 1e-6,
+            "halfway along the track, not an hour off: {}",
+            place.lat
+        );
         let photo = db.photo(ids[0]).unwrap();
-        assert_eq!((photo.gps_lat, photo.pin_lat), (None, None), "the track's position is not stored as a pin");
+        assert_eq!(
+            (photo.gps_lat, photo.pin_lat),
+            (None, None),
+            "the track's position is not stored as a pin"
+        );
     }
 
     #[test]
     fn library_photos_say_whether_a_trip_has_them() {
         let (db, _, folder, ids) = photos("shots", &["a.jpg", "b.jpg"]);
-        let trip = db.create_trip(&TripDraft::new("Temple", "Asia/Tokyo")).unwrap();
+        let trip = db
+            .create_trip(&TripDraft::new("Temple", "Asia/Tokyo"))
+            .unwrap();
         db.add_to_trip(trip, &ids[..1]).unwrap();
         let mut shots = db.trip_shots();
         shots.sort_by_key(|shot| shot.id);
         let name = folder.file_name().unwrap().to_string_lossy().into_owned();
-        assert_eq!(shots.iter().map(|shot| (shot.id, shot.in_trip, shot.folder.clone())).collect::<Vec<_>>(), vec![(ids[0], true, name.clone()), (ids[1], false, name)]);
+        assert_eq!(
+            shots
+                .iter()
+                .map(|shot| (shot.id, shot.in_trip, shot.folder.clone()))
+                .collect::<Vec<_>>(),
+            vec![(ids[0], true, name.clone()), (ids[1], false, name)]
+        );
     }
 
     /// A library with photos `a.jpg`, `b.jpg`, … in its folder, by name.
     fn photos(tag: &str, names: &[&str]) -> (Database, i64, std::path::PathBuf, Vec<i64>) {
         let (db, folder_id, folder) = library(tag);
-        let records: Vec<_> = names.iter().enumerate().map(|(at, name)| record(folder_id, &folder, name, at as i64)).collect();
+        let records: Vec<_> = names
+            .iter()
+            .enumerate()
+            .map(|(at, name)| record(folder_id, &folder, name, at as i64))
+            .collect();
         let ids = db.write_batch(&records).unwrap().ids;
         (db, folder_id, folder, ids)
     }
 
     fn trip(db: &Database, title: &str) -> i64 {
-        db.create_trip(&TripDraft::new(title, "Asia/Taipei")).unwrap()
+        db.create_trip(&TripDraft::new(title, "Asia/Taipei"))
+            .unwrap()
     }
 
     fn all(db: &Database, trip_id: i64) -> Vec<Member> {
@@ -2022,8 +2667,14 @@ mod tests {
     }
 
     fn in_day(db: &Database, trip_id: i64, day_id: i64) -> Vec<i64> {
-        let query = MemberQuery { day: DayFilter::Day(day_id), ..MemberQuery::default() };
-        db.trip_members(trip_id, &query, 0, 1000).into_iter().map(|member| member.media_id).collect()
+        let query = MemberQuery {
+            day: DayFilter::Day(day_id),
+            ..MemberQuery::default()
+        };
+        db.trip_members(trip_id, &query, 0, 1000)
+            .into_iter()
+            .map(|member| member.media_id)
+            .collect()
     }
 
     fn day(text: &str) -> Option<NaiveDate> {
@@ -2036,11 +2687,17 @@ mod tests {
         let other = folder.parent().unwrap().join("more");
         std::fs::create_dir_all(&other).unwrap();
         let other_id = db.add_folder(&other).unwrap();
-        let more = db.write_batch(&[record(other_id, &other.canonicalize().unwrap(), "c.jpg", 5)]).unwrap().ids[0];
+        let more = db
+            .write_batch(&[record(other_id, &other.canonicalize().unwrap(), "c.jpg", 5)])
+            .unwrap()
+            .ids[0];
         db.set_star(ids[0], true);
         let album = db.create_album("Favorites").unwrap();
         db.add_to_album(album, &[ids[1]]);
-        let before: Vec<String> = [ids[0], ids[1], more].iter().map(|id| format!("{:?}", db.photo(*id).unwrap())).collect();
+        let before: Vec<String> = [ids[0], ids[1], more]
+            .iter()
+            .map(|id| format!("{:?}", db.photo(*id).unwrap()))
+            .collect();
 
         let mut draft = TripDraft::new("  Island  ", "Asia/Taipei");
         draft.first_day = day("2026-03-01");
@@ -2048,24 +2705,71 @@ mod tests {
         draft.destination = "Capital".into();
         let trip_id = db.create_trip(&draft).unwrap();
         let refs = db.add_to_trip(trip_id, &[more, ids[1], ids[0]]).unwrap();
-        let first = db.add_trip_day(trip_id, day("2026-03-01"), "Arrival").unwrap();
-        db.move_to_day(trip_id, Some(first), &[refs[2], refs[0]], DaySource::User).unwrap();
+        let first = db
+            .add_trip_day(trip_id, day("2026-03-01"), "Arrival")
+            .unwrap();
+        db.move_to_day(trip_id, Some(first), &[refs[2], refs[0]], DaySource::User)
+            .unwrap();
         db.set_trip_cover(trip_id, Some(refs[1])).unwrap();
         let story = db.create_story(trip_id, "Seven days").unwrap();
-        db.save_story_blocks(story, 1, &[StoryBlock::new(Block::Photo(MediaUse::new(refs[0])))]).unwrap();
+        db.save_story_blocks(
+            story,
+            1,
+            &[StoryBlock::new(Block::Photo(MediaUse::new(refs[0])))],
+        )
+        .unwrap();
 
         let path = db.conn.path().unwrap().to_string();
         drop(db);
         let db = Database::open(Path::new(&path)).unwrap();
         let trip = db.trip(trip_id).unwrap();
-        assert_eq!((trip.title.as_str(), trip.zone.as_str(), trip.first_day, trip.last_day), ("Island", "Asia/Taipei", day("2026-03-01"), day("2026-03-07")));
-        assert_eq!((trip.members, trip.available, trip.days, trip.stories, trip.cover), (3, 3, 1, 1, Some(refs[1])));
-        let order: Vec<Option<i64>> = all(&db, trip_id).iter().map(|member| member.photo_id).collect();
-        assert_eq!(order, [Some(more), Some(ids[1]), Some(ids[0])], "in the order they were added");
-        assert_eq!(in_day(&db, trip_id, first), [refs[2], refs[0]], "in the order they were put in the day");
+        assert_eq!(
+            (
+                trip.title.as_str(),
+                trip.zone.as_str(),
+                trip.first_day,
+                trip.last_day
+            ),
+            (
+                "Island",
+                "Asia/Taipei",
+                day("2026-03-01"),
+                day("2026-03-07")
+            )
+        );
+        assert_eq!(
+            (
+                trip.members,
+                trip.available,
+                trip.days,
+                trip.stories,
+                trip.cover
+            ),
+            (3, 3, 1, 1, Some(refs[1]))
+        );
+        let order: Vec<Option<i64>> = all(&db, trip_id)
+            .iter()
+            .map(|member| member.photo_id)
+            .collect();
+        assert_eq!(
+            order,
+            [Some(more), Some(ids[1]), Some(ids[0])],
+            "in the order they were added"
+        );
+        assert_eq!(
+            in_day(&db, trip_id, first),
+            [refs[2], refs[0]],
+            "in the order they were put in the day"
+        );
         assert_eq!(db.story_blocks(story).len(), 1);
-        let after: Vec<String> = [ids[0], ids[1], more].iter().map(|id| format!("{:?}", db.photo(*id).unwrap())).collect();
-        assert_eq!(before, after, "stars, captions, dates, and paths are untouched");
+        let after: Vec<String> = [ids[0], ids[1], more]
+            .iter()
+            .map(|id| format!("{:?}", db.photo(*id).unwrap()))
+            .collect();
+        assert_eq!(
+            before, after,
+            "stars, captions, dates, and paths are untouched"
+        );
         assert_eq!(db.albums()[0].count, 1, "albums are untouched");
         let _ = folder_id;
     }
@@ -2079,17 +2783,36 @@ mod tests {
         assert_eq!((preview.photos, preview.videos, preview.already), (1, 1, 1));
         assert_eq!(preview.taken, Some((1_700_000_000, 1_700_000_000)));
         // The fixtures share size, pixel size and date, so the second looks like a copy.
-        assert_eq!((preview.no_time, preview.located, preview.in_other_trip, preview.duplicates), (0, 2, 0, 1));
+        assert_eq!(
+            (
+                preview.no_time,
+                preview.located,
+                preview.in_other_trip,
+                preview.duplicates
+            ),
+            (0, 2, 0, 1)
+        );
         let other = trip(&db, "Hills");
         assert_eq!(db.preview_add_to_trip(other, &[ids[0]]).in_other_trip, 1);
         let refs = db.add_to_trip(trip_id, &[ids[1], ids[0], ids[2]]).unwrap();
         assert_eq!(refs.len(), 3);
         assert_eq!(all(&db, trip_id).len(), 3);
         assert!(all(&db, trip_id)[2].is_video);
-        assert!(db.add_to_trip(trip_id, &[9999]).is_err(), "a photo that isn't in the library");
-        assert_eq!(db.remove_photos_from_trip(trip_id, &[ids[2], 9999]).unwrap(), 1, "by catalog photo");
+        assert!(
+            db.add_to_trip(trip_id, &[9999]).is_err(),
+            "a photo that isn't in the library"
+        );
+        assert_eq!(
+            db.remove_photos_from_trip(trip_id, &[ids[2], 9999])
+                .unwrap(),
+            1,
+            "by catalog photo"
+        );
         db.add_to_trip(trip_id, &[ids[2]]).unwrap();
-        assert!(db.add_to_trip(other + 1, &[ids[0]]).is_err(), "a trip that doesn't exist");
+        assert!(
+            db.add_to_trip(other + 1, &[ids[0]]).is_err(),
+            "a trip that doesn't exist"
+        );
         assert_eq!(all(&db, trip_id).len(), 3, "a failed add changes nothing");
     }
 
@@ -2100,16 +2823,36 @@ mod tests {
         let north_ref = db.add_to_trip(north, &ids).unwrap()[0];
         let south_ref = db.add_to_trip(south, &ids).unwrap()[0];
         assert_eq!(north_ref, south_ref, "one reference per photo");
-        let (north_day, south_day) = (db.add_trip_day(north, None, "").unwrap(), db.add_trip_day(south, None, "").unwrap());
-        db.move_to_day(north, Some(north_day), &[north_ref], DaySource::User).unwrap();
-        db.move_to_day(south, Some(south_day), &[south_ref], DaySource::User).unwrap();
-        assert!(db.move_to_day(north, Some(south_day), &[north_ref], DaySource::User).is_err());
-        assert_eq!(in_day(&db, north, north_day), [north_ref], "a rejected move changes nothing");
+        let (north_day, south_day) = (
+            db.add_trip_day(north, None, "").unwrap(),
+            db.add_trip_day(south, None, "").unwrap(),
+        );
+        db.move_to_day(north, Some(north_day), &[north_ref], DaySource::User)
+            .unwrap();
+        db.move_to_day(south, Some(south_day), &[south_ref], DaySource::User)
+            .unwrap();
+        assert!(db
+            .move_to_day(north, Some(south_day), &[north_ref], DaySource::User)
+            .is_err());
+        assert_eq!(
+            in_day(&db, north, north_day),
+            [north_ref],
+            "a rejected move changes nothing"
+        );
 
         // The library refuses it too, whoever writes.
-        let raw = db.conn.execute("UPDATE trip_media SET day_id = ?1 WHERE trip_id = ?2", params![south_day, north]);
+        let raw = db.conn.execute(
+            "UPDATE trip_media SET day_id = ?1 WHERE trip_id = ?2",
+            params![south_day, north],
+        );
         assert!(raw.is_err());
-        assert!(db.conn.execute("UPDATE trip_days SET trip_id = ?1 WHERE id = ?2", params![south, north_day]).is_err());
+        assert!(db
+            .conn
+            .execute(
+                "UPDATE trip_days SET trip_id = ?1 WHERE id = ?2",
+                params![south, north_day]
+            )
+            .is_err());
         let track = db.conn.execute(
             "INSERT INTO trip_tracks(trip_id, day_id, path, name) VALUES(?1, ?2, '/t.gpx', 't')",
             params![north, south_day],
@@ -2122,29 +2865,73 @@ mod tests {
         let (db, _, _, ids) = photos("trip-suggest", &["a.jpg", "b.jpg", "c.jpg"]);
         let trip_id = trip(&db, "Peaks");
         let refs = db.add_to_trip(trip_id, &ids).unwrap();
-        let (one, two) = (db.add_trip_day(trip_id, day("2026-07-01"), "").unwrap(), db.add_trip_day(trip_id, day("2026-07-02"), "").unwrap());
-        db.move_to_day(trip_id, Some(one), &[refs[0]], DaySource::User).unwrap();
-        let moved = db.move_to_day(trip_id, Some(two), &refs, DaySource::Suggested).unwrap();
+        let (one, two) = (
+            db.add_trip_day(trip_id, day("2026-07-01"), "").unwrap(),
+            db.add_trip_day(trip_id, day("2026-07-02"), "").unwrap(),
+        );
+        db.move_to_day(trip_id, Some(one), &[refs[0]], DaySource::User)
+            .unwrap();
+        let moved = db
+            .move_to_day(trip_id, Some(two), &refs, DaySource::Suggested)
+            .unwrap();
         assert_eq!(moved.len(), 2, "the user's choice stays");
         assert_eq!(in_day(&db, trip_id, one), [refs[0]]);
         assert_eq!(in_day(&db, trip_id, two), [refs[1], refs[2]]);
-        let sources: Vec<_> = all(&db, trip_id).iter().map(|member| member.day_source).collect();
-        assert_eq!(sources, [Some(DaySource::User), Some(DaySource::Suggested), Some(DaySource::Suggested)]);
+        let sources: Vec<_> = all(&db, trip_id)
+            .iter()
+            .map(|member| member.day_source)
+            .collect();
+        assert_eq!(
+            sources,
+            [
+                Some(DaySource::User),
+                Some(DaySource::Suggested),
+                Some(DaySource::Suggested)
+            ]
+        );
 
-        let undo = db.move_to_day(trip_id, Some(one), &[refs[2], refs[1]], DaySource::User).unwrap();
-        assert_eq!(in_day(&db, trip_id, one), [refs[0], refs[2], refs[1]], "after the day's members, in selection order");
+        let undo = db
+            .move_to_day(trip_id, Some(one), &[refs[2], refs[1]], DaySource::User)
+            .unwrap();
+        assert_eq!(
+            in_day(&db, trip_id, one),
+            [refs[0], refs[2], refs[1]],
+            "after the day's members, in selection order"
+        );
         db.restore_day_assignments(trip_id, &undo).unwrap();
         assert_eq!(in_day(&db, trip_id, two), [refs[1], refs[2]]);
-        assert_eq!(all(&db, trip_id)[1].day_source, Some(DaySource::Suggested), "undo puts back who chose the day");
+        assert_eq!(
+            all(&db, trip_id)[1].day_source,
+            Some(DaySource::Suggested),
+            "undo puts back who chose the day"
+        );
 
         db.order_day(two, &[refs[2]]).unwrap();
         assert_eq!(in_day(&db, trip_id, two), [refs[2], refs[1]]);
-        let in_two = MemberQuery { day: DayFilter::Day(two), ..MemberQuery::default() };
-        let shown: Vec<i64> = db.trip_photos(trip_id, &in_two, Sort::Name).iter().map(|photo| photo.id).collect();
-        assert_eq!(shown, [ids[2], ids[1]], "a Day shows its own order, whatever the sort");
-        assert!(db.order_day(two, &[refs[0]]).is_err(), "only members of the day");
-        db.move_to_day(trip_id, None, &[refs[1]], DaySource::User).unwrap();
-        let unassigned = MemberQuery { day: DayFilter::Unassigned, ..MemberQuery::default() };
+        let in_two = MemberQuery {
+            day: DayFilter::Day(two),
+            ..MemberQuery::default()
+        };
+        let shown: Vec<i64> = db
+            .trip_photos(trip_id, &in_two, Sort::Name)
+            .iter()
+            .map(|photo| photo.id)
+            .collect();
+        assert_eq!(
+            shown,
+            [ids[2], ids[1]],
+            "a Day shows its own order, whatever the sort"
+        );
+        assert!(
+            db.order_day(two, &[refs[0]]).is_err(),
+            "only members of the day"
+        );
+        db.move_to_day(trip_id, None, &[refs[1]], DaySource::User)
+            .unwrap();
+        let unassigned = MemberQuery {
+            day: DayFilter::Unassigned,
+            ..MemberQuery::default()
+        };
         assert_eq!(db.count_trip_members(trip_id, &unassigned), 1);
         assert_eq!(all(&db, trip_id)[1].day_source, None);
     }
@@ -2154,24 +2941,45 @@ mod tests {
         let (db, _, _, ids) = photos("trip-day-order", &["a.jpg"]);
         let trip_id = trip(&db, "Loop");
         let refs = db.add_to_trip(trip_id, &ids).unwrap();
-        let a = db.add_trip_day(trip_id, day("2026-05-01"), "Morning").unwrap();
-        let b = db.add_trip_day(trip_id, day("2026-05-01"), "Evening").unwrap();
+        let a = db
+            .add_trip_day(trip_id, day("2026-05-01"), "Morning")
+            .unwrap();
+        let b = db
+            .add_trip_day(trip_id, day("2026-05-01"), "Evening")
+            .unwrap();
         let c = db.add_trip_day(trip_id, None, "Later").unwrap();
-        db.update_trip_day(c, day("2026-05-03"), " Last ", "notes").unwrap();
+        db.update_trip_day(c, day("2026-05-03"), " Last ", "notes")
+            .unwrap();
         db.reorder_trip_days(trip_id, &[c, a, b]).unwrap();
         let days = db.trip_days(trip_id);
-        let order: Vec<_> = days.iter().map(|day| (day.id, day.title.as_str())).collect();
+        let order: Vec<_> = days
+            .iter()
+            .map(|day| (day.id, day.title.as_str()))
+            .collect();
         assert_eq!(order, [(c, "Last"), (a, "Morning"), (b, "Evening")]);
         assert_eq!(days[0].notes, "notes");
-        assert!(db.reorder_trip_days(trip_id, &[c, a]).is_err(), "every day once");
+        assert!(
+            db.reorder_trip_days(trip_id, &[c, a]).is_err(),
+            "every day once"
+        );
         assert!(db.reorder_trip_days(trip_id, &[c, a, a]).is_err());
 
-        db.move_to_day(trip_id, Some(a), &refs, DaySource::User).unwrap();
+        db.move_to_day(trip_id, Some(a), &refs, DaySource::User)
+            .unwrap();
         db.delete_trip_day(a).unwrap();
         let days = db.trip_days(trip_id);
-        assert_eq!(days.iter().map(|day| (day.id, day.position)).collect::<Vec<_>>(), [(c, 0), (b, 1)]);
+        assert_eq!(
+            days.iter()
+                .map(|day| (day.id, day.position))
+                .collect::<Vec<_>>(),
+            [(c, 0), (b, 1)]
+        );
         let member = &all(&db, trip_id)[0];
-        assert_eq!((member.day_id, member.day_source), (None, None), "the member stays, without a day");
+        assert_eq!(
+            (member.day_id, member.day_source),
+            (None, None),
+            "the member stays, without a day"
+        );
     }
 
     #[test]
@@ -2180,7 +2988,8 @@ mod tests {
         let trip_id = trip(&db, "Filters");
         let refs = db.add_to_trip(trip_id, &ids).unwrap();
         let day_id = db.add_trip_day(trip_id, None, "").unwrap();
-        db.move_to_day(trip_id, Some(day_id), &refs[..2], DaySource::User).unwrap();
+        db.move_to_day(trip_id, Some(day_id), &refs[..2], DaySource::User)
+            .unwrap();
         db.set_star(ids[1], true);
         db.write_batch(&[{
             let mut bare = record(1, &folder, "c.jpg", 2);
@@ -2193,37 +3002,134 @@ mod tests {
         db.delete_photos(&[ids[3]]);
         let first = db.create_story(trip_id, "First").unwrap();
         let photo = |media: i64| StoryBlock::new(Block::Photo(MediaUse::new(media)));
-        db.save_story_blocks(first, 1, &[photo(refs[0]), StoryBlock::new(Block::Gallery(vec![MediaUse::new(refs[3])]))]).unwrap();
+        db.save_story_blocks(
+            first,
+            1,
+            &[
+                photo(refs[0]),
+                StoryBlock::new(Block::Gallery(vec![MediaUse::new(refs[3])])),
+            ],
+        )
+        .unwrap();
         let second = db.create_story(trip_id, "Second").unwrap();
         db.save_story_blocks(second, 1, &[photo(refs[2])]).unwrap();
         let other_trip = trip(&db, "Other");
         let elsewhere = db.create_story(other_trip, "").unwrap();
         db.add_to_trip(other_trip, &ids[1..2]).unwrap();
-        db.save_story_blocks(elsewhere, 1, &[photo(refs[1])]).unwrap();
+        db.save_story_blocks(elsewhere, 1, &[photo(refs[1])])
+            .unwrap();
         let cases = [
-            (MemberQuery::default(), vec![refs[0], refs[1], refs[2], refs[3]]),
-            (MemberQuery { day: DayFilter::Day(day_id), ..MemberQuery::default() }, vec![refs[0], refs[1]]),
-            (MemberQuery { day: DayFilter::Unassigned, ..MemberQuery::default() }, vec![refs[2], refs[3]]),
-            (MemberQuery { starred: true, ..MemberQuery::default() }, vec![refs[1]]),
-            (MemberQuery { no_location: true, ..MemberQuery::default() }, vec![refs[2]]),
-            (MemberQuery { unavailable: true, ..MemberQuery::default() }, vec![refs[3]]),
-            (MemberQuery { day: DayFilter::Day(day_id), starred: true, ..MemberQuery::default() }, vec![refs[1]]),
-            (MemberQuery { story: StoryFilter::AnyStory, ..MemberQuery::default() }, vec![refs[0], refs[2], refs[3]]),
-            (MemberQuery { story: StoryFilter::Story(first), ..MemberQuery::default() }, vec![refs[0], refs[3]]),
-            (MemberQuery { story: StoryFilter::Story(elsewhere), ..MemberQuery::default() }, vec![]),
+            (
+                MemberQuery::default(),
+                vec![refs[0], refs[1], refs[2], refs[3]],
+            ),
+            (
+                MemberQuery {
+                    day: DayFilter::Day(day_id),
+                    ..MemberQuery::default()
+                },
+                vec![refs[0], refs[1]],
+            ),
+            (
+                MemberQuery {
+                    day: DayFilter::Unassigned,
+                    ..MemberQuery::default()
+                },
+                vec![refs[2], refs[3]],
+            ),
+            (
+                MemberQuery {
+                    starred: true,
+                    ..MemberQuery::default()
+                },
+                vec![refs[1]],
+            ),
+            (
+                MemberQuery {
+                    no_location: true,
+                    ..MemberQuery::default()
+                },
+                vec![refs[2]],
+            ),
+            (
+                MemberQuery {
+                    unavailable: true,
+                    ..MemberQuery::default()
+                },
+                vec![refs[3]],
+            ),
+            (
+                MemberQuery {
+                    day: DayFilter::Day(day_id),
+                    starred: true,
+                    ..MemberQuery::default()
+                },
+                vec![refs[1]],
+            ),
+            (
+                MemberQuery {
+                    story: StoryFilter::AnyStory,
+                    ..MemberQuery::default()
+                },
+                vec![refs[0], refs[2], refs[3]],
+            ),
+            (
+                MemberQuery {
+                    story: StoryFilter::Story(first),
+                    ..MemberQuery::default()
+                },
+                vec![refs[0], refs[3]],
+            ),
+            (
+                MemberQuery {
+                    story: StoryFilter::Story(elsewhere),
+                    ..MemberQuery::default()
+                },
+                vec![],
+            ),
         ];
         for (query, expected) in cases {
-            let listed: Vec<i64> = db.trip_members(trip_id, &query, 0, 100).into_iter().map(|member| member.media_id).collect();
+            let listed: Vec<i64> = db
+                .trip_members(trip_id, &query, 0, 100)
+                .into_iter()
+                .map(|member| member.media_id)
+                .collect();
             assert_eq!(listed, expected, "{query:?}");
-            assert_eq!(db.count_trip_members(trip_id, &query), expected.len() as i64, "{query:?}");
+            assert_eq!(
+                db.count_trip_members(trip_id, &query),
+                expected.len() as i64,
+                "{query:?}"
+            );
         }
-        let starred = MemberQuery { starred: true, ..MemberQuery::default() };
-        let grid: Vec<i64> = db.trip_photos(trip_id, &starred, Sort::Name).iter().map(|photo| photo.id).collect();
+        let starred = MemberQuery {
+            starred: true,
+            ..MemberQuery::default()
+        };
+        let grid: Vec<i64> = db
+            .trip_photos(trip_id, &starred, Sort::Name)
+            .iter()
+            .map(|photo| photo.id)
+            .collect();
         assert_eq!(grid, [ids[1]], "the grid uses the same query");
-        assert_eq!(db.trip_photos(trip_id, &MemberQuery::default(), Sort::Name).len(), 3, "unavailable members have no photo");
-        assert_eq!(db.photo_at_path(Path::new(&folder_path(&folder, "a.jpg"))), Some(ids[0]));
-        assert_eq!(db.photo_at_path(Path::new(&folder_path(&folder, "d.jpg"))), None);
-        let page: Vec<i64> = db.trip_members(trip_id, &MemberQuery::default(), 1, 2).into_iter().map(|member| member.media_id).collect();
+        assert_eq!(
+            db.trip_photos(trip_id, &MemberQuery::default(), Sort::Name)
+                .len(),
+            3,
+            "unavailable members have no photo"
+        );
+        assert_eq!(
+            db.photo_at_path(Path::new(&folder_path(&folder, "a.jpg"))),
+            Some(ids[0])
+        );
+        assert_eq!(
+            db.photo_at_path(Path::new(&folder_path(&folder, "d.jpg"))),
+            None
+        );
+        let page: Vec<i64> = db
+            .trip_members(trip_id, &MemberQuery::default(), 1, 2)
+            .into_iter()
+            .map(|member| member.media_id)
+            .collect();
         assert_eq!(page, [refs[1], refs[2]]);
         let trip = db.trip(trip_id).unwrap();
         assert_eq!((trip.members, trip.available), (4, 3));
@@ -2235,24 +3141,45 @@ mod tests {
         let trip_id = trip(&db, "Return");
         let refs = db.add_to_trip(trip_id, &ids).unwrap();
         let story = db.create_story(trip_id, "").unwrap();
-        db.save_story_blocks(story, 1, &[StoryBlock::new(Block::Gallery(vec![MediaUse::new(refs[0]), MediaUse::new(refs[1])]))]).unwrap();
+        db.save_story_blocks(
+            story,
+            1,
+            &[StoryBlock::new(Block::Gallery(vec![
+                MediaUse::new(refs[0]),
+                MediaUse::new(refs[1]),
+            ]))],
+        )
+        .unwrap();
 
         // The file goes, and the archive of removed photos is emptied.
         db.remove_missing(folder_id, &[folder_path(&folder, "b.jpg")]);
         db.purge_archive(i64::MAX);
         let gone = &all(&db, trip_id)[0];
-        assert_eq!((gone.photo_id, gone.path.as_str(), gone.filename.as_str()), (None, folder_path(&folder, "a.jpg").as_str(), "a.jpg"));
-        assert_eq!(db.story_blocks(story)[0].block.media().len(), 2, "the story keeps it");
+        assert_eq!(
+            (gone.photo_id, gone.path.as_str(), gone.filename.as_str()),
+            (None, folder_path(&folder, "a.jpg").as_str(), "a.jpg")
+        );
+        assert_eq!(
+            db.story_blocks(story)[0].block.media().len(),
+            2,
+            "the story keeps it"
+        );
 
         // Another photo arrives; it gets a new id and nothing of the old one.
-        let other = db.write_batch(&[record(folder_id, &folder, "z.jpg", 99)]).unwrap().ids[0];
+        let other = db
+            .write_batch(&[record(folder_id, &folder, "z.jpg", 99)])
+            .unwrap()
+            .ids[0];
         assert!(other > ids[1]);
         assert_eq!(db.relink_trip_media(), 0);
         assert_eq!(all(&db, trip_id)[0].photo_id, None);
         assert_eq!(db.count_trip_members(trip_id, &MemberQuery::default()), 2);
 
         // The file comes back at its path.
-        let back = db.write_batch(&[record(folder_id, &folder, "a.jpg", 0)]).unwrap().ids[0];
+        let back = db
+            .write_batch(&[record(folder_id, &folder, "a.jpg", 0)])
+            .unwrap()
+            .ids[0];
         assert_eq!(db.relink_trip_media(), 1);
         assert_eq!(all(&db, trip_id)[0].photo_id, Some(back));
         assert_eq!(db.trip(trip_id).unwrap().available, 2);
@@ -2263,22 +3190,46 @@ mod tests {
         let (db, folder_id, folder, ids) = photos("trip-moved", &["a.jpg", "b.jpg"]);
         let trip_id = trip(&db, "Moved");
         let refs = db.add_to_trip(trip_id, &ids).unwrap();
-        db.rename_photos(&[(ids[0], folder_path(&folder, "renamed.jpg"), "renamed.jpg".into())]).unwrap();
-        assert_eq!(all(&db, trip_id)[0].filename, "renamed.jpg", "the hints follow a rename");
+        db.rename_photos(&[(
+            ids[0],
+            folder_path(&folder, "renamed.jpg"),
+            "renamed.jpg".into(),
+        )])
+        .unwrap();
+        assert_eq!(
+            all(&db, trip_id)[0].filename,
+            "renamed.jpg",
+            "the hints follow a rename"
+        );
 
         db.delete_photos(&ids);
         // a.jpg turns up under one new name; b.jpg under two.
-        let one = db.write_batch(&[record(folder_id, &folder.join("x"), "a.jpg", 0)]).unwrap().ids[0];
-        let twins = db.write_batch(&[record(folder_id, &folder.join("x"), "b.jpg", 1), record(folder_id, &folder.join("y"), "b.jpg", 1)]).unwrap().ids;
+        let one = db
+            .write_batch(&[record(folder_id, &folder.join("x"), "a.jpg", 0)])
+            .unwrap()
+            .ids[0];
+        let twins = db
+            .write_batch(&[
+                record(folder_id, &folder.join("x"), "b.jpg", 1),
+                record(folder_id, &folder.join("y"), "b.jpg", 1),
+            ])
+            .unwrap()
+            .ids;
         assert_eq!(db.relink_trip_media(), 1);
         let members = all(&db, trip_id);
         assert_eq!(members[0].photo_id, Some(one));
         assert_eq!(members[1].photo_id, None, "two matches: the user chooses");
 
-        assert!(db.relink_media_to(refs[1], one).is_err(), "a photo stands for one reference");
+        assert!(
+            db.relink_media_to(refs[1], one).is_err(),
+            "a photo stands for one reference"
+        );
         db.relink_media_to(refs[1], twins[1]).unwrap();
         assert_eq!(all(&db, trip_id)[1].photo_id, Some(twins[1]));
-        assert!(db.relink_media_to(refs[1], twins[0]).is_err(), "only an unavailable reference");
+        assert!(
+            db.relink_media_to(refs[1], twins[0]).is_err(),
+            "only an unavailable reference"
+        );
     }
 
     #[test]
@@ -2289,7 +3240,10 @@ mod tests {
         db.remove_folder(folder_id).unwrap();
         let member = &all(&db, trip_id)[0];
         assert_eq!(member.photo_id, None);
-        let unlinked: Option<i64> = db.conn.query_row("SELECT unlinked_at FROM media_refs", [], |row| row.get(0)).unwrap();
+        let unlinked: Option<i64> = db
+            .conn
+            .query_row("SELECT unlinked_at FROM media_refs", [], |row| row.get(0))
+            .unwrap();
         assert!(unlinked.is_some());
     }
 
@@ -2300,24 +3254,60 @@ mod tests {
         let refs = db.add_to_trip(trip_id, &ids).unwrap();
         let story_id = db.create_story(trip_id, " Notes ").unwrap();
         let story = db.story(story_id).unwrap();
-        assert_eq!((story.title.as_str(), story.revision, story.template.as_str(), story.cover), ("Notes", 1, DEFAULT_TEMPLATE, None));
-        assert!(db.story_blocks(story_id).is_empty(), "a blank story has no blocks");
+        assert_eq!(
+            (
+                story.title.as_str(),
+                story.revision,
+                story.template.as_str(),
+                story.cover
+            ),
+            ("Notes", 1, DEFAULT_TEMPLATE, None)
+        );
+        assert!(
+            db.story_blocks(story_id).is_empty(),
+            "a blank story has no blocks"
+        );
 
-        let photo = MediaUse { media_id: refs[0], caption: "Harbor".into(), alt: "Boats at a pier".into() };
-        let unknown = Block::Unknown { kind: "map".into(), version: 7, payload: r#"{"zoom":3}"#.into(), media: vec![MediaUse::new(refs[1])] };
-        let blocks: Vec<StoryBlock> = [Block::Heading("Day 1".into()), Block::Photo(photo), Block::Paragraph("Rain.".into()), unknown]
-            .into_iter()
-            .map(StoryBlock::new)
-            .collect();
+        let photo = MediaUse {
+            media_id: refs[0],
+            caption: "Harbor".into(),
+            alt: "Boats at a pier".into(),
+        };
+        let unknown = Block::Unknown {
+            kind: "map".into(),
+            version: 7,
+            payload: r#"{"zoom":3}"#.into(),
+            media: vec![MediaUse::new(refs[1])],
+        };
+        let blocks: Vec<StoryBlock> = [
+            Block::Heading("Day 1".into()),
+            Block::Photo(photo),
+            Block::Paragraph("Rain.".into()),
+            unknown,
+        ]
+        .into_iter()
+        .map(StoryBlock::new)
+        .collect();
         let revision = db.save_story_blocks(story_id, 1, &blocks).unwrap();
         assert_eq!(revision, 2);
-        assert_eq!(db.story_blocks(story_id), blocks, "ids, order, captions, and unknown blocks come back");
+        assert_eq!(
+            db.story_blocks(story_id),
+            blocks,
+            "ids, order, captions, and unknown blocks come back"
+        );
 
         let stale = db.save_story_blocks(story_id, 1, &blocks[..1]);
         assert!(stale.is_err());
-        assert_eq!(db.story_blocks(story_id).len(), 4, "a stale save changes nothing");
+        assert_eq!(
+            db.story_blocks(story_id).len(),
+            4,
+            "a stale save changes nothing"
+        );
         let twice = [blocks[0].clone(), blocks[0].clone()];
-        assert!(db.save_story_blocks(story_id, revision, &twice).is_err(), "block ids are unique");
+        assert!(
+            db.save_story_blocks(story_id, revision, &twice).is_err(),
+            "block ids are unique"
+        );
         assert_eq!(db.story(story_id).unwrap().revision, revision);
 
         let mut details = db.story(story_id).unwrap();
@@ -2328,12 +3318,28 @@ mod tests {
         details.show_date = false;
         details.finished = true;
         let revision = db.save_story_details(&details, revision).unwrap();
-        let revision = db.set_story_cover(story_id, Some(refs[1]), revision).unwrap();
+        let revision = db
+            .set_story_cover(story_id, Some(refs[1]), revision)
+            .unwrap();
         let saved = db.story(story_id).unwrap();
-        assert_eq!((saved.subtitle.as_str(), saved.show_date, saved.cover, saved.revision), ("A week by the sea", false, Some(refs[1]), revision));
-        assert_eq!((saved.introduction.as_str(), saved.conclusion.as_str()), ("Why we went.", "We'll go back."));
+        assert_eq!(
+            (
+                saved.subtitle.as_str(),
+                saved.show_date,
+                saved.cover,
+                saved.revision
+            ),
+            ("A week by the sea", false, Some(refs[1]), revision)
+        );
+        assert_eq!(
+            (saved.introduction.as_str(), saved.conclusion.as_str()),
+            ("Why we went.", "We'll go back.")
+        );
         assert!(saved.finished);
-        assert!(!db.photo(ids[1]).unwrap().starred, "the cover is the story's own");
+        assert!(
+            !db.photo(ids[1]).unwrap().starred,
+            "the cover is the story's own"
+        );
 
         db.set_story_archived(story_id, true);
         assert!(db.stories(trip_id)[0].archived);
@@ -2342,7 +3348,10 @@ mod tests {
         db.remove_from_trip(trip_id, &refs).unwrap();
         assert_eq!(db.story_blocks(story_id), blocks);
         db.delete_story(story_id).unwrap();
-        let left: i64 = db.conn.query_row("SELECT COUNT(*) FROM media_refs", [], |row| row.get(0)).unwrap();
+        let left: i64 = db
+            .conn
+            .query_row("SELECT COUNT(*) FROM media_refs", [], |row| row.get(0))
+            .unwrap();
         assert_eq!(left, 0, "references nothing uses are removed");
     }
 
@@ -2354,14 +3363,34 @@ mod tests {
         let first = db.add_trip_day(trip_id, day("2026-08-01"), "").unwrap();
         let second = db.add_trip_day(trip_id, day("2026-08-02"), "Lake").unwrap();
         let empty = db.add_trip_day(trip_id, None, "").unwrap();
-        db.move_to_day(trip_id, Some(first), &[refs[1], refs[0], refs[2]], DaySource::User).unwrap();
-        db.move_to_day(trip_id, Some(second), &[refs[3]], DaySource::User).unwrap();
-        db.reorder_trip_days(trip_id, &[second, first, empty]).unwrap();
+        db.move_to_day(
+            trip_id,
+            Some(first),
+            &[refs[1], refs[0], refs[2]],
+            DaySource::User,
+        )
+        .unwrap();
+        db.move_to_day(trip_id, Some(second), &[refs[3]], DaySource::User)
+            .unwrap();
+        db.reorder_trip_days(trip_id, &[second, first, empty])
+            .unwrap();
 
-        let (story, videos) = db.create_story_from_days(trip_id, "Summer", None, |date| date.format("%b %-d").to_string()).unwrap();
+        let (story, videos) = db
+            .create_story_from_days(trip_id, "Summer", None, |date| {
+                date.format("%b %-d").to_string()
+            })
+            .unwrap();
         assert_eq!(videos, 1);
-        assert_eq!(db.story(story).unwrap().dates, None, "the story is about the whole trip");
-        let blocks: Vec<Block> = db.story_blocks(story).into_iter().map(|item| item.block).collect();
+        assert_eq!(
+            db.story(story).unwrap().dates,
+            None,
+            "the story is about the whole trip"
+        );
+        let blocks: Vec<Block> = db
+            .story_blocks(story)
+            .into_iter()
+            .map(|item| item.block)
+            .collect();
         assert_eq!(
             blocks,
             [
@@ -2372,8 +3401,13 @@ mod tests {
                 Block::Photo(MediaUse::new(refs[0])),
             ]
         );
-        db.reorder_trip_days(trip_id, &[first, second, empty]).unwrap();
-        assert_eq!(db.story_blocks(story).len(), 5, "changing the days later leaves the story");
+        db.reorder_trip_days(trip_id, &[first, second, empty])
+            .unwrap();
+        assert_eq!(
+            db.story_blocks(story).len(),
+            5,
+            "changing the days later leaves the story"
+        );
     }
 
     #[test]
@@ -2383,25 +3417,69 @@ mod tests {
         let refs = db.add_to_trip(trip_id, &ids).unwrap();
         let first = db.add_trip_day(trip_id, day("2026-08-01"), "").unwrap();
         let lake = db.add_trip_day(trip_id, day("2026-08-02"), "Lake").unwrap();
-        db.move_to_day(trip_id, Some(first), &[refs[0]], DaySource::User).unwrap();
-        db.move_to_day(trip_id, Some(lake), &[refs[1]], DaySource::User).unwrap();
+        db.move_to_day(trip_id, Some(first), &[refs[0]], DaySource::User)
+            .unwrap();
+        db.move_to_day(trip_id, Some(lake), &[refs[1]], DaySource::User)
+            .unwrap();
         // 17:00 UTC on the 2nd is past midnight in Capital, the Trip's zone.
-        let utc = NaiveDate::from_ymd_opt(2026, 8, 2).unwrap().and_hms_opt(17, 0, 0).unwrap().and_utc().timestamp();
+        let utc = NaiveDate::from_ymd_opt(2026, 8, 2)
+            .unwrap()
+            .and_hms_opt(17, 0, 0)
+            .unwrap()
+            .and_utc()
+            .timestamp();
         db.store_capture(refs[2], Capture::Utc(utc), 0);
         let on = |first: &str, last: &str| {
-            let query = MemberQuery { day: DayFilter::Dates(day(first).unwrap(), day(last).unwrap()), ..MemberQuery::default() };
-            db.trip_members(trip_id, &query, 0, 10).into_iter().map(|member| member.media_id).collect::<Vec<_>>()
+            let query = MemberQuery {
+                day: DayFilter::Dates(day(first).unwrap(), day(last).unwrap()),
+                ..MemberQuery::default()
+            };
+            db.trip_members(trip_id, &query, 0, 10)
+                .into_iter()
+                .map(|member| member.media_id)
+                .collect::<Vec<_>>()
         };
-        assert_eq!(on("2026-08-01", "2026-08-02"), [refs[0], refs[1]], "by their Day's date");
-        assert_eq!(on("2026-08-03", "2026-08-03"), [refs[2]], "by when it was taken, in the trip's zone");
-        assert!(on("2026-08-04", "2026-12-31").is_empty(), "a photo of no known date is on none");
+        assert_eq!(
+            on("2026-08-01", "2026-08-02"),
+            [refs[0], refs[1]],
+            "by their Day's date"
+        );
+        assert_eq!(
+            on("2026-08-03", "2026-08-03"),
+            [refs[2]],
+            "by when it was taken, in the trip's zone"
+        );
+        assert!(
+            on("2026-08-04", "2026-12-31").is_empty(),
+            "a photo of no known date is on none"
+        );
 
-        let (story, _) = db.create_story_from_days(trip_id, "Lake", day("2026-08-03").zip(day("2026-08-02")), |date| date.format("%b %-d").to_string()).unwrap();
-        assert_eq!(db.story(story).unwrap().dates, day("2026-08-02").zip(day("2026-08-03")), "earlier first");
-        let blocks: Vec<Block> = db.story_blocks(story).into_iter().map(|item| item.block).collect();
+        let (story, _) = db
+            .create_story_from_days(
+                trip_id,
+                "Lake",
+                day("2026-08-03").zip(day("2026-08-02")),
+                |date| date.format("%b %-d").to_string(),
+            )
+            .unwrap();
+        assert_eq!(
+            db.story(story).unwrap().dates,
+            day("2026-08-02").zip(day("2026-08-03")),
+            "earlier first"
+        );
+        let blocks: Vec<Block> = db
+            .story_blocks(story)
+            .into_iter()
+            .map(|item| item.block)
+            .collect();
         assert_eq!(
             blocks,
-            [Block::Heading("Lake".into()), Block::Photo(MediaUse::new(refs[1])), Block::Heading("Aug 3".into()), Block::Photo(MediaUse::new(refs[2]))],
+            [
+                Block::Heading("Lake".into()),
+                Block::Photo(MediaUse::new(refs[1])),
+                Block::Heading("Aug 3".into()),
+                Block::Photo(MediaUse::new(refs[2]))
+            ],
             "a date takes the title of the Day its photos are in"
         );
 
@@ -2409,8 +3487,13 @@ mod tests {
         details.dates = None;
         db.save_story_details(&details, details.revision).unwrap();
         assert_eq!(db.story(story).unwrap().dates, None);
-        let blank = db.create_story_about(trip_id, "", day("2026-08-01").zip(day("2026-08-01"))).unwrap();
-        assert_eq!(db.story(blank).unwrap().dates, day("2026-08-01").zip(day("2026-08-01")));
+        let blank = db
+            .create_story_about(trip_id, "", day("2026-08-01").zip(day("2026-08-01")))
+            .unwrap();
+        assert_eq!(
+            db.story(blank).unwrap().dates,
+            day("2026-08-01").zip(day("2026-08-01"))
+        );
         assert!(db.story_blocks(blank).is_empty());
     }
 
@@ -2433,18 +3516,54 @@ mod tests {
         let refs = db.add_to_trip(gone, &ids).unwrap();
         db.add_trip_day(gone, None, "").unwrap();
         let story = db.create_story(gone, "").unwrap();
-        db.save_story_blocks(story, 1, &[StoryBlock::new(Block::Photo(MediaUse::new(refs[1])))]).unwrap();
+        db.save_story_blocks(
+            story,
+            1,
+            &[StoryBlock::new(Block::Photo(MediaUse::new(refs[1])))],
+        )
+        .unwrap();
         let ride = folder_path(&folder, "ride.gpx");
-        db.store_track(folder_id, &ride, 1, 1, &Track { name: "Ride".into(), segments: Vec::new() }).unwrap();
+        db.store_track(
+            folder_id,
+            &ride,
+            1,
+            1,
+            &Track {
+                name: "Ride".into(),
+                segments: Vec::new(),
+            },
+        )
+        .unwrap();
         let track_id = db.tracks()[0].0;
         db.link_trip_track(gone, track_id, None).unwrap();
         assert_eq!(db.track_choices(), [(track_id, "Ride".to_string(), None)]);
 
         db.set_trip_archived(gone, true);
-        assert_eq!(db.trips(&TripQuery::default()).iter().map(|trip| trip.id).collect::<Vec<_>>(), [kept]);
-        let archived = TripQuery { archived: true, ..TripQuery::default() };
-        assert_eq!(db.trips(&archived)[0].stories, 1, "archiving keeps the stories");
-        assert_eq!(db.trip_impact(gone), TripImpact { days: 1, members: 2, stories: 1, tracks: 1 });
+        assert_eq!(
+            db.trips(&TripQuery::default())
+                .iter()
+                .map(|trip| trip.id)
+                .collect::<Vec<_>>(),
+            [kept]
+        );
+        let archived = TripQuery {
+            archived: true,
+            ..TripQuery::default()
+        };
+        assert_eq!(
+            db.trips(&archived)[0].stories,
+            1,
+            "archiving keeps the stories"
+        );
+        assert_eq!(
+            db.trip_impact(gone),
+            TripImpact {
+                days: 1,
+                members: 2,
+                stories: 1,
+                tracks: 1
+            }
+        );
 
         db.delete_trip(gone).unwrap();
         assert!(db.trip(gone).is_none());
@@ -2452,7 +3571,10 @@ mod tests {
         assert_eq!(db.trip(kept).unwrap().members, 1);
         assert!(db.photo(ids[1]).is_some(), "photos stay in the library");
         assert_eq!(db.tracks().len(), 1, "tracks stay in the library");
-        let left: i64 = db.conn.query_row("SELECT COUNT(*) FROM media_refs", [], |row| row.get(0)).unwrap();
+        let left: i64 = db
+            .conn
+            .query_row("SELECT COUNT(*) FROM media_refs", [], |row| row.get(0))
+            .unwrap();
         assert_eq!(left, 1, "only the reference the kept trip uses");
     }
 
@@ -2466,7 +3588,13 @@ mod tests {
         draft.description = "Ring road".into();
         let highlands = db.create_trip(&draft).unwrap();
         let find = |search: &str| -> Vec<i64> {
-            db.trips(&TripQuery { search: search.into(), ..TripQuery::default() }).iter().map(|trip| trip.id).collect()
+            db.trips(&TripQuery {
+                search: search.into(),
+                ..TripQuery::default()
+            })
+            .iter()
+            .map(|trip| trip.id)
+            .collect()
         };
         assert_eq!(find("temple islands"), [temple]);
         assert_eq!(find("road"), [highlands], "the description counts");
@@ -2475,8 +3603,12 @@ mod tests {
         assert_eq!(find("").len(), 2);
         assert_eq!(db.trip(temple).unwrap().zone, "+09:00");
         assert!(db.create_trip(&TripDraft::new("No zone", "")).is_err());
-        assert!(db.update_trip(temple, &TripDraft::new("", "+09:00")).is_err());
-        assert!(db.update_trip(9999, &TripDraft::new("Gone", "+09:00")).is_err());
+        assert!(db
+            .update_trip(temple, &TripDraft::new("", "+09:00"))
+            .is_err());
+        assert!(db
+            .update_trip(9999, &TripDraft::new("Gone", "+09:00"))
+            .is_err());
     }
 
     #[test]
@@ -2485,15 +3617,36 @@ mod tests {
         let trip_id = trip(&db, "Hike");
         let day_id = db.add_trip_day(trip_id, None, "").unwrap();
         let path = folder_path(&folder, "hike.gpx");
-        let track = Track { name: "Hike".into(), segments: vec![vec![Point { lat: 1.0, lon: 2.0, time: Some(1) }, Point { lat: 1.1, lon: 2.0, time: Some(2) }]] };
+        let track = Track {
+            name: "Hike".into(),
+            segments: vec![vec![
+                Point {
+                    lat: 1.0,
+                    lon: 2.0,
+                    time: Some(1),
+                },
+                Point {
+                    lat: 1.1,
+                    lon: 2.0,
+                    time: Some(2),
+                },
+            ]],
+        };
         db.store_track(folder_id, &path, 1, 1, &track).unwrap();
         let track_id = db.tracks()[0].0;
         let link = db.link_trip_track(trip_id, track_id, Some(day_id)).unwrap();
-        assert_eq!(db.link_trip_track(trip_id, track_id, None).unwrap(), link, "linking again updates the link");
+        assert_eq!(
+            db.link_trip_track(trip_id, track_id, None).unwrap(),
+            link,
+            "linking again updates the link"
+        );
 
         db.remove_missing_tracks(folder_id, &[]);
         let gone = &db.trip_tracks(trip_id)[0];
-        assert_eq!((gone.track_id, gone.path.as_str(), gone.name.as_str()), (None, path.as_str(), "Hike"));
+        assert_eq!(
+            (gone.track_id, gone.path.as_str(), gone.name.as_str()),
+            (None, path.as_str(), "Hike")
+        );
         db.store_track(folder_id, &path, 1, 1, &track).unwrap();
         assert_eq!(db.relink_trip_media(), 1);
         assert_eq!(db.trip_tracks(trip_id)[0].track_id, Some(db.tracks()[0].0));
@@ -2616,9 +3769,19 @@ mod tests {
             matches!(&blocks[1].block, Block::Grid { caption, media, .. } if caption == "Two" && media.iter().map(|m| m.media_id).collect::<Vec<_>>() == refs)
         );
 
-        let reused = db.import_trip(&package, &files, &std::collections::HashMap::from([(11, ids[0])])).unwrap();
+        let reused = db
+            .import_trip(
+                &package,
+                &files,
+                &std::collections::HashMap::from([(11, ids[0])]),
+            )
+            .unwrap();
         let members = db.trip_members(reused, &MemberQuery::default(), 0, 10);
-        assert_eq!(members[0].photo_id, Some(ids[0]), "a photo already in the library is used at once");
+        assert_eq!(
+            members[0].photo_id,
+            Some(ids[0]),
+            "a photo already in the library is used at once"
+        );
         assert_eq!(db.relink_trip_media(), 0);
 
         let mut bad = package.clone();
@@ -2639,17 +3802,48 @@ mod tests {
         let first = db.add_trip_day(trip_id, None, "").unwrap();
         let second = db.add_trip_day(trip_id, None, "").unwrap();
         // A watch and a phone recorded the same walk.
-        let walk = |lat: f64| Track { name: String::new(), segments: vec![vec![Point { lat, lon: 2.0, time: Some(10) }, Point { lat, lon: 2.1, time: Some(20) }]] };
+        let walk = |lat: f64| Track {
+            name: String::new(),
+            segments: vec![vec![
+                Point {
+                    lat,
+                    lon: 2.0,
+                    time: Some(10),
+                },
+                Point {
+                    lat,
+                    lon: 2.1,
+                    time: Some(20),
+                },
+            ]],
+        };
         for (name, lat) in [("watch.gpx", 1.0), ("phone.gpx", 1.0001)] {
-            db.store_track(folder_id, &folder_path(&folder, name), 1, 1, &Track { name: name.into(), ..walk(lat) }).unwrap();
+            db.store_track(
+                folder_id,
+                &folder_path(&folder, name),
+                1,
+                1,
+                &Track {
+                    name: name.into(),
+                    ..walk(lat)
+                },
+            )
+            .unwrap();
         }
         let ids: Vec<i64> = db.tracks().iter().map(|track| track.0).collect();
         let watch = db.link_trip_track(trip_id, ids[0], Some(first)).unwrap();
         let phone = db.link_trip_track(trip_id, ids[1], Some(first)).unwrap();
         assert_ne!(watch, phone);
         db.link_trip_track(trip_id, ids[1], Some(second)).unwrap();
-        let days: Vec<(i64, Option<i64>)> = db.trip_tracks(trip_id).iter().map(|link| (link.id, link.day_id)).collect();
-        assert!(days.contains(&(watch, Some(first))) && days.contains(&(phone, Some(second))), "{days:?}");
+        let days: Vec<(i64, Option<i64>)> = db
+            .trip_tracks(trip_id)
+            .iter()
+            .map(|link| (link.id, link.day_id))
+            .collect();
+        assert!(
+            days.contains(&(watch, Some(first))) && days.contains(&(phone, Some(second))),
+            "{days:?}"
+        );
     }
 
     #[test]
@@ -2661,25 +3855,55 @@ mod tests {
             let pics = dir.join("pics");
             std::fs::create_dir_all(&pics).unwrap();
             let folder_id = db.add_folder(&pics).unwrap();
-            let id = db.write_batch(&[record(folder_id, &pics.canonicalize().unwrap(), "a.jpg", 1)]).unwrap().ids[0];
+            let id = db
+                .write_batch(&[record(folder_id, &pics.canonicalize().unwrap(), "a.jpg", 1)])
+                .unwrap()
+                .ids[0];
             db.set_star(id, true);
             // Take the library back to the layout of version 1.
-            let tables = ["story_media", "story_blocks", "stories", "trip_tracks", "trip_media", "trip_days", "trips", "media_refs"];
+            let tables = [
+                "story_media",
+                "story_blocks",
+                "stories",
+                "trip_tracks",
+                "trip_media",
+                "trip_days",
+                "trips",
+                "media_refs",
+            ];
             for table in tables {
-                db.conn.execute_batch(&format!("DROP TABLE {table}")).unwrap();
+                db.conn
+                    .execute_batch(&format!("DROP TABLE {table}"))
+                    .unwrap();
             }
             db.conn.execute_batch("DROP TRIGGER photos_media_hints; DROP TRIGGER photos_media_unlinked; PRAGMA user_version = 1").unwrap();
         }
         let db = Database::open(&path).unwrap();
-        let version: i64 = db.conn.query_row("PRAGMA user_version", [], |row| row.get(0)).unwrap();
+        let version: i64 = db
+            .conn
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .unwrap();
         assert_eq!(version, SCHEMA_VERSION);
-        assert!(db.photos(&crate::types::Nav::Starred, "", crate::types::Sort::DateNewest).len() == 1, "the photo and its star stay");
+        assert!(
+            db.photos(
+                &crate::types::Nav::Starred,
+                "",
+                crate::types::Sort::DateNewest
+            )
+            .len()
+                == 1,
+            "the photo and its star stay"
+        );
         let trip_id = trip(&db, "After");
         let ids: Vec<i64> = db.photo_paths().into_iter().map(|(id, _)| id).collect();
         db.add_to_trip(trip_id, &ids).unwrap();
         drop(db);
         let db = Database::open(&path).unwrap();
-        assert_eq!(db.trip(trip_id).unwrap().members, 1, "opening again changes nothing");
+        assert_eq!(
+            db.trip(trip_id).unwrap().members,
+            1,
+            "opening again changes nothing"
+        );
     }
 
     fn at(text: &str) -> NaiveDateTime {
@@ -2692,14 +3916,30 @@ mod tests {
         let trip_id = trip(&db, "Seaport");
         db.add_to_trip(trip_id, &ids).unwrap();
         let stopped = crate::story_html::Progress::default();
-        stopped.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+        stopped
+            .cancel
+            .store(true, std::sync::atomic::Ordering::Relaxed);
         assert!(!db.read_captures(trip_id, &stopped, || {}));
-        assert_eq!(db.captures_to_read(trip_id).len(), 3, "a cancel before the first photo reads none");
+        assert_eq!(
+            db.captures_to_read(trip_id).len(),
+            3,
+            "a cancel before the first photo reads none"
+        );
         let progress = crate::story_html::Progress::default();
         let mut reports = 0;
         assert!(db.read_captures(trip_id, &progress, || reports += 1));
-        assert_eq!((progress.done.into_inner(), progress.total.into_inner(), reports), (3, 3, 1));
-        assert!(db.captures_to_read(trip_id).is_empty(), "kept, so the next suggestion reads nothing again");
+        assert_eq!(
+            (
+                progress.done.into_inner(),
+                progress.total.into_inner(),
+                reports
+            ),
+            (3, 3, 1)
+        );
+        assert!(
+            db.captures_to_read(trip_id).is_empty(),
+            "kept, so the next suggestion reads nothing again"
+        );
         let again = crate::story_html::Progress::default();
         assert!(db.read_captures(trip_id, &again, || {}));
         assert_eq!(again.total.into_inner(), 0);
@@ -2707,16 +3947,25 @@ mod tests {
 
     #[test]
     fn days_are_suggested_from_capture_times_and_keep_the_users_choices() {
-        let (db, _, _, ids) = photos("trip-suggest-days", &["a.jpg", "b.jpg", "c.jpg", "d.jpg", "e.jpg", "f.jpg"]);
+        let (db, _, _, ids) = photos(
+            "trip-suggest-days",
+            &["a.jpg", "b.jpg", "c.jpg", "d.jpg", "e.jpg", "f.jpg"],
+        );
         let trip_id = trip(&db, "Capital");
         let refs = db.add_to_trip(trip_id, &ids).unwrap();
         let unread = db.captures_to_read(trip_id);
         assert_eq!(unread.len(), 6, "nothing read yet");
-        let metro = |text| Capture::Clock { clock: at(text), offset: Some(9 * 3600) };
+        let metro = |text| Capture::Clock {
+            clock: at(text),
+            offset: Some(9 * 3600),
+        };
         let captures = [
             metro("2026-03-02 00:30:00"), // 1 March in Capital
             metro("2026-03-02 12:00:00"),
-            Capture::Clock { clock: at("2026-03-02 09:00:00"), offset: None },
+            Capture::Clock {
+                clock: at("2026-03-02 09:00:00"),
+                offset: None,
+            },
             Capture::Missing,
             metro("2026-03-03 12:00:00"),
             metro("2026-03-01 12:00:00"),
@@ -2726,26 +3975,63 @@ mod tests {
         }
         assert!(db.captures_to_read(trip_id).is_empty());
         db.store_capture(refs[0], captures[0], -1);
-        assert_eq!(db.captures_to_read(trip_id).len(), 1, "a file that changed is read again");
+        assert_eq!(
+            db.captures_to_read(trip_id).len(),
+            1,
+            "a file that changed is read again"
+        );
         db.store_capture(refs[0], captures[0], 0);
         let mine = db.add_trip_day(trip_id, None, "Arrival").unwrap();
-        db.move_to_day(trip_id, Some(mine), &[refs[5]], DaySource::User).unwrap();
+        db.move_to_day(trip_id, Some(mine), &[refs[5]], DaySource::User)
+            .unwrap();
 
         let first = db.suggest_days(trip_id).unwrap();
         assert_eq!((first.assigned, first.new_days, first.kept), (3, 3, 1));
         assert_eq!(first.review, [(Review::NoOffset, 1), (Review::NoTime, 1)]);
         let days = db.trip_days(trip_id);
-        let dates: Vec<_> = days.iter().map(|day| day.day.map(|d| d.to_string())).collect();
-        assert_eq!(dates, [None, Some("2026-03-01".into()), Some("2026-03-02".into()), Some("2026-03-03".into())]);
-        assert_eq!(in_day(&db, trip_id, mine), [refs[5]], "the user's day stays");
+        let dates: Vec<_> = days
+            .iter()
+            .map(|day| day.day.map(|d| d.to_string()))
+            .collect();
+        assert_eq!(
+            dates,
+            [
+                None,
+                Some("2026-03-01".into()),
+                Some("2026-03-02".into()),
+                Some("2026-03-03".into())
+            ]
+        );
+        assert_eq!(
+            in_day(&db, trip_id, mine),
+            [refs[5]],
+            "the user's day stays"
+        );
         assert_eq!(in_day(&db, trip_id, days[1].id), [refs[0]]);
-        assert_eq!(db.review_counts(trip_id), first.review, "kept to review later");
-        let to_review = MemberQuery { day: DayFilter::Review, ..MemberQuery::default() };
+        assert_eq!(
+            db.review_counts(trip_id),
+            first.review,
+            "kept to review later"
+        );
+        let to_review = MemberQuery {
+            day: DayFilter::Review,
+            ..MemberQuery::default()
+        };
         assert_eq!(db.count_trip_members(trip_id, &to_review), 2);
-        let undo = db.move_to_day(trip_id, Some(mine), &[refs[3]], DaySource::User).unwrap();
-        assert_eq!(db.review_counts(trip_id), [(Review::NoOffset, 1)], "placing a photo settles it");
+        let undo = db
+            .move_to_day(trip_id, Some(mine), &[refs[3]], DaySource::User)
+            .unwrap();
+        assert_eq!(
+            db.review_counts(trip_id),
+            [(Review::NoOffset, 1)],
+            "placing a photo settles it"
+        );
         db.restore_day_assignments(trip_id, &undo).unwrap();
-        assert_eq!(db.review_counts(trip_id), first.review, "and Undo brings its review back");
+        assert_eq!(
+            db.review_counts(trip_id),
+            first.review,
+            "and Undo brings its review back"
+        );
 
         // Accepting that the camera was on Trip time settles the clock without an offset.
         let mut draft = TripDraft::new("Capital", "Asia/Taipei");
@@ -2760,34 +4046,74 @@ mod tests {
         // A shift made with Adjust date counts once.
         db.shift_taken(&[ids[4]], -86_400);
         db.suggest_days(trip_id).unwrap();
-        assert_eq!(in_day(&db, trip_id, days[2].id), [refs[1], refs[2], refs[4]]);
-        assert_eq!(db.photo(ids[4]).unwrap().taken_at, 1_700_000_000 - 86_400, "catalog dates stay as the user set them");
+        assert_eq!(
+            in_day(&db, trip_id, days[2].id),
+            [refs[1], refs[2], refs[4]]
+        );
+        assert_eq!(
+            db.photo(ids[4]).unwrap().taken_at,
+            1_700_000_000 - 86_400,
+            "catalog dates stay as the user set them"
+        );
     }
 
     #[test]
     fn two_cameras_in_different_zones_meet_on_the_trips_days() {
-        let (db, _, _, ids) = photos("trip-two-cameras", &["phone.jpg", "camera.jpg", "old.jpg", "no-gps.jpg"]);
-        let trip_id = db.create_trip(&TripDraft::new("Midtown", "Europe/Madrid")).unwrap();
+        let (db, _, _, ids) = photos(
+            "trip-two-cameras",
+            &["phone.jpg", "camera.jpg", "old.jpg", "no-gps.jpg"],
+        );
+        let trip_id = db
+            .create_trip(&TripDraft::new("Midtown", "Europe/Madrid"))
+            .unwrap();
         let refs = db.add_to_trip(trip_id, &ids).unwrap();
         let captures = [
             // The phone keeps local time and says so.
-            Capture::Clock { clock: at("2025-07-01 23:30:00"), offset: Some(2 * 3600) },
+            Capture::Clock {
+                clock: at("2025-07-01 23:30:00"),
+                offset: Some(2 * 3600),
+            },
             // A camera left on Capital time, which it records: the same evening in Midtown.
-            Capture::Clock { clock: at("2025-07-02 05:45:00"), offset: Some(8 * 3600) },
+            Capture::Clock {
+                clock: at("2025-07-02 05:45:00"),
+                offset: Some(8 * 3600),
+            },
             // An older camera on Capital time that records no offset.
-            Capture::Clock { clock: at("2025-07-02 05:50:00"), offset: None },
+            Capture::Clock {
+                clock: at("2025-07-02 05:50:00"),
+                offset: None,
+            },
             // Taken the next morning, without GPS: Days don't need a location.
-            Capture::Clock { clock: at("2025-07-02 09:00:00"), offset: Some(2 * 3600) },
+            Capture::Clock {
+                clock: at("2025-07-02 09:00:00"),
+                offset: Some(2 * 3600),
+            },
         ];
-        for ((media_id, _, modified_at), capture) in db.captures_to_read(trip_id).into_iter().zip(captures) {
+        for ((media_id, _, modified_at), capture) in
+            db.captures_to_read(trip_id).into_iter().zip(captures)
+        {
             db.store_capture(media_id, capture, modified_at);
         }
         let first = db.suggest_days(trip_id).unwrap();
-        assert_eq!(first.review, [(Review::NoOffset, 1)], "a clock without an offset waits for the user");
+        assert_eq!(
+            first.review,
+            [(Review::NoOffset, 1)],
+            "a clock without an offset waits for the user"
+        );
         let days = db.trip_days(trip_id);
-        let dates: Vec<_> = days.iter().map(|day| day.day.map(|d| d.to_string())).collect();
-        assert_eq!(dates, [Some("2025-07-01".into()), Some("2025-07-02".into())]);
-        assert_eq!(in_day(&db, trip_id, days[0].id), [refs[0], refs[1]], "two cameras' offsets, one evening");
+        let dates: Vec<_> = days
+            .iter()
+            .map(|day| day.day.map(|d| d.to_string()))
+            .collect();
+        assert_eq!(
+            dates,
+            [Some("2025-07-01".into()), Some("2025-07-02".into())]
+        );
+        assert_eq!(
+            in_day(&db, trip_id, days[0].id),
+            [refs[0], refs[1]],
+            "two cameras' offsets, one evening"
+        );
         assert_eq!(in_day(&db, trip_id, days[1].id), [refs[3]]);
 
         // Said to be on Trip time, the old camera lands six hours late, on the next Day;
@@ -2800,11 +4126,17 @@ mod tests {
             ids.sort_unstable();
             ids
         };
-        assert_eq!(sorted(in_day(&db, trip_id, days[1].id)), sorted(vec![refs[2], refs[3]]));
+        assert_eq!(
+            sorted(in_day(&db, trip_id, days[1].id)),
+            sorted(vec![refs[2], refs[3]])
+        );
         db.shift_taken(&[ids[2]], -6 * 3600);
         let settled = db.suggest_days(trip_id).unwrap();
         assert!(settled.review.is_empty());
-        assert_eq!(sorted(in_day(&db, trip_id, days[0].id)), sorted(vec![refs[0], refs[1], refs[2]]));
+        assert_eq!(
+            sorted(in_day(&db, trip_id, days[0].id)),
+            sorted(vec![refs[0], refs[1], refs[2]])
+        );
         assert_eq!(db.trip_days(trip_id).len(), 2, "no Day twice");
     }
 
@@ -2814,11 +4146,19 @@ mod tests {
         let trip_id = trip(&db, "Capital");
         let refs = db.add_to_trip(trip_id, &ids).unwrap();
         let captures = [
-            Capture::Clock { clock: at("2026-03-01 12:00:00"), offset: Some(8 * 3600) },
-            Capture::Clock { clock: at("2026-03-02 12:00:00"), offset: Some(8 * 3600) },
+            Capture::Clock {
+                clock: at("2026-03-01 12:00:00"),
+                offset: Some(8 * 3600),
+            },
+            Capture::Clock {
+                clock: at("2026-03-02 12:00:00"),
+                offset: Some(8 * 3600),
+            },
             Capture::Missing,
         ];
-        for ((media_id, _, modified_at), capture) in db.captures_to_read(trip_id).into_iter().zip(captures) {
+        for ((media_id, _, modified_at), capture) in
+            db.captures_to_read(trip_id).into_iter().zip(captures)
+        {
             db.store_capture(media_id, capture, modified_at);
         }
         // The last write, marking the photo without a time for review, fails.
@@ -2826,16 +4166,33 @@ mod tests {
             .execute_batch("CREATE TEMP TRIGGER cut_short BEFORE UPDATE OF review ON trip_media WHEN NEW.review != 0 BEGIN SELECT RAISE(ABORT, 'disk full'); END;")
             .unwrap();
         let failed = db.suggest_days(trip_id);
-        assert!(failed.as_ref().is_err_and(|err| err.contains("disk full")), "{failed:?}");
+        assert!(
+            failed.as_ref().is_err_and(|err| err.contains("disk full")),
+            "{failed:?}"
+        );
         assert!(db.trip_days(trip_id).is_empty(), "no Days half made");
-        assert!(all(&db, trip_id).iter().all(|member| member.day_id.is_none()), "no photo moved");
+        assert!(
+            all(&db, trip_id)
+                .iter()
+                .all(|member| member.day_id.is_none()),
+            "no photo moved"
+        );
         assert!(db.review_counts(trip_id).is_empty());
 
         db.conn.execute_batch("DROP TRIGGER cut_short;").unwrap();
         let done = db.suggest_days(trip_id).unwrap();
-        assert_eq!((done.assigned, done.new_days, done.review.clone()), (2, 2, vec![(Review::NoTime, 1)]));
+        assert_eq!(
+            (done.assigned, done.new_days, done.review.clone()),
+            (2, 2, vec![(Review::NoTime, 1)])
+        );
         let days = db.trip_days(trip_id);
-        assert_eq!((in_day(&db, trip_id, days[0].id), in_day(&db, trip_id, days[1].id)), (vec![refs[0]], vec![refs[1]]));
+        assert_eq!(
+            (
+                in_day(&db, trip_id, days[0].id),
+                in_day(&db, trip_id, days[1].id)
+            ),
+            (vec![refs[0]], vec![refs[1]])
+        );
     }
 
     #[test]
@@ -2843,10 +4200,16 @@ mod tests {
         // Capture times are stored as clock readings and offsets, and Days
         // are counted in the Trip's zone, so nothing here reads the local zone.
         let zone = TripZone::parse("Europe/Lisbon").unwrap();
-        let capture = Capture::Clock { clock: at("2026-10-25 01:30:00"), offset: Some(3600) };
+        let capture = Capture::Clock {
+            clock: at("2026-10-25 01:30:00"),
+            offset: Some(3600),
+        };
         let day = capture_day(capture, 0, &zone, false);
         assert_eq!(day.map(|day| day.to_string()), Ok("2026-10-25".into()));
-        assert_eq!(read_capture_row(1, Some("2026-10-25 01:30:00".into()), Some(3600), None), capture);
+        assert_eq!(
+            read_capture_row(1, Some("2026-10-25 01:30:00".into()), Some(3600), None),
+            capture
+        );
         assert_eq!(read_capture_row(2, None, None, Some(5)), Capture::Utc(5));
         assert_eq!(read_capture_row(0, None, None, None), Capture::Unread);
     }
@@ -2866,17 +4229,38 @@ mod tests {
         // The second block can't be written, as on a full disk.
         db.conn.execute_batch("CREATE TEMP TRIGGER cut_short AFTER INSERT ON story_blocks WHEN NEW.position > 0 BEGIN SELECT RAISE(ABORT, 'disk full'); END;").unwrap();
         let failed = db.save_story(&story, false, &blocks, revision);
-        assert!(failed.as_ref().is_err_and(|err| err.contains("disk full")), "{failed:?}");
+        assert!(
+            failed.as_ref().is_err_and(|err| err.contains("disk full")),
+            "{failed:?}"
+        );
         let now = db.story(id).unwrap();
-        assert_eq!((now.title.as_str(), now.revision), ("Before", revision), "the title isn't saved without its blocks");
-        let texts = |db: &Database| db.story_blocks(id).into_iter().map(|block| block.block).collect::<Vec<_>>();
+        assert_eq!(
+            (now.title.as_str(), now.revision),
+            ("Before", revision),
+            "the title isn't saved without its blocks"
+        );
+        let texts = |db: &Database| {
+            db.story_blocks(id)
+                .into_iter()
+                .map(|block| block.block)
+                .collect::<Vec<_>>()
+        };
         assert_eq!(texts(&db), [Block::Paragraph("Kept".into())]);
 
         // Once it can be written, the same save goes through: no conflict with itself.
         db.conn.execute_batch("DROP TRIGGER cut_short;").unwrap();
-        assert_eq!(db.save_story(&story, false, &blocks, revision), Ok(revision + 1));
+        assert_eq!(
+            db.save_story(&story, false, &blocks, revision),
+            Ok(revision + 1)
+        );
         assert_eq!(db.story(id).unwrap().title, "After");
-        assert_eq!(texts(&db), [Block::Paragraph("One".into()), Block::Paragraph("Two".into())]);
+        assert_eq!(
+            texts(&db),
+            [
+                Block::Paragraph("One".into()),
+                Block::Paragraph("Two".into())
+            ]
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 

@@ -5,19 +5,19 @@
 
 mod app;
 mod backup;
-mod burst;
 #[cfg(test)]
 mod bench;
+mod burst;
 mod config;
 #[cfg(test)]
 mod corpus;
 mod db;
 mod edit;
+mod elevation;
 mod geo;
 mod geocode;
 mod geotag;
 mod gutenberg;
-mod wordpress;
 mod i18n;
 mod image_io;
 mod inline;
@@ -40,8 +40,8 @@ mod trip_package;
 mod types;
 mod update;
 mod upload;
-mod elevation;
 mod video;
+mod wordpress;
 mod worker;
 mod world;
 
@@ -51,14 +51,24 @@ pub const ICON_SIZE: usize = 256;
 pub static ICON_RGBA: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/icon-256.rgba"));
 
 fn main() -> eframe::Result {
-    let args: Vec<std::path::PathBuf> = std::env::args_os().skip(1).map(std::path::PathBuf::from).collect();
+    let args: Vec<std::path::PathBuf> = std::env::args_os()
+        .skip(1)
+        .map(std::path::PathBuf::from)
+        .collect();
     if args.first().is_some_and(|arg| arg.as_os_str() == "geotag") {
         std::process::exit(geotag::cli(&args[1..]));
     }
-    if args.first().is_some_and(|arg| arg.as_os_str() == "--version") {
+    if args
+        .first()
+        .is_some_and(|arg| arg.as_os_str() == "--version")
+    {
         attach_console();
         let build = [env!("PICASSO_BUILD_DATE"), env!("PICASSO_COMMIT")].join(" ");
-        println!("Picasso {} ({})", env!("CARGO_PKG_VERSION"), build.trim_end());
+        println!(
+            "Picasso {} ({})",
+            env!("CARGO_PKG_VERSION"),
+            build.trim_end()
+        );
         return Ok(());
     }
     prefer_wsl_gl();
@@ -135,7 +145,8 @@ fn run(args: &[std::path::PathBuf], renderer: eframe::Renderer) -> eframe::Resul
         "Picasso",
         options,
         Box::new(move |cc| {
-            cc.egui_ctx.add_font_provider(std::sync::Arc::new(SystemFonts::default()));
+            cc.egui_ctx
+                .add_font_provider(std::sync::Arc::new(SystemFonts::default()));
             Ok(app::start(&cc.egui_ctx, args))
         }),
     )
@@ -166,12 +177,19 @@ impl SystemFonts {
 }
 
 impl eframe::egui::epaint::text::FontProvider for SystemFonts {
-    fn fonts_for_family(&self, family: &eframe::egui::FontFamily) -> Vec<eframe::egui::epaint::text::FontInsert> {
+    fn fonts_for_family(
+        &self,
+        family: &eframe::egui::FontFamily,
+    ) -> Vec<eframe::egui::epaint::text::FontInsert> {
         self.guarded(Vec::new(), || self.inner.fonts_for_family(family))
     }
 
-    fn font_for(&self, request: &eframe::egui::epaint::text::FallbackRequest<'_>) -> Option<eframe::egui::epaint::text::FontInsert> {
-        self.guarded(None, || self.inner.font_for(request)).or_else(|| symbol_font(request))
+    fn font_for(
+        &self,
+        request: &eframe::egui::epaint::text::FallbackRequest<'_>,
+    ) -> Option<eframe::egui::epaint::text::FontInsert> {
+        self.guarded(None, || self.inner.font_for(request))
+            .or_else(|| symbol_font(request))
     }
 }
 
@@ -183,14 +201,26 @@ fn symbol_font_files() -> Vec<std::path::PathBuf> {
     let mut files = Vec::new();
     if cfg!(windows) {
         let windir = std::env::var_os("WINDIR").unwrap_or_else(|| "C:\\Windows".into());
-        files.push(std::path::Path::new(&windir).join("Fonts").join("seguisym.ttf"));
+        files.push(
+            std::path::Path::new(&windir)
+                .join("Fonts")
+                .join("seguisym.ttf"),
+        );
     } else if cfg!(target_os = "macos") {
         files.push("/System/Library/Fonts/Apple Symbols.ttf".into());
     } else {
-        for dir in ["/usr/share/fonts/truetype/dejavu", "/usr/share/fonts/TTF", "/usr/share/fonts/dejavu"] {
+        for dir in [
+            "/usr/share/fonts/truetype/dejavu",
+            "/usr/share/fonts/TTF",
+            "/usr/share/fonts/dejavu",
+        ] {
             files.push(std::path::Path::new(dir).join("DejaVuSans.ttf"));
         }
-        for dir in ["/usr/share/fonts/truetype/noto", "/usr/share/fonts/noto", "/usr/share/fonts/google-noto"] {
+        for dir in [
+            "/usr/share/fonts/truetype/noto",
+            "/usr/share/fonts/noto",
+            "/usr/share/fonts/google-noto",
+        ] {
             files.push(std::path::Path::new(dir).join("NotoSansSymbols2-Regular.ttf"));
         }
     }
@@ -200,17 +230,23 @@ fn symbol_font_files() -> Vec<std::path::PathBuf> {
 /// The first of [`symbol_font_files`] with a glyph for the request's first
 /// character. egui asks once per character and family, so a file is read
 /// only for the few characters no other font has.
-fn symbol_font(request: &eframe::egui::epaint::text::FallbackRequest<'_>) -> Option<eframe::egui::epaint::text::FontInsert> {
+fn symbol_font(
+    request: &eframe::egui::epaint::text::FallbackRequest<'_>,
+) -> Option<eframe::egui::epaint::text::FontInsert> {
     use ab_glyph::Font as _;
     use eframe::egui::epaint::text::{FontInsert, FontPriority, InsertFontFamily};
     let c = request.cluster.chars().next()?;
     symbol_font_files().into_iter().find_map(|path| {
         let bytes = std::fs::read(&path).ok()?;
-        let has = ab_glyph::FontRef::try_from_slice(&bytes).is_ok_and(|font| font.glyph_id(c).0 != 0);
+        let has =
+            ab_glyph::FontRef::try_from_slice(&bytes).is_ok_and(|font| font.glyph_id(c).0 != 0);
         has.then(|| FontInsert {
             name: format!("symbols:{}", path.display()),
             data: eframe::egui::FontData::from_owned(bytes),
-            families: vec![InsertFontFamily { family: request.family.clone(), priority: FontPriority::Lowest }],
+            families: vec![InsertFontFamily {
+                family: request.family.clone(),
+                priority: FontPriority::Lowest,
+            }],
         })
     })
 }
@@ -226,7 +262,10 @@ mod tests {
         }
         let family = eframe::egui::FontFamily::Proportional;
         for star in ["★", "☆"] {
-            let request = eframe::egui::epaint::text::FallbackRequest { cluster: star, family: &family };
+            let request = eframe::egui::epaint::text::FallbackRequest {
+                cluster: star,
+                family: &family,
+            };
             assert!(symbol_font(&request).is_some(), "no font for {star}");
         }
     }
@@ -236,6 +275,10 @@ mod tests {
         let fonts = SystemFonts::default();
         assert_eq!(fonts.guarded(1, || 2), 2);
         assert_eq!(fonts.guarded(0, || -> i32 { panic!("no fontconfig") }), 0);
-        assert_eq!(fonts.guarded(0, || 2), 0, "a failed listing is not tried again");
+        assert_eq!(
+            fonts.guarded(0, || 2),
+            0,
+            "a failed listing is not tried again"
+        );
     }
 }

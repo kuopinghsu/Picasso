@@ -40,8 +40,11 @@ impl MapSource {
     ];
 
     /// The CARTO styles, which Settings offers as one source.
-    pub const CARTO_STYLES: [MapSource; 3] =
-        [MapSource::CartoVoyager, MapSource::CartoPositron, MapSource::CartoDarkMatter];
+    pub const CARTO_STYLES: [MapSource; 3] = [
+        MapSource::CartoVoyager,
+        MapSource::CartoPositron,
+        MapSource::CartoDarkMatter,
+    ];
 
     pub fn code(self) -> &'static str {
         match self {
@@ -55,7 +58,9 @@ impl MapSource {
     }
 
     pub fn from_code(code: &str) -> Option<MapSource> {
-        MapSource::ALL.into_iter().find(|source| source.code() == code)
+        MapSource::ALL
+            .into_iter()
+            .find(|source| source.code() == code)
     }
 
     /// Product name, the same in every language.
@@ -78,18 +83,25 @@ impl MapSource {
     /// Credit the provider asks to show on the map.
     pub fn attribution(self) -> &'static str {
         match self {
-            MapSource::OpenFreeMap => "OpenFreeMap © OpenMapTiles · Data © OpenStreetMap contributors",
+            MapSource::OpenFreeMap => {
+                "OpenFreeMap © OpenMapTiles · Data © OpenStreetMap contributors"
+            }
             MapSource::OpenStreetMap => "© OpenStreetMap contributors",
             MapSource::CartoVoyager | MapSource::CartoPositron | MapSource::CartoDarkMatter => {
                 "© CARTO · © OpenStreetMap contributors"
             }
-            MapSource::EsriImagery => "Tiles © Esri · Esri, Maxar, Earthstar Geographics, and the GIS User Community",
+            MapSource::EsriImagery => {
+                "Tiles © Esri · Esri, Maxar, Earthstar Geographics, and the GIS User Community"
+            }
         }
     }
 
     /// CARTO serves its tiles only with a (free) API key.
     pub fn needs_key(self) -> bool {
-        matches!(self, MapSource::CartoVoyager | MapSource::CartoPositron | MapSource::CartoDarkMatter)
+        matches!(
+            self,
+            MapSource::CartoVoyager | MapSource::CartoPositron | MapSource::CartoDarkMatter
+        )
     }
 
     /// Folder of this source's tiles under the tile cache. OpenStreetMap
@@ -105,7 +117,10 @@ impl MapSource {
         match self {
             MapSource::OpenFreeMap => "pbf",
             MapSource::EsriImagery => "jpg",
-            MapSource::OpenStreetMap | MapSource::CartoVoyager | MapSource::CartoPositron | MapSource::CartoDarkMatter => "png",
+            MapSource::OpenStreetMap
+            | MapSource::CartoVoyager
+            | MapSource::CartoPositron
+            | MapSource::CartoDarkMatter => "png",
         }
     }
 
@@ -164,7 +179,9 @@ pub fn latlon_to_world(lat: f64, lon: f64, zoom: u8) -> (f64, f64) {
     let n = f64::from(1u32 << zoom);
     let x = (lon + 180.0) / 360.0 * n * TILE_PX;
     let lat_rad = lat.to_radians();
-    let y = (1.0 - (lat_rad.tan() + 1.0 / lat_rad.cos()).ln() / std::f64::consts::PI) / 2.0 * n * TILE_PX;
+    let y = (1.0 - (lat_rad.tan() + 1.0 / lat_rad.cos()).ln() / std::f64::consts::PI) / 2.0
+        * n
+        * TILE_PX;
     (x, y)
 }
 
@@ -179,13 +196,20 @@ pub fn world_to_latlon(x: f64, y: f64, zoom: u8) -> (f64, f64) {
     let lon = (x / n) * 360.0 - 180.0;
     let merc = std::f64::consts::PI * (1.0 - 2.0 * y / n);
     let lat = merc.sinh().atan().to_degrees();
-    (lat.clamp(-85.05112878, 85.05112878), lon.clamp(-180.0, 180.0))
+    (
+        lat.clamp(-85.05112878, 85.05112878),
+        lon.clamp(-180.0, 180.0),
+    )
 }
 
 fn agent() -> ureq::Agent {
     let config = ureq::Agent::config_builder()
         .timeout_global(Some(Duration::from_secs(12)))
-        .user_agent(concat!("Picasso/", env!("CARGO_PKG_VERSION"), " (local photo library; geotag map)"))
+        .user_agent(concat!(
+            "Picasso/",
+            env!("CARGO_PKG_VERSION"),
+            " (local photo library; geotag map)"
+        ))
         .build();
     ureq::Agent::new_with_config(config)
 }
@@ -195,7 +219,14 @@ pub fn tile_loop(jobs: Receiver<TileJob>, done: Sender<TileDone>, cache: PathBuf
     let tiles = cache.join("tiles");
     while let Ok(job) = jobs.recv() {
         let image = load_tile(&agent, &tiles, &job);
-        let reply = TileDone { source: job.source, generation: job.generation, z: job.z, x: job.x, y: job.y, image };
+        let reply = TileDone {
+            source: job.source,
+            generation: job.generation,
+            z: job.z,
+            x: job.x,
+            y: job.y,
+            image,
+        };
         if done.send(reply).is_err() {
             break;
         }
@@ -214,7 +245,9 @@ fn load_tile(agent: &ureq::Agent, tiles: &Path, job: &TileJob) -> Option<TileIma
 pub fn load_tiles(jobs: &[TileJob], cache: &Path) -> Vec<Option<TileImage>> {
     let agent = agent();
     let tiles = cache.join("tiles");
-    jobs.iter().map(|job| load_tile(&agent, &tiles, job)).collect()
+    jobs.iter()
+        .map(|job| load_tile(&agent, &tiles, job))
+        .collect()
 }
 
 fn picture_tile(agent: &ureq::Agent, tiles: &Path, job: &TileJob) -> Option<TileImage> {
@@ -227,7 +260,10 @@ fn picture_tile(agent: &ureq::Agent, tiles: &Path, job: &TileJob) -> Option<Tile
     let bytes = match std::fs::read(&path) {
         Ok(cached) if cached.len() > 32 => cached,
         _ => {
-            let bytes = fetch(agent, &job.source.picture_url(job.z, job.x, job.y, &job.key))?;
+            let bytes = fetch(
+                agent,
+                &job.source.picture_url(job.z, job.x, job.y, &job.key),
+            )?;
             if bytes.len() < 32 {
                 return None;
             }
@@ -246,18 +282,38 @@ fn picture_tile(agent: &ureq::Agent, tiles: &Path, job: &TileJob) -> Option<Tile
 
 fn vector_tile(agent: &ureq::Agent, tiles: &Path, job: &TileJob) -> Option<TileImage> {
     let ((z, x, y), part) = liberty::Part::of(job.z, job.x, job.y);
-    let path = MapSource::OpenFreeMap.cache_dir(tiles).join(z.to_string()).join(x.to_string()).join(format!("{y}.pbf"));
+    let path = MapSource::OpenFreeMap
+        .cache_dir(tiles)
+        .join(z.to_string())
+        .join(x.to_string())
+        .join(format!("{y}.pbf"));
     let data = match std::fs::read(&path) {
         Ok(cached) => cached,
         Err(_) => {
-            let data = unzip(fetch(agent, &vector_url(agent).replace("{z}", &z.to_string()).replace("{x}", &x.to_string()).replace("{y}", &y.to_string()))?)?;
+            let data = unzip(fetch(
+                agent,
+                &vector_url(agent)
+                    .replace("{z}", &z.to_string())
+                    .replace("{x}", &x.to_string())
+                    .replace("{y}", &y.to_string()),
+            )?)?;
             store(&path, &data);
             data
         }
     };
-    let drawn = liberty::draw(&data, job.z, part, liberty::name_keys(crate::i18n::current()))?;
+    let drawn = liberty::draw(
+        &data,
+        job.z,
+        part,
+        liberty::name_keys(crate::i18n::current()),
+    )?;
     let side = liberty::TILE_SIZE as usize;
-    Some(TileImage { w: side, h: side, rgba: drawn.rgba, labels: drawn.labels })
+    Some(TileImage {
+        w: side,
+        h: side,
+        rgba: drawn.rgba,
+        labels: drawn.labels,
+    })
 }
 
 /// Tile address of the current OpenFreeMap data, read once from its
@@ -287,7 +343,12 @@ fn vector_url(agent: &ureq::Agent) -> String {
 fn fetch(agent: &ureq::Agent, url: &str) -> Option<Vec<u8>> {
     let mut response = agent.get(url).call().ok()?;
     match response.status().as_u16() {
-        200 => response.body_mut().with_config().limit(16 << 20).read_to_vec().ok(),
+        200 => response
+            .body_mut()
+            .with_config()
+            .limit(16 << 20)
+            .read_to_vec()
+            .ok(),
         204 => Some(Vec::new()),
         _ => None,
     }
@@ -299,7 +360,9 @@ fn unzip(data: Vec<u8>) -> Option<Vec<u8>> {
         return Some(data);
     }
     let mut out = Vec::new();
-    flate2::read::GzDecoder::new(data.as_slice()).read_to_end(&mut out).ok()?;
+    flate2::read::GzDecoder::new(data.as_slice())
+        .read_to_end(&mut out)
+        .ok()?;
     Some(out)
 }
 
@@ -340,8 +403,15 @@ fn terrain_tiles(places: &[(f64, f64)], zoom: u8) -> TerrainTiles {
     let mut tiles = TerrainTiles::new();
     for (index, &(lat, lon)) in places.iter().enumerate() {
         let (x, y) = latlon_to_world(lat, lon, zoom);
-        let tile = (((x / TILE_PX) as u32).min(last), ((y / TILE_PX) as u32).min(last));
-        tiles.entry(tile).or_default().push((index, x - f64::from(tile.0) * TILE_PX, y - f64::from(tile.1) * TILE_PX));
+        let tile = (
+            ((x / TILE_PX) as u32).min(last),
+            ((y / TILE_PX) as u32).min(last),
+        );
+        tiles.entry(tile).or_default().push((
+            index,
+            x - f64::from(tile.0) * TILE_PX,
+            y - f64::from(tile.1) * TILE_PX,
+        ));
     }
     tiles
 }
@@ -362,7 +432,11 @@ fn terrain_zoom(places: &[(f64, f64)]) -> (u8, TerrainTiles) {
 /// longitude), from terrain tiles kept in the tile cache. Only the numbers
 /// of the tiles are sent, as when showing the map. A tile that fails is
 /// tried once more; a place whose tile still can't be had gets `None`.
-pub fn terrain_heights(places: &[(f64, f64)], cache: &Path, progress: &TerrainProgress) -> Vec<Option<f64>> {
+pub fn terrain_heights(
+    places: &[(f64, f64)],
+    cache: &Path,
+    progress: &TerrainProgress,
+) -> Vec<Option<f64>> {
     let (zoom, tiles) = terrain_zoom(places);
     let tiles: Vec<_> = tiles.into_iter().collect();
     progress.total.store(tiles.len(), Ordering::Relaxed);
@@ -381,12 +455,17 @@ pub fn terrain_heights(places: &[(f64, f64)], cache: &Path, progress: &TerrainPr
                         // Each tile is read as it comes, so only the heights are kept.
                         let got = terrain_tile(&agent, &folder, zoom, *x, *y);
                         if let Some(tile) = &got {
-                            let mut heights = heights.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+                            let mut heights = heights
+                                .lock()
+                                .unwrap_or_else(|poisoned| poisoned.into_inner());
                             for &(index, px, py) in inside {
                                 heights[index] = Some(terrain_height(tile, px, py));
                             }
                         } else {
-                            failed.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push(job);
+                            failed
+                                .lock()
+                                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                                .push(job);
                         }
                         if got.is_some() || last_try {
                             progress.done.fetch_add(1, Ordering::Relaxed);
@@ -395,23 +474,40 @@ pub fn terrain_heights(places: &[(f64, f64)], cache: &Path, progress: &TerrainPr
                 });
             }
         });
-        left = failed.into_inner().unwrap_or_else(|poisoned| poisoned.into_inner());
+        left = failed
+            .into_inner()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         if left.is_empty() {
             break;
         }
     }
-    heights.into_inner().unwrap_or_else(|poisoned| poisoned.into_inner())
+    heights
+        .into_inner()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 /// A terrain tile from the cache, or downloaded when it isn't there or
 /// doesn't decode, as a tile cut short by a crash wouldn't.
-fn terrain_tile(agent: &ureq::Agent, folder: &Path, zoom: u8, x: u32, y: u32) -> Option<image::RgbaImage> {
+fn terrain_tile(
+    agent: &ureq::Agent,
+    folder: &Path,
+    zoom: u8,
+    x: u32,
+    y: u32,
+) -> Option<image::RgbaImage> {
     let path = folder.join(x.to_string()).join(format!("{y}.png"));
-    let decode = |bytes: &[u8]| image::load_from_memory(bytes).ok().map(|tile| tile.to_rgba8());
+    let decode = |bytes: &[u8]| {
+        image::load_from_memory(bytes)
+            .ok()
+            .map(|tile| tile.to_rgba8())
+    };
     if let Some(tile) = std::fs::read(&path).ok().and_then(|bytes| decode(&bytes)) {
         return Some(tile);
     }
-    let url = TERRAIN_URL.replace("{z}", &zoom.to_string()).replace("{x}", &x.to_string()).replace("{y}", &y.to_string());
+    let url = TERRAIN_URL
+        .replace("{z}", &zoom.to_string())
+        .replace("{x}", &x.to_string())
+        .replace("{y}", &y.to_string());
     let bytes = fetch(agent, &url)?;
     let tile = decode(&bytes)?;
     let _ = crate::image_io::write_whole(&path, &bytes);
@@ -424,7 +520,10 @@ fn terrain_tile(agent: &ureq::Agent, folder: &Path, zoom: u8, x: u32, y: u32) ->
 fn terrain_height(tile: &image::RgbaImage, x: f64, y: f64) -> f64 {
     let (w, h) = (tile.width() as f64, tile.height() as f64);
     // Pixel centers are half a pixel in.
-    let (x, y) = ((x * w / TILE_PX - 0.5).clamp(0.0, w - 1.0), (y * h / TILE_PX - 0.5).clamp(0.0, h - 1.0));
+    let (x, y) = (
+        (x * w / TILE_PX - 0.5).clamp(0.0, w - 1.0),
+        (y * h / TILE_PX - 0.5).clamp(0.0, h - 1.0),
+    );
     let (x0, y0) = (x.floor(), y.floor());
     let (x1, y1) = ((x0 + 1.0).min(w - 1.0), (y0 + 1.0).min(h - 1.0));
     let at = |px: f64, py: f64| {
@@ -460,13 +559,31 @@ mod tests {
         assert_eq!(MapSource::default(), MapSource::OpenFreeMap);
         let tiles = Path::new("tiles");
         assert_eq!(MapSource::OpenStreetMap.cache_dir(tiles), tiles);
-        assert_eq!(MapSource::EsriImagery.cache_dir(tiles), tiles.join("esri-imagery"));
-        assert!(MapSource::EsriImagery.picture_url(3, 5, 2, "").ends_with("/tile/3/2/5?blankTile=false"), "Esri puts the row first");
-        assert!(MapSource::CartoPositron.picture_url(3, 5, 2, " abc ").ends_with("/light_all/3/5/2@2x.png?key=abc"));
-        assert!(MapSource::CartoVoyager.picture_url(3, 5, 2, "abc").contains("/voyager/3/5/2@2x.png"));
-        assert!(MapSource::CartoDarkMatter.picture_url(3, 5, 2, "abc").contains("/dark_all/3/5/2@2x.png"));
-        assert!(MapSource::ALL.iter().all(|source| MapSource::from_code(source.code()) == Some(*source)));
-        assert!(MapSource::CARTO_STYLES.iter().all(|style| style.needs_key()));
+        assert_eq!(
+            MapSource::EsriImagery.cache_dir(tiles),
+            tiles.join("esri-imagery")
+        );
+        assert!(
+            MapSource::EsriImagery
+                .picture_url(3, 5, 2, "")
+                .ends_with("/tile/3/2/5?blankTile=false"),
+            "Esri puts the row first"
+        );
+        assert!(MapSource::CartoPositron
+            .picture_url(3, 5, 2, " abc ")
+            .ends_with("/light_all/3/5/2@2x.png?key=abc"));
+        assert!(MapSource::CartoVoyager
+            .picture_url(3, 5, 2, "abc")
+            .contains("/voyager/3/5/2@2x.png"));
+        assert!(MapSource::CartoDarkMatter
+            .picture_url(3, 5, 2, "abc")
+            .contains("/dark_all/3/5/2@2x.png"));
+        assert!(MapSource::ALL
+            .iter()
+            .all(|source| MapSource::from_code(source.code()) == Some(*source)));
+        assert!(MapSource::CARTO_STYLES
+            .iter()
+            .all(|style| style.needs_key()));
         assert_eq!(MapSource::CartoDarkMatter.style_name(), "Dark Matter");
     }
 
@@ -491,25 +608,51 @@ mod tests {
         let cache = std::env::temp_dir().join(format!("picasso-terrain-{}", std::process::id()));
         let (x, y) = latlon_to_world(25.0336, 121.5645, TERRAIN_ZOOM);
         let (tx, ty) = ((x / TILE_PX) as u32, (y / TILE_PX) as u32);
-        let path = cache.join("tiles/terrarium/12").join(tx.to_string()).join(format!("{ty}.png"));
+        let path = cache
+            .join("tiles/terrarium/12")
+            .join(tx.to_string())
+            .join(format!("{ty}.png"));
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        image::RgbaImage::from_pixel(256, 256, image::Rgba([128, 10, 0, 255])).save(&path).unwrap();
+        image::RgbaImage::from_pixel(256, 256, image::Rgba([128, 10, 0, 255]))
+            .save(&path)
+            .unwrap();
         let progress = TerrainProgress::default();
-        assert_eq!(terrain_heights(&[(25.0336, 121.5645)], &cache, &progress), vec![Some(10.0)]);
-        assert_eq!((progress.done.load(Ordering::Relaxed), progress.total.load(Ordering::Relaxed)), (1, 1));
+        assert_eq!(
+            terrain_heights(&[(25.0336, 121.5645)], &cache, &progress),
+            vec![Some(10.0)]
+        );
+        assert_eq!(
+            (
+                progress.done.load(Ordering::Relaxed),
+                progress.total.load(Ordering::Relaxed)
+            ),
+            (1, 1)
+        );
         let _ = std::fs::remove_dir_all(&cache);
     }
 
     #[test]
     fn long_tracks_read_coarser_terrain() {
         // A walk round a city stays at the finest tiles.
-        let city: Vec<(f64, f64)> = (0..1000).map(|step| (41.38 + step as f64 * 1e-5, 2.17)).collect();
+        let city: Vec<(f64, f64)> = (0..1000)
+            .map(|step| (41.38 + step as f64 * 1e-5, 2.17))
+            .collect();
         assert_eq!(terrain_zoom(&city).0, TERRAIN_ZOOM);
         // A drive from Seaport to Moscow needs too many of them.
-        let drive: Vec<(f64, f64)> =
-            (0..=4000).map(|step| (38.7 + (55.75 - 38.7) * step as f64 / 4000.0, -9.14 + (37.62 + 9.14) * step as f64 / 4000.0)).collect();
+        let drive: Vec<(f64, f64)> = (0..=4000)
+            .map(|step| {
+                (
+                    38.7 + (55.75 - 38.7) * step as f64 / 4000.0,
+                    -9.14 + (37.62 + 9.14) * step as f64 / 4000.0,
+                )
+            })
+            .collect();
         let (zoom, tiles) = terrain_zoom(&drive);
-        assert!(zoom < TERRAIN_ZOOM && tiles.len() <= TERRAIN_TILES, "{zoom} {}", tiles.len());
+        assert!(
+            zoom < TERRAIN_ZOOM && tiles.len() <= TERRAIN_TILES,
+            "{zoom} {}",
+            tiles.len()
+        );
         assert_eq!(tiles.values().map(Vec::len).sum::<usize>(), drive.len());
     }
 

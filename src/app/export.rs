@@ -86,11 +86,27 @@ impl PicassoApp {
             .config
             .text("export_folder")
             .map(str::to_owned)
-            .or_else(|| crate::db::pictures_dir().map(|dir| dir.join("Picasso Exports").display().to_string()))
+            .or_else(|| {
+                crate::db::pictures_dir()
+                    .map(|dir| dir.join("Picasso Exports").display().to_string())
+            })
             .unwrap_or_default();
-        let format = self.config.number("export_format").map_or(0, |n| n as usize).min(EXPORT_FORMATS.len() - 1);
-        let edge = self.config.number("export_edge").map_or(0, |n| n as usize).min(EXPORT_EDGES.len() - 1);
-        let quality = self.config.number("export_quality").map_or(ExportOptions::default().quality, |n| n.clamp(50.0, 100.0) as u8);
+        let format = self
+            .config
+            .number("export_format")
+            .map_or(0, |n| n as usize)
+            .min(EXPORT_FORMATS.len() - 1);
+        let edge = self
+            .config
+            .number("export_edge")
+            .map_or(0, |n| n as usize)
+            .min(EXPORT_EDGES.len() - 1);
+        let quality = self
+            .config
+            .number("export_quality")
+            .map_or(ExportOptions::default().quality, |n| {
+                n.clamp(50.0, 100.0) as u8
+            });
         self.modal = Modal::Export(ExportDialog {
             jobs,
             videos,
@@ -105,76 +121,102 @@ impl PicassoApp {
     }
 
     pub(super) fn export_modal(&mut self, ctx: &egui::Context) {
-        let Modal::Export(dialog) = &mut self.modal else { return };
+        let Modal::Export(dialog) = &mut self.modal else {
+            return;
+        };
         let mut close = false;
         let mut browse = false;
         let mut start = false;
-        let response = egui::Modal::new(egui::Id::unique("export")).frame(about::dialog_frame()).show(ctx, |ui| {
-            ui.set_width(480.0);
-            about::title_bar(ui, &self.logo, tr("Export photos"), &mut close);
-            egui::Frame::new().inner_margin(Margin::symmetric(20, 14)).show(ui, |ui| {
-                let intro = if dialog.jobs.len() == 1 {
-                    tr("The photo is saved as a new file with its edits.").to_string()
-                } else {
-                    trf("{} photos are saved as new files with their edits.", &[&dialog.jobs.len()])
-                };
-                ui.label(RichText::new(intro).color(theme::muted()));
-                if dialog.videos > 0 {
-                    ui.label(RichText::new(trf("{} videos are left out.", &[&dialog.videos])).color(theme::muted()));
-                }
-                ui.add_space(10.0);
-                egui::Grid::new("export-grid").num_columns(2).spacing([12.0, 10.0]).show(ui, |ui| {
-                    ui.label(tr("Format"));
-                    egui::ComboBox::from_id_salt("batch-format")
-                        .width(120.0)
-                        .selected_text(EXPORT_FORMATS[dialog.format].0)
-                        .show_ui(ui, |ui| {
-                            for (index, (name, _)) in EXPORT_FORMATS.iter().enumerate() {
-                                ui.selectable_value(&mut dialog.format, index, *name);
+        let response = egui::Modal::new(egui::Id::unique("export"))
+            .frame(about::dialog_frame())
+            .show(ctx, |ui| {
+                ui.set_width(480.0);
+                about::title_bar(ui, &self.logo, tr("Export photos"), &mut close);
+                egui::Frame::new()
+                    .inner_margin(Margin::symmetric(20, 14))
+                    .show(ui, |ui| {
+                        let intro = if dialog.jobs.len() == 1 {
+                            tr("The photo is saved as a new file with its edits.").to_string()
+                        } else {
+                            trf(
+                                "{} photos are saved as new files with their edits.",
+                                &[&dialog.jobs.len()],
+                            )
+                        };
+                        ui.label(RichText::new(intro).color(theme::muted()));
+                        if dialog.videos > 0 {
+                            ui.label(
+                                RichText::new(trf("{} videos are left out.", &[&dialog.videos]))
+                                    .color(theme::muted()),
+                            );
+                        }
+                        ui.add_space(10.0);
+                        egui::Grid::new("export-grid")
+                            .num_columns(2)
+                            .spacing([12.0, 10.0])
+                            .show(ui, |ui| {
+                                ui.label(tr("Format"));
+                                egui::ComboBox::from_id_salt("batch-format")
+                                    .width(120.0)
+                                    .selected_text(EXPORT_FORMATS[dialog.format].0)
+                                    .show_ui(ui, |ui| {
+                                        for (index, (name, _)) in EXPORT_FORMATS.iter().enumerate()
+                                        {
+                                            ui.selectable_value(&mut dialog.format, index, *name);
+                                        }
+                                    });
+                                ui.end_row();
+                                ui.label(tr("Size"));
+                                egui::ComboBox::from_id_salt("batch-edge")
+                                    .width(120.0)
+                                    .selected_text(edge_label(dialog.options.long_edge))
+                                    .show_ui(ui, |ui| {
+                                        for edge in EXPORT_EDGES {
+                                            ui.selectable_value(
+                                                &mut dialog.options.long_edge,
+                                                edge,
+                                                edge_label(edge),
+                                            );
+                                        }
+                                    })
+                                    .response
+                                    .on_hover_text(tr("Long edge of the exported file"));
+                                ui.end_row();
+                                if dialog.format == 0 {
+                                    ui.label(tr("Quality"));
+                                    ui.add(egui::Slider::new(
+                                        &mut dialog.options.quality,
+                                        50..=100,
+                                    ));
+                                    ui.end_row();
+                                }
+                                ui.label(tr("Folder"));
+                                ui.horizontal(|ui| {
+                                    ui.add(
+                                        egui::TextEdit::singleline(&mut dialog.folder)
+                                            .desired_width(290.0),
+                                    );
+                                    if ui.button(tr("Browse")).clicked() {
+                                        browse = true;
+                                    }
+                                });
+                                ui.end_row();
+                            });
+                        if !dialog.error.is_empty() {
+                            ui.add_space(6.0);
+                            ui.label(RichText::new(&dialog.error).color(theme::DANGER));
+                        }
+                        ui.add_space(12.0);
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            if ui.add(theme::primary_button(tr("Export"))).clicked() {
+                                start = true;
+                            }
+                            if ui.button(tr("Cancel")).clicked() {
+                                close = true;
                             }
                         });
-                    ui.end_row();
-                    ui.label(tr("Size"));
-                    egui::ComboBox::from_id_salt("batch-edge")
-                        .width(120.0)
-                        .selected_text(edge_label(dialog.options.long_edge))
-                        .show_ui(ui, |ui| {
-                            for edge in EXPORT_EDGES {
-                                ui.selectable_value(&mut dialog.options.long_edge, edge, edge_label(edge));
-                            }
-                        })
-                        .response
-                        .on_hover_text(tr("Long edge of the exported file"));
-                    ui.end_row();
-                    if dialog.format == 0 {
-                        ui.label(tr("Quality"));
-                        ui.add(egui::Slider::new(&mut dialog.options.quality, 50..=100));
-                        ui.end_row();
-                    }
-                    ui.label(tr("Folder"));
-                    ui.horizontal(|ui| {
-                        ui.add(egui::TextEdit::singleline(&mut dialog.folder).desired_width(290.0));
-                        if ui.button(tr("Browse")).clicked() {
-                            browse = true;
-                        }
                     });
-                    ui.end_row();
-                });
-                if !dialog.error.is_empty() {
-                    ui.add_space(6.0);
-                    ui.label(RichText::new(&dialog.error).color(theme::DANGER));
-                }
-                ui.add_space(12.0);
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if ui.add(theme::primary_button(tr("Export"))).clicked() {
-                        start = true;
-                    }
-                    if ui.button(tr("Cancel")).clicked() {
-                        close = true;
-                    }
-                });
             });
-        });
         if browse {
             let mut picker = rfd::FileDialog::new().set_title(tr("Choose a folder for the photos"));
             if Path::new(&dialog.folder).is_dir() {
@@ -200,12 +242,19 @@ impl PicassoApp {
             dialog.error = trf("Couldn't create the folder: {}", &[&err]);
             return;
         }
-        let Modal::Export(dialog) = std::mem::replace(&mut self.modal, Modal::None) else { return };
-        let edge = EXPORT_EDGES.iter().position(|edge| *edge == dialog.options.long_edge).unwrap_or(0);
-        self.config.set("export_folder", folder.display().to_string());
+        let Modal::Export(dialog) = std::mem::replace(&mut self.modal, Modal::None) else {
+            return;
+        };
+        let edge = EXPORT_EDGES
+            .iter()
+            .position(|edge| *edge == dialog.options.long_edge)
+            .unwrap_or(0);
+        self.config
+            .set("export_folder", folder.display().to_string());
         self.config.set("export_format", dialog.format as f64);
         self.config.set("export_edge", edge as f64);
-        self.config.set("export_quality", f64::from(dialog.options.quality));
+        self.config
+            .set("export_quality", f64::from(dialog.options.quality));
         self.start_export(dialog, folder, ctx);
     }
 
@@ -228,51 +277,76 @@ impl PicassoApp {
         let jobs = dialog.jobs;
         let events = self.events_tx.clone();
         let ctx = ctx.clone();
-        let _ = std::thread::Builder::new().name("picasso-batch-export".into()).spawn(move || {
-            let targets = target_paths(&folder, &jobs, extension);
-            let exported = AtomicUsize::new(0);
-            let failed = AtomicUsize::new(0);
-            let error = Mutex::new(None);
-            let send = |finished: bool| {
-                let error = error.lock().map(|error| error.clone()).unwrap_or_default();
-                let _ = events.send(UiEvent::BatchExported {
-                    exported: exported.load(Ordering::Relaxed),
-                    failed: failed.load(Ordering::Relaxed),
-                    error,
-                    finished,
-                });
-                ctx.request_repaint();
-            };
-            let run = || {
-                jobs.par_iter().zip(targets.par_iter()).for_each(|(job, target)| {
-                    if cancel.load(Ordering::Relaxed) {
-                        return;
-                    }
-                    match edit::export(&job.source, target, &job.settings, job.rotation, options) {
-                        Ok(()) => {
-                            exported.fetch_add(1, Ordering::Relaxed);
-                        }
-                        Err(err) => {
-                            failed.fetch_add(1, Ordering::Relaxed);
-                            if let Ok(mut first) = error.lock() {
-                                let name = job.source.file_name().unwrap_or_default().to_string_lossy();
-                                first.get_or_insert_with(|| format!("{name}: {err}"));
+        let _ = std::thread::Builder::new()
+            .name("picasso-batch-export".into())
+            .spawn(move || {
+                let targets = target_paths(&folder, &jobs, extension);
+                let exported = AtomicUsize::new(0);
+                let failed = AtomicUsize::new(0);
+                let error = Mutex::new(None);
+                let send = |finished: bool| {
+                    let error = error.lock().map(|error| error.clone()).unwrap_or_default();
+                    let _ = events.send(UiEvent::BatchExported {
+                        exported: exported.load(Ordering::Relaxed),
+                        failed: failed.load(Ordering::Relaxed),
+                        error,
+                        finished,
+                    });
+                    ctx.request_repaint();
+                };
+                let run = || {
+                    jobs.par_iter()
+                        .zip(targets.par_iter())
+                        .for_each(|(job, target)| {
+                            if cancel.load(Ordering::Relaxed) {
+                                return;
                             }
-                        }
-                    }
-                    send(false);
-                });
-            };
-            match rayon::ThreadPoolBuilder::new().num_threads(crate::image_io::RENDER_THREADS).build() {
-                Ok(pool) => pool.install(run),
-                Err(_) => run(),
-            }
-            send(true);
-        });
+                            match edit::export(
+                                &job.source,
+                                target,
+                                &job.settings,
+                                job.rotation,
+                                options,
+                            ) {
+                                Ok(()) => {
+                                    exported.fetch_add(1, Ordering::Relaxed);
+                                }
+                                Err(err) => {
+                                    failed.fetch_add(1, Ordering::Relaxed);
+                                    if let Ok(mut first) = error.lock() {
+                                        let name = job
+                                            .source
+                                            .file_name()
+                                            .unwrap_or_default()
+                                            .to_string_lossy();
+                                        first.get_or_insert_with(|| format!("{name}: {err}"));
+                                    }
+                                }
+                            }
+                            send(false);
+                        });
+                };
+                match rayon::ThreadPoolBuilder::new()
+                    .num_threads(crate::image_io::RENDER_THREADS)
+                    .build()
+                {
+                    Ok(pool) => pool.install(run),
+                    Err(_) => run(),
+                }
+                send(true);
+            });
     }
 
-    pub(super) fn on_batch_export(&mut self, exported: usize, failed: usize, error: Option<String>, finished: bool) {
-        let Some(run) = &mut self.export_run else { return };
+    pub(super) fn on_batch_export(
+        &mut self,
+        exported: usize,
+        failed: usize,
+        error: Option<String>,
+        finished: bool,
+    ) {
+        let Some(run) = &mut self.export_run else {
+            return;
+        };
         if run.finished.is_some() {
             return;
         }
@@ -292,9 +366,16 @@ impl PicassoApp {
         ui.label(small("·".into()).color(theme::muted()));
         let Some(at) = run.finished else {
             ui.add(egui::Spinner::new().size(12.0));
-            let note = trf("Exporting {} of {}…", &[&(run.exported + run.failed + 1).min(run.total), &run.total]);
+            let note = trf(
+                "Exporting {} of {}…",
+                &[&(run.exported + run.failed + 1).min(run.total), &run.total],
+            );
             ui.label(small(note).color(theme::muted()));
-            if ui.link(small(tr("Stop").into())).on_hover_text(tr("Stop after the photos being saved now")).clicked() {
+            if ui
+                .link(small(tr("Stop").into()))
+                .on_hover_text(tr("Stop after the photos being saved now"))
+                .clicked()
+            {
                 run.cancel.store(true, Ordering::Relaxed);
             }
             return;
@@ -307,15 +388,26 @@ impl PicassoApp {
         ui.ctx().request_repaint_after(left);
         ui.label(small(trf("Exported {} photos", &[&run.exported])).color(theme::muted()));
         if run.skipped() > 0 {
-            ui.label(small(trf("Stopped; the other {} weren't exported", &[&run.skipped()])).color(theme::muted()));
+            ui.label(
+                small(trf(
+                    "Stopped; the other {} weren't exported",
+                    &[&run.skipped()],
+                ))
+                .color(theme::muted()),
+            );
         }
         if run.failed > 0 {
-            let note = ui.label(small(trf("{} couldn't be exported", &[&run.failed])).color(theme::DANGER));
+            let note = ui
+                .label(small(trf("{} couldn't be exported", &[&run.failed])).color(theme::DANGER));
             if let Some(error) = &run.error {
                 note.on_hover_text(error);
             }
         }
-        if ui.link(small(tr("Open folder").into())).on_hover_text(run.folder.display().to_string()).clicked() {
+        if ui
+            .link(small(tr("Open folder").into()))
+            .on_hover_text(run.folder.display().to_string())
+            .clicked()
+        {
             let _ = open::that(&run.folder);
         }
     }
@@ -380,7 +472,8 @@ mod tests {
 
     #[test]
     fn exported_names_never_overwrite_a_file() {
-        let folder = std::env::temp_dir().join(format!("picasso-export-names-{}", std::process::id()));
+        let folder =
+            std::env::temp_dir().join(format!("picasso-export-names-{}", std::process::id()));
         std::fs::create_dir_all(&folder).unwrap();
         std::fs::write(folder.join("beach.jpg"), b"taken").unwrap();
         let job = |path: &str| Job {
@@ -388,12 +481,20 @@ mod tests {
             settings: Settings::default(),
             rotation: 0,
         };
-        let jobs = [job("/a/beach.png"), job("/b/Beach.jpg"), job("/a/hill.heic"), job("/b/hill.jpg")];
+        let jobs = [
+            job("/a/beach.png"),
+            job("/b/Beach.jpg"),
+            job("/a/hill.heic"),
+            job("/b/hill.jpg"),
+        ];
         let names: Vec<String> = target_paths(&folder, &jobs, "jpg")
             .iter()
             .map(|path| path.file_name().unwrap().to_string_lossy().into_owned())
             .collect();
-        assert_eq!(names, ["beach (2).jpg", "Beach (3).jpg", "hill.jpg", "hill (2).jpg"]);
+        assert_eq!(
+            names,
+            ["beach (2).jpg", "Beach (3).jpg", "hill.jpg", "hill (2).jpg"]
+        );
         let _ = std::fs::remove_dir_all(&folder);
     }
 }

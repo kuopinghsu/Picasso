@@ -40,7 +40,11 @@ impl SidePanel {
 impl PicassoApp {
     /// Opens `panel`, or closes it when it is already showing.
     pub(super) fn toggle_side(&mut self, panel: SidePanel) {
-        self.side = if self.side == panel { SidePanel::None } else { panel };
+        self.side = if self.side == panel {
+            SidePanel::None
+        } else {
+            panel
+        };
         if self.side != SidePanel::None {
             self.side_last = self.side;
         }
@@ -49,7 +53,11 @@ impl PicassoApp {
 
     /// Opens the panel on the tab it last showed, or closes it.
     pub(super) fn toggle_side_panel(&mut self) {
-        let panel = if self.side == SidePanel::None { self.side_last } else { self.side };
+        let panel = if self.side == SidePanel::None {
+            self.side_last
+        } else {
+            self.side
+        };
         self.toggle_side(panel);
     }
 
@@ -71,16 +79,26 @@ impl PicassoApp {
         ui.horizontal(|ui| {
             for (panel, label) in [(SidePanel::Info, "Info"), (SidePanel::Map, "Map")] {
                 let on = self.side == panel;
-                let text = egui::RichText::new(tr(label)).color(if on { theme::accent() } else { theme::text() });
+                let text = egui::RichText::new(tr(label)).color(if on {
+                    theme::accent()
+                } else {
+                    theme::text()
+                });
                 let button = egui::Button::new(text)
-                    .fill(if on { theme::select() } else { Color32::TRANSPARENT })
+                    .fill(if on {
+                        theme::select()
+                    } else {
+                        Color32::TRANSPARENT
+                    })
                     .stroke(Stroke::NONE);
                 if ui.add(button).clicked() && !on {
                     self.toggle_side(panel);
                 }
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let close = egui::Button::new(egui::RichText::new("×").size(18.0).color(theme::muted())).frame(false);
+                let close =
+                    egui::Button::new(egui::RichText::new("×").size(18.0).color(theme::muted()))
+                        .frame(false);
                 if ui.add(close).on_hover_text(tr("Close panel")).clicked() {
                     self.toggle_side(self.side);
                 }
@@ -91,7 +109,10 @@ impl PicassoApp {
         let Some(photo) = self.side_photo() else {
             ui.add_space(40.0);
             ui.vertical_centered(|ui| {
-                ui.label(egui::RichText::new(tr("Select a photo to see its details.")).color(theme::muted()));
+                ui.label(
+                    egui::RichText::new(tr("Select a photo to see its details."))
+                        .color(theme::muted()),
+                );
             });
             return;
         };
@@ -115,8 +136,10 @@ impl PicassoApp {
     fn side_preview(&mut self, ui: &mut egui::Ui, photo: &Photo) {
         self.ensure_thumb(photo.id, &photo.path);
         let width = ui.available_width();
-        let (frame, _) = ui.allocate_exact_size(Vec2::new(width, (width * 0.7).min(240.0)), Sense::hover());
-        ui.painter().rect_filled(frame, theme::THUMB_RADIUS, theme::placeholder());
+        let (frame, _) =
+            ui.allocate_exact_size(Vec2::new(width, (width * 0.7).min(240.0)), Sense::hover());
+        ui.painter()
+            .rect_filled(frame, theme::THUMB_RADIUS, theme::placeholder());
         if let Some((texture, _, _)) = self.thumb_texture(photo.id) {
             let (w, h) = self.shown_size(photo);
             let scale = (frame.width() / w).min(frame.height() / h);
@@ -129,10 +152,25 @@ impl PicassoApp {
     pub(super) fn side_info(&mut self, ui: &mut egui::Ui, photo: &Photo) {
         self.side_preview(ui, photo);
         ui.add_space(10.0);
-        ui.add(egui::Label::new(egui::RichText::new(&photo.filename).size(15.0).strong().color(theme::text())).wrap());
+        ui.add(
+            egui::Label::new(
+                egui::RichText::new(&photo.filename)
+                    .size(15.0)
+                    .strong()
+                    .color(theme::text()),
+            )
+            .wrap(),
+        );
         if let Some(parent) = std::path::Path::new(&photo.path).parent() {
             let folder = parent.to_string_lossy();
-            ui.add(egui::Label::new(egui::RichText::new(folder.trim_start_matches(r"\\?\")).size(11.5).color(theme::muted())).wrap());
+            ui.add(
+                egui::Label::new(
+                    egui::RichText::new(folder.trim_start_matches(r"\\?\"))
+                        .size(11.5)
+                        .color(theme::muted()),
+                )
+                .wrap(),
+            );
         }
         if !photo.caption.is_empty() {
             ui.add_space(4.0);
@@ -149,15 +187,24 @@ impl PicassoApp {
             rows.insert(1, ("Modified", format_timestamp(photo.modified_at)));
         }
         if photo.is_video() && photo.duration > 0.0 {
-            rows.insert(1, ("Duration", crate::types::format_duration(photo.duration)));
+            rows.insert(
+                1,
+                ("Duration", crate::types::format_duration(photo.duration)),
+            );
         }
         if photo.rotation != 0 {
             rows.push(("Rotated", trf("{}° clockwise", &[&photo.rotation])));
         }
-        if let Some(folder) = self.folders.iter().find(|folder| folder.id == photo.folder_id) {
+        if let Some(folder) = self
+            .folders
+            .iter()
+            .find(|folder| folder.id == photo.folder_id)
+        {
             rows.push(("Library folder", folder_label(&folder.path)));
         }
-        super::photo_meta::card(ui, tr("Properties"), |ui| property_grid(ui, ("props", photo.id), &rows));
+        super::photo_meta::card(ui, tr("Properties"), |ui| {
+            property_grid(ui, ("props", photo.id), &rows)
+        });
 
         let exif = self.exif_for(photo);
         exif_card(ui, photo, exif.as_deref());
@@ -188,7 +235,12 @@ impl PicassoApp {
             self.side_preview(ui, photo);
             ui.add_space(16.0);
             ui.vertical_centered(|ui| {
-                ui.label(egui::RichText::new(tr("No GPS location")).size(15.0).strong().color(theme::text()));
+                ui.label(
+                    egui::RichText::new(tr("No GPS location"))
+                        .size(15.0)
+                        .strong()
+                        .color(theme::text()),
+                );
                 ui.add_space(4.0);
                 ui.label(
                     egui::RichText::new(tr("This photo's EXIF has no GPS coordinates."))
@@ -207,7 +259,10 @@ impl PicassoApp {
             self.side_pan = Vec2::ZERO;
         }
         let width = ui.available_width();
-        let (rect, response) = ui.allocate_exact_size(Vec2::new(width, (width * 1.1).clamp(220.0, 420.0)), Sense::click_and_drag());
+        let (rect, response) = ui.allocate_exact_size(
+            Vec2::new(width, (width * 1.1).clamp(220.0, 420.0)),
+            Sense::click_and_drag(),
+        );
         if response.dragged() {
             self.side_pan += response.drag_delta();
         }
@@ -216,8 +271,10 @@ impl PicassoApp {
         }
         let mut zoom_by = 0i32;
         if response.hovered() {
-            let (scroll, pinch) = ui.input(|input| (input.smooth_scroll_delta.y, input.zoom_delta()));
-            zoom_by = super::places::wheel_steps(&mut self.side_wheel, scroll) + super::places::pinch_steps(&mut self.side_pinch, pinch);
+            let (scroll, pinch) =
+                ui.input(|input| (input.smooth_scroll_delta.y, input.zoom_delta()));
+            zoom_by = super::places::wheel_steps(&mut self.side_wheel, scroll)
+                + super::places::pinch_steps(&mut self.side_pinch, pinch);
         }
 
         let painter = ui.painter_at(rect);
@@ -252,16 +309,28 @@ impl PicassoApp {
             }
         }
         paint_pin(&painter, rect.center() + self.side_pan);
-        painter.rect_stroke(rect, theme::THUMB_RADIUS, Stroke::new(1.0, theme::hairline()), egui::StrokeKind::Inside);
+        painter.rect_stroke(
+            rect,
+            theme::THUMB_RADIUS,
+            Stroke::new(1.0, theme::hairline()),
+            egui::StrokeKind::Inside,
+        );
         self.paint_map_notes(&painter, rect, view);
 
         // Clear of the provider's credit, which may wrap onto two lines.
         let step = super::places::zoom_step(rect.height() - 52.0);
-        if let Some(next) = super::places::zoom_control(ui, rect.right_top() + Vec2::new(-36.0, 8.0), self.side_zoom, step, "side-zoom") {
+        if let Some(next) = super::places::zoom_control(
+            ui,
+            rect.right_top() + Vec2::new(-36.0, 8.0),
+            self.side_zoom,
+            step,
+            "side-zoom",
+        ) {
             zoom_by = i32::from(next) - i32::from(self.side_zoom);
         }
         if zoom_by != 0 {
-            let next = (self.side_zoom as i32 + zoom_by).clamp(MIN_ZOOM as i32, MAX_ZOOM as i32) as u8;
+            let next =
+                (self.side_zoom as i32 + zoom_by).clamp(MIN_ZOOM as i32, MAX_ZOOM as i32) as u8;
             if next != self.side_zoom {
                 self.side_pan *= 2f32.powi(i32::from(next) - i32::from(self.side_zoom));
                 self.side_zoom = next;
@@ -271,13 +340,25 @@ impl PicassoApp {
         // The same location details as the photo's info, under its map.
         ui.add_space(8.0);
         let altitude = altitude_of(self.exif_for(photo).as_deref());
-        let action = super::photo_meta::location(ui, photo.id, photo.place(), photo.pinned(), altitude.as_deref(), self.nav == Nav::Places);
+        let action = super::photo_meta::location(
+            ui,
+            photo.id,
+            photo.place(),
+            photo.pinned(),
+            altitude.as_deref(),
+            self.nav == Nav::Places,
+        );
         self.location_action(photo, action);
     }
 
     /// The Location card: a small map of where `photo` was taken, which
     /// opens Places when clicked, then the location's details and actions.
-    pub(super) fn location_card(&mut self, ui: &mut egui::Ui, photo: &Photo, altitude: Option<&str>) {
+    pub(super) fn location_card(
+        &mut self,
+        ui: &mut egui::Ui,
+        photo: &Photo,
+        altitude: Option<&str>,
+    ) {
         let in_places = self.nav == Nav::Places;
         let mut action = None;
         super::photo_meta::card(ui, tr("Location"), |ui| {
@@ -287,12 +368,24 @@ impl PicassoApp {
                 }
                 ui.add_space(8.0);
             }
-            action = super::photo_meta::location(ui, photo.id, photo.place(), photo.pinned(), altitude, in_places).or(action);
+            action = super::photo_meta::location(
+                ui,
+                photo.id,
+                photo.place(),
+                photo.pinned(),
+                altitude,
+                in_places,
+            )
+            .or(action);
         });
         self.location_action(photo, action);
     }
 
-    fn location_action(&mut self, photo: &Photo, action: Option<super::photo_meta::LocationAction>) {
+    fn location_action(
+        &mut self,
+        photo: &Photo,
+        action: Option<super::photo_meta::LocationAction>,
+    ) {
         match action {
             Some(super::photo_meta::LocationAction::Places) => self.show_on_map(photo.id),
             Some(super::photo_meta::LocationAction::OpenStreetMap) => {
@@ -308,17 +401,43 @@ impl PicassoApp {
     /// as Places. True when clicked and `opens` says a click goes to Places.
     fn mini_map(&mut self, ui: &mut egui::Ui, lat: f64, lon: f64, opens: bool) -> bool {
         let width = ui.available_width();
-        let sense = if opens { Sense::click() } else { Sense::hover() };
-        let (rect, response) = ui.allocate_exact_size(Vec2::new(width, (width * 0.5).clamp(110.0, 160.0)), sense);
+        let sense = if opens {
+            Sense::click()
+        } else {
+            Sense::hover()
+        };
+        let (rect, response) =
+            ui.allocate_exact_size(Vec2::new(width, (width * 0.5).clamp(110.0, 160.0)), sense);
         let painter = ui.painter_at(rect);
         painter.rect_filled(rect, 8, super::places::map_backdrop());
-        self.paint_tiles(&painter, rect, MapView { lat, lon, zoom: MINI_MAP_ZOOM, pan: Vec2::ZERO });
+        self.paint_tiles(
+            &painter,
+            rect,
+            MapView {
+                lat,
+                lon,
+                zoom: MINI_MAP_ZOOM,
+                pan: Vec2::ZERO,
+            },
+        );
         paint_pin(&painter, rect.center() + Vec2::new(0.0, 8.0));
         // The tiles are square at their corners; a frame the card's colour rounds them.
-        painter.rect_stroke(rect.expand(3.0), 11, Stroke::new(6.0, theme::bg()), egui::StrokeKind::Inside);
-        painter.rect_stroke(rect, 8, Stroke::new(1.0, theme::hairline()), egui::StrokeKind::Inside);
+        painter.rect_stroke(
+            rect.expand(3.0),
+            11,
+            Stroke::new(6.0, theme::bg()),
+            egui::StrokeKind::Inside,
+        );
+        painter.rect_stroke(
+            rect,
+            8,
+            Stroke::new(1.0, theme::hairline()),
+            egui::StrokeKind::Inside,
+        );
         if opens {
-            let response = response.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(tr("Show in Places"));
+            let response = response
+                .on_hover_cursor(egui::CursorIcon::PointingHand)
+                .on_hover_text(tr("Show in Places"));
             return response.clicked();
         }
         false
@@ -327,7 +446,8 @@ impl PicassoApp {
     /// The bar pinned under a photo's details: what can be done with the
     /// file, with deleting apart at the end, in red.
     pub(super) fn photo_actions(&mut self, ui: &mut egui::Ui, photo: &Photo) {
-        let (line, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 1.0), Sense::hover());
+        let (line, _) =
+            ui.allocate_exact_size(Vec2::new(ui.available_width(), 1.0), Sense::hover());
         ui.painter().rect_filled(line, 0, theme::hairline());
         ui.add_space(6.0);
         ui.horizontal(|ui| {
@@ -335,7 +455,9 @@ impl PicassoApp {
                 crate::shell::reveal(&photo.path);
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let trash = egui::Button::new(egui::RichText::new(tr("Move to trash")).color(theme::DANGER));
+                let trash = egui::Button::new(
+                    egui::RichText::new(tr("Move to trash")).color(theme::DANGER),
+                );
                 if ui.add(trash).clicked() {
                     self.modal = super::Modal::trash(vec![photo.id]);
                 }
@@ -352,31 +474,49 @@ const MINI_MAP_ZOOM: u8 = 13;
 
 /// The Altitude row of `exif`, which the Location card shows.
 pub(super) fn altitude_of(exif: Option<&[(&'static str, String)]>) -> Option<String> {
-    exif?.iter().find(|(label, _)| *label == "Altitude").map(|(_, value)| value.clone())
+    exif?
+        .iter()
+        .find(|(label, _)| *label == "Altitude")
+        .map(|(_, value)| value.clone())
 }
 
 /// The Camera card, or the Video card for a video, from `exif` as read,
 /// with the library's name for the camera when the file's own is missing.
 pub(super) fn exif_card(ui: &mut egui::Ui, photo: &Photo, exif: Option<&[(&'static str, String)]>) {
-    super::photo_meta::card(ui, tr(if photo.is_video() { "Video" } else { "Camera" }), |ui| match exif {
-        None => {
-            ui.horizontal(|ui| {
-                ui.add(egui::Spinner::new().size(12.0));
-                ui.label(egui::RichText::new(tr("Reading EXIF…")).size(12.0).color(theme::muted()));
-            });
-        }
-        Some(exif) => {
-            let mut rows = exif.to_vec();
-            if !photo.camera.is_empty() && !rows.iter().any(|(label, _)| *label == "Camera") {
-                rows.insert(0, ("Camera", photo.camera.clone()));
+    super::photo_meta::card(
+        ui,
+        tr(if photo.is_video() { "Video" } else { "Camera" }),
+        |ui| match exif {
+            None => {
+                ui.horizontal(|ui| {
+                    ui.add(egui::Spinner::new().size(12.0));
+                    ui.label(
+                        egui::RichText::new(tr("Reading EXIF…"))
+                            .size(12.0)
+                            .color(theme::muted()),
+                    );
+                });
             }
-            if rows.iter().all(|(label, _)| *label == "Taken" || *label == "Altitude") {
-                ui.label(egui::RichText::new(tr("No EXIF data in this file")).size(12.0).color(theme::muted()));
-            } else {
-                super::photo_meta::exif(ui, ("exif", photo.id), &rows, photo.is_video());
+            Some(exif) => {
+                let mut rows = exif.to_vec();
+                if !photo.camera.is_empty() && !rows.iter().any(|(label, _)| *label == "Camera") {
+                    rows.insert(0, ("Camera", photo.camera.clone()));
+                }
+                if rows
+                    .iter()
+                    .all(|(label, _)| *label == "Taken" || *label == "Altitude")
+                {
+                    ui.label(
+                        egui::RichText::new(tr("No EXIF data in this file"))
+                            .size(12.0)
+                            .color(theme::muted()),
+                    );
+                } else {
+                    super::photo_meta::exif(ui, ("exif", photo.id), &rows, photo.is_video());
+                }
             }
-        }
-    });
+        },
+    );
 }
 
 /// Two-column grid of `rows`, whose labels are English keys for `tr`; a
@@ -414,7 +554,20 @@ pub(super) fn panel_icon(ui: &mut egui::Ui, on: bool) -> egui::Response {
     let color = if on { theme::accent() } else { theme::text() };
     let window = Rect::from_center_size(rect.center(), Vec2::new(18.0, 14.0));
     let pane = Rect::from_min_max(egui::pos2(window.max.x - 6.5, window.min.y), window.max);
-    painter.rect_filled(pane, egui::CornerRadius { ne: 2, se: 2, ..Default::default() }, color);
-    painter.rect_stroke(window, 2.0, Stroke::new(1.5, color), egui::StrokeKind::Inside);
+    painter.rect_filled(
+        pane,
+        egui::CornerRadius {
+            ne: 2,
+            se: 2,
+            ..Default::default()
+        },
+        color,
+    );
+    painter.rect_stroke(
+        window,
+        2.0,
+        Stroke::new(1.5, color),
+        egui::StrokeKind::Inside,
+    );
     response
 }

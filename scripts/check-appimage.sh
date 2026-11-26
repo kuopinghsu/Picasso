@@ -22,17 +22,17 @@ if [ "${1:-}" = --system-libs ]; then
 fi
 
 case "${1:-amd64}" in
-    amd64 | x86_64 | x64) label=x64 abi=x86-64 ;;
-    arm64 | aarch64) label=arm64 abi=AArch64 ;;
+    amd64 | x86_64 | x64) label=x86_64 abi=x86-64 ;;
+    arm64 | aarch64) label=aarch64 abi=AArch64 ;;
     *)
         echo "Unknown architecture $1; use amd64 or arm64" >&2
         exit 1
         ;;
 esac
 
-image=$(ls -t dist/picasso-*-linux-"$label".AppImage 2>/dev/null | head -n 1 || true)
+image=$(ls -t dist/picasso-*-"$label".AppImage 2>/dev/null | head -n 1 || true)
 if [ -z "$image" ]; then
-    echo "No dist/picasso-*-linux-$label.AppImage; run 'make appimage-docker' first" >&2
+    echo "No dist/picasso-*-$label.AppImage; run 'make appimage-docker' first" >&2
     exit 1
 fi
 
@@ -61,13 +61,21 @@ cd "$work/squashfs-root"
 # The bundled libraries AppRun puts on the path: those the system lacks.
 installed=$({ /sbin/ldconfig -p || ldconfig -p; } 2>/dev/null)
 bundled=
-used=0
 for dir in "$PWD"/usr/lib/picasso/*; do
     if ! grep -q "^[[:space:]]*${dir##*/} (libc6,$abi" <<<"$installed"; then
         bundled=$bundled${bundled:+:}$dir
-        used=$((used + 1))
     fi
 done
+# Match AppRun: libxkbcommon-x11 uses private symbols in libxkbcommon,
+# so a mixed system/bundled pair can pass ldd yet crash at window creation.
+xkb=$PWD/usr/lib/picasso/libxkbcommon.so.0
+xkb_x11=$PWD/usr/lib/picasso/libxkbcommon-x11.so.0
+case :$bundled: in
+    *":$xkb_x11:"*) case :$bundled: in *":$xkb:"*) ;; *) bundled=$bundled:$xkb ;; esac ;;
+    *":$xkb:"*) [ -d "$xkb_x11" ] && bundled=$bundled:$xkb_x11 ;;
+esac
+used=0
+for dir in ${bundled//:/ }; do used=$((used + 1)); done
 echo "AppRun would use $used of $(ls usr/lib/picasso | wc -l) bundled libraries"
 
 failed=0

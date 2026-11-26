@@ -9,10 +9,13 @@ const ICON_SIZE: u32 = 256;
 
 fn main() {
     let out = PathBuf::from(std::env::var_os("OUT_DIR").expect("OUT_DIR is set by Cargo"));
-    let manifest = PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR is set by Cargo"));
+    let manifest = PathBuf::from(
+        std::env::var_os("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR is set by Cargo"),
+    );
     let ico = manifest.join("build").join("picasso.ico");
     let bytes = std::fs::read(&ico).unwrap_or_else(|err| panic!("read {}: {err}", ico.display()));
-    std::fs::write(out.join("icon-256.rgba"), ico_rgba(&bytes, ICON_SIZE)).expect("write icon pixels");
+    std::fs::write(out.join("icon-256.rgba"), ico_rgba(&bytes, ICON_SIZE))
+        .expect("write icon pixels");
     println!("cargo:rustc-env=PICASSO_BUILD_DATE={}", build_date());
     println!("cargo:rustc-env=PICASSO_COMMIT={}", commit(&manifest));
 
@@ -48,7 +51,7 @@ fn ico_rgba(ico: &[u8], size: u32) -> Vec<u8> {
     let mut out = Vec::with_capacity(row * size as usize);
     for y in (0..size as usize).rev() {
         let line = &image[header + y * row..header + (y + 1) * row];
-        for pixel in line.chunks_exact(4) {
+        for pixel in line.as_chunks::<4>().0 {
             out.extend_from_slice(&[pixel[2], pixel[1], pixel[0], pixel[3]]);
         }
     }
@@ -60,7 +63,11 @@ fn build_date() -> String {
     let seconds = std::env::var("SOURCE_DATE_EPOCH")
         .ok()
         .and_then(|value| value.parse().ok())
-        .unwrap_or_else(|| SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |since| since.as_secs()));
+        .unwrap_or_else(|| {
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_or(0, |since| since.as_secs())
+        });
     let (year, month, day) = civil_date(seconds / 86_400);
     format!("{year}.{month:02}.{day:02}")
 }
@@ -88,7 +95,11 @@ fn commit(manifest: &std::path::Path) -> String {
     };
     if let Some(dir) = git(&["rev-parse", "--absolute-git-dir"]) {
         let dir = PathBuf::from(dir);
-        for path in [dir.join("HEAD"), dir.join("refs").join("heads"), dir.join("packed-refs")] {
+        for path in [
+            dir.join("HEAD"),
+            dir.join("refs").join("heads"),
+            dir.join("packed-refs"),
+        ] {
             if path.exists() {
                 println!("cargo:rerun-if-changed={}", path.display());
             }
@@ -97,7 +108,11 @@ fn commit(manifest: &std::path::Path) -> String {
         // the build differs from the commit until it is back.
         // -z gives names as they are, where plain output quotes those with
         // letters outside ASCII, which would name no file.
-        for path in git(&["ls-files", "-z"]).unwrap_or_default().split('\0').filter(|path| !path.is_empty()) {
+        for path in git(&["ls-files", "-z"])
+            .unwrap_or_default()
+            .split('\0')
+            .filter(|path| !path.is_empty())
+        {
             println!("cargo:rerun-if-changed={path}");
         }
     }
@@ -108,7 +123,9 @@ fn commit(manifest: &std::path::Path) -> String {
             return sha.chars().take(7).collect();
         }
     }
-    let Some(sha) = git(&["rev-parse", "HEAD"]) else { return String::new() };
+    let Some(sha) = git(&["rev-parse", "HEAD"]) else {
+        return String::new();
+    };
     let short: String = sha.chars().take(7).collect();
     // Tracked files that differ from the commit make a build no commit names.
     let changed = std::process::Command::new("git")

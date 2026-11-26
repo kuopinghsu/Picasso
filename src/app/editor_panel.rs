@@ -8,13 +8,16 @@ use eframe::egui::{self, Color32, Pos2, RichText, Sense, Stroke, Vec2};
 use serde_json::{Map, Value};
 
 use crate::edit::{
-    self, presets, Control, Geometry, Kind, Mask, Settings, Shape, Unit, BANDS, CURVE_CHANNELS, HDR_METHODS, LOCALS, MIX_PARTS, PROFILES, ZONES,
+    self, presets, Control, Geometry, Kind, Mask, Settings, Shape, Unit, BANDS, CURVE_CHANNELS,
+    HDR_METHODS, LOCALS, MIX_PARTS, PROFILES, ZONES,
 };
 use crate::i18n::{tr, trf};
 use crate::photo_info::Histogram;
 use crate::types::Photo;
 
-use super::editor::{Compare, EditSession, Live, Tool, ASPECTS, EXPORT_EDGES, EXPORT_FORMATS, GUIDES};
+use super::editor::{
+    Compare, EditSession, Live, Tool, ASPECTS, EXPORT_EDGES, EXPORT_FORMATS, GUIDES,
+};
 use super::theme::{self, Icon, WHITE};
 use super::PicassoApp;
 
@@ -77,7 +80,11 @@ struct Context<'a> {
 impl PicassoApp {
     pub(super) fn edit_panel(&mut self, ui: &mut egui::Ui, height: f32, photo: Option<&Photo>) {
         let mut actions = Vec::new();
-        let names: Vec<String> = self.user_presets.iter().map(|preset| preset.name.clone()).collect();
+        let names: Vec<String> = self
+            .user_presets
+            .iter()
+            .map(|preset| preset.name.clone())
+            .collect();
         let last_preset = self
             .edit
             .as_ref()
@@ -89,13 +96,23 @@ impl PicassoApp {
             has_clipboard: self.edit_clipboard.is_some(),
             photo,
         };
-        let frame = egui::Frame::new().fill(theme::sidebar()).inner_margin(egui::Margin::same(12));
+        let frame = egui::Frame::new()
+            .fill(theme::sidebar())
+            .inner_margin(egui::Margin::same(12));
         frame.show(ui, |ui| {
             ui.set_min_size(Vec2::new(PANEL_W, height - 24.0));
             ui.set_max_width(PANEL_W);
             // The viewer row lays out left to right; the panel stacks downward.
             let layout = egui::Layout::top_down(egui::Align::Min);
-            ui.with_layout(layout, |ui| panel_contents(ui, self.edit.as_mut(), height - 24.0, &context, &mut actions));
+            ui.with_layout(layout, |ui| {
+                panel_contents(
+                    ui,
+                    self.edit.as_mut(),
+                    height - 24.0,
+                    &context,
+                    &mut actions,
+                )
+            });
         });
         let ctx = ui.ctx().clone();
         for action in actions {
@@ -125,11 +142,25 @@ impl PicassoApp {
     }
 }
 
-fn panel_contents(ui: &mut egui::Ui, session: Option<&mut EditSession>, height: f32, context: &Context, actions: &mut Vec<Action>) {
+fn panel_contents(
+    ui: &mut egui::Ui,
+    session: Option<&mut EditSession>,
+    height: f32,
+    context: &Context,
+    actions: &mut Vec<Action>,
+) {
     let top = ui.cursor().top();
-    let history = session.as_ref().filter(|session| session.error.is_none()).map(|session| &session.history);
+    let history = session
+        .as_ref()
+        .filter(|session| session.error.is_none())
+        .map(|session| &session.history);
     ui.horizontal(|ui| {
-        ui.label(RichText::new(tr("Edit")).size(16.0).strong().color(theme::text()));
+        ui.label(
+            RichText::new(tr("Edit"))
+                .size(16.0)
+                .strong()
+                .color(theme::text()),
+        );
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if ui.button(tr("Done")).clicked() {
                 actions.push(Action::Done);
@@ -137,10 +168,16 @@ fn panel_contents(ui: &mut egui::Ui, session: Option<&mut EditSession>, height: 
             let Some(history) = history else { return };
             history_menu(ui, history, context, actions);
             let (can_undo, can_redo) = (history.can_undo(), history.can_redo());
-            if theme::icon_button(ui, Icon::Redo, can_redo, false).on_hover_text(tr("Redo (Ctrl+Y)")).clicked() {
+            if theme::icon_button(ui, Icon::Redo, can_redo, false)
+                .on_hover_text(tr("Redo (Ctrl+Y)"))
+                .clicked()
+            {
                 actions.push(Action::Redo);
             }
-            if theme::icon_button(ui, Icon::Undo, can_undo, false).on_hover_text(tr("Undo (Ctrl+Z)")).clicked() {
+            if theme::icon_button(ui, Icon::Undo, can_undo, false)
+                .on_hover_text(tr("Undo (Ctrl+Z)"))
+                .clicked()
+            {
                 actions.push(Action::Undo);
             }
         });
@@ -167,7 +204,11 @@ fn panel_contents(ui: &mut egui::Ui, session: Option<&mut EditSession>, height: 
     let tools = [
         (Tool::Adjust, "Adjust", "Light, color, effects, and detail"),
         (Tool::Crop, "Crop", "Crop & straighten (C)"),
-        (Tool::Transform, "Transform", "Drag four corners to turn, tilt, and skew (T)"),
+        (
+            Tool::Transform,
+            "Transform",
+            "Drag four corners to turn, tilt, and skew (T)",
+        ),
         (Tool::Mask, "Masks", "Linear and radial local adjustments"),
     ];
     let picked = button_row(
@@ -184,11 +225,18 @@ fn panel_contents(ui: &mut egui::Ui, session: Option<&mut EditSession>, height: 
     }
     ui.add_space(4.0);
     let now = std::time::Instant::now();
-    let held = session.held_histogram.as_ref().filter(|(_, until)| now < *until);
+    let held = session
+        .held_histogram
+        .as_ref()
+        .filter(|(_, until)| now < *until);
     if let (None, Some((_, until))) = (&session.histogram, held) {
         ui.ctx().request_repaint_after(*until - now);
     }
-    match session.histogram.as_ref().or(held.map(|(histogram, _)| histogram)) {
+    match session
+        .histogram
+        .as_ref()
+        .or(held.map(|(histogram, _)| histogram))
+    {
         Some(histogram) => super::viewer::paint_histogram(ui, histogram),
         None => super::viewer::paint_histogram_placeholder(ui, false),
     }
@@ -196,30 +244,49 @@ fn panel_contents(ui: &mut egui::Ui, session: Option<&mut EditSession>, height: 
     ui.add_space(2.0);
     let compare = session.compare;
     let row = [
-        ("Before", "Show the original (\\)", compare == Compare::Before),
-        ("Side by side", "Before and after side by side (Y)", compare == Compare::SideBySide),
-        ("Split", "Before and after split view (Shift+Y)", matches!(compare, Compare::Split(_))),
+        (
+            "Before",
+            "Show the original (\\)",
+            compare == Compare::Before,
+        ),
+        (
+            "Side by side",
+            "Before and after side by side (Y)",
+            compare == Compare::SideBySide,
+        ),
+        (
+            "Split",
+            "Before and after split view (Shift+Y)",
+            matches!(compare, Compare::Split(_)),
+        ),
     ];
     let row_w = ui.available_width();
-    ui.allocate_ui_with_layout(Vec2::new(row_w, 26.0), egui::Layout::right_to_left(egui::Align::Center), |ui| {
-        ui.spacing_mut().item_spacing.x = 6.0;
-        let clipping = theme::icon_button(ui, Icon::Clipping, true, session.clipping);
-        if clipping.on_hover_text(tr("Show clipped highlights and shadows (J)")).clicked() {
-            actions.push(Action::Clipping);
-        }
-        let items = row.map(|(label, hint, selected)| Item {
-            label,
-            hint,
-            enabled: true,
-            selected,
-        });
-        match segmented(ui, &items, ui.available_width()) {
-            Some(0) => actions.push(Action::Compare(Compare::Before)),
-            Some(1) => actions.push(Action::Compare(Compare::SideBySide)),
-            Some(2) => actions.push(Action::Compare(Compare::Split(0.5))),
-            _ => {}
-        }
-    });
+    ui.allocate_ui_with_layout(
+        Vec2::new(row_w, 26.0),
+        egui::Layout::right_to_left(egui::Align::Center),
+        |ui| {
+            ui.spacing_mut().item_spacing.x = 6.0;
+            let clipping = theme::icon_button(ui, Icon::Clipping, true, session.clipping);
+            if clipping
+                .on_hover_text(tr("Show clipped highlights and shadows (J)"))
+                .clicked()
+            {
+                actions.push(Action::Clipping);
+            }
+            let items = row.map(|(label, hint, selected)| Item {
+                label,
+                hint,
+                enabled: true,
+                selected,
+            });
+            match segmented(ui, &items, ui.available_width()) {
+                Some(0) => actions.push(Action::Compare(Compare::Before)),
+                Some(1) => actions.push(Action::Compare(Compare::SideBySide)),
+                Some(2) => actions.push(Action::Compare(Compare::Split(0.5))),
+                _ => {}
+            }
+        },
+    );
     ui.add_space(4.0);
 
     let mut draft = Draft {
@@ -234,7 +301,10 @@ fn panel_contents(ui: &mut egui::Ui, session: Option<&mut EditSession>, height: 
     // is left and the panel keeps to the stage's height. Taller, it would
     // push the filmstrip down, and back up while the next photo loads.
     let tail_id = egui::Id::unique("edit-panel-tail");
-    let tail_h = ui.ctx().data(|data| data.get_temp::<f32>(tail_id)).unwrap_or(EXPORT_H);
+    let tail_h = ui
+        .ctx()
+        .data(|data| data.get_temp::<f32>(tail_id))
+        .unwrap_or(EXPORT_H);
     egui::ScrollArea::vertical()
         .id_salt("edit-panel")
         .auto_shrink([false, false])
@@ -253,7 +323,8 @@ fn panel_contents(ui: &mut egui::Ui, session: Option<&mut EditSession>, height: 
     export_section(ui, session, actions);
     let measured = ui.cursor().top() - tail_top;
     if (measured - tail_h).abs() > 0.5 {
-        ui.ctx().data_mut(|data| data.insert_temp(tail_id, measured));
+        ui.ctx()
+            .data_mut(|data| data.insert_temp(tail_id, measured));
         ui.ctx().request_repaint();
     }
 
@@ -277,24 +348,41 @@ struct Item {
 
 /// The ··· button beside undo and redo: the steps furthest back and
 /// forward, and the settings as a whole.
-fn history_menu(ui: &mut egui::Ui, history: &edit::History, context: &Context, actions: &mut Vec<Action>) {
+fn history_menu(
+    ui: &mut egui::Ui,
+    history: &edit::History,
+    context: &Context,
+    actions: &mut Vec<Action>,
+) {
     let button = theme::icon_button(ui, Icon::More, true, false);
     let edited = !history.settings().is_identity();
     let popup = egui::Popup::menu(&button).show(|ui| {
-        let mut item = |enabled: bool, label: &'static str, hint: &'static str| ui.add_enabled(enabled, egui::Button::new(tr(label))).on_hover_text(tr(hint)).clicked();
+        let mut item = |enabled: bool, label: &'static str, hint: &'static str| {
+            ui.add_enabled(enabled, egui::Button::new(tr(label)))
+                .on_hover_text(tr(hint))
+                .clicked()
+        };
         if item(history.can_undo(), "Undo all", "Back to the original") {
             actions.push(Action::UndoAll);
         }
         if item(history.can_redo(), "Redo all", "Apply every step again") {
             actions.push(Action::RedoAll);
         }
-        if item(edited, "Reset all", "Back to the untouched photo, as a step") {
+        if item(
+            edited,
+            "Reset all",
+            "Back to the untouched photo, as a step",
+        ) {
             actions.push(Action::Commit(Kind::Reset, Settings::default()));
         }
         if item(true, "Copy", "Copy these settings (Ctrl+Shift+C)") {
             actions.push(Action::Copy);
         }
-        if item(context.has_clipboard, "Paste", "Paste copied settings (Ctrl+Shift+V)") {
+        if item(
+            context.has_clipboard,
+            "Paste",
+            "Paste copied settings (Ctrl+Shift+V)",
+        ) {
             actions.push(Action::Paste);
         }
     });
@@ -312,19 +400,42 @@ fn segmented(ui: &mut egui::Ui, items: &[Item], width: f32) -> Option<usize> {
     let painter = ui.painter().clone();
     painter.rect_filled(rect, theme::RADIUS + 1, theme::well());
     let part_w = (width - 4.0) / items.len() as f32;
-    let raised = if theme::is_dark() { Color32::from_rgb(0x35, 0x3F, 0x42) } else { theme::bg() };
+    let raised = if theme::is_dark() {
+        Color32::from_rgb(0x35, 0x3F, 0x42)
+    } else {
+        theme::bg()
+    };
     let mut clicked = None;
     for (index, item) in items.iter().enumerate() {
-        let part = egui::Rect::from_min_size(rect.min + Vec2::new(2.0 + part_w * index as f32, 2.0), Vec2::new(part_w, height - 4.0));
-        let response = ui.interact(part, egui::Id::unique(("segmented", item.label)), Sense::click());
+        let part = egui::Rect::from_min_size(
+            rect.min + Vec2::new(2.0 + part_w * index as f32, 2.0),
+            Vec2::new(part_w, height - 4.0),
+        );
+        let response = ui.interact(
+            part,
+            egui::Id::unique(("segmented", item.label)),
+            Sense::click(),
+        );
         if item.selected {
-            painter.rect_filled(part.translate(Vec2::new(0.0, 0.5)), theme::RADIUS - 1, Color32::from_black_alpha(24));
+            painter.rect_filled(
+                part.translate(Vec2::new(0.0, 0.5)),
+                theme::RADIUS - 1,
+                Color32::from_black_alpha(24),
+            );
             painter.rect_filled(part, theme::RADIUS - 1, raised);
         } else if response.hovered() {
             painter.rect_filled(part, theme::RADIUS - 1, theme::overlay(14));
         }
-        let color = if item.selected { theme::text() } else { theme::muted() };
-        let mut job = egui::text::LayoutJob::simple_singleline(tr(item.label).to_string(), egui::FontId::proportional(12.0), color);
+        let color = if item.selected {
+            theme::text()
+        } else {
+            theme::muted()
+        };
+        let mut job = egui::text::LayoutJob::simple_singleline(
+            tr(item.label).to_string(),
+            egui::FontId::proportional(12.0),
+            color,
+        );
         job.wrap = egui::text::TextWrapping::truncate_at_width(part_w - 6.0);
         let galley = painter.layout_job(job);
         painter.galley(part.center() - galley.size() / 2.0, galley, color);
@@ -346,8 +457,14 @@ fn button_row(ui: &mut egui::Ui, items: &[Item]) -> Option<usize> {
         ui.spacing_mut().button_padding.x = 2.0;
         for (index, item) in items.iter().enumerate() {
             let text = RichText::new(tr(item.label)).size(12.0);
-            let button = egui::Button::new(text).selected(item.selected).min_size(Vec2::new(width, 24.0));
-            if ui.add_enabled(item.enabled, button).on_hover_text(tr(item.hint)).clicked() {
+            let button = egui::Button::new(text)
+                .selected(item.selected)
+                .min_size(Vec2::new(width, 24.0));
+            if ui
+                .add_enabled(item.enabled, button)
+                .on_hover_text(tr(item.hint))
+                .clicked()
+            {
                 clicked = Some(index);
             }
         }
@@ -356,15 +473,25 @@ fn button_row(ui: &mut egui::Ui, items: &[Item]) -> Option<usize> {
 }
 
 fn section(ui: &mut egui::Ui, title: &'static str, open: bool, add: impl FnOnce(&mut egui::Ui)) {
-    egui::CollapsingHeader::new(RichText::new(tr(title)).strong().size(12.5).color(theme::text()))
-        .id_salt(title)
-        .default_open(open)
-        .show(ui, add);
+    egui::CollapsingHeader::new(
+        RichText::new(tr(title))
+            .strong()
+            .size(12.5)
+            .color(theme::text()),
+    )
+    .id_salt(title)
+    .default_open(open)
+    .show(ui, add);
 }
 
 fn subheading(ui: &mut egui::Ui, title: &'static str) {
     ui.add_space(4.0);
-    ui.label(RichText::new(tr(title).to_uppercase()).size(10.5).strong().color(theme::muted()));
+    ui.label(
+        RichText::new(tr(title).to_uppercase())
+            .size(10.5)
+            .strong()
+            .color(theme::muted()),
+    );
 }
 
 /// Slider with its name and value above it. Double-clicking the name or
@@ -384,8 +511,18 @@ fn slider_labeled(
     let def = control.def();
     let mut value = draft.settings.get(control);
     let neutral = control.neutral();
-    let auto = draft.auto.iter().any(|(other, set)| *other == control && *set == value);
-    let reset = slider_header(ui, tr(label), swatch, auto, &control.format(value), value != neutral);
+    let auto = draft
+        .auto
+        .iter()
+        .any(|(other, set)| *other == control && *set == value);
+    let reset = slider_header(
+        ui,
+        tr(label),
+        swatch,
+        auto,
+        &control.format(value),
+        value != neutral,
+    );
     let step = match def.unit {
         Unit::Ev => 0.01,
         Unit::Radius | Unit::Degrees => 0.1,
@@ -404,7 +541,14 @@ fn slider_labeled(
 
 /// Bold name, an "auto" badge when Auto tone or Auto white balance set the
 /// value, and the value at the right. True when the name is double-clicked.
-fn slider_header(ui: &mut egui::Ui, label: &str, swatch: Option<Color32>, auto: bool, value: &str, changed: bool) -> bool {
+fn slider_header(
+    ui: &mut egui::Ui,
+    label: &str,
+    swatch: Option<Color32>,
+    auto: bool,
+    value: &str,
+    changed: bool,
+) -> bool {
     let mut reset = false;
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 6.0;
@@ -412,8 +556,18 @@ fn slider_header(ui: &mut egui::Ui, label: &str, swatch: Option<Color32>, auto: 
             let (rect, _) = ui.allocate_exact_size(Vec2::splat(10.0), Sense::hover());
             ui.painter().circle_filled(rect.center(), 4.5, color);
         }
-        let name = egui::Label::new(RichText::new(label).size(12.5).strong().color(theme::text())).sense(Sense::click());
-        if ui.add(name).on_hover_text(tr("Double-click to reset")).double_clicked() {
+        let name = egui::Label::new(
+            RichText::new(label)
+                .size(12.5)
+                .strong()
+                .color(theme::text()),
+        )
+        .sense(Sense::click());
+        if ui
+            .add(name)
+            .on_hover_text(tr("Double-click to reset"))
+            .double_clicked()
+        {
             reset = true;
         }
         if auto {
@@ -421,10 +575,20 @@ fn slider_header(ui: &mut egui::Ui, label: &str, swatch: Option<Color32>, auto: 
                 .fill(badge_fill())
                 .corner_radius(4)
                 .inner_margin(egui::Margin::symmetric(5, 1))
-                .show(ui, |ui| ui.label(RichText::new(tr("Auto").to_lowercase()).size(10.0).color(theme::muted())));
+                .show(ui, |ui| {
+                    ui.label(
+                        RichText::new(tr("Auto").to_lowercase())
+                            .size(10.0)
+                            .color(theme::muted()),
+                    )
+                });
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let color = if changed { theme::text() } else { theme::muted() };
+            let color = if changed {
+                theme::text()
+            } else {
+                theme::muted()
+            };
             ui.label(RichText::new(value).monospace().size(11.5).color(color));
         });
     });
@@ -437,7 +601,13 @@ const SLIDER_HEIGHT: f32 = 20.0;
 /// Thick rail filled in the accent color from `anchor` to the value, with a
 /// round knob. egui's slider underneath, left invisible, handles the pointer
 /// and the arrow keys.
-fn develop_slider(ui: &mut egui::Ui, value: &mut f32, range: RangeInclusive<f32>, step: f64, anchor: f32) -> egui::Response {
+fn develop_slider(
+    ui: &mut egui::Ui,
+    value: &mut f32,
+    range: RangeInclusive<f32>,
+    step: f64,
+    anchor: f32,
+) -> egui::Response {
     let (min, max) = (*range.start(), *range.end());
     let width = ui.available_width();
     let response = ui
@@ -446,11 +616,20 @@ fn develop_slider(ui: &mut egui::Ui, value: &mut f32, range: RangeInclusive<f32>
             spacing.slider_width = width;
             spacing.interact_size.y = SLIDER_HEIGHT;
             let widgets = &mut ui.visuals_mut().widgets;
-            for state in [&mut widgets.inactive, &mut widgets.hovered, &mut widgets.active] {
+            for state in [
+                &mut widgets.inactive,
+                &mut widgets.hovered,
+                &mut widgets.active,
+            ] {
                 state.bg_fill = Color32::TRANSPARENT;
                 state.fg_stroke = Stroke::NONE;
             }
-            ui.add(egui::Slider::new(value, range).show_value(false).trailing_fill(false).step_by(step))
+            ui.add(
+                egui::Slider::new(value, range)
+                    .show_value(false)
+                    .trailing_fill(false)
+                    .step_by(step),
+            )
         })
         .inner;
 
@@ -458,11 +637,18 @@ fn develop_slider(ui: &mut egui::Ui, value: &mut f32, range: RangeInclusive<f32>
     // egui keeps the knob's center this far from each end.
     let radius = rect.height() / 2.5;
     let x_at = |at: f32| {
-        let t = if max > min { ((at - min) / (max - min)).clamp(0.0, 1.0) } else { 0.0 };
+        let t = if max > min {
+            ((at - min) / (max - min)).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
         egui::lerp(rect.left() + radius..=rect.right() - radius, t)
     };
     let y = rect.center().y;
-    let rail = egui::Rect::from_x_y_ranges(rect.x_range(), y - RAIL_HEIGHT / 2.0..=y + RAIL_HEIGHT / 2.0);
+    let rail = egui::Rect::from_x_y_ranges(
+        rect.x_range(),
+        y - RAIL_HEIGHT / 2.0..=y + RAIL_HEIGHT / 2.0,
+    );
     let painter = ui.painter();
     painter.rect_filled(rail, RAIL_HEIGHT / 2.0, rail_fill());
 
@@ -478,10 +664,23 @@ fn develop_slider(ui: &mut egui::Ui, value: &mut f32, range: RangeInclusive<f32>
         let fill = egui::Rect::from_x_y_ranges(start.min(knob)..=start.max(knob), rail.y_range());
         painter.rect_filled(fill, RAIL_HEIGHT / 2.0, theme::accent());
     }
-    let grow = if response.dragged() || response.hovered() { 1.0 } else { 0.0 };
+    let grow = if response.dragged() || response.hovered() {
+        1.0
+    } else {
+        0.0
+    };
     let center = egui::pos2(knob, y);
-    painter.circle_filled(center + Vec2::new(0.0, 1.0), radius + grow, Color32::from_black_alpha(50));
-    painter.circle(center, radius + grow, knob_fill(), Stroke::new(1.0, theme::hairline()));
+    painter.circle_filled(
+        center + Vec2::new(0.0, 1.0),
+        radius + grow,
+        Color32::from_black_alpha(50),
+    );
+    painter.circle(
+        center,
+        radius + grow,
+        knob_fill(),
+        Stroke::new(1.0, theme::hairline()),
+    );
     response
 }
 
@@ -509,7 +708,13 @@ fn knob_fill() -> Color32 {
     }
 }
 
-fn adjust_sections(ui: &mut egui::Ui, session: &mut EditSession, draft: &mut Draft, context: &Context, actions: &mut Vec<Action>) {
+fn adjust_sections(
+    ui: &mut egui::Ui,
+    session: &mut EditSession,
+    draft: &mut Draft,
+    context: &Context,
+    actions: &mut Vec<Action>,
+) {
     ui.horizontal(|ui| {
         ui.label(RichText::new(tr("Profile")).size(12.0).color(theme::text()));
         let mut profile = draft.settings.get(Control::PROFILE).round() as usize;
@@ -526,14 +731,22 @@ fn adjust_sections(ui: &mut egui::Ui, session: &mut EditSession, draft: &mut Dra
             });
     });
 
-    section(ui, "Presets", false, |ui| presets_section(ui, session, draft, context, actions));
+    section(ui, "Presets", false, |ui| {
+        presets_section(ui, session, draft, context, actions)
+    });
 
-    section(ui, "Transform", false, |ui| transform_section(ui, session, draft, context, actions));
+    section(ui, "Transform", false, |ui| {
+        transform_section(ui, session, draft, context, actions)
+    });
 
     section(ui, "Light", true, |ui| {
         ui.horizontal(|ui| {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.small_button(tr("Auto tone")).on_hover_text(tr("Auto tone: balance exposure and contrast")).clicked() {
+                if ui
+                    .small_button(tr("Auto tone"))
+                    .on_hover_text(tr("Auto tone: balance exposure and contrast"))
+                    .clicked()
+                {
                     actions.push(Action::AutoTone);
                 }
             });
@@ -543,13 +756,19 @@ fn adjust_sections(ui: &mut egui::Ui, session: &mut EditSession, draft: &mut Dra
         }
     });
 
-    section(ui, "Tone curve", false, |ui| tone_curve_section(ui, session, draft));
+    section(ui, "Tone curve", false, |ui| {
+        tone_curve_section(ui, session, draft)
+    });
 
     section(ui, "HDR", false, |ui| hdr_section(ui, draft));
 
     section(ui, "Color", true, |ui| {
         ui.horizontal(|ui| {
-            ui.label(RichText::new(tr("White balance")).size(12.0).color(theme::text()));
+            ui.label(
+                RichText::new(tr("White balance"))
+                    .size(12.0)
+                    .color(theme::text()),
+            );
             egui::ComboBox::from_id_salt("edit-wb")
                 .width(110.0)
                 .selected_text(tr("Choose…"))
@@ -563,9 +782,9 @@ fn adjust_sections(ui: &mut egui::Ui, session: &mut EditSession, draft: &mut Dra
                         }
                     }
                 });
-            let picker = ui
-                .selectable_label(session.picker, "⊙")
-                .on_hover_text(tr("White balance picker: click something that should be neutral gray"));
+            let picker = ui.selectable_label(session.picker, "⊙").on_hover_text(tr(
+                "White balance picker: click something that should be neutral gray",
+            ));
             if picker.clicked() {
                 session.picker = !session.picker;
             }
@@ -585,7 +804,14 @@ fn adjust_sections(ui: &mut egui::Ui, session: &mut EditSession, draft: &mut Dra
         });
         for band in 0..BANDS.len() {
             let swatch = swatch(BAND_SWATCH[band]);
-            slider_labeled(ui, draft, Control::mix(session.mix_part, band), Kind::Adjust, BANDS[band], Some(swatch));
+            slider_labeled(
+                ui,
+                draft,
+                Control::mix(session.mix_part, band),
+                Kind::Adjust,
+                BANDS[band],
+                Some(swatch),
+            );
         }
     });
 
@@ -606,7 +832,11 @@ fn adjust_sections(ui: &mut egui::Ui, session: &mut EditSession, draft: &mut Dra
             slider(ui, draft, control, Kind::Adjust);
         }
         subheading(ui, "Grain");
-        for control in [Control::GRAIN_AMOUNT, Control::GRAIN_SIZE, Control::GRAIN_ROUGHNESS] {
+        for control in [
+            Control::GRAIN_AMOUNT,
+            Control::GRAIN_SIZE,
+            Control::GRAIN_ROUGHNESS,
+        ] {
             slider(ui, draft, control, Kind::Adjust);
         }
     });
@@ -628,13 +858,25 @@ fn adjust_sections(ui: &mut egui::Ui, session: &mut EditSession, draft: &mut Dra
 
     section(ui, "Black & White", false, |ui| {
         let mut mono = draft.settings.get(Control::MONOCHROME) >= 0.5;
-        if ui.checkbox(&mut mono, tr("Convert to black & white")).changed() {
-            draft.settings.set(Control::MONOCHROME, if mono { 1.0 } else { 0.0 });
+        if ui
+            .checkbox(&mut mono, tr("Convert to black & white"))
+            .changed()
+        {
+            draft
+                .settings
+                .set(Control::MONOCHROME, if mono { 1.0 } else { 0.0 });
             draft.changed(Kind::Adjust);
         }
         ui.add_enabled_ui(mono, |ui| {
             for band in 0..BANDS.len() {
-                slider_labeled(ui, draft, Control::bw(band), Kind::Adjust, BANDS[band], Some(swatch(BAND_SWATCH[band])));
+                slider_labeled(
+                    ui,
+                    draft,
+                    Control::bw(band),
+                    Kind::Adjust,
+                    BANDS[band],
+                    Some(swatch(BAND_SWATCH[band])),
+                );
             }
         });
     });
@@ -642,18 +884,31 @@ fn adjust_sections(ui: &mut egui::Ui, session: &mut EditSession, draft: &mut Dra
     section(ui, "History", true, |ui| {
         let history = &session.history;
         let applied = history.applied();
-        let rows = std::iter::once(tr("Original").to_string()).chain(history.steps().iter().map(edit::Step::label));
+        let rows = std::iter::once(tr("Original").to_string())
+            .chain(history.steps().iter().map(edit::Step::label));
         for (index, text) in rows.enumerate() {
-            let color = if index > applied { theme::muted().gamma_multiply(0.7) } else { theme::text() };
-            if ui.selectable_label(index == applied, RichText::new(text).size(12.0).color(color)).clicked() {
+            let color = if index > applied {
+                theme::muted().gamma_multiply(0.7)
+            } else {
+                theme::text()
+            };
+            if ui
+                .selectable_label(
+                    index == applied,
+                    RichText::new(text).size(12.0).color(color),
+                )
+                .clicked()
+            {
                 actions.push(Action::Jump(index));
             }
         }
         ui.add_space(6.0);
         ui.label(
-            RichText::new(tr("Edits are saved as steps in the library. The original file is never changed."))
-                .size(11.0)
-                .color(theme::muted()),
+            RichText::new(tr(
+                "Edits are saved as steps in the library. The original file is never changed.",
+            ))
+            .size(11.0)
+            .color(theme::muted()),
         );
     });
 }
@@ -670,7 +925,8 @@ const HDR_NOTES: [&str; 5] = [
 fn hdr_section(ui: &mut egui::Ui, draft: &mut Draft) {
     ui.horizontal(|ui| {
         ui.label(RichText::new(tr("Method")).size(12.0).color(theme::text()));
-        let mut method = (draft.settings.get(Control::HDR_METHOD).round().max(0.0) as usize).min(HDR_METHODS.len() - 1);
+        let mut method = (draft.settings.get(Control::HDR_METHOD).round().max(0.0) as usize)
+            .min(HDR_METHODS.len() - 1);
         egui::ComboBox::from_id_salt("edit-hdr-method")
             .width(170.0)
             .selected_text(tr(HDR_METHODS[method]))
@@ -683,8 +939,13 @@ fn hdr_section(ui: &mut egui::Ui, draft: &mut Draft) {
                 }
             });
     });
-    let method = (draft.settings.get(Control::HDR_METHOD).round().max(0.0) as usize).min(HDR_NOTES.len() - 1);
-    ui.label(RichText::new(tr(HDR_NOTES[method])).size(11.0).color(theme::muted()));
+    let method = (draft.settings.get(Control::HDR_METHOD).round().max(0.0) as usize)
+        .min(HDR_NOTES.len() - 1);
+    ui.label(
+        RichText::new(tr(HDR_NOTES[method]))
+            .size(11.0)
+            .color(theme::muted()),
+    );
     slider(ui, draft, Control::HDR_STRENGTH, Kind::Adjust);
     slider(ui, draft, Control::HDR_DETAIL, Kind::Adjust);
 }
@@ -694,18 +955,37 @@ fn swatch(hue: f32) -> Color32 {
     Color32::from_rgb(r, g, b)
 }
 
-fn presets_section(ui: &mut egui::Ui, session: &mut EditSession, draft: &mut Draft, context: &Context, actions: &mut Vec<Action>) {
+fn presets_section(
+    ui: &mut egui::Ui,
+    session: &mut EditSession,
+    draft: &mut Draft,
+    context: &Context,
+    actions: &mut Vec<Action>,
+) {
     let last = context.last_preset.as_ref().map(|(name, _)| name.as_str());
     if let Some((name, patch)) = &context.last_preset {
         ui.horizontal(|ui| {
-            ui.label(RichText::new(presets::display_name(name)).size(12.0).color(theme::accent()));
+            ui.label(
+                RichText::new(presets::display_name(name))
+                    .size(12.0)
+                    .color(theme::accent()),
+            );
         });
         let mut percent = session.preset_amount * 100.0;
-        slider_header(ui, tr("Amount"), None, false, &format!("{percent:.0}%"), true);
+        slider_header(
+            ui,
+            tr("Amount"),
+            None,
+            false,
+            &format!("{percent:.0}%"),
+            true,
+        );
         let response = develop_slider(ui, &mut percent, 0.0..=200.0, 1.0, 0.0);
         if response.changed() {
             session.preset_amount = percent / 100.0;
-            let before = session.history.settings_at(session.history.applied().saturating_sub(1));
+            let before = session
+                .history
+                .settings_at(session.history.applied().saturating_sub(1));
             draft.settings = presets::apply(&before, patch, session.preset_amount);
             draft.kind = Some(Kind::Preset(name.clone()));
             draft.amend = true;
@@ -716,9 +996,15 @@ fn presets_section(ui: &mut egui::Ui, session: &mut EditSession, draft: &mut Dra
         subheading(ui, group);
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing = Vec2::new(4.0, 4.0);
-            for preset in presets::BUILTIN.iter().filter(|preset| preset.group == group) {
+            for preset in presets::BUILTIN
+                .iter()
+                .filter(|preset| preset.group == group)
+            {
                 let text = RichText::new(tr(preset.name)).size(11.5);
-                if ui.selectable_label(last == Some(preset.name), text).clicked() {
+                if ui
+                    .selectable_label(last == Some(preset.name), text)
+                    .clicked()
+                {
                     actions.push(Action::Preset(preset.name.to_string()));
                 }
             }
@@ -726,15 +1012,26 @@ fn presets_section(ui: &mut egui::Ui, session: &mut EditSession, draft: &mut Dra
     }
     subheading(ui, "My presets");
     if context.user_presets.is_empty() {
-        ui.label(RichText::new(tr("Save the current settings as a preset to reuse them.")).size(11.0).color(theme::muted()));
+        ui.label(
+            RichText::new(tr("Save the current settings as a preset to reuse them."))
+                .size(11.0)
+                .color(theme::muted()),
+        );
     }
     for (index, name) in context.user_presets.iter().enumerate() {
         ui.horizontal(|ui| {
-            if ui.selectable_label(last == Some(name.as_str()), RichText::new(name).size(12.0)).clicked() {
+            if ui
+                .selectable_label(last == Some(name.as_str()), RichText::new(name).size(12.0))
+                .clicked()
+            {
                 actions.push(Action::Preset(name.clone()));
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.small_button("×").on_hover_text(tr("Delete preset")).clicked() {
+                if ui
+                    .small_button("×")
+                    .on_hover_text(tr("Delete preset"))
+                    .clicked()
+                {
                     actions.push(Action::DeletePreset(index));
                 }
             });
@@ -746,7 +1043,10 @@ fn presets_section(ui: &mut egui::Ui, session: &mut EditSession, draft: &mut Dra
             .desired_width(ui.available_width() - 60.0);
         let response = ui.add(field);
         let enter = response.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
-        let save = ui.add_enabled(!session.preset_name.trim().is_empty(), egui::Button::new(tr("Save")));
+        let save = ui.add_enabled(
+            !session.preset_name.trim().is_empty(),
+            egui::Button::new(tr("Save")),
+        );
         if save.clicked() || (enter && !session.preset_name.trim().is_empty()) {
             actions.push(Action::SavePreset(std::mem::take(&mut session.preset_name)));
         }
@@ -768,11 +1068,20 @@ fn tone_curve_section(ui: &mut egui::Ui, session: &mut EditSession, draft: &mut 
     curve_graph(ui, session, draft);
     if session.point_curve {
         ui.horizontal(|ui| {
-            ui.label(RichText::new(tr("Click to add a point, drag to move, double-click to remove.")).size(10.5).color(theme::muted()));
+            ui.label(
+                RichText::new(tr(
+                    "Click to add a point, drag to move, double-click to remove.",
+                ))
+                .size(10.5)
+                .color(theme::muted()),
+            );
         });
         let channel = session.curve_channel;
         if ui
-            .add_enabled(!draft.settings.curves[channel].is_identity(), egui::Button::new(tr("Reset curve")))
+            .add_enabled(
+                !draft.settings.curves[channel].is_identity(),
+                egui::Button::new(tr("Reset curve")),
+            )
             .clicked()
         {
             draft.settings.curves[channel] = edit::Curve::default();
@@ -788,7 +1097,11 @@ fn tone_curve_section(ui: &mut egui::Ui, session: &mut EditSession, draft: &mut 
             slider(ui, draft, control, Kind::Curve);
         }
         subheading(ui, "Splits");
-        for control in [Control::SPLIT_SHADOWS, Control::SPLIT_MIDTONES, Control::SPLIT_HIGHLIGHTS] {
+        for control in [
+            Control::SPLIT_SHADOWS,
+            Control::SPLIT_MIDTONES,
+            Control::SPLIT_HIGHLIGHTS,
+        ] {
             slider(ui, draft, control, Kind::Curve);
         }
     }
@@ -796,11 +1109,20 @@ fn tone_curve_section(ui: &mut egui::Ui, session: &mut EditSession, draft: &mut 
 
 fn curve_graph(ui: &mut egui::Ui, session: &mut EditSession, draft: &mut Draft) {
     let width = ui.available_width();
-    let sense = if session.point_curve { Sense::click_and_drag() } else { Sense::hover() };
+    let sense = if session.point_curve {
+        Sense::click_and_drag()
+    } else {
+        Sense::hover()
+    };
     let (rect, response) = ui.allocate_exact_size(Vec2::new(width, width * 0.8), sense);
     let painter = ui.painter_at(rect.expand(5.0));
     painter.rect_filled(rect, 2, theme::well());
-    let to_screen = |p: [f32; 2]| Pos2::new(rect.left() + p[0] * rect.width(), rect.bottom() - p[1] * rect.height());
+    let to_screen = |p: [f32; 2]| {
+        Pos2::new(
+            rect.left() + p[0] * rect.width(),
+            rect.bottom() - p[1] * rect.height(),
+        )
+    };
     let from_screen = |pos: Pos2| {
         [
             ((pos.x - rect.left()) / rect.width()).clamp(0.0, 1.0),
@@ -830,7 +1152,10 @@ fn curve_graph(ui: &mut egui::Ui, session: &mut EditSession, draft: &mut Draft) 
         painter.line_segment([to_screen([t, 0.0]), to_screen([t, 1.0])], grid);
         painter.line_segment([to_screen([0.0, t]), to_screen([1.0, t])], grid);
     }
-    painter.line_segment([to_screen([0.0, 0.0]), to_screen([1.0, 1.0])], Stroke::new(1.0, theme::overlay(30)));
+    painter.line_segment(
+        [to_screen([0.0, 0.0]), to_screen([1.0, 1.0])],
+        Stroke::new(1.0, theme::overlay(30)),
+    );
 
     let curve_line = |points: &[[f32; 2]], color: Color32| {
         let table = edit::sample_curve(points, 129);
@@ -843,7 +1168,11 @@ fn curve_graph(ui: &mut egui::Ui, session: &mut EditSession, draft: &mut Draft) 
         table
     };
     let n = |control: Control| draft.settings.get(control) / 100.0;
-    let splits = [n(Control::SPLIT_SHADOWS), n(Control::SPLIT_MIDTONES), n(Control::SPLIT_HIGHLIGHTS)];
+    let splits = [
+        n(Control::SPLIT_SHADOWS),
+        n(Control::SPLIT_MIDTONES),
+        n(Control::SPLIT_HIGHLIGHTS),
+    ];
     if !session.point_curve {
         for split in splits {
             painter.line_segment(
@@ -870,7 +1199,10 @@ fn curve_graph(ui: &mut egui::Ui, session: &mut EditSession, draft: &mut Draft) 
     ];
     for other in (0..4).filter(|other| *other != channel) {
         if !draft.settings.curves[other].is_identity() {
-            curve_line(&draft.settings.curves[other].0, colors[other].gamma_multiply(0.35));
+            curve_line(
+                &draft.settings.curves[other].0,
+                colors[other].gamma_multiply(0.35),
+            );
         }
     }
     let table = curve_line(&draft.settings.curves[channel].0, colors[channel]);
@@ -886,7 +1218,9 @@ fn curve_graph(ui: &mut egui::Ui, session: &mut EditSession, draft: &mut Draft) 
     };
     let insert = |points: &mut Vec<[f32; 2]>, point: [f32; 2]| {
         let index = points.partition_point(|existing| existing[0] < point[0]);
-        let crowded = points.iter().any(|existing| (existing[0] - point[0]).abs() < 0.02);
+        let crowded = points
+            .iter()
+            .any(|existing| (existing[0] - point[0]).abs() < 0.02);
         if crowded || index == 0 || index >= points.len() {
             return None;
         }
@@ -895,7 +1229,10 @@ fn curve_graph(ui: &mut egui::Ui, session: &mut EditSession, draft: &mut Draft) 
     };
     let mut changed = false;
     if response.double_clicked() {
-        if let Some(index) = response.interact_pointer_pos().and_then(|pos| nearest(points, pos)) {
+        if let Some(index) = response
+            .interact_pointer_pos()
+            .and_then(|pos| nearest(points, pos))
+        {
             if index > 0 && index + 1 < points.len() {
                 points.remove(index);
                 changed = true;
@@ -936,7 +1273,11 @@ fn curve_graph(ui: &mut egui::Ui, session: &mut EditSession, draft: &mut Draft) 
     }
     for (index, point) in points.iter().enumerate() {
         let active = session.curve_drag == Some(index);
-        painter.circle_filled(to_screen(*point), if active { 5.0 } else { 4.0 }, colors[channel]);
+        painter.circle_filled(
+            to_screen(*point),
+            if active { 5.0 } else { 4.0 },
+            colors[channel],
+        );
         painter.circle_stroke(to_screen(*point), 4.5, Stroke::new(1.0, Color32::BLACK));
     }
     if changed {
@@ -993,18 +1334,26 @@ fn wheel(ui: &mut egui::Ui, draft: &mut Draft, zone: usize, size: f32) {
         let hue = step as f32 / segments as f32 * 360.0;
         let angle = hue.to_radians();
         let [r, g, b] = edit::hue_rgb(hue).map(|c| ((0.47 + (c - 0.47) * 0.8) * 255.0) as u8);
-        mesh.colored_vertex(center + Vec2::new(angle.cos(), -angle.sin()) * radius, Color32::from_rgb(r, g, b));
+        mesh.colored_vertex(
+            center + Vec2::new(angle.cos(), -angle.sin()) * radius,
+            Color32::from_rgb(r, g, b),
+        );
         if step > 0 {
             mesh.add_triangle(0, step, step + 1);
         }
     }
     painter.add(egui::Shape::mesh(mesh));
-    painter.circle_stroke(center, radius, Stroke::new(1.0, Color32::from_black_alpha(160)));
+    painter.circle_stroke(
+        center,
+        radius,
+        Stroke::new(1.0, Color32::from_black_alpha(160)),
+    );
     let hue_control = Control::grade(zone, 0);
     let saturation_control = Control::grade(zone, 1);
     let hue = draft.settings.get(hue_control);
     let saturation = draft.settings.get(saturation_control) / 100.0;
-    let knob = center + Vec2::new(hue.to_radians().cos(), -hue.to_radians().sin()) * saturation * radius;
+    let knob =
+        center + Vec2::new(hue.to_radians().cos(), -hue.to_radians().sin()) * saturation * radius;
     painter.circle_filled(knob, 5.0, WHITE);
     painter.circle_stroke(knob, 5.0, Stroke::new(1.5, Color32::BLACK));
     let response = response.on_hover_text(trf(
@@ -1027,7 +1376,13 @@ fn wheel(ui: &mut egui::Ui, draft: &mut Draft, zone: usize, size: f32) {
     }
 }
 
-fn crop_section(ui: &mut egui::Ui, session: &mut EditSession, draft: &mut Draft, context: &Context, actions: &mut Vec<Action>) {
+fn crop_section(
+    ui: &mut egui::Ui,
+    session: &mut EditSession,
+    draft: &mut Draft,
+    context: &Context,
+    actions: &mut Vec<Action>,
+) {
     let Some(photo) = context.photo else { return };
     let canvas = session.canvas(photo);
     let turns = photo.rotation.div_euclid(90).rem_euclid(4) as usize;
@@ -1056,7 +1411,10 @@ fn crop_section(ui: &mut egui::Ui, session: &mut EditSession, draft: &mut Draft,
             reset.set(control, control.neutral());
         }
         reset.set_crop(edit::FULL);
-        if ui.add_enabled(reset != draft.settings, egui::Button::new(tr("Reset crop"))).clicked() {
+        if ui
+            .add_enabled(reset != draft.settings, egui::Button::new(tr("Reset crop")))
+            .clicked()
+        {
             draft.settings = reset;
             draft.changed(Kind::Crop);
             refit = true;
@@ -1079,7 +1437,13 @@ fn crop_section(ui: &mut egui::Ui, session: &mut EditSession, draft: &mut Draft,
 
 /// The crop shape, with a button that swaps portrait and landscape. A new
 /// shape takes the largest crop of it inside the current one.
-fn aspect_row(ui: &mut egui::Ui, session: &mut EditSession, draft: &mut Draft, canvas: [f32; 2], turns: usize) {
+fn aspect_row(
+    ui: &mut egui::Ui,
+    session: &mut EditSession,
+    draft: &mut Draft,
+    canvas: [f32; 2],
+    turns: usize,
+) {
     let mut reshape = false;
     ui.horizontal(|ui| {
         ui.label(RichText::new(tr("Aspect")).size(12.0).color(theme::text()));
@@ -1088,7 +1452,10 @@ fn aspect_row(ui: &mut egui::Ui, session: &mut EditSession, draft: &mut Draft, c
             .selected_text(tr(ASPECTS[session.aspect].0))
             .show_ui(ui, |ui| {
                 for (index, (name, _)) in ASPECTS.iter().enumerate() {
-                    if ui.selectable_value(&mut session.aspect, index, tr(name)).clicked() {
+                    if ui
+                        .selectable_value(&mut session.aspect, index, tr(name))
+                        .clicked()
+                    {
                         reshape = true;
                     }
                 }
@@ -1105,7 +1472,12 @@ fn aspect_row(ui: &mut egui::Ui, session: &mut EditSession, draft: &mut Draft, c
         if let Some(ratio) = session.aspect_ratio(canvas, turns) {
             let mut crop = edit::with_aspect(draft.settings.crop(), ratio, canvas[0], canvas[1]);
             if session.constrain {
-                crop = edit::constrain(crop, &Geometry::turn_of(&draft.settings), canvas[0], canvas[1]);
+                crop = edit::constrain(
+                    crop,
+                    &Geometry::turn_of(&draft.settings),
+                    canvas[0],
+                    canvas[1],
+                );
             }
             draft.settings.set_crop(crop);
             draft.changed(Kind::Crop);
@@ -1117,14 +1489,22 @@ fn aspect_row(ui: &mut egui::Ui, session: &mut EditSession, draft: &mut Draft, c
 /// fitting again.
 fn constrain_checkbox(ui: &mut egui::Ui, session: &mut EditSession) -> bool {
     ui.checkbox(&mut session.constrain, tr("Constrain crop"))
-        .on_hover_text(tr("Crop away the empty edges that turning, perspective, or moved corners leave"))
+        .on_hover_text(tr(
+            "Crop away the empty edges that turning, perspective, or moved corners leave",
+        ))
         .changed()
         && session.constrain
 }
 
 /// Straighten, perspective, flips, 90° turns, and the grid, without leaving
 /// Adjust, and the way to the corner handles and the crop frame.
-fn transform_section(ui: &mut egui::Ui, session: &mut EditSession, draft: &mut Draft, context: &Context, actions: &mut Vec<Action>) {
+fn transform_section(
+    ui: &mut egui::Ui,
+    session: &mut EditSession,
+    draft: &mut Draft,
+    context: &Context,
+    actions: &mut Vec<Action>,
+) {
     let Some(photo) = context.photo else { return };
     let canvas = session.canvas(photo);
     let turns = photo.rotation.div_euclid(90).rem_euclid(4) as usize;
@@ -1134,10 +1514,18 @@ fn transform_section(ui: &mut egui::Ui, session: &mut EditSession, draft: &mut D
     aspect_row(ui, session, draft, canvas, turns);
     ui.add_space(2.0);
     ui.horizontal(|ui| {
-        if ui.button(tr("Corners…")).on_hover_text(tr("Drag four corners to turn, tilt, and skew (T)")).clicked() {
+        if ui
+            .button(tr("Corners…"))
+            .on_hover_text(tr("Drag four corners to turn, tilt, and skew (T)"))
+            .clicked()
+        {
             actions.push(Action::Tool(Tool::Transform));
         }
-        if ui.button(tr("Crop…")).on_hover_text(tr("Crop & straighten (C)")).clicked() {
+        if ui
+            .button(tr("Crop…"))
+            .on_hover_text(tr("Crop & straighten (C)"))
+            .clicked()
+        {
             actions.push(Action::Tool(Tool::Crop));
         }
         reset_transform_button(ui, session, draft, turns);
@@ -1145,7 +1533,13 @@ fn transform_section(ui: &mut egui::Ui, session: &mut EditSession, draft: &mut D
 }
 
 /// The Transform tool: the stage shows four corner handles.
-fn corners_section(ui: &mut egui::Ui, session: &mut EditSession, draft: &mut Draft, context: &Context, actions: &mut Vec<Action>) {
+fn corners_section(
+    ui: &mut egui::Ui,
+    session: &mut EditSession,
+    draft: &mut Draft,
+    context: &Context,
+    actions: &mut Vec<Action>,
+) {
     let Some(photo) = context.photo else { return };
     let turns = photo.rotation.div_euclid(90).rem_euclid(4) as usize;
     ui.label(
@@ -1159,8 +1553,13 @@ fn corners_section(ui: &mut egui::Ui, session: &mut EditSession, draft: &mut Dra
     transform_controls(ui, session, draft, turns, actions);
     ui.add_space(4.0);
     ui.horizontal(|ui| {
-        let moved = (0..4).any(|corner| (0..2).any(|axis| draft.settings.get(Control::corner(corner, axis)) != 0.0));
-        if ui.add_enabled(moved, egui::Button::new(tr("Reset corners"))).clicked() {
+        let moved = (0..4).any(|corner| {
+            (0..2).any(|axis| draft.settings.get(Control::corner(corner, axis)) != 0.0)
+        });
+        if ui
+            .add_enabled(moved, egui::Button::new(tr("Reset corners")))
+            .clicked()
+        {
             for corner in 0..4 {
                 for axis in 0..2 {
                     draft.settings.set(Control::corner(corner, axis), 0.0);
@@ -1178,7 +1577,13 @@ fn corners_section(ui: &mut egui::Ui, session: &mut EditSession, draft: &mut Dra
 
 /// Straighten, perspective, flips, 90° turns, and constraining the crop.
 /// A new turn or tilt fits the crop again.
-fn transform_controls(ui: &mut egui::Ui, session: &mut EditSession, draft: &mut Draft, turns: usize, actions: &mut Vec<Action>) {
+fn transform_controls(
+    ui: &mut egui::Ui,
+    session: &mut EditSession,
+    draft: &mut Draft,
+    turns: usize,
+    actions: &mut Vec<Action>,
+) {
     let before = Geometry::turn_of(&draft.settings);
     straighten_slider(ui, session, draft);
     subheading(ui, "Perspective");
@@ -1186,7 +1591,10 @@ fn transform_controls(ui: &mut egui::Ui, session: &mut EditSession, draft: &mut 
         (0, "Positive widens the top, for buildings that lean back"),
         (1, "Positive widens the right side"),
     ] {
-        if perspective_slider(ui, draft, axis, turns).on_hover_text(tr(hint)).dragged() {
+        if perspective_slider(ui, draft, axis, turns)
+            .on_hover_text(tr(hint))
+            .dragged()
+        {
             session.straightening = true;
         }
     }
@@ -1200,9 +1608,20 @@ fn transform_controls(ui: &mut egui::Ui, session: &mut EditSession, draft: &mut 
 }
 
 /// Puts straighten, perspective, corners, flips, and crop back to none.
-fn reset_transform_button(ui: &mut egui::Ui, session: &EditSession, draft: &mut Draft, turns: usize) {
+fn reset_transform_button(
+    ui: &mut egui::Ui,
+    session: &EditSession,
+    draft: &mut Draft,
+    turns: usize,
+) {
     let reset = draft.settings.with_geometry_of(&Settings::default());
-    if ui.add_enabled(reset != draft.settings, egui::Button::new(tr("Reset transform"))).clicked() {
+    if ui
+        .add_enabled(
+            reset != draft.settings,
+            egui::Button::new(tr("Reset transform")),
+        )
+        .clicked()
+    {
         draft.settings = reset;
         session.refit_crop(&mut draft.settings, turns);
         draft.changed(Kind::Crop);
@@ -1226,7 +1645,12 @@ fn perspective_control(axis: usize, turns: usize) -> (Control, f32) {
     }
 }
 
-fn perspective_slider(ui: &mut egui::Ui, draft: &mut Draft, axis: usize, turns: usize) -> egui::Response {
+fn perspective_slider(
+    ui: &mut egui::Ui,
+    draft: &mut Draft,
+    axis: usize,
+    turns: usize,
+) -> egui::Response {
     let (control, sign) = perspective_control(axis, turns);
     let mut value = draft.settings.get(control) * sign;
     let label = tr(["Vertical", "Horizontal"][axis]);
@@ -1250,7 +1674,13 @@ fn straighten_slider(ui: &mut egui::Ui, session: &mut EditSession, draft: &mut D
         ui.label(RichText::new(tr("Angle")).size(12.0).color(theme::text()));
         let mut value = draft.settings.get(Control::STRAIGHTEN);
         let exact = ui
-            .add(egui::DragValue::new(&mut value).range(-180.0..=180.0).speed(0.1).fixed_decimals(1).suffix("°"))
+            .add(
+                egui::DragValue::new(&mut value)
+                    .range(-180.0..=180.0)
+                    .speed(0.1)
+                    .fixed_decimals(1)
+                    .suffix("°"),
+            )
             .on_hover_text(tr("Type an angle, or drag for fine steps"));
         if exact.changed() {
             draft.settings.set(Control::STRAIGHTEN, value);
@@ -1263,7 +1693,10 @@ fn straighten_slider(ui: &mut egui::Ui, session: &mut EditSession, draft: &mut D
 
 fn flip_and_rotate(ui: &mut egui::Ui, draft: &mut Draft, actions: &mut Vec<Action>) {
     ui.horizontal(|ui| {
-        for (control, label) in [(Control::FLIP_H, "Flip horizontal"), (Control::FLIP_V, "Flip vertical")] {
+        for (control, label) in [
+            (Control::FLIP_H, "Flip horizontal"),
+            (Control::FLIP_V, "Flip vertical"),
+        ] {
             let on = draft.settings.get(control) >= 0.5;
             if ui.add(egui::Button::new(tr(label)).selected(on)).clicked() {
                 draft.settings.set(control, if on { 0.0 } else { 1.0 });
@@ -1285,7 +1718,11 @@ fn mask_section(ui: &mut egui::Ui, session: &mut EditSession, draft: &mut Draft)
     let [left, top, right, bottom] = draft.settings.crop();
     let (cx, cy) = ((left + right) * 0.5, (top + bottom) * 0.5);
     let canvas = session.base.as_ref().map_or([1.0, 1.0], |base| {
-        edit::canvas_size(draft.settings.get(Control::STRAIGHTEN), base.width() as f32, base.height() as f32)
+        edit::canvas_size(
+            draft.settings.get(Control::STRAIGHTEN),
+            base.width() as f32,
+            base.height() as f32,
+        )
     });
     ui.horizontal(|ui| {
         let count = draft.settings.masks.len() + 1;
@@ -1320,22 +1757,34 @@ fn mask_section(ui: &mut egui::Ui, session: &mut EditSession, draft: &mut Draft)
     });
     if draft.settings.masks.is_empty() {
         ui.label(
-            RichText::new(tr("Add a gradient, then drag its handles on the photo and set what it changes."))
-                .size(11.0)
-                .color(theme::muted()),
+            RichText::new(tr(
+                "Add a gradient, then drag its handles on the photo and set what it changes.",
+            ))
+            .size(11.0)
+            .color(theme::muted()),
         );
         return;
     }
-    ui.checkbox(&mut session.mask_overlay, tr("Show the selected mask in red"));
+    ui.checkbox(
+        &mut session.mask_overlay,
+        tr("Show the selected mask in red"),
+    );
     let mut remove = None;
     for (index, mask) in draft.settings.masks.iter().enumerate() {
         ui.horizontal(|ui| {
             let selected = session.mask == Some(index);
-            if ui.selectable_label(selected, RichText::new(&mask.name).size(12.0)).clicked() {
+            if ui
+                .selectable_label(selected, RichText::new(&mask.name).size(12.0))
+                .clicked()
+            {
                 session.mask = Some(index);
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.small_button("×").on_hover_text(tr("Delete mask")).clicked() {
+                if ui
+                    .small_button("×")
+                    .on_hover_text(tr("Delete mask"))
+                    .clicked()
+                {
                     remove = Some(index);
                 }
             });
@@ -1351,14 +1800,26 @@ fn mask_section(ui: &mut egui::Ui, session: &mut EditSession, draft: &mut Draft)
         .filter(|selected| *selected < draft.settings.masks.len());
         draft.changed(Kind::Mask);
     }
-    let Some(index) = session.mask.filter(|index| *index < draft.settings.masks.len()) else { return };
+    let Some(index) = session
+        .mask
+        .filter(|index| *index < draft.settings.masks.len())
+    else {
+        return;
+    };
     ui.add_space(4.0);
     let mask = &mut draft.settings.masks[index];
     let mut changed = false;
     changed |= ui.checkbox(&mut mask.invert, tr("Invert")).changed();
     if let Shape::Radial { feather, .. } = &mut mask.shape {
         let mut percent = *feather * 100.0;
-        slider_header(ui, tr("Feather"), None, false, &format!("{percent:.0}"), true);
+        slider_header(
+            ui,
+            tr("Feather"),
+            None,
+            false,
+            &format!("{percent:.0}"),
+            true,
+        );
         if develop_slider(ui, &mut percent, 0.0..=100.0, 1.0, 0.0).changed() {
             *feather = percent / 100.0;
             changed = true;
@@ -1367,7 +1828,11 @@ fn mask_section(ui: &mut egui::Ui, session: &mut EditSession, draft: &mut Draft)
     for (local, name) in LOCALS.iter().enumerate() {
         let (min, max) = Mask::local_range(local);
         let mut value = mask.amounts[local];
-        let text = if local == 0 { format!("{value:+.2} EV") } else { format!("{value:+.0}") };
+        let text = if local == 0 {
+            format!("{value:+.2} EV")
+        } else {
+            format!("{value:+.0}")
+        };
         let reset = slider_header(ui, tr(name), None, false, &text, value != 0.0);
         let step = if local == 0 { 0.01 } else { 1.0 };
         let response = develop_slider(ui, &mut value, min..=max, step, 0.0);
@@ -1411,12 +1876,22 @@ fn export_section(ui: &mut egui::Ui, session: &mut EditSession, actions: &mut Ve
     });
     if session.export_format == 0 {
         let mut quality = f32::from(session.export.quality);
-        slider_header(ui, tr("Quality"), None, false, &format!("{quality:.0}"), true);
+        slider_header(
+            ui,
+            tr("Quality"),
+            None,
+            false,
+            &format!("{quality:.0}"),
+            true,
+        );
         develop_slider(ui, &mut quality, 50.0..=100.0, 1.0, 50.0);
         session.export.quality = quality.round().clamp(50.0, 100.0) as u8;
     }
     let export = ui
-        .add_sized([ui.available_width(), 30.0], theme::primary_button(tr("Export…")))
+        .add_sized(
+            [ui.available_width(), 30.0],
+            theme::primary_button(tr("Export…")),
+        )
         .on_hover_text(tr("Save the edited photo as a new file"));
     if export.clicked() {
         actions.push(Action::Export);

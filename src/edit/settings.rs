@@ -38,7 +38,14 @@ pub struct Def {
     pub unit: Unit,
 }
 
-fn def(key: impl Into<String>, label: &'static str, min: f32, max: f32, default: f32, unit: Unit) -> Def {
+fn def(
+    key: impl Into<String>,
+    label: &'static str,
+    min: f32,
+    max: f32,
+    default: f32,
+    unit: Unit,
+) -> Def {
     Def {
         key: key.into(),
         label,
@@ -57,17 +64,39 @@ impl Def {
     }
 }
 
-pub const BANDS: [&str; 8] = ["Red", "Orange", "Yellow", "Green", "Aqua", "Blue", "Purple", "Magenta"];
-const BAND_KEYS: [&str; 8] = ["red", "orange", "yellow", "green", "aqua", "blue", "purple", "magenta"];
+pub const BANDS: [&str; 8] = [
+    "Red", "Orange", "Yellow", "Green", "Aqua", "Blue", "Purple", "Magenta",
+];
+const BAND_KEYS: [&str; 8] = [
+    "red", "orange", "yellow", "green", "aqua", "blue", "purple", "magenta",
+];
 /// OkLCh hue of each band's center, in degrees.
 pub const BAND_HUES: [f32; 8] = [29.0, 60.0, 105.0, 142.0, 195.0, 262.0, 300.0, 335.0];
 pub const ZONES: [&str; 4] = ["Shadows", "Midtones", "Highlights", "Global"];
 const ZONE_KEYS: [&str; 4] = ["shadows", "midtones", "highlights", "global"];
-pub const PROFILES: [&str; 6] = ["Color", "Neutral", "Vivid", "Landscape", "Portrait", "Monochrome"];
+pub const PROFILES: [&str; 6] = [
+    "Color",
+    "Neutral",
+    "Vivid",
+    "Landscape",
+    "Portrait",
+    "Monochrome",
+];
 /// HDR tone mapping methods, in the order of the `hdr.method` values.
-pub const HDR_METHODS: [&str; 5] = ["Local tone mapping", "Exposure fusion", "Reinhard", "Drago", "Filmic"];
+pub const HDR_METHODS: [&str; 5] = [
+    "Local tone mapping",
+    "Exposure fusion",
+    "Reinhard",
+    "Drago",
+    "Filmic",
+];
 pub const CURVE_CHANNELS: [&str; 4] = ["RGB", "Red", "Green", "Blue"];
-const CURVE_KEYS: [&str; 4] = ["curve.points.rgb", "curve.points.red", "curve.points.green", "curve.points.blue"];
+const CURVE_KEYS: [&str; 4] = [
+    "curve.points.rgb",
+    "curve.points.red",
+    "curve.points.green",
+    "curve.points.blue",
+];
 pub const MIX_PARTS: [&str; 3] = ["Hue", "Saturation", "Luminance"];
 
 /// Adjustments a mask applies to the area it covers.
@@ -272,7 +301,8 @@ impl Control {
     }
 
     fn is_geometry(self) -> bool {
-        (Control::STRAIGHTEN.0..=Control::CROP_BOTTOM.0).contains(&self.0) || self.0 >= Control::PERSPECTIVE_V.0
+        (Control::STRAIGHTEN.0..=Control::CROP_BOTTOM.0).contains(&self.0)
+            || self.0 >= Control::PERSPECTIVE_V.0
     }
 }
 
@@ -299,24 +329,65 @@ fn defs() -> &'static [Def] {
             signed("curve.lights".into(), "Lights").prefixed("Tone curve"),
             signed("curve.darks".into(), "Darks").prefixed("Tone curve"),
             signed("curve.shadows".into(), "Shadows").prefixed("Tone curve"),
-            def("curve.split.shadows", "Shadow split", 10.0, 40.0, 25.0, Unit::Plain),
-            def("curve.split.midtones", "Midtone split", 35.0, 65.0, 50.0, Unit::Plain),
-            def("curve.split.highlights", "Highlight split", 60.0, 90.0, 75.0, Unit::Plain),
+            def(
+                "curve.split.shadows",
+                "Shadow split",
+                10.0,
+                40.0,
+                25.0,
+                Unit::Plain,
+            ),
+            def(
+                "curve.split.midtones",
+                "Midtone split",
+                35.0,
+                65.0,
+                50.0,
+                Unit::Plain,
+            ),
+            def(
+                "curve.split.highlights",
+                "Highlight split",
+                60.0,
+                90.0,
+                75.0,
+                Unit::Plain,
+            ),
         ];
-        for (part, label) in ["hue", "saturation", "luminance"].into_iter().zip(MIX_PARTS) {
+        for (part, label) in ["hue", "saturation", "luminance"]
+            .into_iter()
+            .zip(MIX_PARTS)
+        {
             for (band, key) in BAND_KEYS.iter().enumerate() {
                 list.push(signed(format!("mix.{key}.{part}"), label).prefixed(BANDS[band]));
             }
         }
         for (zone, key) in ZONE_KEYS.iter().enumerate() {
             let prefix = ZONES[zone];
-            list.push(def(format!("grade.{key}.hue"), "Hue", 0.0, 360.0, 0.0, Unit::Hue).prefixed(prefix));
+            list.push(
+                def(
+                    format!("grade.{key}.hue"),
+                    "Hue",
+                    0.0,
+                    360.0,
+                    0.0,
+                    Unit::Hue,
+                )
+                .prefixed(prefix),
+            );
             list.push(plain(format!("grade.{key}.saturation"), "Saturation", 0.0).prefixed(prefix));
             list.push(signed(format!("grade.{key}.luminance"), "Luminance").prefixed(prefix));
         }
         list.push(plain("grade.blending".into(), "Blending", 50.0).prefixed("Color grading"));
         list.push(signed("grade.balance".into(), "Balance").prefixed("Color grading"));
-        list.push(def("bw.enabled", "Black & White", 0.0, 1.0, 0.0, Unit::Toggle));
+        list.push(def(
+            "bw.enabled",
+            "Black & White",
+            0.0,
+            1.0,
+            0.0,
+            Unit::Toggle,
+        ));
         for (band, key) in BAND_KEYS.iter().enumerate() {
             list.push(signed(format!("bw.{key}"), BANDS[band]).prefixed("B&W mix"));
         }
@@ -335,23 +406,85 @@ fn defs() -> &'static [Def] {
             plain("sharpen.masking".into(), "Masking", 0.0).prefixed("Sharpening"),
             plain("noise.luminance".into(), "Luminance", 0.0).prefixed("Noise reduction"),
             plain("noise.color".into(), "Color", 0.0).prefixed("Noise reduction"),
-            def("geometry.angle", "Straighten", -180.0, 180.0, 0.0, Unit::Degrees),
-            def("geometry.flip_h", "Flip horizontal", 0.0, 1.0, 0.0, Unit::Toggle),
-            def("geometry.flip_v", "Flip vertical", 0.0, 1.0, 0.0, Unit::Toggle),
+            def(
+                "geometry.angle",
+                "Straighten",
+                -180.0,
+                180.0,
+                0.0,
+                Unit::Degrees,
+            ),
+            def(
+                "geometry.flip_h",
+                "Flip horizontal",
+                0.0,
+                1.0,
+                0.0,
+                Unit::Toggle,
+            ),
+            def(
+                "geometry.flip_v",
+                "Flip vertical",
+                0.0,
+                1.0,
+                0.0,
+                Unit::Toggle,
+            ),
             def("crop.left", "Crop left", 0.0, 1.0, 0.0, Unit::Fraction),
             def("crop.top", "Crop top", 0.0, 1.0, 0.0, Unit::Fraction),
             def("crop.right", "Crop right", 0.0, 1.0, 1.0, Unit::Fraction),
             def("crop.bottom", "Crop bottom", 0.0, 1.0, 1.0, Unit::Fraction),
-            def("profile", "Profile", 0.0, (PROFILES.len() - 1) as f32, 0.0, Unit::Choice),
-            def("hdr.method", "Method", 0.0, (HDR_METHODS.len() - 1) as f32, 0.0, Unit::Choice).prefixed("HDR"),
+            def(
+                "profile",
+                "Profile",
+                0.0,
+                (PROFILES.len() - 1) as f32,
+                0.0,
+                Unit::Choice,
+            ),
+            def(
+                "hdr.method",
+                "Method",
+                0.0,
+                (HDR_METHODS.len() - 1) as f32,
+                0.0,
+                Unit::Choice,
+            )
+            .prefixed("HDR"),
             plain("hdr.strength".into(), "Strength", 0.0).prefixed("HDR"),
             plain("hdr.detail".into(), "Detail", 50.0).prefixed("HDR"),
-            def("geometry.vertical", "Vertical", -45.0, 45.0, 0.0, Unit::Degrees).prefixed("Perspective"),
-            def("geometry.horizontal", "Horizontal", -45.0, 45.0, 0.0, Unit::Degrees).prefixed("Perspective"),
+            def(
+                "geometry.vertical",
+                "Vertical",
+                -45.0,
+                45.0,
+                0.0,
+                Unit::Degrees,
+            )
+            .prefixed("Perspective"),
+            def(
+                "geometry.horizontal",
+                "Horizontal",
+                -45.0,
+                45.0,
+                0.0,
+                Unit::Degrees,
+            )
+            .prefixed("Perspective"),
         ]);
         for (corner, key) in CORNER_KEYS.iter().enumerate() {
             for axis in ["x", "y"] {
-                list.push(def(format!("geometry.corner.{key}.{axis}"), CORNERS[corner], -1.0, 1.0, 0.0, Unit::Fraction).prefixed("Corner"));
+                list.push(
+                    def(
+                        format!("geometry.corner.{key}.{axis}"),
+                        CORNERS[corner],
+                        -1.0,
+                        1.0,
+                        0.0,
+                        Unit::Fraction,
+                    )
+                    .prefixed("Corner"),
+                );
             }
         }
         debug_assert_eq!(list.len(), COUNT);
@@ -383,7 +516,10 @@ impl Curve {
             .iter()
             .filter_map(|point| {
                 let pair = point.as_array()?;
-                Some([pair.first()?.as_f64()? as f32, pair.get(1)?.as_f64()? as f32])
+                Some([
+                    pair.first()?.as_f64()? as f32,
+                    pair.get(1)?.as_f64()? as f32,
+                ])
             })
             .collect();
         (points.len() >= 2).then_some(Curve(points))
@@ -396,7 +532,11 @@ pub enum Shape {
     Linear { from: [f32; 2], to: [f32; 2] },
     /// Ellipse around `center`; `radius` is in canvas fractions and
     /// `feather` (0…1) softens its edge.
-    Radial { center: [f32; 2], radius: [f32; 2], feather: f32 },
+    Radial {
+        center: [f32; 2],
+        radius: [f32; 2],
+        feather: f32,
+    },
 }
 
 /// A local adjustment. Positions are fractions of the straightened canvas,
@@ -421,7 +561,11 @@ impl Mask {
     fn to_json(&self) -> Value {
         let mut object = match self.shape {
             Shape::Linear { from, to } => json!({ "kind": "linear", "from": from, "to": to }),
-            Shape::Radial { center, radius, feather } => {
+            Shape::Radial {
+                center,
+                radius,
+                feather,
+            } => {
                 json!({ "kind": "radial", "center": center, "radius": radius, "feather": feather })
             }
         };
@@ -440,7 +584,10 @@ impl Mask {
     fn from_json(value: &Value) -> Option<Mask> {
         let pair = |key: &str| -> Option<[f32; 2]> {
             let array = value[key].as_array()?;
-            Some([array.first()?.as_f64()? as f32, array.get(1)?.as_f64()? as f32])
+            Some([
+                array.first()?.as_f64()? as f32,
+                array.get(1)?.as_f64()? as f32,
+            ])
         };
         let shape = match value["kind"].as_str()? {
             "linear" => Shape::Linear {
@@ -493,7 +640,11 @@ impl Settings {
 
     pub fn set(&mut self, control: Control, value: f32) {
         let def = control.def();
-        let mut value = if value.is_finite() { value.clamp(def.min, def.max) } else { def.default };
+        let mut value = if value.is_finite() {
+            value.clamp(def.min, def.max)
+        } else {
+            def.default
+        };
         if matches!(def.unit, Unit::Toggle | Unit::Choice) {
             value = value.round();
         }
@@ -558,7 +709,10 @@ impl Settings {
             }
         }
         if self.masks != base.masks {
-            patch.insert("masks".into(), Value::Array(self.masks.iter().map(Mask::to_json).collect()));
+            patch.insert(
+                "masks".into(),
+                Value::Array(self.masks.iter().map(Mask::to_json).collect()),
+            );
         }
         patch
     }
@@ -574,7 +728,10 @@ impl Settings {
                     self.curves[index] = curve;
                 }
             } else if key == "masks" {
-                self.masks = value.as_array().map(|masks| masks.iter().filter_map(Mask::from_json).collect()).unwrap_or_default();
+                self.masks = value
+                    .as_array()
+                    .map(|masks| masks.iter().filter_map(Mask::from_json).collect())
+                    .unwrap_or_default();
             }
         }
     }
@@ -651,11 +808,10 @@ impl Step {
         match &self.kind {
             Kind::Adjust => {
                 if self.patch.len() == 1 {
-                    if let Some((control, value)) = self
-                        .patch
-                        .iter()
-                        .next()
-                        .and_then(|(key, value)| Some((Control::from_key(key)?, value.as_f64()? as f32)))
+                    if let Some((control, value)) =
+                        self.patch.iter().next().and_then(|(key, value)| {
+                            Some((Control::from_key(key)?, value.as_f64()? as f32))
+                        })
                     {
                         return format!("{}  {}", control.label(), control.format(value));
                     }
@@ -665,10 +821,17 @@ impl Step {
             Kind::Reset => tr("Reset all").into(),
             Kind::Preset(name) => trf("Preset: {}", &[&super::presets::display_name(name)]),
             Kind::Profile => {
-                let index = self.patch.get(Control::PROFILE.key()).and_then(Value::as_f64).unwrap_or(0.0);
+                let index = self
+                    .patch
+                    .get(Control::PROFILE.key())
+                    .and_then(Value::as_f64)
+                    .unwrap_or(0.0);
                 trf("Profile: {}", &[&Control::PROFILE.format(index as f32)])
             }
-            Kind::WhiteBalance(name) => trf("White balance: {}", &[&super::presets::white_balance_name(name)]),
+            Kind::WhiteBalance(name) => trf(
+                "White balance: {}",
+                &[&super::presets::white_balance_name(name)],
+            ),
             Kind::Paste => tr("Paste settings").into(),
             Kind::AutoTone => tr("Auto tone").into(),
             Kind::AutoWhiteBalance => tr("Auto white balance").into(),
@@ -728,7 +891,11 @@ impl History {
         if *after == before {
             return false;
         }
-        let base = if kind == Kind::Reset { Settings::default() } else { before };
+        let base = if kind == Kind::Reset {
+            Settings::default()
+        } else {
+            before
+        };
         let patch = after.changed_from(&base);
         self.steps.truncate(self.applied);
         self.steps.push(Step { kind, patch });
@@ -739,7 +906,10 @@ impl History {
     /// Like [`History::commit`], but a change of the same kind as the newest
     /// step replaces it, as a preset's amount is tuned.
     pub fn amend(&mut self, kind: Kind, after: &Settings) -> bool {
-        let last = self.applied.checked_sub(1).filter(|_| self.applied == self.steps.len());
+        let last = self
+            .applied
+            .checked_sub(1)
+            .filter(|_| self.applied == self.steps.len());
         let Some(last) = last.filter(|last| self.steps[*last].kind == kind) else {
             return self.commit(kind, after);
         };
@@ -765,7 +935,9 @@ impl History {
             }
             let by_auto = matches!(step.kind, Kind::AutoTone | Kind::AutoWhiteBalance);
             for (key, value) in &step.patch {
-                let Some(control) = Control::from_key(key) else { continue };
+                let Some(control) = Control::from_key(key) else {
+                    continue;
+                };
                 auto.retain(|(other, _)| *other != control);
                 if let Some(value) = value.as_f64().filter(|_| by_auto) {
                     auto.push((control, value as f32));
@@ -777,7 +949,10 @@ impl History {
 
     /// Name of the newest applied step when it is a preset nothing followed.
     pub fn last_preset(&self) -> Option<&str> {
-        let step = self.steps.last().filter(|_| self.applied == self.steps.len())?;
+        let step = self
+            .steps
+            .last()
+            .filter(|_| self.applied == self.steps.len())?;
         match &step.kind {
             Kind::Preset(name) => Some(name),
             _ => None,
@@ -854,7 +1029,10 @@ impl History {
                 })
             })
             .collect();
-        let mut history = History { steps, ..History::default() };
+        let mut history = History {
+            steps,
+            ..History::default()
+        };
         history.set_applied(applied);
         history
     }
@@ -922,8 +1100,15 @@ mod tests {
         history.undo_all();
         assert!(history.settings().is_identity());
         history.redo();
-        assert!(history.commit(Kind::Adjust, &with(Control::SHADOWS, 30.0, &history.settings())));
-        assert_eq!(history.steps().len(), 2, "the undone contrast step is replaced");
+        assert!(history.commit(
+            Kind::Adjust,
+            &with(Control::SHADOWS, 30.0, &history.settings())
+        ));
+        assert_eq!(
+            history.steps().len(),
+            2,
+            "the undone contrast step is replaced"
+        );
         assert!(!history.can_redo());
         assert!(history.commit(Kind::Reset, &Settings::default()));
         assert!(history.settings().is_identity());
@@ -943,11 +1128,17 @@ mod tests {
             values.sort_by_key(|(control, _)| control.0);
             values
         };
-        let mut expected = vec![(Control::EXPOSURE, 0.4), (Control::CONTRAST, 12.0), (Control::TEMPERATURE, -8.0)];
+        let mut expected = vec![
+            (Control::EXPOSURE, 0.4),
+            (Control::CONTRAST, 12.0),
+            (Control::TEMPERATURE, -8.0),
+        ];
         expected.sort_by_key(|(control, _)| control.0);
         assert_eq!(auto(&history), expected);
         history.commit(Kind::Adjust, &with(Control::CONTRAST, 20.0, &balanced));
-        assert!(!auto(&history).iter().any(|(control, _)| *control == Control::CONTRAST));
+        assert!(!auto(&history)
+            .iter()
+            .any(|(control, _)| *control == Control::CONTRAST));
         assert_eq!(auto(&history).len(), 2);
         history.undo();
         assert_eq!(auto(&history), expected);
@@ -967,7 +1158,12 @@ mod tests {
         assert_eq!(history.settings(), replayed(&history));
         history.commit(Kind::Reset, &Settings::default());
         assert_eq!(history.settings(), replayed(&history));
-        for change in [History::undo, History::undo_all, History::redo, History::redo_all] {
+        for change in [
+            History::undo,
+            History::undo_all,
+            History::redo,
+            History::redo_all,
+        ] {
             change(&mut history);
             assert_eq!(history.settings(), replayed(&history));
         }

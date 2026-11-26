@@ -19,8 +19,14 @@ pub fn profile_of(paths: &[&Path]) -> Option<Profile> {
     let mut out: Profile = Vec::new();
     let mut along = 0.0f64;
     for path in paths {
-        let Ok(loaded) = crate::track_edit::load(path, crate::track_edit::Settings::default()) else { continue };
-        let heights = loaded.points.iter().any(|point| point.ele.is_some_and(|ele| ele.is_finite() && ele != 0.0));
+        let Ok(loaded) = crate::track_edit::load(path, crate::track_edit::Settings::default())
+        else {
+            continue;
+        };
+        let heights = loaded
+            .points
+            .iter()
+            .any(|point| point.ele.is_some_and(|ele| ele.is_finite() && ele != 0.0));
         let mut last = None;
         for point in &loaded.points {
             if let Some(previous) = last {
@@ -44,7 +50,11 @@ fn thin(points: Profile) -> Option<Profile> {
         return Some(points);
     }
     let step = (points.len() - 1) as f64 / (MOST - 1) as f64;
-    Some((0..MOST).map(|n| points[((n as f64 * step).round() as usize).min(points.len() - 1)]).collect())
+    Some(
+        (0..MOST)
+            .map(|n| points[((n as f64 * step).round() as usize).min(points.len() - 1)])
+            .collect(),
+    )
 }
 
 /// Size of the chart's panel and its gap from the picture's edges, before `scale`.
@@ -61,10 +71,15 @@ pub const VEIL: u8 = 140;
 /// Draws `profile` in the bottom-right corner of `pixmap`, on a light
 /// see-through panel over the map, in `ink`, with the highest and lowest heights beside it.
 pub fn draw(pixmap: &mut tiny_skia::Pixmap, profile: &[[f32; 2]], scale: f32, ink: [u8; 3]) {
-    let (Some(first), Some(last)) = (profile.first(), profile.last()) else { return };
+    let (Some(first), Some(last)) = (profile.first(), profile.last()) else {
+        return;
+    };
     let (width, height) = (pixmap.width() as f32, pixmap.height() as f32);
     let (panel_w, panel_h) = (PANEL.0 * scale, PANEL.1 * scale);
-    let (left, top) = (width - panel_w - MARGIN * scale, height - panel_h - MARGIN * scale);
+    let (left, top) = (
+        width - panel_w - MARGIN * scale,
+        height - panel_h - MARGIN * scale,
+    );
     if left < 0.0 || top < 0.0 {
         return;
     }
@@ -76,16 +91,33 @@ pub fn draw(pixmap: &mut tiny_skia::Pixmap, profile: &[[f32; 2]], scale: f32, in
     };
     let none = tiny_skia::Transform::identity();
     if let Some(panel) = rounded(left, top, panel_w, panel_h, 6.0 * scale) {
-        pixmap.fill_path(&panel, &paint([255, 255, 255], VEIL), tiny_skia::FillRule::Winding, none, None);
+        pixmap.fill_path(
+            &panel,
+            &paint([255, 255, 255], VEIL),
+            tiny_skia::FillRule::Winding,
+            none,
+            None,
+        );
     }
-    let low = profile.iter().map(|point| point[1]).fold(f32::INFINITY, f32::min);
-    let high = profile.iter().map(|point| point[1]).fold(f32::NEG_INFINITY, f32::max);
+    let low = profile
+        .iter()
+        .map(|point| point[1])
+        .fold(f32::INFINITY, f32::min);
+    let high = profile
+        .iter()
+        .map(|point| point[1])
+        .fold(f32::NEG_INFINITY, f32::max);
     // A flat route still shows as a line a little above the bottom.
     let span = (high - low).max(20.0);
     let (x0, x1) = (left + (PAD + LABELS) * scale, left + panel_w - PAD * scale);
     let (y0, y1) = (top + PAD * scale, top + panel_h - PAD * scale);
     let length = last[0] - first[0];
-    let at = |[along, ele]: [f32; 2]| (x0 + (along - first[0]) / length * (x1 - x0), y1 - (ele - low) / span * (y1 - y0));
+    let at = |[along, ele]: [f32; 2]| {
+        (
+            x0 + (along - first[0]) / length * (x1 - x0),
+            y1 - (ele - low) / span * (y1 - y0),
+        )
+    };
     let mut area = tiny_skia::PathBuilder::new();
     let mut line = tiny_skia::PathBuilder::new();
     area.move_to(x0, y1);
@@ -101,10 +133,20 @@ pub fn draw(pixmap: &mut tiny_skia::Pixmap, profile: &[[f32; 2]], scale: f32, in
     area.line_to(x1, y1);
     area.close();
     if let Some(area) = area.finish() {
-        pixmap.fill_path(&area, &paint(ink, 70), tiny_skia::FillRule::Winding, none, None);
+        pixmap.fill_path(
+            &area,
+            &paint(ink, 70),
+            tiny_skia::FillRule::Winding,
+            none,
+            None,
+        );
     }
     if let Some(line) = line.finish() {
-        let stroke = tiny_skia::Stroke { width: 2.0 * scale, line_join: tiny_skia::LineJoin::Round, ..Default::default() };
+        let stroke = tiny_skia::Stroke {
+            width: 2.0 * scale,
+            line_join: tiny_skia::LineJoin::Round,
+            ..Default::default()
+        };
         pixmap.stroke_path(&line, &paint(ink, 255), &stroke, none, None);
     }
     let size = 12.0 * scale;
@@ -135,15 +177,29 @@ fn rounded(x: f32, y: f32, w: f32, h: f32, r: f32) -> Option<tiny_skia::Path> {
 
 /// How wide `words` are at `size`, in the font [`text`] writes in.
 pub(crate) fn text_width(words: &str, size: f32) -> f32 {
-    let Ok(font) = FontRef::try_from_slice(epaint_default_fonts::UBUNTU_LIGHT) else { return 0.0 };
+    let Ok(font) = FontRef::try_from_slice(epaint_default_fonts::UBUNTU_LIGHT) else {
+        return 0.0;
+    };
     let scaled = font.as_scaled(PxScale::from(size));
-    words.chars().map(|c| scaled.h_advance(scaled.glyph_id(c))).sum()
+    words
+        .chars()
+        .map(|c| scaled.h_advance(scaled.glyph_id(c)))
+        .sum()
 }
 
 /// Writes `words` in `ink` with its baseline at `baseline`, in the
 /// interface's own font, laid on what is there.
-pub(crate) fn text(pixmap: &mut tiny_skia::Pixmap, words: &str, x: f32, baseline: f32, size: f32, ink: [u8; 3]) {
-    let Ok(font) = FontRef::try_from_slice(epaint_default_fonts::UBUNTU_LIGHT) else { return };
+pub(crate) fn text(
+    pixmap: &mut tiny_skia::Pixmap,
+    words: &str,
+    x: f32,
+    baseline: f32,
+    size: f32,
+    ink: [u8; 3],
+) {
+    let Ok(font) = FontRef::try_from_slice(epaint_default_fonts::UBUNTU_LIGHT) else {
+        return;
+    };
     let scaled = font.as_scaled(PxScale::from(size));
     let (width, height) = (pixmap.width() as i32, pixmap.height() as i32);
     let data = pixmap.data_mut();
@@ -156,7 +212,10 @@ pub(crate) fn text(pixmap: &mut tiny_skia::Pixmap, words: &str, x: f32, baseline
         if let Some(outline) = font.outline_glyph(glyph) {
             let bounds = outline.px_bounds();
             outline.draw(|gx, gy, coverage| {
-                let (px, py) = (bounds.min.x as i32 + gx as i32, bounds.min.y as i32 + gy as i32);
+                let (px, py) = (
+                    bounds.min.x as i32 + gx as i32,
+                    bounds.min.y as i32 + gy as i32,
+                );
                 if px < 0 || py < 0 || px >= width || py >= height {
                     return;
                 }
@@ -164,7 +223,8 @@ pub(crate) fn text(pixmap: &mut tiny_skia::Pixmap, words: &str, x: f32, baseline
                 let coverage = coverage.clamp(0.0, 1.0);
                 // The map picture is opaque, so the colour is blended as is.
                 for (channel, ink) in data[at..at + 3].iter_mut().zip(ink) {
-                    *channel = (f32::from(*channel) * (1.0 - coverage) + f32::from(ink) * coverage).round() as u8;
+                    *channel = (f32::from(*channel) * (1.0 - coverage) + f32::from(ink) * coverage)
+                        .round() as u8;
                 }
             });
         }
@@ -181,9 +241,17 @@ mod tests {
         let long: Profile = (0..1000).map(|n| [n as f32, (n % 50) as f32]).collect();
         let thinned = thin(long).unwrap();
         assert_eq!(thinned.len(), MOST);
-        assert_eq!((thinned[0][0], thinned[MOST - 1][0]), (0.0, 999.0), "it keeps both ends");
+        assert_eq!(
+            (thinned[0][0], thinned[MOST - 1][0]),
+            (0.0, 999.0),
+            "it keeps both ends"
+        );
         assert_eq!(thin(vec![[0.0, 10.0]]), None);
-        assert_eq!(thin(vec![[5.0, 10.0], [5.0, 12.0]]), None, "a route that goes nowhere");
+        assert_eq!(
+            thin(vec![[5.0, 10.0], [5.0, 12.0]]),
+            None,
+            "a route that goes nowhere"
+        );
     }
 
     #[test]
@@ -192,7 +260,11 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("walk.gpx");
         let points: String = (0..5).map(|n| format!("<trkpt lat=\"35.{n}\" lon=\"135.0\"><ele>{}</ele><time>2024-05-01T08:0{n}:00Z</time></trkpt>", 100 + n * 50)).collect();
-        std::fs::write(&path, format!("<gpx><trk><trkseg>{points}</trkseg></trk></gpx>")).unwrap();
+        std::fs::write(
+            &path,
+            format!("<gpx><trk><trkseg>{points}</trkseg></trk></gpx>"),
+        )
+        .unwrap();
         let profile = profile_of(&[path.as_path()]).unwrap();
         assert_eq!(profile.len(), 5);
         assert_eq!((profile[0][1], profile[4][1]), (100.0, 300.0));
@@ -202,7 +274,10 @@ mod tests {
         let pixel = |x: u32, y: u32| pixmap.pixel(x, y).unwrap();
         assert_eq!(pixel(10, 10).red(), 0, "the rest of the map is left alone");
         let veiled = pixel(720 - 20, 400 - 100).red();
-        assert!(veiled > 100 && veiled < 200, "the panel veils the map in the bottom-right corner, {veiled}");
+        assert!(
+            veiled > 100 && veiled < 200,
+            "the panel veils the map in the bottom-right corner, {veiled}"
+        );
         // A file whose heights are all 0 recorded none.
         let flat = dir.join("flat.gpx");
         std::fs::write(&flat, "<gpx><trk><trkseg><trkpt lat=\"35.0\" lon=\"135.0\"><ele>0</ele></trkpt><trkpt lat=\"35.1\" lon=\"135.0\"><ele>0</ele></trkpt></trkseg></trk></gpx>").unwrap();

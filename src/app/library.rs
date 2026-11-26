@@ -107,10 +107,14 @@ impl GridLayout {
     /// above the first visible row, or with `Sort::Name` the file name of the
     /// first photo in that row.
     fn position_label(&self, photos: &[Photo], sort: Sort, top: f32) -> Option<String> {
-        let first = self.rows.partition_point(|row| Self::row_y(row) + Self::row_height(row) <= top + 1.0);
+        let first = self
+            .rows
+            .partition_point(|row| Self::row_y(row) + Self::row_height(row) <= top + 1.0);
         if sort.by_name() {
             self.rows.get(first..)?.iter().find_map(|row| match row {
-                GridRow::Photos { indices, .. } => photos.get(indices.start).map(|photo| photo.filename.clone()),
+                GridRow::Photos { indices, .. } => photos
+                    .get(indices.start)
+                    .map(|photo| photo.filename.clone()),
                 GridRow::Header { .. } | GridRow::Tracks { .. } => None,
             })
         } else {
@@ -126,7 +130,9 @@ impl GridLayout {
     /// in view when the view's top edge is at `top`. Scrolling to that photo
     /// finds the same row again.
     fn first_visible(&self, top: f32) -> Option<usize> {
-        let first = self.rows.partition_point(|row| Self::row_y(row) + Self::row_height(row) / 2.0 <= top);
+        let first = self
+            .rows
+            .partition_point(|row| Self::row_y(row) + Self::row_height(row) / 2.0 <= top);
         self.rows.get(first..)?.iter().find_map(|row| match row {
             GridRow::Photos { indices, .. } => Some(indices.start),
             GridRow::Header { .. } | GridRow::Tracks { .. } => None,
@@ -138,7 +144,9 @@ impl GridLayout {
     fn section_at(&self, y: f32) -> Option<(String, usize)> {
         let at = self.months.partition_point(|mark| mark.y <= y);
         let month = self.months.get(at.saturating_sub(1))?;
-        let undated = self.undated.filter(|(top, _)| *top <= y && (at == 0 || month.y < *top));
+        let undated = self
+            .undated
+            .filter(|(top, _)| *top <= y && (at == 0 || month.y < *top));
         Some(match undated {
             Some((_, count)) => (tr("Unknown date").to_string(), count),
             None => (format_month(month.year, month.month), month.count),
@@ -151,10 +159,15 @@ impl GridLayout {
     /// in full view, or when sorted by name.
     fn pinned_heading(&self, top: f32) -> Option<(&str, f32)> {
         let at = self.rows.partition_point(|row| Self::row_y(row) <= top);
-        let (index, title, y) = self.rows[..at].iter().enumerate().rev().find_map(|(index, row)| match row {
-            GridRow::Header { title, y, .. } => Some((index, title.as_str(), *y)),
-            GridRow::Photos { .. } | GridRow::Tracks { .. } => None,
-        })?;
+        let (index, title, y) =
+            self.rows[..at]
+                .iter()
+                .enumerate()
+                .rev()
+                .find_map(|(index, row)| match row {
+                    GridRow::Header { title, y, .. } => Some((index, title.as_str(), *y)),
+                    GridRow::Photos { .. } | GridRow::Tracks { .. } => None,
+                })?;
         if y >= top {
             return None;
         }
@@ -237,7 +250,9 @@ impl PicassoApp {
         self.jump_to = None;
         // Named, so the viewer's filmstrip in the same panel keeps its own
         // scroll position and the grid is where it was after the viewer.
-        let mut area = egui::ScrollArea::vertical().id_salt("library-grid").auto_shrink([false, false]);
+        let mut area = egui::ScrollArea::vertical()
+            .id_salt("library-grid")
+            .auto_shrink([false, false]);
         // The date strip scrolls the grid itself, so a scroll bar beside it
         // would only repeat it.
         let scrubber = strip_w > 0.0 && !layout.months.is_empty();
@@ -250,9 +265,9 @@ impl PicassoApp {
         let mut grid = ui.new_child(egui::UiBuilder::new().max_rect(grid_rect));
         let output = area.show_viewport(&mut grid, |ui, viewport| {
             ui.set_height(layout.height);
-            let first = layout
-                .rows
-                .partition_point(|row| GridLayout::row_y(row) + GridLayout::row_height(row) < viewport.min.y);
+            let first = layout.rows.partition_point(|row| {
+                GridLayout::row_y(row) + GridLayout::row_height(row) < viewport.min.y
+            });
             let last = layout
                 .rows
                 .partition_point(|row| GridLayout::row_y(row) < viewport.max.y + 40.0)
@@ -295,14 +310,17 @@ impl PicassoApp {
             }
             // Asked for after the visible cells, so those are decoded first.
             let ahead = viewport.height();
-            let above = layout
-                .rows
-                .partition_point(|row| GridLayout::row_y(row) + GridLayout::row_height(row) < viewport.min.y - ahead / 2.0);
+            let above = layout.rows.partition_point(|row| {
+                GridLayout::row_y(row) + GridLayout::row_height(row) < viewport.min.y - ahead / 2.0
+            });
             let below = layout
                 .rows
                 .partition_point(|row| GridLayout::row_y(row) < viewport.max.y + ahead)
                 .max(last);
-            for row in layout.rows[last..below].iter().chain(&layout.rows[above.min(first)..first]) {
+            for row in layout.rows[last..below]
+                .iter()
+                .chain(&layout.rows[above.min(first)..first])
+            {
                 if let GridRow::Photos { indices, .. } = row {
                     for index in indices.clone() {
                         if let Some(photo) = self.photos.get(index) {
@@ -318,11 +336,17 @@ impl PicassoApp {
         let view = output.inner_rect;
         if let Some((title, y)) = layout.pinned_heading(output.state.clamped_offset().y) {
             let top = view.top() + y - output.state.clamped_offset().y;
-            let band = Rect::from_min_max(Pos2::new(view.left(), top), Pos2::new(view.right(), top + HEADER_H));
+            let band = Rect::from_min_max(
+                Pos2::new(view.left(), top),
+                Pos2::new(view.right(), top + HEADER_H),
+            );
             grid.interact(band, egui::Id::unique("pinned-heading"), Sense::click());
             let painter = grid.painter().with_clip_rect(view);
             painter.rect_filled(band, 0, theme::bg());
-            painter.line_segment([band.left_bottom(), band.right_bottom()], egui::Stroke::new(1.0, theme::hairline()));
+            painter.line_segment(
+                [band.left_bottom(), band.right_bottom()],
+                egui::Stroke::new(1.0, theme::hairline()),
+            );
             painter.text(
                 Pos2::new(view.left() + PAD, band.bottom() - 12.0),
                 Align2::LEFT_BOTTOM,
@@ -334,14 +358,26 @@ impl PicassoApp {
         ui.advance_cursor_after_rect(full);
         // The Library as a new window opens it, so the next start can come
         // back to the same photos.
-        if self.nav == Nav::Library && self.search.is_empty() && self.sort == Sort::DateNewest && !self.loading {
+        if self.nav == Nav::Library
+            && self.search.is_empty()
+            && self.sort == Sort::DateNewest
+            && !self.loading
+        {
             let top = layout.first_visible(output.state.clamped_offset().y);
-            self.library_top = top.and_then(|index| self.photos.get(index)).map(|photo| photo.id);
+            self.library_top = top
+                .and_then(|index| self.photos.get(index))
+                .map(|photo| photo.id);
         }
         self.scroll_hint(ui, &layout, &output);
         if scrubber {
             let strip = Rect::from_min_max(Pos2::new(grid_rect.max.x, full.min.y), full.max);
-            self.date_strip(ui, strip, &layout, output.state.clamped_offset().y, output.inner_rect.height());
+            self.date_strip(
+                ui,
+                strip,
+                &layout,
+                output.state.clamped_offset().y,
+                output.inner_rect.height(),
+            );
         }
     }
 
@@ -350,7 +386,14 @@ impl PicassoApp {
     /// marks the part in view. Pointing at it names the month there; a click
     /// goes to that month and dragging scrubs through the library. For a
     /// moment after scrolling it names the month in view.
-    fn date_strip(&mut self, ui: &egui::Ui, rect: Rect, layout: &GridLayout, offset: f32, view_h: f32) {
+    fn date_strip(
+        &mut self,
+        ui: &egui::Ui,
+        rect: Rect,
+        layout: &GridLayout,
+        offset: f32,
+        view_h: f32,
+    ) {
         let marks = &layout.months;
         let track = Rect::from_min_max(
             Pos2::new(rect.left(), rect.top() + STRIP_PAD),
@@ -364,7 +407,9 @@ impl PicassoApp {
         let to_grid = |y: f32| ((y - track.top()) / track.height()).clamp(0.0, 1.0) * total;
         let line_x = track.right() - 12.0;
 
-        let current = marks.partition_point(|mark| mark.y <= offset + HEADER_H).saturating_sub(1);
+        let current = marks
+            .partition_point(|mark| mark.y <= offset + HEADER_H)
+            .saturating_sub(1);
         let year_now = marks[current].year;
         let mut years: Vec<(i32, f32)> = Vec::new();
         for mark in marks {
@@ -375,10 +420,16 @@ impl PicassoApp {
         // The year in view is always labelled; others only where they don't
         // crowd a label already placed.
         let mut labels: Vec<(i32, f32, f32)> = Vec::new();
-        let by_priority = years.iter().filter(|(year, _)| *year == year_now).chain(years.iter().filter(|(year, _)| *year != year_now));
+        let by_priority = years
+            .iter()
+            .filter(|(year, _)| *year == year_now)
+            .chain(years.iter().filter(|(year, _)| *year != year_now));
         for &(year, top) in by_priority {
             let at = to_strip(top);
-            if labels.iter().all(|(_, other, _)| (other - at).abs() >= YEAR_GAP) {
+            if labels
+                .iter()
+                .all(|(_, other, _)| (other - at).abs() >= YEAR_GAP)
+            {
                 labels.push((year, at, top));
             }
         }
@@ -390,23 +441,33 @@ impl PicassoApp {
         let grow = ((HANDLE_MIN - (handle_bottom - handle_top)) / 2.0).max(0.0);
         let handle_span = (handle_top - grow)..=(handle_bottom + grow);
 
-        let response = ui.interact(rect, egui::Id::unique("date-strip"), Sense::click_and_drag());
+        let response = ui.interact(
+            rect,
+            egui::Id::unique("date-strip"),
+            Sense::click_and_drag(),
+        );
         response.widget_info(|| {
             let mut info = egui::WidgetInfo::labeled(egui::Role::Slider, true, tr("Timeline"));
-            info.current_text_value = Some(crate::types::format_month(year_now, marks[current].month));
+            info.current_text_value =
+                Some(crate::types::format_month(year_now, marks[current].month));
             info
         });
         if response.drag_started() {
-            let origin = ui.input(|input| input.pointer.press_origin()).map(|pos| pos.y);
+            let origin = ui
+                .input(|input| input.pointer.press_origin())
+                .map(|pos| pos.y);
             self.strip_glide = None;
-            self.strip_grab = origin.filter(|y| scrollable && handle_span.contains(y)).map(|y| y - handle_top);
+            self.strip_grab = origin
+                .filter(|y| scrollable && handle_span.contains(y))
+                .map(|y| y - handle_top);
         }
         if !response.dragged() {
             self.strip_grab = None;
         }
         let active = response.dragged() || response.is_pointer_button_down_on();
         let pointer_y = if active {
-            ui.input(|input| input.pointer.latest_pos()).map(|pos| pos.y.clamp(track.top(), track.bottom()))
+            ui.input(|input| input.pointer.latest_pos())
+                .map(|pos| pos.y.clamp(track.top(), track.bottom()))
         } else {
             response.hover_pos().map(|pos| pos.y)
         };
@@ -435,7 +496,9 @@ impl PicassoApp {
             if response.dragged() {
                 self.jump_to = Some((target - HEADER_H).clamp(0.0, max_offset));
             } else if response.clicked() {
-                let at = marks.partition_point(|mark| mark.y <= target).saturating_sub(1);
+                let at = marks
+                    .partition_point(|mark| mark.y <= target)
+                    .saturating_sub(1);
                 let to = (marks[at].y - 8.0).clamp(0.0, max_offset);
                 self.strip_glide = Some((offset, to, Instant::now()));
             }
@@ -459,7 +522,11 @@ impl PicassoApp {
             self.strip_offset = offset;
             self.strip_moved_at = Some(Instant::now());
         }
-        let hot = ctx.animate_bool_with_time(egui::Id::unique("date-strip-hot"), response.hovered() || active, STRIP_WAKE);
+        let hot = ctx.animate_bool_with_time(
+            egui::Id::unique("date-strip-hot"),
+            response.hovered() || active,
+            STRIP_WAKE,
+        );
         let awake = ctx.animate_bool_with_time(
             egui::Id::unique("date-strip-awake"),
             response.hovered() || active || self.strip_moved_at.is_some(),
@@ -468,18 +535,35 @@ impl PicassoApp {
 
         let painter = ui.painter_at(rect);
         if hot > 0.0 {
-            painter.rect_filled(rect.shrink2(Vec2::new(4.0, 2.0)), 10, theme::overlay((10.0 * hot) as u8));
+            painter.rect_filled(
+                rect.shrink2(Vec2::new(4.0, 2.0)),
+                10,
+                theme::overlay((10.0 * hot) as u8),
+            );
         }
         painter.line_segment(
-            [Pos2::new(line_x, track.top()), Pos2::new(line_x, track.bottom())],
+            [
+                Pos2::new(line_x, track.top()),
+                Pos2::new(line_x, track.bottom()),
+            ],
             egui::Stroke::new(1.0, theme::hairline().gamma_multiply(0.8 + 0.2 * awake)),
         );
-        let (month_tick, year_tick) = (theme::muted().gamma_multiply(0.35 + 0.25 * awake), theme::muted().gamma_multiply(0.7 + 0.3 * awake));
+        let (month_tick, year_tick) = (
+            theme::muted().gamma_multiply(0.35 + 0.25 * awake),
+            theme::muted().gamma_multiply(0.7 + 0.3 * awake),
+        );
         for (index, mark) in marks.iter().enumerate() {
             let new_year = index == 0 || marks[index - 1].year != mark.year;
-            let (half, color) = if new_year { (4.0 + hot, year_tick) } else { (2.0 + hot, month_tick) };
+            let (half, color) = if new_year {
+                (4.0 + hot, year_tick)
+            } else {
+                (2.0 + hot, month_tick)
+            };
             let y = to_strip(mark.y);
-            painter.line_segment([Pos2::new(line_x - half, y), Pos2::new(line_x + half, y)], egui::Stroke::new(1.0, color));
+            painter.line_segment(
+                [Pos2::new(line_x - half, y), Pos2::new(line_x + half, y)],
+                egui::Stroke::new(1.0, color),
+            );
         }
         for &(year, at, _) in &labels {
             let (size, color) = if year == year_now {
@@ -487,7 +571,13 @@ impl PicassoApp {
             } else {
                 (11.5, theme::muted().gamma_multiply(0.8 + 0.2 * awake))
             };
-            painter.text(Pos2::new(line_x - 10.0, at), Align2::RIGHT_CENTER, year.to_string(), FontId::proportional(size), color);
+            painter.text(
+                Pos2::new(line_x - 10.0, at),
+                Align2::RIGHT_CENTER,
+                year.to_string(),
+                FontId::proportional(size),
+                color,
+            );
         }
         if let (Some(y), false) = (pointer_y, self.strip_grab.is_some() || over_handle) {
             painter.line_segment(
@@ -504,34 +594,61 @@ impl PicassoApp {
             if self.strip_grab.is_some() {
                 painter.rect_filled(handle.expand(3.0), 6, theme::accent().gamma_multiply(0.2));
             }
-            painter.rect_filled(handle, half_w, theme::accent().gamma_multiply(0.75 + 0.25 * awake));
+            painter.rect_filled(
+                handle,
+                half_w,
+                theme::accent().gamma_multiply(0.75 + 0.25 * awake),
+            );
         }
 
         let tip_x = rect.left() + 2.0;
         if let (Some(y), Some(target)) = (pointer_y, target) {
             if let Some((title, count)) = layout.section_at(target) {
-                paint_date_bubble(&ctx, title, Some(super::photo_count(count)), Pos2::new(tip_x, y), rect, 1.0);
+                paint_date_bubble(
+                    &ctx,
+                    title,
+                    Some(super::photo_count(count)),
+                    Pos2::new(tip_x, y),
+                    rect,
+                    1.0,
+                );
             }
         } else if let Some(at) = self.strip_moved_at {
-            let alpha = 1.0 - ((at.elapsed().as_secs_f32() - STRIP_HINT_HOLD) / SCROLL_HINT_FADE).clamp(0.0, 1.0);
+            let alpha = 1.0
+                - ((at.elapsed().as_secs_f32() - STRIP_HINT_HOLD) / SCROLL_HINT_FADE)
+                    .clamp(0.0, 1.0);
             if alpha <= 0.0 {
                 self.strip_moved_at = None;
             } else if let Some((title, count)) = layout.section_at(offset + HEADER_H) {
                 ctx.request_repaint();
                 let y = (handle_top + handle_bottom) / 2.0;
-                paint_date_bubble(&ctx, title, Some(super::photo_count(count)), Pos2::new(tip_x, y), rect, alpha);
+                paint_date_bubble(
+                    &ctx,
+                    title,
+                    Some(super::photo_count(count)),
+                    Pos2::new(tip_x, y),
+                    rect,
+                    alpha,
+                );
             }
         }
     }
 
     /// Bubble beside the scroll bar handle while it is dragged, naming the
     /// part of the library in view. It fades out after the drag ends.
-    fn scroll_hint(&mut self, ui: &egui::Ui, layout: &GridLayout, output: &egui::scroll_area::ScrollAreaOutput<()>) {
+    fn scroll_hint(
+        &mut self,
+        ui: &egui::Ui,
+        layout: &GridLayout,
+        output: &egui::scroll_area::ScrollAreaOutput<()>,
+    ) {
         let ctx = ui.ctx();
         if ctx.is_being_dragged(output.id.with(1)) {
             self.scroll_hint_at = Some(Instant::now());
         }
-        let Some(at) = self.scroll_hint_at else { return };
+        let Some(at) = self.scroll_hint_at else {
+            return;
+        };
         let alpha = 1.0 - (at.elapsed().as_secs_f32() / SCROLL_HINT_FADE).clamp(0.0, 1.0);
         if alpha <= 0.0 {
             self.scroll_hint_at = None;
@@ -544,15 +661,25 @@ impl PicassoApp {
             return;
         }
         let offset = output.state.clamped_offset().y;
-        let Some(text) = layout.position_label(&self.photos, self.sort, offset) else { return };
+        let Some(text) = layout.position_label(&self.photos, self.sort, offset) else {
+            return;
+        };
 
         // The handle as egui places it, so the bubble follows the pointer.
         let style = &ui.spacing().scroll;
         let handle = (view.height() * view.height() / content).max(style.handle_min_length);
         let progress = offset / (content - view.height());
-        let handle_y = view.top() + handle / 2.0 + progress.clamp(0.0, 1.0) * (view.height() - handle);
+        let handle_y =
+            view.top() + handle / 2.0 + progress.clamp(0.0, 1.0) * (view.height() - handle);
         let bar_left = view.right() - style.bar_outer_margin - style.bar_width;
-        paint_date_bubble(ctx, text, None, Pos2::new(bar_left - 4.0, handle_y), view, alpha);
+        paint_date_bubble(
+            ctx,
+            text,
+            None,
+            Pos2::new(bar_left - 4.0, handle_y),
+            view,
+            alpha,
+        );
     }
 
     fn ensure_layout(&mut self, width: f32, tracks: usize) {
@@ -572,7 +699,13 @@ impl PicassoApp {
                 sort: self.sort,
                 thumb: thumb_key,
                 tracks,
-                layout: Rc::new(build_layout(&self.photos, tracks, self.sort, width, self.thumb_size)),
+                layout: Rc::new(build_layout(
+                    &self.photos,
+                    tracks,
+                    self.sort,
+                    width,
+                    self.thumb_size,
+                )),
             });
         }
     }
@@ -584,7 +717,11 @@ impl PicassoApp {
         if self.edited_only {
             return Vec::new();
         }
-        let words: Vec<String> = self.search.split_whitespace().map(str::to_lowercase).collect();
+        let words: Vec<String> = self
+            .search
+            .split_whitespace()
+            .map(str::to_lowercase)
+            .collect();
         let mut found: Vec<usize> = self
             .tracks
             .iter()
@@ -596,16 +733,20 @@ impl PicassoApp {
             })
             .filter(|(_, track)| {
                 let text = format!("{} {}", track.name, folder_label(&track.path)).to_lowercase();
-                words.iter().all(|word| match word.strip_prefix('-').filter(|rest| !rest.is_empty()) {
-                    Some(rest) => !text.contains(rest),
-                    None => text.contains(word.as_str()),
+                words.iter().all(|word| {
+                    match word.strip_prefix('-').filter(|rest| !rest.is_empty()) {
+                        Some(rest) => !text.contains(rest),
+                        None => text.contains(word.as_str()),
+                    }
                 })
             })
             .map(|(index, _)| index)
             .collect();
         let start = |index: &usize| self.tracks[*index].time_span.map(|(start, _)| start);
         match self.sort {
-            Sort::Name => found.sort_by_key(|index| folder_label(&self.tracks[*index].path).to_lowercase()),
+            Sort::Name => {
+                found.sort_by_key(|index| folder_label(&self.tracks[*index].path).to_lowercase())
+            }
             Sort::DateNewest => found.sort_by_key(|index| std::cmp::Reverse(start(index))),
             Sort::DateOldest => found.sort_by_key(start),
         }
@@ -613,7 +754,9 @@ impl PicassoApp {
     }
 
     fn track_cell(&mut self, ui: &mut egui::Ui, index: usize, rect: Rect, labeled: bool) {
-        let Some(track) = self.tracks.get(index) else { return };
+        let Some(track) = self.tracks.get(index) else {
+            return;
+        };
         let bounds = track.bounds;
         let thumb = rect.width();
         let image_rect = Rect::from_min_size(rect.min, Vec2::splat(thumb));
@@ -636,14 +779,28 @@ impl PicassoApp {
             let tile_scale = (fit / scale).min(1.0);
             let [x, y] = bounds.center();
             let (lat, lon) = crate::geo::world_to_latlon(x, y, 0);
-            let view = super::places::MapView { lat, lon, zoom, pan: Vec2::ZERO };
+            let view = super::places::MapView {
+                lat,
+                lon,
+                zoom,
+                pan: Vec2::ZERO,
+            };
             self.paint_preview_tiles(&map_painter, image_rect, view, tile_scale);
             super::track_editor::paint_track_shape(
-                &map_painter, image_rect.center(), &self.tracks[index].segments, [x, y], scale * tile_scale,
+                &map_painter,
+                image_rect.center(),
+                &self.tracks[index].segments,
+                [x, y],
+                scale * tile_scale,
             );
             badge_bottom = self.paint_map_credit(&map_painter, image_rect, 9.0).top();
         }
-        painter.rect_stroke(image_rect, THUMB_RADIUS, egui::Stroke::new(1.0, Color32::from_black_alpha(18)), egui::StrokeKind::Inside);
+        painter.rect_stroke(
+            image_rect,
+            THUMB_RADIUS,
+            egui::Stroke::new(1.0, Color32::from_black_alpha(18)),
+            egui::StrokeKind::Inside,
+        );
         let track = &self.tracks[index];
         let pill = |text: String, left_top: Pos2| {
             let galley = painter.layout_no_wrap(text, FontId::proportional(10.5), WHITE);
@@ -651,8 +808,14 @@ impl PicassoApp {
             painter.rect_filled(back, 5, Color32::from_black_alpha(150));
             painter.galley(back.min + Vec2::new(5.0, 2.0), galley, WHITE);
         };
-        pill(super::track_editor::format_badge(&track.path), image_rect.left_top() + Vec2::new(6.0, 6.0));
-        pill(crate::track::format_distance(track.meters), Pos2::new(image_rect.left() + 6.0, badge_bottom - 22.0));
+        pill(
+            super::track_editor::format_badge(&track.path),
+            image_rect.left_top() + Vec2::new(6.0, 6.0),
+        );
+        pill(
+            crate::track::format_distance(track.meters),
+            Pos2::new(image_rect.left() + 6.0, badge_bottom - 22.0),
+        );
         let file = folder_label(&track.path);
         if labeled {
             painter.text(
@@ -664,7 +827,8 @@ impl PicassoApp {
             );
         }
         let path = track.path.clone();
-        let response = response.on_hover_ui(|ui| super::places::track_tooltip(ui, &self.tracks[index]));
+        let response =
+            response.on_hover_ui(|ui| super::places::track_tooltip(ui, &self.tracks[index]));
         if response.clicked() {
             self.open_track(&path, ui.ctx());
         }
@@ -782,7 +946,10 @@ impl PicassoApp {
         let stories_tab = matches!(self.nav, Nav::Trip(id) if self.trip_stories.contains(&id));
         if !matches!(self.nav, Nav::Statistics | Nav::TravelMap | Nav::Trips) && !stories_tab {
             ui.horizontal_wrapped(|ui| {
-                if ui.checkbox(&mut self.edited_only, tr("Edited only")).changed() {
+                if ui
+                    .checkbox(&mut self.edited_only, tr("Edited only"))
+                    .changed()
+                {
                     self.reload_view();
                 }
             });
@@ -791,7 +958,8 @@ impl PicassoApp {
     }
 
     fn album_menu(&mut self, ui: &mut egui::Ui) {
-        let albums: Vec<(i64, String)> = self.albums.iter().map(|a| (a.id, a.name.clone())).collect();
+        let albums: Vec<(i64, String)> =
+            self.albums.iter().map(|a| (a.id, a.name.clone())).collect();
         let mut create = false;
         let mut add: Option<i64> = None;
         let button = theme::icon_button(ui, theme::Icon::AddToAlbum, true, false);
@@ -836,14 +1004,20 @@ impl PicassoApp {
         let response = ui
             .interact(rect, egui::Id::unique(("photo", photo.id)), Sense::click())
             .on_hover_cursor(egui::CursorIcon::PointingHand);
-        response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, &photo.filename));
+        response.widget_info(|| {
+            egui::WidgetInfo::selected(egui::Role::Button, true, selected, &photo.filename)
+        });
         if self.focus_photo == Some(photo.id) {
             self.focus_photo = None;
             response.request_focus();
         }
         if response.has_focus() {
             self.photo_focus = Some((response.id, photo.id));
-            let arrows = egui::EventFilter { horizontal_arrows: true, vertical_arrows: true, ..Default::default() };
+            let arrows = egui::EventFilter {
+                horizontal_arrows: true,
+                vertical_arrows: true,
+                ..Default::default()
+            };
             ui.memory_mut(|memory| memory.set_focus_lock_filter(response.id, arrows));
         }
         let painter = ui.painter();
@@ -861,7 +1035,12 @@ impl PicassoApp {
                 THUMB_RADIUS as f32,
             );
             let held = ui.input(|input| input.pointer.any_down());
-            self.sharpen_thumb(photo.id, &photo.path, thumb * ui.ctx().pixels_per_point(), held);
+            self.sharpen_thumb(
+                photo.id,
+                &photo.path,
+                thumb * ui.ctx().pixels_per_point(),
+                held,
+            );
         }
         let painter = ui.painter();
         if !labeled && response.hovered() {
@@ -873,12 +1052,25 @@ impl PicassoApp {
             egui::Stroke::new(1.0, Color32::from_black_alpha(18))
         };
         painter.rect_stroke(image_rect, THUMB_RADIUS, stroke, egui::StrokeKind::Inside);
-        let check_rect = Rect::from_center_size(image_rect.left_top() + Vec2::splat(15.0), Vec2::splat(24.0));
+        let check_rect =
+            Rect::from_center_size(image_rect.left_top() + Vec2::splat(15.0), Vec2::splat(24.0));
         let over_check = |pos: Option<Pos2>| pos.is_some_and(|pos| check_rect.contains(pos));
         if !selected && (response.hovered() || self.selection.len() > 1) {
             let center = check_rect.center();
-            let ring = if over_check(response.hover_pos()) { WHITE } else { WHITE.gamma_multiply(0.85) };
-            painter.circle_filled(center, 9.0, Color32::from_black_alpha(if over_check(response.hover_pos()) { 90 } else { 50 }));
+            let ring = if over_check(response.hover_pos()) {
+                WHITE
+            } else {
+                WHITE.gamma_multiply(0.85)
+            };
+            painter.circle_filled(
+                center,
+                9.0,
+                Color32::from_black_alpha(if over_check(response.hover_pos()) {
+                    90
+                } else {
+                    50
+                }),
+            );
             painter.circle_stroke(center, 9.0, egui::Stroke::new(1.6, ring));
         }
         if selected {
@@ -897,10 +1089,20 @@ impl PicassoApp {
         if photo.starred {
             let center = image_rect.right_bottom() + Vec2::new(-14.0, -14.0);
             painter.circle_filled(center, 11.0, Color32::from_black_alpha(110));
-            painter.text(center, Align2::CENTER_CENTER, "★", FontId::proportional(14.0), STAR);
+            painter.text(
+                center,
+                Align2::CENTER_CENTER,
+                "★",
+                FontId::proportional(14.0),
+                STAR,
+            );
         }
         if photo.is_video() {
-            super::viewer::paint_play_button(painter, image_rect.center(), (thumb * 0.14).clamp(14.0, 24.0));
+            super::viewer::paint_play_button(
+                painter,
+                image_rect.center(),
+                (thumb * 0.14).clamp(14.0, 24.0),
+            );
             if photo.duration > 0.0 {
                 let galley = painter.layout_no_wrap(
                     crate::types::format_duration(photo.duration),
@@ -915,12 +1117,24 @@ impl PicassoApp {
                 painter.galley(pill.min + Vec2::new(5.0, 2.0), galley, WHITE);
             }
         }
-        let place_rect = Rect::from_center_size(image_rect.left_bottom() + Vec2::new(14.0, -14.0), Vec2::splat(22.0));
+        let place_rect = Rect::from_center_size(
+            image_rect.left_bottom() + Vec2::new(14.0, -14.0),
+            Vec2::splat(22.0),
+        );
         if photo.place().is_some() {
             painter.circle_filled(place_rect.center(), 11.0, Color32::from_black_alpha(110));
-            theme::paint_pin(painter, place_rect.center(), 4.6, WHITE, Color32::from_black_alpha(110));
+            theme::paint_pin(
+                painter,
+                place_rect.center(),
+                4.6,
+                WHITE,
+                Color32::from_black_alpha(110),
+            );
         }
-        let edit_rect = Rect::from_center_size(image_rect.right_top() + Vec2::new(-14.0, 14.0), Vec2::splat(22.0));
+        let edit_rect = Rect::from_center_size(
+            image_rect.right_top() + Vec2::new(-14.0, 14.0),
+            Vec2::splat(22.0),
+        );
         let edited = self.edits.contains_key(&photo.id);
         if edited {
             theme::paint_edit_mark(painter, edit_rect.center(), 11.0);
@@ -936,21 +1150,40 @@ impl PicassoApp {
         } else if response.hovered() {
             // Clear of the place and star badges in the bottom corners.
             let badges = photo.place().is_some() || photo.starred;
-            let mut job = egui::text::LayoutJob::simple_singleline(photo.filename.clone(), FontId::proportional(11.5), WHITE);
-            job.wrap = egui::text::TextWrapping::truncate_at_width(thumb - if badges { 64.0 } else { 16.0 });
+            let mut job = egui::text::LayoutJob::simple_singleline(
+                photo.filename.clone(),
+                FontId::proportional(11.5),
+                WHITE,
+            );
+            job.wrap = egui::text::TextWrapping::truncate_at_width(
+                thumb - if badges { 64.0 } else { 16.0 },
+            );
             let galley = painter.layout_job(job);
-            let at = Pos2::new(image_rect.center().x - galley.size().x / 2.0, image_rect.bottom() - 8.0 - galley.size().y);
+            let at = Pos2::new(
+                image_rect.center().x - galley.size().x / 2.0,
+                image_rect.bottom() - 8.0 - galley.size().y,
+            );
             painter.galley(at, galley, WHITE);
         }
-        let star_rect = Rect::from_min_size(image_rect.right_bottom() + Vec2::new(-22.0, -22.0), Vec2::splat(22.0));
+        let star_rect = Rect::from_min_size(
+            image_rect.right_bottom() + Vec2::new(-22.0, -22.0),
+            Vec2::splat(22.0),
+        );
         let on_star = response
             .interact_pointer_pos()
             .map(|pos| star_rect.contains(pos) && photo.starred)
             .unwrap_or(false);
-        let over_place = |pos: Option<Pos2>| photo.place().is_some() && pos.is_some_and(|pos| place_rect.contains(pos));
-        let over_edit = |pos: Option<Pos2>| edited && pos.is_some_and(|pos| edit_rect.contains(pos));
+        let over_place = |pos: Option<Pos2>| {
+            photo.place().is_some() && pos.is_some_and(|pos| place_rect.contains(pos))
+        };
+        let over_edit =
+            |pos: Option<Pos2>| edited && pos.is_some_and(|pos| edit_rect.contains(pos));
         let response = if over_place(response.hover_pos()) {
-            let text = if photo.pinned() { "Geotagged in Picasso — show on map" } else { "Has GPS location — show on map" };
+            let text = if photo.pinned() {
+                "Geotagged in Picasso — show on map"
+            } else {
+                "Has GPS location — show on map"
+            };
             response.on_hover_text(tr(text))
         } else if over_edit(response.hover_pos()) {
             response.on_hover_text(tr("Edited — open in the editor"))
@@ -994,7 +1227,14 @@ impl PicassoApp {
                 ui.close();
             }
             let star_label = if self.selection.contains(&id) && self.selection.len() > 1 {
-                trf(if photo.starred { "Unstar {} photos" } else { "Star {} photos" }, &[&self.selection.len()])
+                trf(
+                    if photo.starred {
+                        "Unstar {} photos"
+                    } else {
+                        "Star {} photos"
+                    },
+                    &[&self.selection.len()],
+                )
             } else {
                 tr(if photo.starred { "Unstar" } else { "Star" }).to_string()
             };
@@ -1024,7 +1264,11 @@ impl PicassoApp {
                 ui.close();
             }
             if ui.button(tr("Export…")).clicked() {
-                let ids = if self.selection.contains(&id) { self.selection_in_order() } else { vec![id] };
+                let ids = if self.selection.contains(&id) {
+                    self.selection_in_order()
+                } else {
+                    vec![id]
+                };
                 self.open_export(&ids);
                 ui.close();
             }
@@ -1033,12 +1277,20 @@ impl PicassoApp {
                 ui.close();
             }
             if ui.button(tr("Copy path")).clicked() {
-                let ids = if self.selection.contains(&id) { self.selection_in_order() } else { vec![id] };
+                let ids = if self.selection.contains(&id) {
+                    self.selection_in_order()
+                } else {
+                    vec![id]
+                };
                 self.copy_paths(ui.ctx(), &ids);
                 ui.close();
             }
             if ui.button(tr("Adjust date…")).clicked() {
-                let ids = if self.selection.contains(&id) { self.selection_in_order() } else { vec![id] };
+                let ids = if self.selection.contains(&id) {
+                    self.selection_in_order()
+                } else {
+                    vec![id]
+                };
                 self.open_adjust_date(ids);
                 ui.close();
             }
@@ -1068,7 +1320,12 @@ impl PicassoApp {
             theme::paint_logo(ui.painter(), &self.logo, rect);
             ui.add_space(16.0);
             let state = empty_state(&self.nav, &self.search, self.edited_only);
-            ui.label(egui::RichText::new(tr(state.title)).size(20.0).strong().color(theme::text()));
+            ui.label(
+                egui::RichText::new(tr(state.title))
+                    .size(20.0)
+                    .strong()
+                    .color(theme::text()),
+            );
             ui.add_space(6.0);
             ui.label(egui::RichText::new(tr(state.hint)).color(theme::muted()));
             ui.add_space(16.0);
@@ -1086,7 +1343,10 @@ impl PicassoApp {
                     EmptyAction::Library => self.set_nav(Nav::Library),
                     EmptyAction::Rescan => self.rescan(),
                     EmptyAction::Import => {
-                        self.modal = super::Modal::AddFolder { path: String::new(), error: String::new() };
+                        self.modal = super::Modal::AddFolder {
+                            path: String::new(),
+                            error: String::new(),
+                        };
                     }
                 }
             }
@@ -1186,14 +1446,26 @@ fn build_layout(photos: &[Photo], tracks: usize, sort: Sort, width: f32, thumb: 
     let mut undated = None;
     let mut y = 8.0;
     if tracks > 0 {
-        rows.push(GridRow::Header { title: tr("GPS tracks").to_string(), y, first: 0 });
+        rows.push(GridRow::Header {
+            title: tr("GPS tracks").to_string(),
+            y,
+            first: 0,
+        });
         y += HEADER_H;
         for start in (0..tracks).step_by(cols) {
-            rows.push(GridRow::Tracks { indices: start..(start + cols).min(tracks), y, h: row_h });
+            rows.push(GridRow::Tracks {
+                indices: start..(start + cols).min(tracks),
+                y,
+                h: row_h,
+            });
             y += row_h;
         }
         if sort.by_name() && !photos.is_empty() {
-            rows.push(GridRow::Header { title: tr("Photos").to_string(), y, first: 0 });
+            rows.push(GridRow::Header {
+                title: tr("Photos").to_string(),
+                y,
+                first: 0,
+            });
             y += HEADER_H;
         }
     }
@@ -1202,7 +1474,11 @@ fn build_layout(photos: &[Photo], tracks: usize, sort: Sort, width: f32, thumb: 
         for chunk in photos.chunks(cols) {
             let indices = offset..offset + chunk.len();
             offset += chunk.len();
-            rows.push(GridRow::Photos { indices, y, h: row_h });
+            rows.push(GridRow::Photos {
+                indices,
+                y,
+                h: row_h,
+            });
             y += row_h;
         }
     } else {
@@ -1218,8 +1494,15 @@ fn build_layout(photos: &[Photo], tracks: usize, sort: Sort, width: f32, thumb: 
                 use chrono::Datelike;
                 let (year, month) = (date.year(), date.month());
                 match months.last_mut() {
-                    Some(last) if (last.year, last.month) == (year, month) => last.count += index - start,
-                    _ => months.push(MonthMark { year, month, y, count: index - start }),
+                    Some(last) if (last.year, last.month) == (year, month) => {
+                        last.count += index - start
+                    }
+                    _ => months.push(MonthMark {
+                        year,
+                        month,
+                        y,
+                        count: index - start,
+                    }),
                 }
             } else {
                 undated.get_or_insert((y, 0)).1 += index - start;
@@ -1258,16 +1541,37 @@ fn build_layout(photos: &[Photo], tracks: usize, sort: Sort, width: f32, thumb: 
 /// Rounded label over the grid naming a part of the library, with an
 /// optional smaller second line. Its pointer's tip is at `tip`, the bubble
 /// to its left, kept within `bounds` vertically while the pointer follows.
-fn paint_date_bubble(ctx: &egui::Context, title: String, detail: Option<String>, tip: Pos2, bounds: Rect, alpha: f32) {
+fn paint_date_bubble(
+    ctx: &egui::Context,
+    title: String,
+    detail: Option<String>,
+    tip: Pos2,
+    bounds: Rect,
+    alpha: f32,
+) {
     const NOTCH: f32 = 6.0;
-    let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::unique("date-bubble")));
+    let painter = ctx.layer_painter(egui::LayerId::new(
+        egui::Order::Foreground,
+        egui::Id::unique("date-bubble"),
+    ));
     let color = theme::text().gamma_multiply(alpha);
     let title = painter.layout_no_wrap(title, FontId::proportional(14.0), color);
-    let detail = detail.map(|text| painter.layout_no_wrap(text, FontId::proportional(11.5), theme::muted().gamma_multiply(alpha)));
-    let text_w = detail.as_ref().map_or(title.size().x, |detail| title.size().x.max(detail.size().x));
+    let detail = detail.map(|text| {
+        painter.layout_no_wrap(
+            text,
+            FontId::proportional(11.5),
+            theme::muted().gamma_multiply(alpha),
+        )
+    });
+    let text_w = detail
+        .as_ref()
+        .map_or(title.size().x, |detail| title.size().x.max(detail.size().x));
     let text_h = title.size().y + detail.as_ref().map_or(0.0, |detail| detail.size().y + 1.0);
     let size = Vec2::new(text_w + 28.0, text_h + 16.0);
-    let top = (tip.y - size.y / 2.0).clamp(bounds.top() + 4.0, (bounds.bottom() - size.y - 4.0).max(bounds.top() + 4.0));
+    let top = (tip.y - size.y / 2.0).clamp(
+        bounds.top() + 4.0,
+        (bounds.bottom() - size.y - 4.0).max(bounds.top() + 4.0),
+    );
     let bubble = Rect::from_min_size(Pos2::new(tip.x - NOTCH - size.x, top), size);
     let mut shadow = theme::card_shadow();
     shadow.color = shadow.color.gamma_multiply(alpha);
@@ -1276,9 +1580,16 @@ fn paint_date_bubble(ctx: &egui::Context, title: String, detail: Option<String>,
     let line = egui::Stroke::new(1.0, theme::hairline().gamma_multiply(alpha));
     painter.rect(bubble, 10, fill, line, egui::StrokeKind::Inside);
     let notch_y = tip.y.clamp(bubble.top() + 14.0, bubble.bottom() - 14.0);
-    let (upper, lower) = (Pos2::new(bubble.right() - 1.0, notch_y - NOTCH), Pos2::new(bubble.right() - 1.0, notch_y + NOTCH));
+    let (upper, lower) = (
+        Pos2::new(bubble.right() - 1.0, notch_y - NOTCH),
+        Pos2::new(bubble.right() - 1.0, notch_y + NOTCH),
+    );
     let point = Pos2::new(bubble.right() + NOTCH - 1.0, notch_y);
-    painter.add(egui::Shape::convex_polygon(vec![upper, point, lower], fill, egui::Stroke::NONE));
+    painter.add(egui::Shape::convex_polygon(
+        vec![upper, point, lower],
+        fill,
+        egui::Stroke::NONE,
+    ));
     painter.line_segment([upper, point], line);
     painter.line_segment([point, lower], line);
     let title_x = bubble.left() + 14.0;
@@ -1316,10 +1627,19 @@ mod tests {
         let photos = [first, second, outside];
         let selected = [1, 2].into_iter().collect();
         // Menu labels and toolbar actions must agree for mixed selections.
-        assert_eq!(super::super::star_change(&photos, &selected, 1), Some((vec![1, 2], false)));
-        assert_eq!(super::super::star_change(&photos, &selected, 2), Some((vec![1, 2], true)));
+        assert_eq!(
+            super::super::star_change(&photos, &selected, 1),
+            Some((vec![1, 2], false))
+        );
+        assert_eq!(
+            super::super::star_change(&photos, &selected, 2),
+            Some((vec![1, 2], true))
+        );
         // The unrelated selection must not change when another photo is clicked.
-        assert_eq!(super::super::star_change(&photos, &selected, 3), Some((vec![3], true)));
+        assert_eq!(
+            super::super::star_change(&photos, &selected, 3),
+            Some((vec![3], true))
+        );
         assert_eq!(super::super::star_change(&photos, &selected, 99), None);
     }
 
@@ -1330,20 +1650,34 @@ mod tests {
             assert_eq!(state.action, EmptyAction::ClearSearch);
             assert_eq!(state.title, "No results found");
             // Clearing search is useful even if a second filter is also active.
-            assert_eq!(empty_state(&nav, "not-found", true).action, EmptyAction::ClearSearch);
+            assert_eq!(
+                empty_state(&nav, "not-found", true).action,
+                EmptyAction::ClearSearch
+            );
         }
     }
 
     #[test]
     fn every_empty_state_is_translated() {
         // Shown through a variable, so the scan of `tr` calls in the source can't see them.
-        let navs = [Nav::Library, Nav::Album(1), Nav::Trip(1), Nav::Starred, Nav::Folder(1), Nav::Dir("photos".into())];
+        let navs = [
+            Nav::Library,
+            Nav::Album(1),
+            Nav::Trip(1),
+            Nav::Starred,
+            Nav::Folder(1),
+            Nav::Dir("photos".into()),
+        ];
         crate::i18n::set_for_thread(Some(crate::i18n::Lang::German));
         let mut missing = Vec::new();
         for nav in &navs {
             for (search, edited) in [("", false), ("", true), ("x", false)] {
                 let state = empty_state(nav, search, edited);
-                missing.extend([state.title, state.hint, state.button].into_iter().filter(|text| tr(text) == *text));
+                missing.extend(
+                    [state.title, state.hint, state.button]
+                        .into_iter()
+                        .filter(|text| tr(text) == *text),
+                );
             }
         }
         crate::i18n::set_for_thread(None);
@@ -1352,12 +1686,30 @@ mod tests {
 
     #[test]
     fn empty_views_offer_actions_for_the_current_collection() {
-        assert_eq!(empty_state(&Nav::Library, "", false).action, EmptyAction::Import);
-        assert_eq!(empty_state(&Nav::Album(1), "", false).action, EmptyAction::Library);
-        assert_eq!(empty_state(&Nav::Starred, "", false).action, EmptyAction::Library);
-        assert_eq!(empty_state(&Nav::Folder(1), "", false).action, EmptyAction::Rescan);
-        assert_eq!(empty_state(&Nav::Dir("photos".into()), "", false).action, EmptyAction::Rescan);
-        assert_eq!(empty_state(&Nav::Album(1), "  ", true).action, EmptyAction::ClearEdited);
+        assert_eq!(
+            empty_state(&Nav::Library, "", false).action,
+            EmptyAction::Import
+        );
+        assert_eq!(
+            empty_state(&Nav::Album(1), "", false).action,
+            EmptyAction::Library
+        );
+        assert_eq!(
+            empty_state(&Nav::Starred, "", false).action,
+            EmptyAction::Library
+        );
+        assert_eq!(
+            empty_state(&Nav::Folder(1), "", false).action,
+            EmptyAction::Rescan
+        );
+        assert_eq!(
+            empty_state(&Nav::Dir("photos".into()), "", false).action,
+            EmptyAction::Rescan
+        );
+        assert_eq!(
+            empty_state(&Nav::Album(1), "  ", true).action,
+            EmptyAction::ClearEdited
+        );
     }
 
     fn photo(name: &str, taken_at: i64) -> Photo {
@@ -1388,7 +1740,10 @@ mod tests {
     #[test]
     fn labels_the_top_of_the_view() {
         // Noon UTC, two days apart, so both stay separate days in any zone.
-        let (day_a, day_b) = (1_780_000_000 / 86_400 * 86_400 + 43_200, 1_780_000_000 / 86_400 * 86_400 - 129_600);
+        let (day_a, day_b) = (
+            1_780_000_000 / 86_400 * 86_400 + 43_200,
+            1_780_000_000 / 86_400 * 86_400 - 129_600,
+        );
         let photos: Vec<Photo> = ["a", "b", "c", "d", "e"]
             .iter()
             .enumerate()
@@ -1399,15 +1754,33 @@ mod tests {
         let dated = build_layout(&photos, 0, Sort::DateNewest, 210.0, 100.0);
         assert_eq!((dated.cols, dated.tile, dated.labels), (2, 100.0, false));
         let (title_a, title_b) = (format_day(day_a), format_day(day_b));
-        assert_eq!(dated.position_label(&photos, Sort::DateNewest, 0.0), Some(title_a.clone()));
-        assert_eq!(dated.position_label(&photos, Sort::DateNewest, 200.0), Some(title_a));
-        assert_eq!(dated.position_label(&photos, Sort::DateNewest, 330.0), Some(title_b.clone()));
-        assert_eq!(dated.position_label(&photos, Sort::DateNewest, 10_000.0), Some(title_b));
+        assert_eq!(
+            dated.position_label(&photos, Sort::DateNewest, 0.0),
+            Some(title_a.clone())
+        );
+        assert_eq!(
+            dated.position_label(&photos, Sort::DateNewest, 200.0),
+            Some(title_a)
+        );
+        assert_eq!(
+            dated.position_label(&photos, Sort::DateNewest, 330.0),
+            Some(title_b.clone())
+        );
+        assert_eq!(
+            dated.position_label(&photos, Sort::DateNewest, 10_000.0),
+            Some(title_b)
+        );
 
         let named = build_layout(&photos, 0, Sort::Name, 218.0, 100.0);
         assert_eq!((named.cols, named.tile, named.labels), (2, 100.0, true));
-        assert_eq!(named.position_label(&photos, Sort::Name, 0.0).as_deref(), Some("a"));
-        assert_eq!(named.position_label(&photos, Sort::Name, 150.0).as_deref(), Some("c"));
+        assert_eq!(
+            named.position_label(&photos, Sort::Name, 0.0).as_deref(),
+            Some("a")
+        );
+        assert_eq!(
+            named.position_label(&photos, Sort::Name, 150.0).as_deref(),
+            Some("c")
+        );
         assert_eq!(named.position_label(&photos, Sort::Name, 10_000.0), None);
     }
 
@@ -1417,45 +1790,104 @@ mod tests {
         let (cols, tile) = grid_columns(544.0, 176.0, GAP);
         assert_eq!(cols, 3, "a third column that nearly fits is added");
         assert!((tile * 3.0 + GAP * 2.0 - 540.0).abs() < 0.01);
-        assert_eq!(grid_columns(404.0, 176.0, GAP), (2, 193.0), "two columns widen rather than leave a gap");
-        assert_eq!(grid_columns(204.0, 150.0, GAP), (1, 195.0), "a lone column grows by at most 30%");
+        assert_eq!(
+            grid_columns(404.0, 176.0, GAP),
+            (2, 193.0),
+            "two columns widen rather than leave a gap"
+        );
+        assert_eq!(
+            grid_columns(204.0, 150.0, GAP),
+            (1, 195.0),
+            "a lone column grows by at most 30%"
+        );
     }
 
     #[test]
     fn names_the_month_at_each_part_of_the_grid() {
         // Mid-month noons in UTC stay in the same month in any zone.
-        let march = chrono::NaiveDate::from_ymd_opt(2026, 3, 15).unwrap().and_hms_opt(12, 0, 0).unwrap().and_utc().timestamp();
-        let january = chrono::NaiveDate::from_ymd_opt(2026, 1, 15).unwrap().and_hms_opt(12, 0, 0).unwrap().and_utc().timestamp();
-        let photos: Vec<Photo> = [march, march, january, i64::MAX].iter().map(|&at| photo("p", at)).collect();
+        let march = chrono::NaiveDate::from_ymd_opt(2026, 3, 15)
+            .unwrap()
+            .and_hms_opt(12, 0, 0)
+            .unwrap()
+            .and_utc()
+            .timestamp();
+        let january = chrono::NaiveDate::from_ymd_opt(2026, 1, 15)
+            .unwrap()
+            .and_hms_opt(12, 0, 0)
+            .unwrap()
+            .and_utc()
+            .timestamp();
+        let photos: Vec<Photo> = [march, march, january, i64::MAX]
+            .iter()
+            .map(|&at| photo("p", at))
+            .collect();
         let layout = build_layout(&photos, 0, Sort::DateNewest, 210.0, 100.0);
         assert_eq!(layout.months.len(), 2);
-        let (first, second, (undated, _)) = (layout.months[0].y, layout.months[1].y, layout.undated.unwrap());
+        let (first, second, (undated, _)) = (
+            layout.months[0].y,
+            layout.months[1].y,
+            layout.undated.unwrap(),
+        );
         assert!(first < second && second < undated);
         assert_eq!(layout.section_at(0.0), Some((format_month(2026, 3), 2)));
-        assert_eq!(layout.section_at(second - 1.0), Some((format_month(2026, 3), 2)));
-        assert_eq!(layout.section_at(second + 1.0), Some((format_month(2026, 1), 1)));
-        assert_eq!(layout.section_at(undated + 1.0), Some((tr("Unknown date").to_string(), 1)));
-        assert!(build_layout(&photos, 0, Sort::Name, 218.0, 100.0).months.is_empty());
+        assert_eq!(
+            layout.section_at(second - 1.0),
+            Some((format_month(2026, 3), 2))
+        );
+        assert_eq!(
+            layout.section_at(second + 1.0),
+            Some((format_month(2026, 1), 1))
+        );
+        assert_eq!(
+            layout.section_at(undated + 1.0),
+            Some((tr("Unknown date").to_string(), 1))
+        );
+        assert!(build_layout(&photos, 0, Sort::Name, 218.0, 100.0)
+            .months
+            .is_empty());
     }
 
     #[test]
     fn pins_the_heading_of_the_rows_in_view() {
         let noon = 1_780_000_000 / 86_400 * 86_400 + 43_200;
-        let photos: Vec<Photo> = [noon, noon, noon, noon - 2 * 86_400].iter().map(|&at| photo("p", at)).collect();
+        let photos: Vec<Photo> = [noon, noon, noon, noon - 2 * 86_400]
+            .iter()
+            .map(|&at| photo("p", at))
+            .collect();
         // Two columns: heading at 8, rows at 48 and 154, next heading at 260.
         let layout = build_layout(&photos, 0, Sort::DateNewest, 210.0, 100.0);
         let (first, second) = (format_day(noon), format_day(noon - 2 * 86_400));
-        assert_eq!(layout.pinned_heading(0.0), None, "the heading is in full view");
+        assert_eq!(
+            layout.pinned_heading(0.0),
+            None,
+            "the heading is in full view"
+        );
         assert_eq!(layout.pinned_heading(100.0), Some((first.as_str(), 100.0)));
-        assert_eq!(layout.pinned_heading(240.0), Some((first.as_str(), 220.0)), "pushed up by the next heading");
+        assert_eq!(
+            layout.pinned_heading(240.0),
+            Some((first.as_str(), 220.0)),
+            "pushed up by the next heading"
+        );
         assert_eq!(layout.pinned_heading(270.0), Some((second.as_str(), 270.0)));
-        assert_eq!(build_layout(&photos, 0, Sort::Name, 218.0, 100.0).pinned_heading(100.0), None);
+        assert_eq!(
+            build_layout(&photos, 0, Sort::Name, 218.0, 100.0).pinned_heading(100.0),
+            None
+        );
     }
 
     #[test]
     fn headings_follow_the_named_days() {
         let noon = 1_780_000_000 / 86_400 * 86_400 + 43_200;
-        let times = [noon + 3_600, noon, noon - 60, noon - 86_400, noon - 86_400 - 7_200, noon - 5 * 86_400, i64::MAX, i64::MAX];
+        let times = [
+            noon + 3_600,
+            noon,
+            noon - 60,
+            noon - 86_400,
+            noon - 86_400 - 7_200,
+            noon - 5 * 86_400,
+            i64::MAX,
+            i64::MAX,
+        ];
         let photos: Vec<Photo> = times.iter().map(|&at| photo("p", at)).collect();
         let layout = build_layout(&photos, 0, Sort::DateNewest, 210.0, 100.0);
 
@@ -1477,8 +1909,14 @@ mod tests {
         assert_eq!(headings, expected);
 
         for index in 0..photos.len() {
-            let row = layout.rows.iter().find(|row| matches!(row, GridRow::Photos { indices, .. } if indices.contains(&index)));
-            assert_eq!(layout.photo_y(index), row.map(GridLayout::row_y), "photo {index}");
+            let row = layout.rows.iter().find(
+                |row| matches!(row, GridRow::Photos { indices, .. } if indices.contains(&index)),
+            );
+            assert_eq!(
+                layout.photo_y(index),
+                row.map(GridLayout::row_y),
+                "photo {index}"
+            );
         }
         assert_eq!(layout.photo_y(photos.len()), None);
     }
@@ -1486,7 +1924,10 @@ mod tests {
     #[test]
     fn tracks_come_first_under_their_own_heading() {
         let noon = 1_780_000_000 / 86_400 * 86_400 + 43_200;
-        let photos: Vec<Photo> = [noon, noon, noon].iter().map(|&at| photo("p", at)).collect();
+        let photos: Vec<Photo> = [noon, noon, noon]
+            .iter()
+            .map(|&at| photo("p", at))
+            .collect();
         // Two columns: tracks heading at 8, three tracks in rows at 48 and
         // 154, the day heading at 260 and its photos from 300.
         let layout = build_layout(&photos, 3, Sort::DateNewest, 210.0, 100.0);
@@ -1502,14 +1943,26 @@ mod tests {
         assert_eq!(layout.photo_y(0), Some(300.0));
         assert_eq!(layout.photo_y(2), Some(406.0));
         assert_eq!(layout.first_visible(0.0), Some(0));
-        assert_eq!(layout.pinned_heading(100.0), Some((tr("GPS tracks"), 100.0)));
+        assert_eq!(
+            layout.pinned_heading(100.0),
+            Some((tr("GPS tracks"), 100.0))
+        );
         assert_eq!(layout.months[0].y, 260.0);
         // Sorted by name, the photos get a heading of their own so the
         // tracks heading doesn't stay pinned over them.
         let named = build_layout(&photos, 1, Sort::Name, 218.0, 100.0);
-        assert_eq!(named.pinned_heading(400.0).map(|(title, _)| title), Some(tr("Photos")));
-        assert_eq!(named.position_label(&photos, Sort::Name, 0.0).as_deref(), Some("p"));
+        assert_eq!(
+            named.pinned_heading(400.0).map(|(title, _)| title),
+            Some(tr("Photos"))
+        );
+        assert_eq!(
+            named.position_label(&photos, Sort::Name, 0.0).as_deref(),
+            Some("p")
+        );
         // Without tracks, nothing changes.
-        assert_eq!(build_layout(&photos, 0, Sort::Name, 218.0, 100.0).pinned_heading(100.0), None);
+        assert_eq!(
+            build_layout(&photos, 0, Sort::Name, 218.0, 100.0).pinned_heading(100.0),
+            None
+        );
     }
 }

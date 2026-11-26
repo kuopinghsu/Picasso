@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Package the release binary as dist/picasso-$VERSION-linux-x64.AppImage, or
-# linux-arm64 when built on 64-bit Arm.
+# Package the release binary as dist/picasso-$VERSION-x86_64.AppImage, or
+# aarch64 when built on 64-bit Arm.
 #
 # Picasso links to glibc and ALSA and opens its display, keyboard, and font
 # libraries at runtime. This bundles those libraries, and everything they
@@ -23,8 +23,8 @@ cd "$(dirname "$0")/.."
 
 # ldconfig -p tags each library with its ABI, such as "libc6,x86-64".
 case "$(uname -s)-$(uname -m)" in
-    Linux-x86_64) arch=x86_64 label=x64 triple=x86_64-unknown-linux-gnu abi=x86-64 loader=ld-linux-x86-64 ;;
-    Linux-aarch64) arch=aarch64 label=arm64 triple=aarch64-unknown-linux-gnu abi=AArch64 loader=ld-linux-aarch64 ;;
+    Linux-x86_64) arch=x86_64 triple=x86_64-unknown-linux-gnu abi=x86-64 loader=ld-linux-x86-64 ;;
+    Linux-aarch64) arch=aarch64 triple=aarch64-unknown-linux-gnu abi=AArch64 loader=ld-linux-aarch64 ;;
     *)
         echo "AppImage packages are built on Linux x86_64 or aarch64" >&2
         exit 1
@@ -44,7 +44,7 @@ if [ ! -x "$bin" ]; then
     exit 1
 fi
 
-name="picasso-$VERSION-linux-$label"
+name="picasso-$VERSION-$arch"
 work=$target_dir/appimage
 app=$work/Picasso.AppDir
 rm -rf "$app"

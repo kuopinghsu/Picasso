@@ -8,7 +8,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use image::codecs::jpeg::JpegEncoder;
 use image::{DynamicImage, ExtendedColorType, GenericImageView, ImageBuffer, ImageReader, Rgba};
 
-use crate::types::{is_heic_path, is_raw_path, is_video_path, parse_utc_offset, unix_now, EARLIEST_PHOTO};
+use crate::types::{
+    is_heic_path, is_raw_path, is_video_path, parse_utc_offset, unix_now, EARLIEST_PHOTO,
+};
 
 /// Bytes read from the start of a file to probe it. JPEG EXIF fits in one
 /// 64 KB segment and the frame header follows it; HEIC and TIFF-based RAW
@@ -20,7 +22,9 @@ fn read_head(path: &Path, limit: usize) -> Result<(Vec<u8>, u64), String> {
     let file = File::open(path).map_err(|err| err.to_string())?;
     let len = file.metadata().map_err(|err| err.to_string())?.len();
     let mut head = Vec::with_capacity(limit.min(len as usize));
-    file.take(limit as u64).read_to_end(&mut head).map_err(|err| err.to_string())?;
+    file.take(limit as u64)
+        .read_to_end(&mut head)
+        .map_err(|err| err.to_string())?;
     Ok((head, len))
 }
 
@@ -216,7 +220,10 @@ fn apply_orientation(image: DynamicImage, orientation: u16) -> DynamicImage {
 /// panorama stays small. A smaller image is kept as it is.
 pub fn thumbnail_rgba(image: &DynamicImage, edge: u32) -> ImageBuffer<Rgba<u8>, Vec<u8>> {
     let (width, height) = image.dimensions();
-    let (short, long) = (width.min(height).max(1) as f32, width.max(height).max(1) as f32);
+    let (short, long) = (
+        width.min(height).max(1) as f32,
+        width.max(height).max(1) as f32,
+    );
     let scale = (edge as f32 / short).min(3.0 * edge as f32 / long);
     if scale >= 1.0 {
         return image.to_rgba8();
@@ -241,14 +248,23 @@ pub fn limit_rgba(image: DynamicImage, max_edge: u32) -> ImageBuffer<Rgba<u8>, V
 
 /// Encodes in memory and writes the file in one go. The bytes go to a
 /// temporary name first, so a reader never sees half a file.
-pub fn save_jpeg(path: &Path, rgba: &ImageBuffer<Rgba<u8>, Vec<u8>>, quality: u8) -> Result<(), String> {
+pub fn save_jpeg(
+    path: &Path,
+    rgba: &ImageBuffer<Rgba<u8>, Vec<u8>>,
+    quality: u8,
+) -> Result<(), String> {
     write_whole(path, &encode_jpeg(rgba, quality)?)
 }
 
 /// [`save_jpeg`] for PNG and TIFF.
-pub fn save_lossless(path: &Path, rgba: &ImageBuffer<Rgba<u8>, Vec<u8>>, format: image::ImageFormat) -> Result<(), String> {
+pub fn save_lossless(
+    path: &Path,
+    rgba: &ImageBuffer<Rgba<u8>, Vec<u8>>,
+    format: image::ImageFormat,
+) -> Result<(), String> {
     let mut encoded = Cursor::new(Vec::new());
-    rgba.write_to(&mut encoded, format).map_err(|err| err.to_string())?;
+    rgba.write_to(&mut encoded, format)
+        .map_err(|err| err.to_string())?;
     write_whole(path, encoded.get_ref())
 }
 
@@ -261,7 +277,11 @@ pub fn write_whole(path: &Path, bytes: &[u8]) -> Result<(), String> {
         std::fs::create_dir_all(parent).map_err(|err| err.to_string())?;
     }
     let mut temporary = path.as_os_str().to_owned();
-    temporary.push(format!(".{}-{}.tmp", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
+    temporary.push(format!(
+        ".{}-{}.tmp",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
     let temporary = PathBuf::from(temporary);
     let written = std::fs::File::create(&temporary)
         .and_then(|mut file| {
@@ -281,10 +301,17 @@ pub const RENDER_THREADS: usize = 3;
 
 /// `job` for each of `items` on [`RENDER_THREADS`] threads, in the order of
 /// `items`. The first error stops the photos not yet begun.
-pub fn render_all<T: Sync, R: Send, E: Send>(items: &[T], job: impl Fn(&T) -> Result<R, E> + Sync) -> Result<Vec<R>, E> {
+pub fn render_all<T: Sync, R: Send, E: Send>(
+    items: &[T],
+    job: impl Fn(&T) -> Result<R, E> + Sync,
+) -> Result<Vec<R>, E> {
     use rayon::prelude::*;
     let run = || items.par_iter().with_max_len(1).map(&job).collect();
-    match rayon::ThreadPoolBuilder::new().num_threads(RENDER_THREADS).thread_name(|index| format!("picasso-render-{index}")).build() {
+    match rayon::ThreadPoolBuilder::new()
+        .num_threads(RENDER_THREADS)
+        .thread_name(|index| format!("picasso-render-{index}"))
+        .build()
+    {
         Ok(pool) => pool.install(run),
         Err(_) => run(),
     }
@@ -295,7 +322,12 @@ pub fn encode_jpeg(rgba: &ImageBuffer<Rgba<u8>, Vec<u8>>, quality: u8) -> Result
     let rgb = DynamicImage::ImageRgba8(rgba.clone()).into_rgb8();
     let mut encoded = Vec::with_capacity(rgb.as_raw().len() / 8);
     JpegEncoder::new_with_quality(&mut encoded, quality)
-        .encode(rgb.as_raw(), rgb.width(), rgb.height(), ExtendedColorType::Rgb8)
+        .encode(
+            rgb.as_raw(),
+            rgb.width(),
+            rgb.height(),
+            ExtendedColorType::Rgb8,
+        )
         .map_err(|err| err.to_string())?;
     Ok(encoded)
 }
@@ -335,11 +367,20 @@ fn bits_from_exif(exif: &exif::Exif) -> ExifBits {
     let make = ascii_field(exif, exif::Tag::Make);
     ExifBits {
         orientation: short_field(exif, exif::Tag::Orientation).unwrap_or(1),
-        taken_at: [exif::Tag::DateTimeOriginal, exif::Tag::DateTimeDigitized, exif::Tag::DateTime]
-            .into_iter()
-            .find_map(|tag| parse_exif_time(&ascii_field(exif, tag)?)),
-        camera: camera_name(make.as_deref().unwrap_or(""), model.as_deref().unwrap_or("")),
-        lens: ascii_field(exif, exif::Tag::LensModel).map(|lens| lens_name(&lens)).unwrap_or_default(),
+        taken_at: [
+            exif::Tag::DateTimeOriginal,
+            exif::Tag::DateTimeDigitized,
+            exif::Tag::DateTime,
+        ]
+        .into_iter()
+        .find_map(|tag| parse_exif_time(&ascii_field(exif, tag)?)),
+        camera: camera_name(
+            make.as_deref().unwrap_or(""),
+            model.as_deref().unwrap_or(""),
+        ),
+        lens: ascii_field(exif, exif::Tag::LensModel)
+            .map(|lens| lens_name(&lens))
+            .unwrap_or_default(),
         focal_mm: short_field(exif, exif::Tag::FocalLengthIn35mmFilm)
             .filter(|mm| *mm > 0)
             .map(f32::from)
@@ -356,7 +397,10 @@ fn bits_from_exif(exif: &exif::Exif) -> ExifBits {
 /// A positive rational EXIF field, such as the focal length.
 fn rational_field(exif: &exif::Exif, tag: exif::Tag) -> Option<f32> {
     match &exif.get_field(tag, exif::In::PRIMARY)?.value {
-        exif::Value::Rational(values) => values.first().map(|r| r.to_f64() as f32).filter(|value| value.is_finite() && *value > 0.0),
+        exif::Value::Rational(values) => values
+            .first()
+            .map(|r| r.to_f64() as f32)
+            .filter(|value| value.is_finite() && *value > 0.0),
         _ => None,
     }
 }
@@ -401,10 +445,35 @@ pub(crate) fn camera_name(make: &str, model: &str) -> String {
 }
 
 /// Words in a maker's company name that aren't its brand.
-const COMPANY_WORDS: [&str; 9] = ["corporation", "corp", "co", "ltd", "inc", "imaging", "optical", "company", "gmbh"];
+const COMPANY_WORDS: [&str; 9] = [
+    "corporation",
+    "corp",
+    "co",
+    "ltd",
+    "inc",
+    "imaging",
+    "optical",
+    "company",
+    "gmbh",
+];
 
 /// Brands as their makers write them, for makes recorded in capitals.
-const BRANDS: [&str; 14] = ["Nikon", "Canon", "Sony", "Fujifilm", "Olympus", "Pentax", "Ricoh", "Leica", "Panasonic", "Samsung", "Hasselblad", "Kodak", "Sigma", "Minolta"];
+const BRANDS: [&str; 14] = [
+    "Nikon",
+    "Canon",
+    "Sony",
+    "Fujifilm",
+    "Olympus",
+    "Pentax",
+    "Ricoh",
+    "Leica",
+    "Panasonic",
+    "Samsung",
+    "Hasselblad",
+    "Kodak",
+    "Sigma",
+    "Minolta",
+];
 
 /// A camera name with the maker's company words dropped, the brand once and
 /// written as the maker writes it, and the model as recorded. Applied to
@@ -414,14 +483,22 @@ pub(crate) fn tidy_camera(name: &str) -> String {
         .split_whitespace()
         .filter(|word| {
             let bare = word.to_lowercase();
-            !bare.split([',', '.']).filter(|part| !part.is_empty()).all(|part| COMPANY_WORDS.contains(&part))
+            !bare
+                .split([',', '.'])
+                .filter(|part| !part.is_empty())
+                .all(|part| COMPANY_WORDS.contains(&part))
         })
         .collect();
     if words.len() > 1 && words[0].eq_ignore_ascii_case(words[1]) {
         words.remove(0);
     }
-    let Some(first) = words.first_mut() else { return String::new() };
-    if let Some(brand) = BRANDS.iter().find(|brand| brand.eq_ignore_ascii_case(first)) {
+    let Some(first) = words.first_mut() else {
+        return String::new();
+    };
+    if let Some(brand) = BRANDS
+        .iter()
+        .find(|brand| brand.eq_ignore_ascii_case(first))
+    {
         *first = brand;
     }
     words.join(" ")
@@ -433,7 +510,17 @@ pub(crate) fn tidy_camera(name: &str) -> String {
 pub(crate) fn lens_name(lens: &str) -> String {
     let lens = lens.trim();
     match lens.rsplit_once('@') {
-        Some((name, focal)) if !name.trim().is_empty() && focal.trim().trim_end_matches("mm").trim().parse::<f32>().is_ok() => name.trim_end().to_string(),
+        Some((name, focal))
+            if !name.trim().is_empty()
+                && focal
+                    .trim()
+                    .trim_end_matches("mm")
+                    .trim()
+                    .parse::<f32>()
+                    .is_ok() =>
+        {
+            name.trim_end().to_string()
+        }
         _ => lens.to_string(),
     }
 }
@@ -456,7 +543,11 @@ fn probe_heic(path: &Path, modified_at: i64) -> Result<Probe, String> {
     if !heif_brand(&head) {
         return Err("Not a HEIF image".into());
     }
-    let bytes = if head.len() as u64 >= len { head } else { std::fs::read(path).map_err(|err| err.to_string())? };
+    let bytes = if head.len() as u64 >= len {
+        head
+    } else {
+        std::fs::read(path).map_err(|err| err.to_string())?
+    };
     let info = heic_rs::probe(&bytes).map_err(|err| err.to_string())?;
     let bits = heic_exif(&bytes).unwrap_or_else(ExifBits::empty);
     Ok(heic_probe(&info, bits, modified_at))
@@ -467,15 +558,23 @@ fn probe_heic(path: &Path, modified_at: i64) -> Result<Probe, String> {
 /// A file without a readable type box is left to the decoder.
 fn heif_brand(head: &[u8]) -> bool {
     const BRANDS: [&[u8]; 12] = [
-        b"heic", b"heix", b"heim", b"heis", b"hevc", b"hevx", b"hevm", b"hevs", b"mif1", b"msf1", b"miaf", b"avif",
+        b"heic", b"heix", b"heim", b"heis", b"hevc", b"hevx", b"hevm", b"hevs", b"mif1", b"msf1",
+        b"miaf", b"avif",
     ];
     if head.len() < 16 || &head[4..8] != b"ftyp" {
         return true;
     }
-    let size = (u32::from_be_bytes([head[0], head[1], head[2], head[3]]) as usize).clamp(16, head.len());
+    let size =
+        (u32::from_be_bytes([head[0], head[1], head[2], head[3]]) as usize).clamp(16, head.len());
     // The major brand, then compatible brands after the minor version.
     std::iter::once(&head[8..12])
-        .chain(head[16..size].as_chunks::<4>().0.iter().map(|brand| brand.as_slice()))
+        .chain(
+            head[16..size]
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|brand| brand.as_slice()),
+        )
         .any(|brand| BRANDS.contains(&brand))
 }
 
@@ -512,8 +611,9 @@ fn heic_image(bytes: &[u8]) -> Result<DynamicImage, String> {
         ..heic_rs::DecodeOptions::default()
     };
     let image = heic_rs::decode(bytes, &options).map_err(|err| err.to_string())?;
-    let buffer = image::ImageBuffer::<Rgba<u8>, Vec<u8>>::from_raw(image.width, image.height, image.data)
-        .ok_or_else(|| "HEIC decode returned an unexpected pixel buffer".to_string())?;
+    let buffer =
+        image::ImageBuffer::<Rgba<u8>, Vec<u8>>::from_raw(image.width, image.height, image.data)
+            .ok_or_else(|| "HEIC decode returned an unexpected pixel buffer".to_string())?;
     Ok(DynamicImage::ImageRgba8(buffer))
 }
 
@@ -561,7 +661,10 @@ fn heic_thumbnail_ranges(head: &[u8]) -> Option<Vec<(u64, u64)>> {
         .iter()
         .find(|reference| reference.kind == RefKind::Thmb && reference.to.contains(&meta.primary))?
         .from;
-    let location = meta.locations.iter().find(|location| location.id == thumb)?;
+    let location = meta
+        .locations
+        .iter()
+        .find(|location| location.id == thumb)?;
     if !matches!(location.construction, Construction::File) {
         return None;
     }
@@ -596,7 +699,9 @@ fn heic_thumbnail(bytes: &[u8], edge: u32) -> Option<DynamicImage> {
         let data = context.item_data(thumb).ok()?;
         let image = if &context.meta.item(thumb)?.item_type == b"jpeg" {
             let decoded = jpeg_scaled(&data, edge, Side::Long)
-                .or_else(|| image::load_from_memory_with_format(&data, image::ImageFormat::Jpeg).ok())?
+                .or_else(|| {
+                    image::load_from_memory_with_format(&data, image::ImageFormat::Jpeg).ok()
+                })?
                 .into_rgba8();
             heic_rs::Image {
                 width: decoded.width(),
@@ -609,13 +714,25 @@ fn heic_thumbnail(bytes: &[u8], edge: u32) -> Option<DynamicImage> {
             let nals = hvcc.split_nals(&data).ok()?;
             let frame = heic_rs::hevc::decode_still(&hvcc.parameter_sets(), &nals).ok()?;
             let nclx = props.nclx.unwrap_or_default();
-            heic_rs::color::convert(&frame, None, nclx, heic_rs::PixelLayout::Rgba8, heic_rs::DEFAULT_MAX_PIXELS, Some(1)).ok()?
+            heic_rs::color::convert(
+                &frame,
+                None,
+                nclx,
+                heic_rs::PixelLayout::Rgba8,
+                heic_rs::DEFAULT_MAX_PIXELS,
+                Some(1),
+            )
+            .ok()?
         };
         // Encoders attach `irot`/`imir` to the thumbnail as well; when one
         // does not, the primary's turn still applies, but not its crop.
         let transforms: Vec<Transform> = if props.transforms.is_empty() {
             let primary_props = context.props(primary).ok()?;
-            primary_props.transforms.into_iter().filter(|transform| !matches!(transform, Transform::Crop(_))).collect()
+            primary_props
+                .transforms
+                .into_iter()
+                .filter(|transform| !matches!(transform, Transform::Crop(_)))
+                .collect()
         } else {
             props.transforms.clone()
         };
@@ -629,7 +746,8 @@ fn heic_thumbnail(bytes: &[u8], edge: u32) -> Option<DynamicImage> {
         if (photo / small - 1.0).abs() > 0.03 {
             return None;
         }
-        let buffer = ImageBuffer::<Rgba<u8>, Vec<u8>>::from_raw(image.width, image.height, image.data)?;
+        let buffer =
+            ImageBuffer::<Rgba<u8>, Vec<u8>>::from_raw(image.width, image.height, image.data)?;
         Some(DynamicImage::ImageRgba8(buffer))
     });
     std::panic::catch_unwind(decode).ok().flatten()
@@ -642,14 +760,20 @@ fn heic_thumbnail(bytes: &[u8], edge: u32) -> Option<DynamicImage> {
 fn heic_exif(bytes: &[u8]) -> Option<ExifBits> {
     let context = heic_rs::context::Context::open(bytes).ok()?;
     let meta = &context.meta;
-    let others = meta.items.iter().filter(|item| &item.item_type == b"Exif").map(|item| item.id);
+    let others = meta
+        .items
+        .iter()
+        .filter(|item| &item.item_type == b"Exif")
+        .map(|item| item.id);
     let mut truncated = false;
     for id in context.exif_item(meta.primary).into_iter().chain(others) {
         let Ok(data) = context.item_data(id) else {
             truncated = true;
             continue;
         };
-        if let Some(exif) = exif_tiff(&data).and_then(|tiff| exif::Reader::new().read_raw(tiff.to_vec()).ok()) {
+        if let Some(exif) =
+            exif_tiff(&data).and_then(|tiff| exif::Reader::new().read_raw(tiff.to_vec()).ok())
+        {
             return Some(bits_from_exif(&exif));
         }
     }
@@ -662,10 +786,16 @@ fn heic_exif(bytes: &[u8]) -> Option<ExifBits> {
 fn exif_tiff(item: &[u8]) -> Option<&[u8]> {
     let is_tiff = |at: &[u8]| at.starts_with(b"II*\0") || at.starts_with(b"MM\0*");
     let skip = u32::from_be_bytes(item.get(..4)?.try_into().ok()?) as usize;
-    if let Some(tiff) = skip.checked_add(4).and_then(|start| item.get(start..)).filter(|tiff| is_tiff(tiff)) {
+    if let Some(tiff) = skip
+        .checked_add(4)
+        .and_then(|start| item.get(start..))
+        .filter(|tiff| is_tiff(tiff))
+    {
         return Some(tiff);
     }
-    (0..item.len().min(64)).map(|at| &item[at..]).find(|tiff| is_tiff(tiff))
+    (0..item.len().min(64))
+        .map(|at| &item[at..])
+        .find(|tiff| is_tiff(tiff))
 }
 
 /// Reads RAW dimensions and metadata from the file headers. The decoder runs
@@ -689,7 +819,9 @@ fn probe_raw(path: &Path, modified_at: i64) -> Result<Probe, String> {
             Ok(Ok((width, height, bits))) if width > 0 && height > 0 && bits.taken_at.is_some() => {
                 return Ok(bits.probe(width as u32, height as u32, modified_at));
             }
-            Ok(Err(rawler::RawlerError::Unsupported { .. })) => return probe_unknown_raw(&head, modified_at),
+            Ok(Err(rawler::RawlerError::Unsupported { .. })) => {
+                return probe_unknown_raw(&head, modified_at)
+            }
             _ => {}
         }
     }
@@ -712,7 +844,9 @@ const RAW_HEAD_BYTES: usize = 1024 * 1024;
 
 /// Dimensions and metadata with the decoder in dummy mode, so the sensor
 /// data is not read.
-fn raw_quick(source: &rawler::rawsource::RawSource) -> Result<(usize, usize, ExifBits), rawler::RawlerError> {
+fn raw_quick(
+    source: &rawler::rawsource::RawSource,
+) -> Result<(usize, usize, ExifBits), rawler::RawlerError> {
     let decoder = rawler::get_decoder(source)?;
     let params = rawler::decoders::RawDecodeParams::default();
     let bits = decoder
@@ -756,8 +890,11 @@ fn raw_picture(path: &Path) -> Result<(DynamicImage, ExifBits), String> {
 /// Probes a TIFF-based RAW file from a camera the decoder doesn't know, from
 /// its directories and EXIF alone.
 fn probe_unknown_raw(head: &[u8], modified_at: i64) -> Result<Probe, String> {
-    let layout = crate::raw_tiff::layout(head).ok_or("This camera's raw files are not supported yet")?;
-    let (width, height) = layout.photo_size().ok_or("This camera's raw files are not supported yet")?;
+    let layout =
+        crate::raw_tiff::layout(head).ok_or("This camera's raw files are not supported yet")?;
+    let (width, height) = layout
+        .photo_size()
+        .ok_or("This camera's raw files are not supported yet")?;
     Ok(raw_head_exif(head).probe(width, height, modified_at))
 }
 
@@ -766,9 +903,12 @@ fn probe_unknown_raw(head: &[u8], modified_at: i64) -> Result<Probe, String> {
 fn unknown_raw_picture(path: &Path) -> Result<(DynamicImage, ExifBits), String> {
     let unsupported = || "This camera's raw files are not supported yet".to_string();
     let (head, _) = read_head(path, RAW_HEAD_BYTES)?;
-    let preview = crate::raw_tiff::layout(&head).and_then(|layout| layout.preview).ok_or_else(unsupported)?;
+    let preview = crate::raw_tiff::layout(&head)
+        .and_then(|layout| layout.preview)
+        .ok_or_else(unsupported)?;
     let jpeg = crate::raw_tiff::read_preview(path, &preview).ok_or_else(unsupported)?;
-    let image = image::load_from_memory_with_format(&jpeg, image::ImageFormat::Jpeg).map_err(|err| err.to_string())?;
+    let image = image::load_from_memory_with_format(&jpeg, image::ImageFormat::Jpeg)
+        .map_err(|err| err.to_string())?;
     let bits = raw_head_exif(&head);
     Ok((apply_orientation(image, bits.orientation), bits))
 }
@@ -783,25 +923,34 @@ fn raw_head_exif(head: &[u8]) -> ExifBits {
 
 use rawler::decoders::Decoder;
 
-fn embedded_raw(decoder: &dyn Decoder, source: &rawler::rawsource::RawSource) -> Option<DynamicImage> {
+fn embedded_raw(
+    decoder: &dyn Decoder,
+    source: &rawler::rawsource::RawSource,
+) -> Option<DynamicImage> {
     let params = rawler::decoders::RawDecodeParams::default();
-    [decoder.preview_image(source, &params), decoder.full_image(source, &params), decoder.thumbnail_image(source, &params)]
-        .into_iter()
-        .filter_map(|image| image.ok().flatten())
-        .max_by_key(|image| u64::from(image.width()) * u64::from(image.height()))
+    [
+        decoder.preview_image(source, &params),
+        decoder.full_image(source, &params),
+        decoder.thumbnail_image(source, &params),
+    ]
+    .into_iter()
+    .filter_map(|image| image.ok().flatten())
+    .max_by_key(|image| u64::from(image.width()) * u64::from(image.height()))
 }
 
 fn develop_raw(path: &Path) -> Result<DynamicImage, String> {
     let path = path.to_path_buf();
-    let developed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> Result<DynamicImage, String> {
-        let raw = rawler::decode_file(&path).map_err(|err| err.to_string())?;
-        let image = rawler::imgop::develop::RawDevelop::default()
-            .develop_intermediate(&raw)
-            .map_err(|err| err.to_string())?;
-        image
-            .to_dynamic_image()
-            .ok_or_else(|| "The raw file produced no pixels".to_string())
-    }));
+    let developed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+        || -> Result<DynamicImage, String> {
+            let raw = rawler::decode_file(&path).map_err(|err| err.to_string())?;
+            let image = rawler::imgop::develop::RawDevelop::default()
+                .develop_intermediate(&raw)
+                .map_err(|err| err.to_string())?;
+            image
+                .to_dynamic_image()
+                .ok_or_else(|| "The raw file produced no pixels".to_string())
+        },
+    ));
     match developed {
         Ok(result) => result,
         Err(_) => Err("This raw file could not be developed".into()),
@@ -812,11 +961,19 @@ fn bits_from_raw(metadata: &rawler::decoders::RawMetadata) -> ExifBits {
     let gps = metadata.exif.gps.as_ref();
     ExifBits {
         orientation: metadata.exif.orientation.unwrap_or(1),
-        taken_at: [&metadata.exif.date_time_original, &metadata.exif.create_date]
-            .into_iter()
-            .find_map(|date| parse_exif_time(date.as_deref()?)),
+        taken_at: [
+            &metadata.exif.date_time_original,
+            &metadata.exif.create_date,
+        ]
+        .into_iter()
+        .find_map(|date| parse_exif_time(date.as_deref()?)),
         camera: camera_name(&metadata.make, &metadata.model),
-        lens: metadata.exif.lens_model.as_deref().map(lens_name).unwrap_or_default(),
+        lens: metadata
+            .exif
+            .lens_model
+            .as_deref()
+            .map(lens_name)
+            .unwrap_or_default(),
         focal_mm: metadata
             .exif
             .focal_length
@@ -827,35 +984,54 @@ fn bits_from_raw(metadata: &rawler::decoders::RawMetadata) -> ExifBits {
             .unwrap_or(0.0),
         gps_lat: gps.and_then(raw_latitude),
         gps_lon: gps.and_then(raw_longitude),
-        zone: [&metadata.exif.offset_time_original, &metadata.exif.offset_time]
-            .into_iter()
-            .find_map(|text| parse_utc_offset(text.as_deref()?)),
+        zone: [
+            &metadata.exif.offset_time_original,
+            &metadata.exif.offset_time,
+        ]
+        .into_iter()
+        .find_map(|text| parse_utc_offset(text.as_deref()?)),
     }
 }
 
 fn raw_latitude(gps: &rawler::exif::ExifGPS) -> Option<f64> {
     let degrees = dms_rationals(gps.gps_latitude.as_ref()?)?;
-    Some(if gps.gps_latitude_ref.as_deref().is_some_and(|r| r.eq_ignore_ascii_case("S")) {
-        -degrees.abs()
-    } else {
-        degrees
-    })
+    Some(
+        if gps
+            .gps_latitude_ref
+            .as_deref()
+            .is_some_and(|r| r.eq_ignore_ascii_case("S"))
+        {
+            -degrees.abs()
+        } else {
+            degrees
+        },
+    )
 }
 
 fn raw_longitude(gps: &rawler::exif::ExifGPS) -> Option<f64> {
     let degrees = dms_rationals(gps.gps_longitude.as_ref()?)?;
-    Some(if gps.gps_longitude_ref.as_deref().is_some_and(|r| r.eq_ignore_ascii_case("W")) {
-        -degrees.abs()
-    } else {
-        degrees
-    })
+    Some(
+        if gps
+            .gps_longitude_ref
+            .as_deref()
+            .is_some_and(|r| r.eq_ignore_ascii_case("W"))
+        {
+            -degrees.abs()
+        } else {
+            degrees
+        },
+    )
 }
 
 fn dms_rationals(values: &[rawler::formats::tiff::Rational; 3]) -> Option<f64> {
     if values.iter().any(|value| value.d == 0) {
         return None;
     }
-    Some(f64::from(values[0].as_f32()) + f64::from(values[1].as_f32()) / 60.0 + f64::from(values[2].as_f32()) / 3600.0)
+    Some(
+        f64::from(values[0].as_f32())
+            + f64::from(values[1].as_f32()) / 60.0
+            + f64::from(values[2].as_f32()) / 3600.0,
+    )
 }
 
 fn short_field(exif: &exif::Exif, tag: exif::Tag) -> Option<u16> {
@@ -910,7 +1086,11 @@ fn gps_degrees(exif: &exif::Exif, tag: exif::Tag, reference: exif::Tag) -> Optio
             _ => None,
         })
         .is_some_and(|byte| matches!(byte, b'S' | b's' | b'W' | b'w'));
-    Some(if south_or_west { -degrees.abs() } else { degrees })
+    Some(if south_or_west {
+        -degrees.abs()
+    } else {
+        degrees
+    })
 }
 
 fn dms_to_deg(values: &[exif::Rational]) -> Option<f64> {
@@ -941,7 +1121,10 @@ mod tests {
         });
         assert_eq!(doubled, Ok((0..40).map(|n| n * 2).collect()));
         assert!(most.load(Ordering::SeqCst) > 1, "more than one at a time");
-        assert!(most.load(Ordering::SeqCst) <= RENDER_THREADS, "never more than {RENDER_THREADS} at a time");
+        assert!(
+            most.load(Ordering::SeqCst) <= RENDER_THREADS,
+            "never more than {RENDER_THREADS} at a time"
+        );
 
         let begun = AtomicUsize::new(0);
         let failed = render_all(&items, |&n| {
@@ -954,7 +1137,10 @@ mod tests {
             }
         });
         assert_eq!(failed, Err("unreadable"));
-        assert!(begun.load(Ordering::SeqCst) < items.len(), "photos not begun are left");
+        assert!(
+            begun.load(Ordering::SeqCst) < items.len(),
+            "photos not begun are left"
+        );
     }
 
     fn heif_box(kind: &[u8; 4], body: &[u8]) -> Vec<u8> {
@@ -970,12 +1156,18 @@ mod tests {
 
     /// A little-endian TIFF block with only a make and a model.
     fn camera_tiff(make: &str, model: &str) -> Vec<u8> {
-        let (make, model) = ([make.as_bytes(), b"\0"].concat(), [model.as_bytes(), b"\0"].concat());
+        let (make, model) = (
+            [make.as_bytes(), b"\0"].concat(),
+            [model.as_bytes(), b"\0"].concat(),
+        );
         let data = 8 + 2 + 2 * 12 + 4;
         let mut tiff = b"II*\0".to_vec();
         tiff.extend(8u32.to_le_bytes());
         tiff.extend(2u16.to_le_bytes());
-        for (tag, text, at) in [(0x010F_u16, &make, data), (0x0110, &model, data + make.len())] {
+        for (tag, text, at) in [
+            (0x010F_u16, &make, data),
+            (0x0110, &model, data + make.len()),
+        ] {
             tiff.extend(tag.to_le_bytes());
             tiff.extend(2u16.to_le_bytes());
             tiff.extend((text.len() as u32).to_le_bytes());
@@ -992,17 +1184,50 @@ mod tests {
     /// item 2 only.
     fn heif_with_exif_on_tmap(exif: &[u8]) -> Vec<u8> {
         let ftyp = heif_box(b"ftyp", b"heic\0\0\0\0mif1heic");
-        let infe = |id: u16, kind: &[u8; 4]| full_box(b"infe", 2, &[&id.to_be_bytes()[..], &[0, 0], kind, b"\0"].concat());
+        let infe = |id: u16, kind: &[u8; 4]| {
+            full_box(
+                b"infe",
+                2,
+                &[&id.to_be_bytes()[..], &[0, 0], kind, b"\0"].concat(),
+            )
+        };
         let meta = |offset: u32| {
             let body = [
-                full_box(b"hdlr", 0, &[&[0; 4][..], b"pict", &[0; 12], b"\0"].concat()),
+                full_box(
+                    b"hdlr",
+                    0,
+                    &[&[0; 4][..], b"pict", &[0; 12], b"\0"].concat(),
+                ),
                 full_box(b"pitm", 0, &1u16.to_be_bytes()),
-                full_box(b"iinf", 0, &[&3u16.to_be_bytes()[..], &infe(1, b"hvc1"), &infe(2, b"tmap"), &infe(3, b"Exif")].concat()),
-                full_box(b"iref", 0, &[heif_box(b"dimg", &[0, 2, 0, 1, 0, 1]), heif_box(b"cdsc", &[0, 3, 0, 1, 0, 2])].concat()),
+                full_box(
+                    b"iinf",
+                    0,
+                    &[
+                        &3u16.to_be_bytes()[..],
+                        &infe(1, b"hvc1"),
+                        &infe(2, b"tmap"),
+                        &infe(3, b"Exif"),
+                    ]
+                    .concat(),
+                ),
+                full_box(
+                    b"iref",
+                    0,
+                    &[
+                        heif_box(b"dimg", &[0, 2, 0, 1, 0, 1]),
+                        heif_box(b"cdsc", &[0, 3, 0, 1, 0, 2]),
+                    ]
+                    .concat(),
+                ),
                 full_box(
                     b"iloc",
                     0,
-                    &[&[0x44, 0x00, 0, 1, 0, 3, 0, 0, 0, 1][..], &offset.to_be_bytes(), &(exif.len() as u32).to_be_bytes()].concat(),
+                    &[
+                        &[0x44, 0x00, 0, 1, 0, 3, 0, 0, 0, 1][..],
+                        &offset.to_be_bytes(),
+                        &(exif.len() as u32).to_be_bytes(),
+                    ]
+                    .concat(),
                 ),
             ]
             .concat();
@@ -1016,11 +1241,21 @@ mod tests {
     fn heic_exif_on_another_item_still_names_the_camera() {
         let tiff = camera_tiff("Hasselblad", "X2D II 100C");
         let file = heif_with_exif_on_tmap(&[&6u32.to_be_bytes()[..], b"Exif\0\0", &tiff].concat());
-        assert_eq!(heic_exif(&file).map(|bits| bits.camera).as_deref(), Some("Hasselblad X2D II 100C"));
-        assert!(heic_exif(&file[..file.len() - 8]).is_none(), "a cut-off EXIF item asks for the whole file");
+        assert_eq!(
+            heic_exif(&file).map(|bits| bits.camera).as_deref(),
+            Some("Hasselblad X2D II 100C")
+        );
+        assert!(
+            heic_exif(&file[..file.len() - 8]).is_none(),
+            "a cut-off EXIF item asks for the whole file"
+        );
 
-        let miscounted = heif_with_exif_on_tmap(&[&0u32.to_be_bytes()[..], b"Exif\0\0", &tiff].concat());
-        assert_eq!(heic_exif(&miscounted).map(|bits| bits.camera).as_deref(), Some("Hasselblad X2D II 100C"));
+        let miscounted =
+            heif_with_exif_on_tmap(&[&0u32.to_be_bytes()[..], b"Exif\0\0", &tiff].concat());
+        assert_eq!(
+            heic_exif(&miscounted).map(|bits| bits.camera).as_deref(),
+            Some("Hasselblad X2D II 100C")
+        );
     }
 
     #[test]
@@ -1037,10 +1272,19 @@ mod tests {
             box_
         };
         assert!(heif_brand(&ftyp(b"heic", &[b"mif1", b"heic"])));
-        assert!(heif_brand(&ftyp(b"isom", &[b"mif1"])), "a compatible HEIF brand counts");
+        assert!(
+            heif_brand(&ftyp(b"isom", &[b"mif1"])),
+            "a compatible HEIF brand counts"
+        );
         assert!(!heif_brand(&ftyp(b"qt  ", &[b"qt  "])), "a QuickTime movie");
-        assert!(!heif_brand(&ftyp(b"isom", &[b"iso2", b"mp41"])), "an MP4 video");
-        assert!(heif_brand(b"no type box here at all"), "unknown files go to the decoder");
+        assert!(
+            !heif_brand(&ftyp(b"isom", &[b"iso2", b"mp41"])),
+            "an MP4 video"
+        );
+        assert!(
+            heif_brand(b"no type box here at all"),
+            "unknown files go to the decoder"
+        );
     }
 
     #[test]
@@ -1061,12 +1305,17 @@ mod tests {
         assert_eq!(parse_exif_time("0001:01:01 00:00:00"), None);
         assert_eq!(parse_exif_time("0000:00:00 00:00:00"), None);
         assert_eq!(parse_exif_time("    :  :     :  :  "), None);
-        let earliest = chrono::NaiveDate::from_ymd_opt(1826, 1, 1).unwrap().and_hms_opt(0, 0, 0).unwrap();
+        let earliest = chrono::NaiveDate::from_ymd_opt(1826, 1, 1)
+            .unwrap()
+            .and_hms_opt(0, 0, 0)
+            .unwrap();
         assert_eq!(earliest.and_utc().timestamp(), EARLIEST_PHOTO);
     }
 
     fn jpeg(width: u32, height: u32) -> Vec<u8> {
-        let rgb = image::RgbImage::from_fn(width, height, |x, y| image::Rgb([(x % 256) as u8, (y % 256) as u8, 90]));
+        let rgb = image::RgbImage::from_fn(width, height, |x, y| {
+            image::Rgb([(x % 256) as u8, (y % 256) as u8, 90])
+        });
         let mut bytes = Vec::new();
         JpegEncoder::new_with_quality(&mut bytes, 85)
             .encode(rgb.as_raw(), width, height, ExtendedColorType::Rgb8)
@@ -1084,7 +1333,10 @@ mod tests {
         let image = jpeg_scaled(&bytes, 200, Side::Short).unwrap();
         assert_eq!(image.dimensions(), (512, 256));
         let tall = jpeg(1024, 2048);
-        assert_eq!(jpeg_scaled(&tall, 200, Side::Short).unwrap().dimensions(), (256, 512));
+        assert_eq!(
+            jpeg_scaled(&tall, 200, Side::Short).unwrap().dimensions(),
+            (256, 512)
+        );
         // Less than half the size: a full decode is as fast.
         assert!(jpeg_scaled(&bytes, 1500, Side::Long).is_none());
         assert!(jpeg_scaled(&bytes, 600, Side::Short).is_none());
@@ -1104,7 +1356,11 @@ mod tests {
         let thumb = thumbnail_rgba(&load_for_tile(&source, 256).unwrap(), 256);
         let target = dir.join("thumbs").join("1.jpg");
         save_jpeg(&target, &thumb, 80).unwrap();
-        let names: Vec<_> = std::fs::read_dir(target.parent().unwrap()).unwrap().flatten().map(|e| e.file_name()).collect();
+        let names: Vec<_> = std::fs::read_dir(target.parent().unwrap())
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name())
+            .collect();
         assert_eq!(names, ["1.jpg"]);
         assert_eq!(image::image_dimensions(&target).unwrap(), (341, 256));
         let _ = std::fs::remove_dir_all(&dir);
@@ -1115,21 +1371,36 @@ mod tests {
         let size = |w, h, edge| thumbnail_rgba(&DynamicImage::new_rgb8(w, h), edge).dimensions();
         assert_eq!(size(6000, 4000, 320), (480, 320));
         assert_eq!(size(4000, 6000, 320), (320, 480));
-        assert_eq!(size(12000, 1000, 320), (960, 80), "a panorama's long edge stops at three times the edge");
+        assert_eq!(
+            size(12000, 1000, 320),
+            (960, 80),
+            "a panorama's long edge stops at three times the edge"
+        );
         assert_eq!(size(200, 150, 320), (200, 150), "never enlarged");
     }
 
     #[test]
     fn one_camera_has_one_name_whichever_program_wrote_it() {
-        for (make, model) in [("NIKON CORPORATION", "NIKON D850"), ("Nikon", "Nikon D850"), ("", "NIKON D850"), ("NIKON", "D850")] {
+        for (make, model) in [
+            ("NIKON CORPORATION", "NIKON D850"),
+            ("Nikon", "Nikon D850"),
+            ("", "NIKON D850"),
+            ("NIKON", "D850"),
+        ] {
             assert_eq!(camera_name(make, model), "Nikon D850", "{make} / {model}");
         }
         assert_eq!(camera_name("OLYMPUS IMAGING CORP.", "E-M1"), "Olympus E-M1");
-        assert_eq!(camera_name("OLYMPUS OPTICAL CO.,LTD", "C2040Z"), "Olympus C2040Z");
+        assert_eq!(
+            camera_name("OLYMPUS OPTICAL CO.,LTD", "C2040Z"),
+            "Olympus C2040Z"
+        );
         assert_eq!(camera_name("FUJIFILM", "X-T5"), "Fujifilm X-T5");
         assert_eq!(camera_name("Apple", "iPhone 15 Pro"), "Apple iPhone 15 Pro");
         assert_eq!(camera_name("Canon", "Canon EOS R5"), "Canon EOS R5");
-        assert_eq!(camera_name("OM Digital Solutions", "OM-1"), "OM Digital Solutions OM-1");
+        assert_eq!(
+            camera_name("OM Digital Solutions", "OM-1"),
+            "OM Digital Solutions OM-1"
+        );
         assert_eq!(camera_name("", ""), "");
         assert_eq!(tidy_camera("NIKON CORPORATION NIKON D850"), "Nikon D850");
     }
@@ -1139,7 +1410,10 @@ mod tests {
         assert_eq!(lens_name("XCD 35-100E@100"), "XCD 35-100E");
         assert_eq!(lens_name("XCD 35-100E@38"), "XCD 35-100E");
         assert_eq!(lens_name(" XCD 35-100E @ 38mm "), "XCD 35-100E");
-        assert_eq!(lens_name("NIKKOR Z 24-70mm f/4 S"), "NIKKOR Z 24-70mm f/4 S");
+        assert_eq!(
+            lens_name("NIKKOR Z 24-70mm f/4 S"),
+            "NIKKOR Z 24-70mm f/4 S"
+        );
         assert_eq!(lens_name("Lens@Home"), "Lens@Home");
         assert_eq!(lens_name("@50"), "@50");
     }

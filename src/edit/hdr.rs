@@ -53,7 +53,11 @@ pub struct Stats {
 impl Stats {
     pub fn of(log: &[f32]) -> Stats {
         if log.is_empty() {
-            return Stats { mean: MID_GRAY, low: -8.0, high: 0.0 };
+            return Stats {
+                mean: MID_GRAY,
+                low: -8.0,
+                high: 0.0,
+            };
         }
         let mean = log.iter().sum::<f32>() / log.len() as f32;
         let mut sorted = log.to_vec();
@@ -179,7 +183,11 @@ fn fuse(base: f32, detail: f32) -> f32 {
 mod tests {
     use super::*;
 
-    const ORDINARY: Stats = Stats { mean: MID_GRAY, low: -9.0, high: 0.0 };
+    const ORDINARY: Stats = Stats {
+        mean: MID_GRAY,
+        low: -9.0,
+        high: 0.0,
+    };
 
     #[test]
     fn methods_keep_order_and_white() {
@@ -188,15 +196,24 @@ mod tests {
             let hdr = Hdr::new(method, 1.0, 50.0, ORDINARY, 0.0);
             let dark = hdr.map(-8.0, 0.0);
             // Filmic deepens the darkest shadows on purpose, as film does.
-            assert!(method == Method::Filmic || dark > -8.0, "{index}: shadows lifted, got {dark}");
+            assert!(
+                method == Method::Filmic || dark > -8.0,
+                "{index}: shadows lifted, got {dark}"
+            );
             let mut last = f32::MIN;
             for step in 0..=40 {
                 let b = -10.0 + step as f32 * 0.25;
                 let out = hdr.map(b, 0.0);
-                assert!(out.is_finite() && out >= last - 1e-4, "{index}: monotonic at {b}");
+                assert!(
+                    out.is_finite() && out >= last - 1e-4,
+                    "{index}: monotonic at {b}"
+                );
                 last = out;
             }
-            assert!(hdr.map(0.0, 0.0) <= 0.01, "{index}: white stays at most white");
+            assert!(
+                hdr.map(0.0, 0.0) <= 0.01,
+                "{index}: white stays at most white"
+            );
         }
     }
 

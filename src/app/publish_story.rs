@@ -11,11 +11,16 @@ use eframe::egui::{self, Margin, RichText};
 
 use crate::db::{PlaceChoice, PostTerms, Publication, Site};
 use crate::i18n::{tr, trf};
-use crate::publish::{self, Event, Finished, Job, Journey, MapPlace, MapPlaces, Stopped, SyncState};
+use crate::publish::{
+    self, Event, Finished, Job, Journey, MapPlace, MapPlaces, Stopped, SyncState,
+};
 use crate::story_html::{self, Preflight};
 use crate::types::{format_bytes, unix_now};
 use crate::upload::UploadSize;
-use crate::wordpress::{edit_link, Api, Client, Credentials, Failure, Network, Policy, SiteUrl, Taxonomy, Term, TravelSupport};
+use crate::wordpress::{
+    edit_link, Api, Client, Credentials, Failure, Network, Policy, SiteUrl, Taxonomy, Term,
+    TravelSupport,
+};
 use crate::worker::UiEvent;
 
 use super::publishing::failure_text;
@@ -113,7 +118,10 @@ impl PicassoApp {
         let mut order: Vec<i64> = job.sources.keys().copied().collect();
         order.sort_unstable();
         for media_id in order {
-            if let Some(photo) = self.story_photo(media_id).filter(|photo| seen.insert(photo.id)) {
+            if let Some(photo) = self
+                .story_photo(media_id)
+                .filter(|photo| seen.insert(photo.id))
+            {
                 // The catalog's quarter turns swap the sides; the estimate doesn't mind.
                 dimensions.push((photo.width, photo.height));
                 previews.push(photo.id);
@@ -121,10 +129,14 @@ impl PicassoApp {
         }
         let sites = self.db.sites();
         let remembered = self.config.number("publish_site").map(|id| id as i64);
-        let site_id = remembered.filter(|id| sites.iter().any(|site| site.id == *id)).or_else(|| sites.iter().find(|site| usable(site)).map(|site| site.id));
+        let site_id = remembered
+            .filter(|id| sites.iter().any(|site| site.id == *id))
+            .or_else(|| sites.iter().find(|site| usable(site)).map(|site| site.id));
         let size = self.publish_size(job.story.id, site_id);
         // A post edited on the site is replaced only when that is chosen.
-        let changed = site_id.and_then(|site_id| self.db.publication(job.story.id, site_id)).is_some_and(|publication| publication.changed_on_site);
+        let changed = site_id
+            .and_then(|site_id| self.db.publication(job.story.id, site_id))
+            .is_some_and(|publication| publication.changed_on_site);
         self.modal = Modal::PublishStory(PublishDialog {
             site_id,
             size,
@@ -141,24 +153,58 @@ impl PicassoApp {
             confirming: false,
             by_day: false,
             day_replace: false,
-            days: job.blocks.iter().filter(|block| matches!(block.block, crate::trip::Block::Heading(_))).count(),
+            days: job
+                .blocks
+                .iter()
+                .filter(|block| matches!(block.block, crate::trip::Block::Heading(_)))
+                .count(),
             at_time: false,
             date: String::new(),
             time: String::new(),
             title: job.story.title.trim().to_string(),
             previews,
             sample_name: {
-                let first = job.sources.iter().min_by_key(|(id, _)| **id).and_then(|(_, source)| source.as_ref()).and_then(|(path, ..)| path.file_stem()).map(|stem| stem.to_string_lossy().into_owned());
-                publish::upload_name(&job.story.title, first.as_deref().unwrap_or_default(), "00000000").trim_end_matches("00000000").to_string() + "….jpg"
+                let first = job
+                    .sources
+                    .iter()
+                    .min_by_key(|(id, _)| **id)
+                    .and_then(|(_, source)| source.as_ref())
+                    .and_then(|(path, ..)| path.file_stem())
+                    .map(|stem| stem.to_string_lossy().into_owned());
+                publish::upload_name(
+                    &job.story.title,
+                    first.as_deref().unwrap_or_default(),
+                    "00000000",
+                )
+                .trim_end_matches("00000000")
+                .to_string()
+                    + "….jpg"
             },
             excerpt: !job.story.subtitle.trim().is_empty(),
             cover: job.story.cover.is_some() || !job.sources.is_empty(),
-            transparent: job.sources.values().flatten().filter(|(path, ..)| crate::upload::has_transparency(path)).count(),
-            routes: job.blocks.iter().filter(|block| matches!(block.block, crate::trip::Block::Route { .. })).count(),
+            transparent: job
+                .sources
+                .values()
+                .flatten()
+                .filter(|(path, ..)| crate::upload::has_transparency(path))
+                .count(),
+            routes: job
+                .blocks
+                .iter()
+                .filter(|block| matches!(block.block, crate::trip::Block::Route { .. }))
+                .count(),
             error: String::new(),
-            story_places: self.story_places(job.story.trip_id, job.sources.keys().copied()).into_iter().map(|(id, place)| (id, place.name)).collect(),
+            story_places: self
+                .story_places(job.story.trip_id, job.sources.keys().copied())
+                .into_iter()
+                .map(|(id, place)| (id, place.name))
+                .collect(),
             places: PlaceChoice::default(),
-            trip_title: self.db.trip(job.story.trip_id).map(|trip| trip.title).unwrap_or_default(),
+            trip_title: self
+                .db
+                .trip(job.story.trip_id)
+                .map(|trip| trip.title)
+                .unwrap_or_default(),
             travel: None,
             travel_reading: None,
             earlier_reading: None,
@@ -170,13 +216,36 @@ impl PicassoApp {
     /// Trip's order, each first visited on the Day it gives.
     fn story_places(&self, trip_id: i64, media: impl Iterator<Item = i64>) -> Vec<(i64, MapPlace)> {
         let media: std::collections::HashSet<i64> = media.collect();
-        let at: Vec<(i64, i64, i64)> = self.db.member_places(trip_id).into_iter().filter(|(media_id, ..)| media.contains(media_id)).collect();
+        let at: Vec<(i64, i64, i64)> = self
+            .db
+            .member_places(trip_id)
+            .into_iter()
+            .filter(|(media_id, ..)| media.contains(media_id))
+            .collect();
         let mut found = Vec::new();
         for (index, place) in self.db.trip_places(trip_id).into_iter().enumerate() {
-            let days = at.iter().filter(|(_, place_id, _)| *place_id == place.id).map(|(.., day)| *day);
-            let Some(day) = days.clone().filter(|day| *day > 0).min().or_else(|| days.clone().next()) else { continue };
+            let days = at
+                .iter()
+                .filter(|(_, place_id, _)| *place_id == place.id)
+                .map(|(.., day)| *day);
+            let Some(day) = days
+                .clone()
+                .filter(|day| *day > 0)
+                .min()
+                .or_else(|| days.clone().next())
+            else {
+                continue;
+            };
             let name = super::trips::place_name(&place, index);
-            found.push((place.id, MapPlace { name, lat: place.lat, lon: place.lon, day }));
+            found.push((
+                place.id,
+                MapPlace {
+                    name,
+                    lat: place.lat,
+                    lon: place.lon,
+                    day,
+                },
+            ));
         }
         found
     }
@@ -184,7 +253,13 @@ impl PicassoApp {
     /// The Story's Places as its posts show them: the ones chosen, to about
     /// a kilometre when asked.
     fn map_places(&self, trip_id: i64, media: &[i64], choice: &PlaceChoice) -> MapPlaces {
-        let round = |degrees: f64| if choice.rough { (degrees * 100.0).round() / 100.0 } else { (degrees * 1e6).round() / 1e6 };
+        let round = |degrees: f64| {
+            if choice.rough {
+                (degrees * 100.0).round() / 100.0
+            } else {
+                (degrees * 1e6).round() / 1e6
+            }
+        };
         let mut places = MapPlaces::default();
         let mut index_of = std::collections::HashMap::new();
         for (id, place) in self.story_places(trip_id, media.iter().copied()) {
@@ -192,12 +267,19 @@ impl PicassoApp {
                 continue;
             }
             index_of.insert(id, places.places.len());
-            places.places.push(MapPlace { lat: round(place.lat), lon: round(place.lon), ..place });
+            places.places.push(MapPlace {
+                lat: round(place.lat),
+                lon: round(place.lon),
+                ..place
+            });
         }
         places.heading = tr("Places").to_string();
         places.map_alt = tr("A map of these places, numbered as in the list below").to_string();
         for (media_id, place_id, _) in self.db.member_places(trip_id) {
-            if let Some(&index) = index_of.get(&place_id).filter(|_| media.contains(&media_id)) {
+            if let Some(&index) = index_of
+                .get(&place_id)
+                .filter(|_| media.contains(&media_id))
+            {
                 places.at.insert(media_id, index);
             }
         }
@@ -209,21 +291,38 @@ impl PicassoApp {
         site_id
             .and_then(|site_id| self.db.publication(story_id, site_id))
             .and_then(|publication| UploadSize::from_code(&publication.size))
-            .or_else(|| self.config.text("publish_size").and_then(UploadSize::from_code))
+            .or_else(|| {
+                self.config
+                    .text("publish_size")
+                    .and_then(UploadSize::from_code)
+            })
             .unwrap_or_default()
     }
 
     pub(super) fn publish_story_modal(&mut self, ctx: &egui::Context) {
         let story_id = self.story.as_ref().map(|editor| editor.story.id);
-        let revision = self.story.as_ref().map_or(0, |editor| editor.story.revision);
+        let revision = self
+            .story
+            .as_ref()
+            .map_or(0, |editor| editor.story.revision);
         // The preview's thumbnails, read before the dialog is borrowed.
         let preview_ids = match &self.modal {
-            Modal::PublishStory(dialog) => dialog.previews.iter().take(PREVIEW_SHOWN).copied().collect(),
+            Modal::PublishStory(dialog) => dialog
+                .previews
+                .iter()
+                .take(PREVIEW_SHOWN)
+                .copied()
+                .collect(),
             _ => Vec::new(),
         };
-        let previews: Vec<_> = preview_ids.into_iter().filter_map(|id| self.thumb_texture(id)).collect();
+        let previews: Vec<_> = preview_ids
+            .into_iter()
+            .filter_map(|id| self.thumb_texture(id))
+            .collect();
         let sites = self.db.sites();
-        let Modal::PublishStory(dialog) = &mut self.modal else { return };
+        let Modal::PublishStory(dialog) = &mut self.modal else {
+            return;
+        };
         let Some(story_id) = story_id else {
             self.modal = Modal::None;
             return;
@@ -231,27 +330,57 @@ impl PicassoApp {
         let mut close = false;
         let mut start = false;
         let mut settings = false;
-        let site = dialog.site_id.and_then(|id| sites.iter().find(|site| site.id == id)).cloned();
-        let earlier = site.as_ref().and_then(|site| self.db.publication(story_id, site.id));
+        let site = dialog
+            .site_id
+            .and_then(|id| sites.iter().find(|site| site.id == id))
+            .cloned();
+        let earlier = site
+            .as_ref()
+            .and_then(|site| self.db.publication(story_id, site.id));
         let found = match (self.publish_found, &site) {
-            (Some((story, site_id, post)), Some(site)) if story == story_id && site_id == site.id && earlier.is_none() => Some(post),
+            (Some((story, site_id, post)), Some(site))
+                if story == story_id && site_id == site.id && earlier.is_none() =>
+            {
+                Some(post)
+            }
             _ => None,
         };
         // Terms belong to one site: another site starts from what was chosen for it.
         if dialog.terms_site != dialog.site_id {
-            dialog.terms = dialog.site_id.map(|site_id| self.db.post_terms(story_id, site_id)).unwrap_or_default();
-            dialog.places = dialog.site_id.map(|site_id| self.db.place_choice(story_id, site_id)).unwrap_or_default();
+            dialog.terms = dialog
+                .site_id
+                .map(|site_id| self.db.post_terms(story_id, site_id))
+                .unwrap_or_default();
+            dialog.places = dialog
+                .site_id
+                .map(|site_id| self.db.place_choice(story_id, site_id))
+                .unwrap_or_default();
             dialog.terms_site = dialog.site_id;
             dialog.site_terms = SiteTerms::default();
             dialog.travel = None;
             dialog.travel_reading = site.as_ref().and_then(|site| read_travel(ctx, site));
             dialog.earlier_gone = false;
-            dialog.earlier_reading = site.as_ref().zip(earlier.as_ref()).and_then(|(site, earlier)| connection(&self.vault, site).ok().and_then(|connection| read_post(ctx, connection, earlier.post_id)));
+            dialog.earlier_reading =
+                site.as_ref()
+                    .zip(earlier.as_ref())
+                    .and_then(|(site, earlier)| {
+                        connection(&self.vault, site)
+                            .ok()
+                            .and_then(|connection| read_post(ctx, connection, earlier.post_id))
+                    });
             // As it went to that site last: by Day when its Day posts were saved after its one post.
             dialog.by_day = dialog.days > 0
                 && dialog.site_id.is_some_and(|site_id| {
-                    let by_day = self.db.day_posts(story_id, site_id).iter().map(|(_, post)| post.synced_at).max();
-                    let single = self.db.publication(story_id, site_id).map(|publication| publication.synced_at);
+                    let by_day = self
+                        .db
+                        .day_posts(story_id, site_id)
+                        .iter()
+                        .map(|(_, post)| post.synced_at)
+                        .max();
+                    let single = self
+                        .db
+                        .publication(story_id, site_id)
+                        .map(|publication| publication.synced_at);
                     by_day.is_some_and(|by_day| single.is_none_or(|single| by_day >= single))
                 });
         }
@@ -267,7 +396,10 @@ impl PicassoApp {
                         dialog.earlier_gone = true;
                     }
                     EarlierNow::Status(status) => {
-                        let _ = self.db.save_publication(&Publication { remote_status: status, ..earlier.clone() });
+                        let _ = self.db.save_publication(&Publication {
+                            remote_status: status,
+                            ..earlier.clone()
+                        });
                     }
                     EarlierNow::AsKnown => {}
                 }
@@ -290,11 +422,20 @@ impl PicassoApp {
             match result {
                 Ok((taxonomy, term)) => {
                     let index = usize::from(taxonomy == Taxonomy::Tags);
-                    let chosen = if index == 0 { &mut dialog.terms.categories } else { &mut dialog.terms.tags };
+                    let chosen = if index == 0 {
+                        &mut dialog.terms.categories
+                    } else {
+                        &mut dialog.terms.tags
+                    };
                     if !chosen.iter().any(|(id, _)| *id == term.id) {
                         chosen.push((term.id, term.name.clone()));
                     }
-                    if let Some(list) = dialog.site_terms.found.as_mut().map(|found| &mut found[index]) {
+                    if let Some(list) = dialog
+                        .site_terms
+                        .found
+                        .as_mut()
+                        .map(|found| &mut found[index])
+                    {
                         if !list.iter().any(|known| known.id == term.id) {
                             list.push(term);
                             list.sort_by_key(|known| known.name.to_lowercase());
@@ -302,7 +443,11 @@ impl PicassoApp {
                     }
                     dialog.site_terms.filter.clear();
                 }
-                Err(Failure::Forbidden) => dialog.site_terms.error = tr("This account isn't allowed to add categories or tags on the site.").to_string(),
+                Err(Failure::Forbidden) => {
+                    dialog.site_terms.error =
+                        tr("This account isn't allowed to add categories or tags on the site.")
+                            .to_string()
+                }
                 Err(failure) => dialog.site_terms.error = failure_text(&failure),
             }
         } else if dialog.site_terms.reading.is_some() || dialog.site_terms.making.is_some() {
@@ -750,24 +895,51 @@ impl PicassoApp {
         // The site's categories and tags open over the dialog, so the dialog stays short.
         if dialog.picking {
             let mut done = false;
-            egui::Modal::new(egui::Id::unique("publish-terms")).frame(about::dialog_frame()).show(ctx, |ui| {
-                ui.set_width(420.0);
-                about::title_bar(ui, &self.logo, tr("Categories and tags"), &mut done);
-                egui::Frame::new().inner_margin(Margin::symmetric(20, 14)).show(ui, |ui| {
-                    ui.spacing_mut().item_spacing.y = 8.0;
-                    read_terms |= terms_picker(ui, &mut dialog.terms, &mut dialog.site_terms, earlier.is_some());
-                    ui.horizontal(|ui| done |= ui.add(theme::primary_button(tr("Done"))).clicked());
+            egui::Modal::new(egui::Id::unique("publish-terms"))
+                .frame(about::dialog_frame())
+                .show(ctx, |ui| {
+                    ui.set_width(420.0);
+                    about::title_bar(ui, &self.logo, tr("Categories and tags"), &mut done);
+                    egui::Frame::new()
+                        .inner_margin(Margin::symmetric(20, 14))
+                        .show(ui, |ui| {
+                            ui.spacing_mut().item_spacing.y = 8.0;
+                            read_terms |= terms_picker(
+                                ui,
+                                &mut dialog.terms,
+                                &mut dialog.site_terms,
+                                earlier.is_some(),
+                            );
+                            ui.horizontal(|ui| {
+                                done |= ui.add(theme::primary_button(tr("Done"))).clicked()
+                            });
+                        });
                 });
-            });
             if done {
                 dialog.picking = false;
             }
         }
         // Making it public names what readers will see, and waits for a yes.
-        let day_public = dialog.by_day && site.as_ref().is_some_and(|site| self.db.day_posts(story_id, site.id).iter().any(|(_, post)| post.remote_status != "draft"));
-        let public = if dialog.by_day { day_public } else { earlier.as_ref().is_some_and(|publication| publication.remote_status != "draft" || publication.changed_on_site) };
+        let day_public = dialog.by_day
+            && site.as_ref().is_some_and(|site| {
+                self.db
+                    .day_posts(story_id, site.id)
+                    .iter()
+                    .any(|(_, post)| post.remote_status != "draft")
+            });
+        let public = if dialog.by_day {
+            day_public
+        } else {
+            earlier.as_ref().is_some_and(|publication| {
+                publication.remote_status != "draft" || publication.changed_on_site
+            })
+        };
         let publish = dialog.publish && !public;
-        let schedule = if publish && dialog.at_time { schedule_of(&dialog.date, &dialog.time) } else { None };
+        let schedule = if publish && dialog.at_time {
+            schedule_of(&dialog.date, &dialog.time)
+        } else {
+            None
+        };
         let by_day = dialog.by_day && dialog.days > 0;
         let day_replace = by_day && dialog.day_replace;
         if start && publish && !dialog.confirming {
@@ -776,7 +948,10 @@ impl PicassoApp {
         }
         if dialog.confirming {
             let mut back = false;
-            let label = site.as_ref().map(|site| site.label.clone()).unwrap_or_default();
+            let label = site
+                .as_ref()
+                .map(|site| site.label.clone())
+                .unwrap_or_default();
             egui::Modal::new(egui::Id::unique("publish-confirm")).frame(about::dialog_frame()).show(ctx, |ui| {
                 ui.set_width(400.0);
                 about::title_bar(ui, &self.logo, &trf("Publish on {}?", &[&label]), &mut back);
@@ -835,7 +1010,12 @@ impl PicassoApp {
                     let ctx = ctx.clone();
                     std::thread::spawn(move || {
                         let network = Network::new();
-                        let made = Client::new(&network, policy).create_term(&api, &credentials, taxonomy, &name);
+                        let made = Client::new(&network, policy).create_term(
+                            &api,
+                            &credentials,
+                            taxonomy,
+                            &name,
+                        );
                         let _ = sender.send(made.map(|term| (taxonomy, term)));
                         ctx.request_repaint();
                     });
@@ -854,10 +1034,18 @@ impl PicassoApp {
                         let network = Network::new();
                         let client = Client::new(&network, policy);
                         let read = |taxonomy| client.terms(&api, &credentials, taxonomy);
-                        let _ = sender.send(read(Taxonomy::Categories).and_then(|categories| Ok([categories, read(Taxonomy::Tags)?])));
+                        let _ =
+                            sender
+                                .send(read(Taxonomy::Categories).and_then(|categories| {
+                                    Ok([categories, read(Taxonomy::Tags)?])
+                                }));
                         ctx.request_repaint();
                     });
-                    dialog.site_terms = SiteTerms { reading: Some(receiver), filter: std::mem::take(&mut dialog.site_terms.filter), ..SiteTerms::default() };
+                    dialog.site_terms = SiteTerms {
+                        reading: Some(receiver),
+                        filter: std::mem::take(&mut dialog.site_terms.filter),
+                        ..SiteTerms::default()
+                    };
                 }
                 Err(err) => dialog.site_terms.error = err,
             }
@@ -866,15 +1054,43 @@ impl PicassoApp {
             self.modal = Modal::None;
             return;
         }
-        let Some(site) = site.filter(|_| start) else { return };
+        let Some(site) = site.filter(|_| start) else {
+            return;
+        };
         let size = dialog.size;
         let exif = dialog.exif;
         let terms = dialog.terms.clone();
         let places = dialog.places.clone();
         let journeys = journeys_kept(dialog);
         let publish = publish && start;
-        let publish::Target { earlier, update, allow_new } = publish::target(story_id, site.id, size, earlier, dialog.update, found, dialog.adopt);
-        match self.start_publishing(ctx, &site, size, exif, terms, places, journeys, earlier, if by_day { day_replace } else { update }, publish, schedule, allow_new, by_day) {
+        let publish::Target {
+            earlier,
+            update,
+            allow_new,
+        } = publish::target(
+            story_id,
+            site.id,
+            size,
+            earlier,
+            dialog.update,
+            found,
+            dialog.adopt,
+        );
+        match self.start_publishing(
+            ctx,
+            &site,
+            size,
+            exif,
+            terms,
+            places,
+            journeys,
+            earlier,
+            if by_day { day_replace } else { update },
+            publish,
+            schedule,
+            allow_new,
+            by_day,
+        ) {
             Ok(()) => {
                 self.modal = Modal::None;
                 self.publish_found = None;
@@ -891,13 +1107,35 @@ impl PicassoApp {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn start_publishing(&mut self, ctx: &egui::Context, site: &Site, size: UploadSize, exif: bool, terms: PostTerms, places: PlaceChoice, journeys: bool, earlier: Option<Publication>, update: bool, publish: bool, schedule: Option<chrono::NaiveDateTime>, allow_new: bool, by_day: bool) -> Result<(), String> {
-        if self.story.as_ref().is_some_and(|editor| self.is_publishing(editor.story.id, site.id)) {
+    fn start_publishing(
+        &mut self,
+        ctx: &egui::Context,
+        site: &Site,
+        size: UploadSize,
+        exif: bool,
+        terms: PostTerms,
+        places: PlaceChoice,
+        journeys: bool,
+        earlier: Option<Publication>,
+        update: bool,
+        publish: bool,
+        schedule: Option<chrono::NaiveDateTime>,
+        allow_new: bool,
+        by_day: bool,
+    ) -> Result<(), String> {
+        if self
+            .story
+            .as_ref()
+            .is_some_and(|editor| self.is_publishing(editor.story.id, site.id))
+        {
             return Err(tr("This story is still being published to this site. Try again once that has finished.").into());
         }
         // A job could reuse an upload the deletion is about to remove.
         if self.deleting_from(site.id) {
-            return Err(trf("Uploads are being deleted from {}. Try again once that has finished.", &[&site.label]));
+            return Err(trf(
+                "Uploads are being deleted from {}. Try again once that has finished.",
+                &[&site.label],
+            ));
         }
         // Every Story of a Trip writes the same Journey, which the site can't
         // change for two at once: each would make one, or undo the other's stops.
@@ -905,7 +1143,13 @@ impl PicassoApp {
             if let Some(editor) = &self.story {
                 let (story_id, trip_id) = (editor.story.id, editor.story.trip_id);
                 let busy = self.publishing.iter().any(|(&(other, other_site), alive)| {
-                    other_site == site.id && other != story_id && alive.strong_count() > 0 && self.db.story(other).is_some_and(|story| story.trip_id == trip_id)
+                    other_site == site.id
+                        && other != story_id
+                        && alive.strong_count() > 0
+                        && self
+                            .db
+                            .story(other)
+                            .is_some_and(|story| story.trip_id == trip_id)
                 });
                 if busy {
                     return Err(tr("Another story of this trip is being published to this site. Try again once that has finished.").into());
@@ -916,13 +1160,20 @@ impl PicassoApp {
         if !self.save_story() {
             return Err(tr("The story couldn't be saved").into());
         }
-        let Some(page) = self.story_job() else { return Err(tr("The story couldn't be saved").into()) };
+        let Some(page) = self.story_job() else {
+            return Err(tr("The story couldn't be saved").into());
+        };
         self.db.save_post_terms(page.story.id, site.id, &terms)?;
         // Places sent before and not now are taken off the posts.
         let before = self.db.place_choice(page.story.id, site.id);
         self.db.save_place_choice(page.story.id, site.id, &places)?;
         let trip_id = page.story.trip_id;
-        let media: Vec<i64> = page.sources.keys().chain(page.videos.sources.keys()).copied().collect();
+        let media: Vec<i64> = page
+            .sources
+            .keys()
+            .chain(page.videos.sources.keys())
+            .copied()
+            .collect();
         let map_places = match (places.places, before.places) {
             (true, _) => Some(self.map_places(trip_id, &media, &places)),
             (false, true) => Some(MapPlaces::default()),
@@ -932,14 +1183,35 @@ impl PicassoApp {
             let trip = self.db.trip(trip_id);
             Journey {
                 post_id: self.db.journey_post(trip_id, site.id),
-                title: trip.as_ref().map(|trip| trip.title.clone()).unwrap_or_default(),
+                title: trip
+                    .as_ref()
+                    .map(|trip| trip.title.clone())
+                    .unwrap_or_default(),
                 description: trip.map(|trip| trip.description).unwrap_or_default(),
             }
         });
-        let pending_since = if earlier.is_none() { self.db.pending_draft(page.story.id, site.id) } else { None };
+        let pending_since = if earlier.is_none() {
+            self.db.pending_draft(page.story.id, site.id)
+        } else {
+            None
+        };
         let days = by_day.then(|| {
             let known = self.db.day_posts(page.story.id, site.id);
-            known.into_iter().map(|(key, publication)| (key, publish::DayPost { post_id: publication.post_id, status: publication.remote_status, fingerprint: publication.fingerprint, changed_on_site: publication.changed_on_site, revision: publication.revision })).collect()
+            known
+                .into_iter()
+                .map(|(key, publication)| {
+                    (
+                        key,
+                        publish::DayPost {
+                            post_id: publication.post_id,
+                            status: publication.remote_status,
+                            fingerprint: publication.fingerprint,
+                            changed_on_site: publication.changed_on_site,
+                            revision: publication.revision,
+                        },
+                    )
+                })
+                .collect()
         });
         let job = Job {
             api,
@@ -954,8 +1226,15 @@ impl PicassoApp {
             exif,
             uploads: self.db.uploads(site.id),
             post_id: earlier.as_ref().map(|publication| publication.post_id),
-            fingerprint: earlier.as_ref().map(|publication| publication.fingerprint.clone()).unwrap_or_default(),
-            overwrite: update && (by_day || earlier.as_ref().is_some_and(|publication| publication.changed_on_site)),
+            fingerprint: earlier
+                .as_ref()
+                .map(|publication| publication.fingerprint.clone())
+                .unwrap_or_default(),
+            overwrite: update
+                && (by_day
+                    || earlier
+                        .as_ref()
+                        .is_some_and(|publication| publication.changed_on_site)),
             pending_since,
             publish,
             schedule,
@@ -963,14 +1242,23 @@ impl PicassoApp {
             allow_new,
             map: Some(page.map),
             profiles: page.profiles,
-            update_published: update && (by_day || earlier.as_ref().is_some_and(|publication| publication.remote_status != "draft")),
+            update_published: update
+                && (by_day
+                    || earlier
+                        .as_ref()
+                        .is_some_and(|publication| publication.remote_status != "draft")),
             terms,
             renders: self.publish_renders.clone(),
             places: map_places,
             journey,
         };
         let progress = self.start_story_job();
-        let (story_id, site_id, revision, label) = (job.story.id, site.id, job.story.revision, site.label.clone());
+        let (story_id, site_id, revision, label) = (
+            job.story.id,
+            site.id,
+            job.story.revision,
+            site.label.clone(),
+        );
         let started_at = unix_now();
         let running = crate::db::PublishJob {
             story_id,
@@ -986,24 +1274,41 @@ impl PicassoApp {
         };
         let log = self.db.record_publish_job(&running).ok();
         let alive = Arc::new(());
-        self.publishing.insert((story_id, site_id), Arc::downgrade(&alive));
+        self.publishing
+            .insert((story_id, site_id), Arc::downgrade(&alive));
         let events = self.events_tx.clone();
         let ctx = ctx.clone();
         let unread = page.unread;
-        let _ = std::thread::Builder::new().name("picasso-publish".into()).spawn(move || {
-            let _alive = alive;
-            let mut job = job;
-            super::story::read_profiles(&mut job.profiles, unread);
-            let network = Network::new();
-            let run = if job.days.is_some() { publish::run_days } else { publish::run };
-            let outcome = run(&network, &job, &progress, &mut |event| {
-                let _ = events.send(UiEvent::PublishProgress(site_id, log, event));
+        let _ = std::thread::Builder::new()
+            .name("picasso-publish".into())
+            .spawn(move || {
+                let _alive = alive;
+                let mut job = job;
+                super::story::read_profiles(&mut job.profiles, unread);
+                let network = Network::new();
+                let run = if job.days.is_some() {
+                    publish::run_days
+                } else {
+                    publish::run
+                };
+                let outcome = run(&network, &job, &progress, &mut |event| {
+                    let _ = events.send(UiEvent::PublishProgress(site_id, log, event));
+                    ctx.request_repaint();
+                });
+                let finished = Finished {
+                    story_id,
+                    site_id,
+                    site: label,
+                    size,
+                    revision,
+                    started_at,
+                    log,
+                    job: progress,
+                    outcome,
+                };
+                let _ = events.send(UiEvent::StoryPublished(Box::new(finished)));
                 ctx.request_repaint();
             });
-            let finished = Finished { story_id, site_id, site: label, size, revision, started_at, log, job: progress, outcome };
-            let _ = events.send(UiEvent::StoryPublished(Box::new(finished)));
-            ctx.request_repaint();
-        });
         Ok(())
     }
 
@@ -1011,16 +1316,31 @@ impl PicassoApp {
     pub(super) fn on_publish_progress(&mut self, site_id: i64, log: Option<i64>, event: Event) {
         let upload = matches!(event, Event::Uploaded { .. } | Event::Gone { .. });
         let kept = match event {
-            Event::Uploaded { hash, size, media_id, url, details } => {
-                let kept = self.db.record_upload(site_id, &hash, size.code(), media_id, &url, &details);
+            Event::Uploaded {
+                hash,
+                size,
+                media_id,
+                url,
+                details,
+            } => {
+                let kept =
+                    self.db
+                        .record_upload(site_id, &hash, size.code(), media_id, &url, &details);
                 if let Some(id) = log {
                     let _ = self.db.count_publish_upload(id);
                 }
                 kept
             }
             Event::Gone { hash } => self.db.forget_upload(site_id, &hash),
-            Event::Creating { story_id, since } => self.db.set_pending_draft(story_id, site_id, since),
-            Event::Part { story_id, revision, key, post } => {
+            Event::Creating { story_id, since } => {
+                self.db.set_pending_draft(story_id, site_id, since)
+            }
+            Event::Part {
+                story_id,
+                revision,
+                key,
+                post,
+            } => {
                 let publication = Publication {
                     story_id,
                     site_id,
@@ -1035,15 +1355,24 @@ impl PicassoApp {
                 self.db.save_day_post(&key, &publication)
             }
             Event::PartGone { story_id, key } => self.db.forget_day_post(story_id, site_id, &key),
-            Event::Journey { trip_id, post_id } => self.db.set_journey_post(trip_id, site_id, post_id),
+            Event::Journey { trip_id, post_id } => {
+                self.db.set_journey_post(trip_id, site_id, post_id)
+            }
             Event::WordPress { url, home } => self.db.set_wordpress_urls(site_id, &url, &home),
             Event::Prepared { photos, bytes } => {
-                self.activity = trf("{} photos ready, {} in all; sending those not on the site yet…", &[&photos, &format_bytes(bytes)]);
+                self.activity = trf(
+                    "{} photos ready, {} in all; sending those not on the site yet…",
+                    &[&photos, &format_bytes(bytes)],
+                );
                 Ok(())
             }
         };
         if let Err(err) = kept {
-            self.activity = if upload { trf("Couldn't record an upload: {}", &[&err]) } else { trf("Couldn't record what the site confirmed: {}", &[&err]) };
+            self.activity = if upload {
+                trf("Couldn't record an upload: {}", &[&err])
+            } else {
+                trf("Couldn't record what the site confirmed: {}", &[&err])
+            };
         }
     }
 
@@ -1054,7 +1383,17 @@ impl PicassoApp {
 
     pub(super) fn on_story_published(&mut self, finished: Finished) {
         self.end_story_job(&finished.job);
-        let Finished { story_id, site_id, site, size, revision, started_at, log, outcome, .. } = finished;
+        let Finished {
+            story_id,
+            site_id,
+            site,
+            size,
+            revision,
+            started_at,
+            log,
+            outcome,
+            ..
+        } = finished;
         self.publishing.remove(&(story_id, site_id));
         let (uploaded, reused) = publish::counts(&outcome);
         let logged = crate::db::PublishJob {
@@ -1076,16 +1415,27 @@ impl PicassoApp {
         let mut notes = Vec::new();
         if let Ok(saved) = &outcome {
             if saved.places_dropped {
-                notes.push(tr("The site's theme doesn't keep places, so the post shows none.").to_string());
+                notes.push(
+                    tr("The site's theme doesn't keep places, so the post shows none.").to_string(),
+                );
             }
             if saved.journey_skipped {
-                notes.push(tr("The site has no Journeys, so the posts were saved without one.").to_string());
+                notes.push(
+                    tr("The site has no Journeys, so the posts were saved without one.")
+                        .to_string(),
+                );
             }
             if let Some(failure) = &saved.journey_error {
-                notes.push(trf("The Journey's places couldn't be written: {}", &[&failure_text(failure)]));
+                notes.push(trf(
+                    "The Journey's places couldn't be written: {}",
+                    &[&failure_text(failure)],
+                ));
             }
             if saved.remade {
-                notes.push(tr("The earlier post was gone from the site, so a new one was made.").to_string());
+                notes.push(
+                    tr("The earlier post was gone from the site, so a new one was made.")
+                        .to_string(),
+                );
             }
             if !saved.orphaned.is_empty() {
                 notes.push(trf("{} Day posts whose headings were removed from the story are still on the site. Delete or unpublish them there if they are no longer wanted.", &[&saved.orphaned.len()]));
@@ -1201,20 +1551,49 @@ impl PicassoApp {
     /// Offers to delete the uploads the Story's posts on the site used
     /// before a save, `before`, and no post there uses now.
     fn offer_leftovers(&mut self, site_id: i64, site: &str, before: &[i64], now: &[i64]) {
-        let ids: Vec<i64> = before.iter().filter(|id| !now.contains(id)).copied().collect();
+        let ids: Vec<i64> = before
+            .iter()
+            .filter(|id| !now.contains(id))
+            .copied()
+            .collect();
         self.queue_leftovers(site_id, site, ids, None);
     }
 
     /// Offers the uploads among `ids` that no post on the site uses, with
     /// those already offered for the site. One whose file name is too short
     /// to look for on the site is never deleted, so never offered.
-    pub(super) fn queue_leftovers(&mut self, site_id: i64, site: &str, mut ids: Vec<i64>, error: Option<String>) {
-        let at = self.publish_leftovers.iter().position(|earlier| earlier.site_id == site_id);
+    pub(super) fn queue_leftovers(
+        &mut self,
+        site_id: i64,
+        site: &str,
+        mut ids: Vec<i64>,
+        error: Option<String>,
+    ) {
+        let at = self
+            .publish_leftovers
+            .iter()
+            .position(|earlier| earlier.site_id == site_id);
         if let Some(at) = at {
-            ids.extend(self.publish_leftovers[at].uploads.iter().map(|(upload, _)| upload.media_id));
+            ids.extend(
+                self.publish_leftovers[at]
+                    .uploads
+                    .iter()
+                    .map(|(upload, _)| upload.media_id),
+            );
         }
-        let uploads: Vec<_> = self.db.unused_uploads(site_id, &ids).into_iter().filter(|upload| publish::upload_stem(&upload.url).is_some()).map(|upload| (upload, true)).collect();
-        let offer = Leftovers { site_id, site: site.to_string(), uploads, error };
+        let uploads: Vec<_> = self
+            .db
+            .unused_uploads(site_id, &ids)
+            .into_iter()
+            .filter(|upload| publish::upload_stem(&upload.url).is_some())
+            .map(|upload| (upload, true))
+            .collect();
+        let offer = Leftovers {
+            site_id,
+            site: site.to_string(),
+            uploads,
+            error,
+        };
         match at {
             Some(at) if offer.uploads.is_empty() => {
                 self.publish_leftovers.remove(at);
@@ -1278,58 +1657,104 @@ impl PicassoApp {
             return;
         }
         let leftovers = self.publish_leftovers.remove(0);
-        let busy = self.publishing.iter().any(|((_, site_id), alive)| *site_id == leftovers.site_id && alive.strong_count() > 0);
+        let busy = self
+            .publishing
+            .iter()
+            .any(|((_, site_id), alive)| *site_id == leftovers.site_id && alive.strong_count() > 0);
         let site = self.db.site(leftovers.site_id);
         let connected = match (&site, busy) {
-            _ if self.deleting_from(leftovers.site_id) => Err(trf("Uploads are being deleted from {}. Try again once that has finished.", &[&leftovers.site])),
-            (_, true) => Err(trf("Wait until publishing to {} has finished, then delete the uploads.", &[&leftovers.site])),
+            _ if self.deleting_from(leftovers.site_id) => Err(trf(
+                "Uploads are being deleted from {}. Try again once that has finished.",
+                &[&leftovers.site],
+            )),
+            (_, true) => Err(trf(
+                "Wait until publishing to {} has finished, then delete the uploads.",
+                &[&leftovers.site],
+            )),
             (None, _) => Err(trf("{} is no longer connected.", &[&leftovers.site])),
             (Some(site), _) => connection(&self.vault, site),
         };
         let (api, credentials, policy) = match connected {
             Ok(connected) => connected,
             Err(err) => {
-                self.publish_leftovers.insert(0, Leftovers { error: Some(err), ..leftovers });
+                self.publish_leftovers.insert(
+                    0,
+                    Leftovers {
+                        error: Some(err),
+                        ..leftovers
+                    },
+                );
                 return;
             }
         };
         // Another Story saved since may use some again.
-        let ticked: Vec<i64> = leftovers.uploads.iter().filter(|(_, ticked)| *ticked).map(|(upload, _)| upload.media_id).collect();
-        let chosen: Vec<(i64, String)> = self.db.unused_uploads(leftovers.site_id, &ticked).into_iter().map(|upload| (upload.media_id, upload.url)).collect();
+        let ticked: Vec<i64> = leftovers
+            .uploads
+            .iter()
+            .filter(|(_, ticked)| *ticked)
+            .map(|(upload, _)| upload.media_id)
+            .collect();
+        let chosen: Vec<(i64, String)> = self
+            .db
+            .unused_uploads(leftovers.site_id, &ticked)
+            .into_iter()
+            .map(|upload| (upload.media_id, upload.url))
+            .collect();
         let (site_id, label) = (leftovers.site_id, leftovers.site);
         self.activity = trf("Deleting from {}: {} uploads…", &[&label, &chosen.len()]);
         let events = self.events_tx.clone();
         let ctx = ctx.clone();
         let alive = Arc::new(());
-        self.deleting_uploads.insert(site_id, Arc::downgrade(&alive));
-        let _ = std::thread::Builder::new().name("picasso-delete-uploads".into()).spawn(move || {
-            let network = Network::new();
-            let deleted = publish::delete_unused(&network, &api, &credentials, policy, &chosen);
-            // Let go first, so the frame the answer wakes sees the site free.
-            drop(alive);
-            let _ = events.send(UiEvent::UploadsDeleted(site_id, label, deleted));
-            ctx.request_repaint();
-        });
+        self.deleting_uploads
+            .insert(site_id, Arc::downgrade(&alive));
+        let _ = std::thread::Builder::new()
+            .name("picasso-delete-uploads".into())
+            .spawn(move || {
+                let network = Network::new();
+                let deleted = publish::delete_unused(&network, &api, &credentials, policy, &chosen);
+                // Let go first, so the frame the answer wakes sees the site free.
+                drop(alive);
+                let _ = events.send(UiEvent::UploadsDeleted(site_id, label, deleted));
+                ctx.request_repaint();
+            });
     }
 
     /// Whether uploads are being deleted from site `site_id`.
     fn deleting_from(&self, site_id: i64) -> bool {
-        self.deleting_uploads.get(&site_id).is_some_and(|alive| alive.strong_count() > 0)
+        self.deleting_uploads
+            .get(&site_id)
+            .is_some_and(|alive| alive.strong_count() > 0)
     }
 
     /// Whether an offer to delete uploads is waiting to be shown, once none
     /// is being deleted from its site.
     pub(super) fn leftovers_due(&self) -> bool {
-        self.publish_leftovers.first().is_some_and(|first| !self.deleting_from(first.site_id))
+        self.publish_leftovers
+            .first()
+            .is_some_and(|first| !self.deleting_from(first.site_id))
     }
 
-    pub(super) fn on_uploads_deleted(&mut self, site_id: i64, site: &str, deleted: publish::Deleted) {
+    pub(super) fn on_uploads_deleted(
+        &mut self,
+        site_id: i64,
+        site: &str,
+        deleted: publish::Deleted,
+    ) {
         for id in &deleted.gone {
             let _ = self.db.forget_media(site_id, *id);
         }
-        let mut text = trf("Deleted from {}: {} uploads.", &[&site, &deleted.gone.len()]);
+        let mut text = trf(
+            "Deleted from {}: {} uploads.",
+            &[&site, &deleted.gone.len()],
+        );
         if deleted.in_use > 0 {
-            text = format!("{text} {}", trf("{} were kept, as another post or page there still shows them.", &[&deleted.in_use]));
+            text = format!(
+                "{text} {}",
+                trf(
+                    "{} were kept, as another post or page there still shows them.",
+                    &[&deleted.in_use]
+                )
+            );
         }
         if let Some(failure) = &deleted.failure {
             text = format!("{} {text}", failure_text(failure));
@@ -1357,7 +1782,12 @@ fn shown_places(dialog: &PublishDialog) -> Vec<String> {
     if !dialog.places.places {
         return Vec::new();
     }
-    dialog.story_places.iter().filter(|(id, _)| !dialog.places.left_out.contains(id)).map(|(_, name)| name.clone()).collect()
+    dialog
+        .story_places
+        .iter()
+        .filter(|(id, _)| !dialog.places.left_out.contains(id))
+        .map(|(_, name)| name.clone())
+        .collect()
 }
 
 /// The dialog's width in points: room for the label column and the photo preview.
@@ -1373,8 +1803,14 @@ const HISTORY_SHOWN: usize = 5;
 /// How a job ended (`publish::outcome_code`), in words.
 /// Whether the job publishing Story `story_id` to site `site_id`, if any,
 /// still has its thread.
-fn publishing_now(publishing: &std::collections::HashMap<(i64, i64), std::sync::Weak<()>>, story_id: i64, site_id: i64) -> bool {
-    publishing.get(&(story_id, site_id)).is_some_and(|alive| alive.strong_count() > 0)
+fn publishing_now(
+    publishing: &std::collections::HashMap<(i64, i64), std::sync::Weak<()>>,
+    story_id: i64,
+    site_id: i64,
+) -> bool {
+    publishing
+        .get(&(story_id, site_id))
+        .is_some_and(|alive| alive.strong_count() > 0)
 }
 
 fn outcome_name(code: &str) -> String {
@@ -1402,16 +1838,19 @@ fn outcome_name(code: &str) -> String {
 /// accents dropped, and runs of anything but letters and digits made one
 /// dash. The site may differ, as when the address is taken.
 fn slug_of(title: &str) -> String {
-    let plain: String = title.chars().map(|ch| match ch {
-        'à'..='å' | 'À'..='Å' => 'a',
-        'ç' | 'Ç' => 'c',
-        'è'..='ë' | 'È'..='Ë' => 'e',
-        'ì'..='ï' | 'Ì'..='Ï' => 'i',
-        'ñ' | 'Ñ' => 'n',
-        'ò'..='ö' | 'Ò'..='Ö' => 'o',
-        'ù'..='ü' | 'Ù'..='Ü' => 'u',
-        other => other,
-    }).collect();
+    let plain: String = title
+        .chars()
+        .map(|ch| match ch {
+            'à'..='å' | 'À'..='Å' => 'a',
+            'ç' | 'Ç' => 'c',
+            'è'..='ë' | 'È'..='Ë' => 'e',
+            'ì'..='ï' | 'Ì'..='Ï' => 'i',
+            'ñ' | 'Ñ' => 'n',
+            'ò'..='ö' | 'Ò'..='Ö' => 'o',
+            'ù'..='ü' | 'Ù'..='Ü' => 'u',
+            other => other,
+        })
+        .collect();
     let mut out = String::new();
     for ch in plain.to_lowercase().chars() {
         if ch.is_alphanumeric() {
@@ -1462,18 +1901,37 @@ fn note(ui: &mut egui::Ui, text: &str) {
 }
 
 /// The site's API and the account's credentials from the password store.
-fn connection(vault: &crate::keychain::Vault, site: &Site) -> Result<(Api, Credentials, Policy), String> {
+fn connection(
+    vault: &crate::keychain::Vault,
+    site: &Site,
+) -> Result<(Api, Credentials, Policy), String> {
     let password = match vault.load(&site.secret_ref) {
         Ok(Some(password)) => password,
         Ok(None) => return Err(tr("Picasso doesn't have this site's password any more. Use Edit… in Settings → Publishing to enter it again.").into()),
         Err(_) => return Err(tr("This computer's password store couldn't be used.").into()),
     };
-    let (Ok(site_url), Ok(root)) = (SiteUrl::parse(&site.site_url), SiteUrl::parse(&site.api_root)) else {
+    let (Ok(site_url), Ok(root)) = (
+        SiteUrl::parse(&site.site_url),
+        SiteUrl::parse(&site.api_root),
+    ) else {
         return Err(failure_text(&Failure::InvalidUrl));
     };
-    let policy = Policy { development: site_url.scheme == "http" };
-    let api = Api { name: site.label.clone(), namespaces: vec!["wp/v2".into()], ..saved_api(site, site_url, root) };
-    Ok((api, Credentials { user: site.user.clone(), password }, policy))
+    let policy = Policy {
+        development: site_url.scheme == "http",
+    };
+    let api = Api {
+        name: site.label.clone(),
+        namespaces: vec!["wp/v2".into()],
+        ..saved_api(site, site_url, root)
+    };
+    Ok((
+        api,
+        Credentials {
+            user: site.user.clone(),
+            password,
+        },
+        policy,
+    ))
 }
 
 /// Where post `post_id` opens in the site's editor.
@@ -1483,13 +1941,23 @@ fn post_edit_link(site: &Site, post_id: i64) -> Option<String> {
 
 /// The site's API as saved, for what anyone may read of it.
 fn site_api(site: &Site) -> Option<Api> {
-    let (site_url, root) = (SiteUrl::parse(&site.site_url).ok()?, SiteUrl::parse(&site.api_root).ok()?);
+    let (site_url, root) = (
+        SiteUrl::parse(&site.site_url).ok()?,
+        SiteUrl::parse(&site.api_root).ok()?,
+    );
     Some(saved_api(site, site_url, root))
 }
 
 fn saved_api(site: &Site, site_url: SiteUrl, root: SiteUrl) -> Api {
     let address = |url: &str| SiteUrl::parse(url).ok();
-    Api { site: site_url, root, wordpress: address(&site.wordpress_url), home: address(&site.home_url), name: String::new(), namespaces: Vec::new() }
+    Api {
+        site: site_url,
+        root,
+        wordpress: address(&site.wordpress_url),
+        home: address(&site.home_url),
+        name: String::new(),
+        namespaces: Vec::new(),
+    }
 }
 
 /// Reads what `site` keeps of a trip in the background, without its password.
@@ -1504,17 +1972,26 @@ enum EarlierNow {
     AsKnown,
 }
 
-fn earlier_now(earlier: &Publication, answer: Result<Option<crate::wordpress::PostState>, Failure>) -> EarlierNow {
+fn earlier_now(
+    earlier: &Publication,
+    answer: Result<Option<crate::wordpress::PostState>, Failure>,
+) -> EarlierNow {
     match answer {
         Ok(None) => EarlierNow::Gone,
         Ok(Some(found)) if found.status == "trash" => EarlierNow::Gone,
-        Ok(Some(found)) if !found.status.is_empty() && found.status != earlier.remote_status => EarlierNow::Status(found.status),
+        Ok(Some(found)) if !found.status.is_empty() && found.status != earlier.remote_status => {
+            EarlierNow::Status(found.status)
+        }
         _ => EarlierNow::AsKnown,
     }
 }
 
 /// Post `post_id` as the site has it now, read in the background.
-fn read_post(ctx: &egui::Context, (api, credentials, policy): (Api, Credentials, Policy), post_id: i64) -> Option<Receiver<Result<Option<crate::wordpress::PostState>, Failure>>> {
+fn read_post(
+    ctx: &egui::Context,
+    (api, credentials, policy): (Api, Credentials, Policy),
+    post_id: i64,
+) -> Option<Receiver<Result<Option<crate::wordpress::PostState>, Failure>>> {
     // Tests never reach a site.
     if cfg!(test) {
         return None;
@@ -1529,13 +2006,18 @@ fn read_post(ctx: &egui::Context, (api, credentials, policy): (Api, Credentials,
     Some(receiver)
 }
 
-fn read_travel(ctx: &egui::Context, site: &Site) -> Option<Receiver<Result<TravelSupport, Failure>>> {
+fn read_travel(
+    ctx: &egui::Context,
+    site: &Site,
+) -> Option<Receiver<Result<TravelSupport, Failure>>> {
     // Tests never reach a site.
     if cfg!(test) {
         return None;
     }
     let api = site_api(site)?;
-    let policy = Policy { development: api.site.scheme == "http" };
+    let policy = Policy {
+        development: api.site.scheme == "http",
+    };
     let (sender, receiver) = crossbeam_channel::bounded(1);
     let ctx = ctx.clone();
     std::thread::spawn(move || {
@@ -1553,18 +2035,34 @@ fn journeys_kept(dialog: &PublishDialog) -> bool {
 
 /// The site's categories and tags to tick, those chosen shown first so they
 /// can be taken off. Returns whether to read the site's again.
-fn terms_picker(ui: &mut egui::Ui, chosen: &mut PostTerms, site: &mut SiteTerms, earlier: bool) -> bool {
+fn terms_picker(
+    ui: &mut egui::Ui,
+    chosen: &mut PostTerms,
+    site: &mut SiteTerms,
+    earlier: bool,
+) -> bool {
     let mut read = false;
     if chosen.categories.is_empty() && chosen.tags.is_empty() {
-        let none = if earlier { tr("None chosen: the post keeps the categories and tags it has on the site.") } else { tr("None chosen: the post goes in the site's default category.") };
+        let none = if earlier {
+            tr("None chosen: the post keeps the categories and tags it has on the site.")
+        } else {
+            tr("None chosen: the post goes in the site's default category.")
+        };
         note(ui, none);
     } else {
         ui.horizontal_wrapped(|ui| {
             for (list, prefix) in [(&mut chosen.categories, ""), (&mut chosen.tags, "#")] {
-                list.retain(|(_, name)| !ui.small_button(format!("{prefix}{name}  ×")).on_hover_text(tr("Take off")).clicked());
+                list.retain(|(_, name)| {
+                    !ui.small_button(format!("{prefix}{name}  ×"))
+                        .on_hover_text(tr("Take off"))
+                        .clicked()
+                });
             }
         });
-        note(ui, tr("Chosen ones replace the post's categories or tags on the site."));
+        note(
+            ui,
+            tr("Chosen ones replace the post's categories or tags on the site."),
+        );
     }
     if !site.error.is_empty() {
         ui.label(RichText::new(&site.error).color(theme::DANGER));
@@ -1577,56 +2075,97 @@ fn terms_picker(ui: &mut egui::Ui, chosen: &mut PostTerms, site: &mut SiteTerms,
         read = ui.button(tr("Read again")).clicked();
         return read;
     }
-    let Some([categories, tags]) = &site.found else { return read };
+    let Some([categories, tags]) = &site.found else {
+        return read;
+    };
     ui.horizontal(|ui| {
-        ui.add(egui::TextEdit::singleline(&mut site.filter).hint_text(tr("Find a category or tag")).desired_width(300.0));
+        ui.add(
+            egui::TextEdit::singleline(&mut site.filter)
+                .hint_text(tr("Find a category or tag"))
+                .desired_width(300.0),
+        );
         read = ui.small_button(tr("Read again")).clicked();
     });
     let wanted = site.filter.trim().to_lowercase();
     let matches = |term: &&Term| wanted.is_empty() || term.name.to_lowercase().contains(&wanted);
     // A name the site doesn't have yet can be added, as a category, a tag, or both.
     let name = site.filter.trim().to_string();
-    let missing = |list: &[Term]| !name.is_empty() && !list.iter().any(|term| term.name.to_lowercase() == wanted);
+    let missing = |list: &[Term]| {
+        !name.is_empty() && !list.iter().any(|term| term.name.to_lowercase() == wanted)
+    };
     let (new_category, new_tag) = (missing(categories), missing(tags));
     if new_category || new_tag {
         ui.horizontal_wrapped(|ui| {
-            if new_category && ui.small_button(trf("Add category \"{}\"", &[&name])).on_hover_text(tr("Makes it on the site and chooses it")).clicked() {
+            if new_category
+                && ui
+                    .small_button(trf("Add category \"{}\"", &[&name]))
+                    .on_hover_text(tr("Makes it on the site and chooses it"))
+                    .clicked()
+            {
                 site.make = Some((Taxonomy::Categories, name.clone()));
             }
-            if new_tag && ui.small_button(trf("Add tag \"{}\"", &[&name])).on_hover_text(tr("Makes it on the site and chooses it")).clicked() {
+            if new_tag
+                && ui
+                    .small_button(trf("Add tag \"{}\"", &[&name]))
+                    .on_hover_text(tr("Makes it on the site and chooses it"))
+                    .clicked()
+            {
                 site.make = Some((Taxonomy::Tags, name.clone()));
             }
         });
     }
     ui.columns(2, |columns| {
-        columns[0].label(RichText::new(tr("Categories")).color(theme::muted()).size(12.0));
-        egui::ScrollArea::vertical().max_height(140.0).id_salt("publish-categories").show(&mut columns[0], |ui| {
-            let shown: Vec<(usize, &Term)> = by_parent(categories).into_iter().filter(|(_, term)| matches(term)).collect();
-            if shown.is_empty() {
-                note(ui, tr("None"));
-            }
-            for (depth, term) in shown {
-                // A filtered list shows children on their own, so only a whole list is indented.
-                let indent = if wanted.is_empty() { depth as f32 * 14.0 } else { 0.0 };
-                ui.horizontal(|ui| {
-                    ui.add_space(indent);
-                    toggle(ui, &mut chosen.categories, term);
-                });
-            }
-        });
+        columns[0].label(
+            RichText::new(tr("Categories"))
+                .color(theme::muted())
+                .size(12.0),
+        );
+        egui::ScrollArea::vertical()
+            .max_height(140.0)
+            .id_salt("publish-categories")
+            .show(&mut columns[0], |ui| {
+                let shown: Vec<(usize, &Term)> = by_parent(categories)
+                    .into_iter()
+                    .filter(|(_, term)| matches(term))
+                    .collect();
+                if shown.is_empty() {
+                    note(ui, tr("None"));
+                }
+                for (depth, term) in shown {
+                    // A filtered list shows children on their own, so only a whole list is indented.
+                    let indent = if wanted.is_empty() {
+                        depth as f32 * 14.0
+                    } else {
+                        0.0
+                    };
+                    ui.horizontal(|ui| {
+                        ui.add_space(indent);
+                        toggle(ui, &mut chosen.categories, term);
+                    });
+                }
+            });
         columns[1].label(RichText::new(tr("Tags")).color(theme::muted()).size(12.0));
-        egui::ScrollArea::vertical().max_height(140.0).id_salt("publish-tags").show(&mut columns[1], |ui| {
-            let shown: Vec<&Term> = tags.iter().filter(matches).collect();
-            if shown.is_empty() {
-                note(ui, tr("None"));
-            }
-            for term in shown.iter().take(SHOWN_TAGS) {
-                toggle(ui, &mut chosen.tags, term);
-            }
-            if shown.len() > SHOWN_TAGS {
-                note(ui, &trf("{} more; type to find them.", &[&(shown.len() - SHOWN_TAGS)]));
-            }
-        });
+        egui::ScrollArea::vertical()
+            .max_height(140.0)
+            .id_salt("publish-tags")
+            .show(&mut columns[1], |ui| {
+                let shown: Vec<&Term> = tags.iter().filter(matches).collect();
+                if shown.is_empty() {
+                    note(ui, tr("None"));
+                }
+                for term in shown.iter().take(SHOWN_TAGS) {
+                    toggle(ui, &mut chosen.tags, term);
+                }
+                if shown.len() > SHOWN_TAGS {
+                    note(
+                        ui,
+                        &trf(
+                            "{} more; type to find them.",
+                            &[&(shown.len() - SHOWN_TAGS)],
+                        ),
+                    );
+                }
+            });
     });
     read
 }
@@ -1641,12 +2180,18 @@ fn by_parent(categories: &[Term]) -> Vec<(usize, &Term)> {
         if depth > 8 {
             return;
         }
-        for term in all.iter().filter(|term| term.parent == parent && term.id != parent) {
+        for term in all
+            .iter()
+            .filter(|term| term.parent == parent && term.id != parent)
+        {
             out.push((depth, term));
             walk(all, term.id, depth + 1, out);
         }
     }
-    for root in categories.iter().filter(|term| term.parent == 0 || term.parent == term.id || !ids.contains(&term.parent)) {
+    for root in categories
+        .iter()
+        .filter(|term| term.parent == 0 || term.parent == term.id || !ids.contains(&term.parent))
+    {
         out.push((0, root));
         walk(categories, root.id, 1, &mut out);
     }
@@ -1671,13 +2216,44 @@ mod tests {
 
     #[test]
     fn a_post_deleted_or_unpublished_on_the_site_is_seen_when_the_dialog_opens() {
-        let state = |status: &str| Ok(Some(crate::wordpress::PostState { status: status.into(), fingerprint: String::new() }));
-        let earlier = Publication { story_id: 1, site_id: 2, post_id: 7, remote_status: "publish".into(), size: String::new(), revision: 1, synced_at: 0, fingerprint: String::new(), changed_on_site: false };
-        assert_eq!(earlier_now(&earlier, Ok(None)), EarlierNow::Gone, "deleted for good");
-        assert_eq!(earlier_now(&earlier, state("trash")), EarlierNow::Gone, "WordPress's Delete moves it to the trash");
-        assert_eq!(earlier_now(&earlier, state("draft")), EarlierNow::Status("draft".into()), "unpublished there: publishing is offered again");
+        let state = |status: &str| {
+            Ok(Some(crate::wordpress::PostState {
+                status: status.into(),
+                fingerprint: String::new(),
+            }))
+        };
+        let earlier = Publication {
+            story_id: 1,
+            site_id: 2,
+            post_id: 7,
+            remote_status: "publish".into(),
+            size: String::new(),
+            revision: 1,
+            synced_at: 0,
+            fingerprint: String::new(),
+            changed_on_site: false,
+        };
+        assert_eq!(
+            earlier_now(&earlier, Ok(None)),
+            EarlierNow::Gone,
+            "deleted for good"
+        );
+        assert_eq!(
+            earlier_now(&earlier, state("trash")),
+            EarlierNow::Gone,
+            "WordPress's Delete moves it to the trash"
+        );
+        assert_eq!(
+            earlier_now(&earlier, state("draft")),
+            EarlierNow::Status("draft".into()),
+            "unpublished there: publishing is offered again"
+        );
         assert_eq!(earlier_now(&earlier, state("publish")), EarlierNow::AsKnown);
-        assert_eq!(earlier_now(&earlier, Err(Failure::Timeout)), EarlierNow::AsKnown, "a site that can't be reached changes nothing");
+        assert_eq!(
+            earlier_now(&earlier, Err(Failure::Timeout)),
+            EarlierNow::AsKnown,
+            "a site that can't be reached changes nothing"
+        );
     }
 
     #[test]
@@ -1685,22 +2261,55 @@ mod tests {
         assert_eq!(slug_of("Coast – 2025-07-01"), "coast-2025-07-01");
         assert_eq!(slug_of("Café in Valley!"), "cafe-in-valley");
         assert_eq!(slug_of("古都の秋"), "古都の秋");
-        assert_eq!(address_of("http://localhost:10003/", " — "), "http://localhost:10003/?p=…");
-        assert_eq!(address_of("https://example.com/blog", "Coast"), "https://example.com/blog/coast/");
+        assert_eq!(
+            address_of("http://localhost:10003/", " — "),
+            "http://localhost:10003/?p=…"
+        );
+        assert_eq!(
+            address_of("https://example.com/blog", "Coast"),
+            "https://example.com/blog/coast/"
+        );
     }
 
     #[test]
     fn a_typed_date_and_time_are_read_or_refused() {
-        assert_eq!(schedule_of(" 2026-11-01 ", "9:05").map(|at| at.to_string()), Some("2026-11-01 09:05:00".into()));
+        assert_eq!(
+            schedule_of(" 2026-11-01 ", "9:05").map(|at| at.to_string()),
+            Some("2026-11-01 09:05:00".into())
+        );
         assert_eq!(schedule_of("2026-02-30", "09:00"), None);
         assert_eq!(schedule_of("2026-11-01", "25:00"), None);
     }
 
     #[test]
     fn categories_list_each_child_after_its_parent() {
-        let term = |id, name: &str, parent| Term { id, name: name.into(), parent };
-        let categories = [term(2, "Region", 0), term(6, "Hilltop", 5), term(5, "Coast", 2), term(1, "Uncategorized", 0), term(9, "Orphan", 77), term(4, "Loop", 4)];
-        let listed: Vec<(usize, &str)> = by_parent(&categories).into_iter().map(|(depth, term)| (depth, term.name.as_str())).collect();
-        assert_eq!(listed, [(0, "Region"), (1, "Coast"), (2, "Hilltop"), (0, "Uncategorized"), (0, "Orphan"), (0, "Loop")]);
+        let term = |id, name: &str, parent| Term {
+            id,
+            name: name.into(),
+            parent,
+        };
+        let categories = [
+            term(2, "Region", 0),
+            term(6, "Hilltop", 5),
+            term(5, "Coast", 2),
+            term(1, "Uncategorized", 0),
+            term(9, "Orphan", 77),
+            term(4, "Loop", 4),
+        ];
+        let listed: Vec<(usize, &str)> = by_parent(&categories)
+            .into_iter()
+            .map(|(depth, term)| (depth, term.name.as_str()))
+            .collect();
+        assert_eq!(
+            listed,
+            [
+                (0, "Region"),
+                (1, "Coast"),
+                (2, "Hilltop"),
+                (0, "Uncategorized"),
+                (0, "Orphan"),
+                (0, "Loop")
+            ]
+        );
     }
 }

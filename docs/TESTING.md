@@ -5,14 +5,17 @@ What the automated tests cover, how to run the slower checks, and what has to be
 ## Running the tests
 
 ```sh
+make fmt-check            # Rust formatting, without changing files
 make test                 # every unit and integration test, as CI runs them
 make bench-check          # the performance limits, as CI runs them (docs/PERFORMANCE.md)
 make check-docs           # links, images, make targets, scripts, and settings named in the documents
 make deny                 # security advisories and licenses of the dependencies
-make ci                   # all four of the above
+make ci                   # all five of the above
 make test T=backup        # only the tests whose name contains "backup"
 make corpus CORPUS=~/corpus
 ```
+
+Run `make fmt` to format the Rust code when `make fmt-check` reports differences.
 
 The last line puts every photo in a folder of your own and its subfolders (HEIC, camera RAW, odd JPEGs) through the reading checks of the test corpus below; videos are skipped. Each photo must have its size read, decode upright at that size, and give a thumbnail of the same shape. The date and camera read are printed for a look, and a folder without photos fails rather than passing empty.
 
@@ -39,7 +42,7 @@ The last line puts every photo in a folder of your own and its subfolders (HEIC,
 | Screens and accessibility | `src/app/headless.rs` | The library, the Trips page, a Trip with a long title and a Story, the Geotag dialog for a folder and for a Trip with a track beside the photos, and Publish to WordPress with the Story's Places shown and a Journey, drawn at 1280 × 800 and the smallest window, 880 × 560, at 1× and 2×, in light and dark: every control that can be clicked or reached by the keyboard has a name for screen readers, none is named by a long tooltip, and none reaches past the window's right edge. The smallest window is drawn again in German, the longest labels, and in Traditional Chinese. Tab goes from the search field through the top bar, the sidebar and the photos, and each control it reaches has a name. Another test uses only the keyboard: it chooses, stars, opens and steps through photos; asks to trash one and cancels; moves the selection and the focus together from a photo reached with Tab; opens Help with F1 and All trips with Enter while a button has the focus; then opens a Trip, puts a photo in a Day with Alt+1, and opens and leaves a Story. A third makes a Trip from a Shift-click selection through New trip, typing its name and time zone and reaching Create with Tab; puts all its photos in a Day with Alt+1, moves one to another Day and takes that back with Ctrl+Z; then, with a Day shown, opens a photo in the editor and leaves with Escape twice, and goes to the Library and back. The same Trip, Day and photo are still chosen. |
 | Performance | `src/bench.rs`, `src/app/headless.rs` | Catalog queries, a year-long Trip, the window's frames while scrolling that Trip without a window, scanning, thumbnails, exporting and publishing a 300-photo Story, and memory, with limits in CI. |
 
-CI runs the tests (`cargo test --release --locked`, the command `make test` runs) on Windows and Linux, each on x64 and Arm64 machines, and on macOS, and `make bench-check` on both Linux machines. It installs, starts, and removes the `.deb` on Ubuntu 22.04, and starts the AppImage on AlmaLinux 8, the oldest system it supports, and Ubuntu 24.04, for both processors. It also builds the User Guide as PDF in both languages with `make guide-pdf`, which fails when a character is in none of the fonts. Like the x64 ones, the Arm packages still need the checks below on a real machine, since CI draws without a graphics card.
+CI runs the tests (`cargo test --release --locked`, the command `make test` runs) on Windows and Linux, each on x64 and Arm64 machines, and on macOS, and `make bench-check` on both Linux machines. It installs, starts, and removes the `.deb` on Ubuntu 22.04, and starts the AppImage on AlmaLinux 8, the oldest system it supports, and Ubuntu 22.04 and 24.04, for both processors. The AppImage startup check requires a visible window that stays open. It also builds the User Guide as PDF in both languages with `make guide-pdf`, which fails when a character is in none of the fonts. Like the x64 ones, the Arm packages still need the checks below on a real machine, since CI draws without a graphics card.
 
 ## Before a release, by hand
 

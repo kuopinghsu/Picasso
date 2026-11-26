@@ -62,11 +62,20 @@ impl GeotagDialog {
     /// What to run with, unless something is missing or the time zone can't be read.
     fn options(&self, dry_run: bool) -> Option<geotag::Options> {
         let offset = self.offset.trim();
-        let offset = if offset.is_empty() { None } else { Some(parse_utc_offset(offset)?) };
+        let offset = if offset.is_empty() {
+            None
+        } else {
+            Some(parse_utc_offset(offset)?)
+        };
         let source = if self.from_photos {
             Source::Photos
         } else {
-            let tracks: Vec<PathBuf> = self.tracks.iter().filter(|(_, used)| *used).map(|(path, _)| path.clone()).collect();
+            let tracks: Vec<PathBuf> = self
+                .tracks
+                .iter()
+                .filter(|(_, used)| *used)
+                .map(|(path, _)| path.clone())
+                .collect();
             if tracks.is_empty() {
                 return None;
             }
@@ -77,7 +86,12 @@ impl GeotagDialog {
             Photos::Folder(folder) => Target::Folder(PathBuf::from(folder.trim())),
             Photos::Trip { files, .. } => Target::Files(files.clone()),
         };
-        Some(geotag::Options { source, target, offset, dry_run })
+        Some(geotag::Options {
+            source,
+            target,
+            offset,
+            dry_run,
+        })
     }
 
     /// The choices as text, to tell whether a check still stands.
@@ -86,7 +100,12 @@ impl GeotagDialog {
             Photos::Folder(folder) => folder.trim(),
             Photos::Trip { .. } => "",
         };
-        format!("{}|{:?}|{folder}|{}", self.from_photos, self.tracks, self.offset.trim())
+        format!(
+            "{}|{:?}|{folder}|{}",
+            self.from_photos,
+            self.tracks,
+            self.offset.trim()
+        )
     }
 
     /// Adds `paths` to the tracks, used, unless they are there.
@@ -103,12 +122,17 @@ impl PicassoApp {
     /// Opens the dialog for `folder`, with the tracks beside it.
     pub(super) fn open_geotag(&mut self, folder: &str) {
         let folder = Path::new(folder);
-        self.modal = Modal::Geotag(GeotagDialog::new(Photos::Folder(display_path(folder)), geotag::tracks_near(folder)));
+        self.modal = Modal::Geotag(GeotagDialog::new(
+            Photos::Folder(display_path(folder)),
+            geotag::tracks_near(folder),
+        ));
     }
 
     /// Opens the dialog for a Trip's photos, with its tracks.
     pub(super) fn open_trip_geotag(&mut self, trip_id: i64) {
-        let Some(trip) = self.db.trip(trip_id) else { return };
+        let Some(trip) = self.db.trip(trip_id) else {
+            return;
+        };
         let files = self
             .db
             .trip_photos(trip_id, &crate::trip::MemberQuery::default(), Sort::Name)
@@ -122,16 +146,29 @@ impl PicassoApp {
             .filter(|link| link.track_id.is_some())
             .map(|link| PathBuf::from(link.path))
             .collect();
-        self.modal = Modal::Geotag(GeotagDialog::new(Photos::Trip { title: trip.title, files }, tracks));
+        self.modal = Modal::Geotag(GeotagDialog::new(
+            Photos::Trip {
+                title: trip.title,
+                files,
+            },
+            tracks,
+        ));
     }
 
     pub(super) fn geotag_modal(&mut self, ctx: &egui::Context) {
-        let Modal::Geotag(dialog) = &mut self.modal else { return };
-        let finished = dialog.run.as_ref().and_then(|run| match run.finished.try_recv() {
-            Ok(result) => Some(result),
-            Err(mpsc::TryRecvError::Disconnected) => Some(Err(tr("The geotagging stopped unexpectedly").to_string())),
-            Err(mpsc::TryRecvError::Empty) => None,
-        });
+        let Modal::Geotag(dialog) = &mut self.modal else {
+            return;
+        };
+        let finished = dialog
+            .run
+            .as_ref()
+            .and_then(|run| match run.finished.try_recv() {
+                Ok(result) => Some(result),
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    Some(Err(tr("The geotagging stopped unexpectedly").to_string()))
+                }
+                Err(mpsc::TryRecvError::Empty) => None,
+            });
         if let Some(result) = finished {
             let run = dialog.run.take();
             match run.and_then(|run| run.check) {
@@ -150,7 +187,9 @@ impl PicassoApp {
     }
 
     fn geotag_window(&mut self, ctx: &egui::Context) {
-        let Modal::Geotag(dialog) = &mut self.modal else { return };
+        let Modal::Geotag(dialog) = &mut self.modal else {
+            return;
+        };
         let running = dialog.run.is_some();
         let (mut close, mut start, mut check) = (false, false, false);
         let offset = dialog.offset.trim();
@@ -286,7 +325,12 @@ impl PicassoApp {
         if start || check {
             if let Some(options) = dialog.options(check && !start) {
                 let choices = (check && !start).then(|| dialog.choices());
-                dialog.run = Some(spawn(options, self.data_dir.join("picasso.db"), ctx.clone(), choices));
+                dialog.run = Some(spawn(
+                    options,
+                    self.data_dir.join("picasso.db"),
+                    ctx.clone(),
+                    choices,
+                ));
             }
         }
         // The library is being written while it runs, so it can't be closed.
@@ -305,12 +349,17 @@ fn tracks_list(ui: &mut egui::Ui, dialog: &mut GeotagDialog) {
                 .color(theme::muted()),
         );
     }
-    egui::ScrollArea::vertical().max_height(120.0).show(ui, |ui| {
-        for (path, used) in &mut dialog.tracks {
-            let name = path.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
-            ui.checkbox(used, name).on_hover_text(display_path(path));
-        }
-    });
+    egui::ScrollArea::vertical()
+        .max_height(120.0)
+        .show(ui, |ui| {
+            for (path, used) in &mut dialog.tracks {
+                let name = path
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                ui.checkbox(used, name).on_hover_text(display_path(path));
+            }
+        });
     if ui.button(tr("Add tracks…")).clicked() {
         let picked = rfd::FileDialog::new()
             .set_title(tr("Choose a GPS track"))
@@ -321,10 +370,16 @@ fn tracks_list(ui: &mut egui::Ui, dialog: &mut GeotagDialog) {
 }
 
 /// A path box with a Choose… button that fills it from `pick`.
-fn path_row(ui: &mut egui::Ui, text: &mut String, label: egui::Id, pick: impl FnOnce() -> Option<PathBuf>) {
+fn path_row(
+    ui: &mut egui::Ui,
+    text: &mut String,
+    label: egui::Id,
+    pick: impl FnOnce() -> Option<PathBuf>,
+) {
     ui.horizontal(|ui| {
         let width = ui.available_width() - 90.0;
-        ui.add(egui::TextEdit::singleline(text).desired_width(width)).labelled_by(label);
+        ui.add(egui::TextEdit::singleline(text).desired_width(width))
+            .labelled_by(label);
         if ui.button(tr("Choose…")).clicked() {
             if let Some(path) = pick() {
                 *text = display_path(&path);
@@ -334,45 +389,100 @@ fn path_row(ui: &mut egui::Ui, text: &mut String, label: egui::Id, pick: impl Fn
 }
 
 fn utc(time: i64) -> String {
-    chrono::DateTime::from_timestamp(time, 0).map(|time| time.format("%Y-%m-%d %H:%M").to_string()).unwrap_or_default()
+    chrono::DateTime::from_timestamp(time, 0)
+        .map(|time| time.format("%Y-%m-%d %H:%M").to_string())
+        .unwrap_or_default()
 }
 
 /// What a run did, or for a check would do.
 fn report_lines(ui: &mut egui::Ui, report: &Report, check: bool) {
     let (start, end) = report.track_span;
     if report.gps_photos > 0 {
-        ui.label(trf("Places from {} photos with GPS · {} – {} UTC", &[&report.gps_photos, &utc(start), &utc(end)]));
+        ui.label(trf(
+            "Places from {} photos with GPS · {} – {} UTC",
+            &[&report.gps_photos, &utc(start), &utc(end)],
+        ));
     } else {
-        let name = if report.track_name.is_empty() { tr("GPS track").to_string() } else { report.track_name.clone() };
-        ui.label(trf("Track: {} · {} – {} UTC", &[&name, &utc(start), &utc(end)]));
+        let name = if report.track_name.is_empty() {
+            tr("GPS track").to_string()
+        } else {
+            report.track_name.clone()
+        };
+        ui.label(trf(
+            "Track: {} · {} – {} UTC",
+            &[&name, &utc(start), &utc(end)],
+        ));
     }
     if let Some((first, last)) = report.photo_span {
-        ui.label(trf("Photos without GPS: taken {} – {} UTC", &[&utc(first), &utc(last)]));
+        ui.label(trf(
+            "Photos without GPS: taken {} – {} UTC",
+            &[&utc(first), &utc(last)],
+        ));
     }
-    ui.label(RichText::new(trf(if check { "Would tag {} photos" } else { "Tagged {} photos" }, &[&report.tagged])).strong());
+    ui.label(
+        RichText::new(trf(
+            if check {
+                "Would tag {} photos"
+            } else {
+                "Tagged {} photos"
+            },
+            &[&report.tagged],
+        ))
+        .strong(),
+    );
     if report.had_gps > 0 {
-        ui.label(RichText::new(trf("{} already had GPS from the camera", &[&report.had_gps])).color(theme::muted()));
+        ui.label(
+            RichText::new(trf(
+                "{} already had GPS from the camera",
+                &[&report.had_gps],
+            ))
+            .color(theme::muted()),
+        );
     }
     if report.hand_pinned > 0 {
-        ui.label(RichText::new(trf("{} were pinned by hand and keep their place", &[&report.hand_pinned])).color(theme::muted()));
+        ui.label(
+            RichText::new(trf(
+                "{} were pinned by hand and keep their place",
+                &[&report.hand_pinned],
+            ))
+            .color(theme::muted()),
+        );
     }
     if report.unmatched > 0 {
         let minutes = NEAR / 60;
-        ui.label(RichText::new(trf("{} had no track point within {} minutes", &[&report.unmatched, &minutes])).color(theme::muted()));
+        ui.label(
+            RichText::new(trf(
+                "{} had no track point within {} minutes",
+                &[&report.unmatched, &minutes],
+            ))
+            .color(theme::muted()),
+        );
     }
     if !check {
         match &report.library_error {
             Some(err) => {
-                ui.label(RichText::new(trf("The library wasn't updated: {}", &[err])).color(theme::DANGER));
+                ui.label(
+                    RichText::new(trf("The library wasn't updated: {}", &[err]))
+                        .color(theme::DANGER),
+                );
             }
             None if report.library > 0 => {
-                ui.label(RichText::new(trf("Pinned {} photos in the library", &[&report.library])).color(theme::muted()));
+                ui.label(
+                    RichText::new(trf("Pinned {} photos in the library", &[&report.library]))
+                        .color(theme::muted()),
+                );
             }
             None => {}
         }
         for (path, err) in &report.failed {
             let folder = path.parent().map(display_path).unwrap_or_default();
-            ui.label(RichText::new(trf("Couldn't write the geotag file in {}: {}", &[&folder, err])).color(theme::DANGER));
+            ui.label(
+                RichText::new(trf(
+                    "Couldn't write the geotag file in {}: {}",
+                    &[&folder, err],
+                ))
+                .color(theme::DANGER),
+            );
         }
     }
     if report.zone_guessed > 0 {
@@ -392,44 +502,76 @@ fn report_lines(ui: &mut egui::Ui, report: &Report, check: bool) {
 
 /// Each photo of a check: when it was taken, and the place it would get or why not.
 fn each_photo(ui: &mut egui::Ui, report: &Report) {
-    egui::CollapsingHeader::new(tr("Each photo")).id_salt("geotag-each").show(ui, |ui| {
-        let height = ui.text_style_height(&egui::TextStyle::Body);
-        egui::ScrollArea::vertical().max_height(180.0).auto_shrink([false, true]).show_rows(ui, height, report.matches.len(), |ui, rows| {
-            for item in &report.matches[rows] {
-                let what = match (item.kept, item.place) {
-                    (Some(Kept::Gps), _) => tr("Has GPS from the camera").to_string(),
-                    (Some(Kept::Pin), _) => tr("Pinned by hand").to_string(),
-                    (None, Some((lat, lon))) => format!("{lat:.5}, {lon:.5}"),
-                    (None, None) => tr("No track point near").to_string(),
-                };
-                let name = item.path.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
-                ui.horizontal(|ui| {
-                    ui.label(RichText::new(utc(item.time)).monospace().size(11.5).color(theme::muted()));
-                    ui.label(RichText::new(name).size(11.5));
-                    ui.label(RichText::new(what).size(11.5).color(if item.place.is_some() { theme::text() } else { theme::muted() }));
+    egui::CollapsingHeader::new(tr("Each photo"))
+        .id_salt("geotag-each")
+        .show(ui, |ui| {
+            let height = ui.text_style_height(&egui::TextStyle::Body);
+            egui::ScrollArea::vertical()
+                .max_height(180.0)
+                .auto_shrink([false, true])
+                .show_rows(ui, height, report.matches.len(), |ui, rows| {
+                    for item in &report.matches[rows] {
+                        let what = match (item.kept, item.place) {
+                            (Some(Kept::Gps), _) => tr("Has GPS from the camera").to_string(),
+                            (Some(Kept::Pin), _) => tr("Pinned by hand").to_string(),
+                            (None, Some((lat, lon))) => format!("{lat:.5}, {lon:.5}"),
+                            (None, None) => tr("No track point near").to_string(),
+                        };
+                        let name = item
+                            .path
+                            .file_name()
+                            .map(|name| name.to_string_lossy().into_owned())
+                            .unwrap_or_default();
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                RichText::new(utc(item.time))
+                                    .monospace()
+                                    .size(11.5)
+                                    .color(theme::muted()),
+                            );
+                            ui.label(RichText::new(name).size(11.5));
+                            ui.label(RichText::new(what).size(11.5).color(
+                                if item.place.is_some() {
+                                    theme::text()
+                                } else {
+                                    theme::muted()
+                                },
+                            ));
+                        });
+                    }
                 });
-            }
         });
-    });
 }
 
-fn spawn(options: geotag::Options, db_path: PathBuf, ctx: egui::Context, check: Option<String>) -> Run {
+fn spawn(
+    options: geotag::Options,
+    db_path: PathBuf,
+    ctx: egui::Context,
+    check: Option<String>,
+) -> Run {
     let (done, total) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
     let (sender, finished) = mpsc::channel();
     let (done_in, total_in) = (done.clone(), total.clone());
-    let _ = std::thread::Builder::new().name("picasso-geotag".into()).spawn(move || {
-        let db = Database::open(&db_path);
-        let progress = |count: usize, all: usize| {
-            done_in.store(count, Ordering::Relaxed);
-            total_in.store(all, Ordering::Relaxed);
+    let _ = std::thread::Builder::new()
+        .name("picasso-geotag".into())
+        .spawn(move || {
+            let db = Database::open(&db_path);
+            let progress = |count: usize, all: usize| {
+                done_in.store(count, Ordering::Relaxed);
+                total_in.store(all, Ordering::Relaxed);
+                ctx.request_repaint();
+            };
+            let mut result = geotag::run(&options, db.as_ref().ok(), &progress);
+            if let (Ok(report), Err(err)) = (&mut result, &db) {
+                report.library_error = Some(err.clone());
+            }
+            let _ = sender.send(result);
             ctx.request_repaint();
-        };
-        let mut result = geotag::run(&options, db.as_ref().ok(), &progress);
-        if let (Ok(report), Err(err)) = (&mut result, &db) {
-            report.library_error = Some(err.clone());
-        }
-        let _ = sender.send(result);
-        ctx.request_repaint();
-    });
-    Run { done, total, finished, check }
+        });
+    Run {
+        done,
+        total,
+        finished,
+        check,
+    }
 }

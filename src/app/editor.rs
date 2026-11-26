@@ -10,7 +10,10 @@ use std::time::Instant;
 use eframe::egui;
 use image::RgbaImage;
 
-use crate::edit::{self, presets, Control, EditJob, ExportOptions, Geometry, History, Kind, Options, Purpose, Settings};
+use crate::edit::{
+    self, presets, Control, EditJob, ExportOptions, Geometry, History, Kind, Options, Purpose,
+    Settings,
+};
 use crate::i18n::{tr, trf};
 use crate::photo_info::Histogram;
 use crate::types::Photo;
@@ -52,10 +55,18 @@ pub(super) const ASPECTS: [(&str, f32); 9] = [
     ("10:16", 10.0 / 16.0),
 ];
 
-pub(super) const GUIDES: [&str; 5] = ["Rule of thirds", "Golden ratio", "Grid", "Diagonals", "None"];
+pub(super) const GUIDES: [&str; 5] = [
+    "Rule of thirds",
+    "Golden ratio",
+    "Grid",
+    "Diagonals",
+    "None",
+];
 
-pub(super) const EXPORT_FORMATS: [(&str, &str); 3] = [("JPEG", "jpg"), ("PNG", "png"), ("TIFF", "tif")];
-pub(super) const EXPORT_EDGES: [Option<u32>; 5] = [None, Some(4096), Some(2048), Some(1600), Some(1080)];
+pub(super) const EXPORT_FORMATS: [(&str, &str); 3] =
+    [("JPEG", "jpg"), ("PNG", "png"), ("TIFF", "tif")];
+pub(super) const EXPORT_EDGES: [Option<u32>; 5] =
+    [None, Some(4096), Some(2048), Some(1600), Some(1080)];
 
 /// A change still under the pointer. It becomes a step once the pointer
 /// is released.
@@ -166,7 +177,9 @@ impl EditSession {
             crop: !self.uncropped(),
             adjust: true,
             clipping: self.clipping,
-            overlay: self.mask.filter(|_| self.tool == Tool::Mask && self.mask_overlay),
+            overlay: self
+                .mask
+                .filter(|_| self.tool == Tool::Mask && self.mask_overlay),
         }
     }
 
@@ -232,7 +245,11 @@ impl EditSession {
     /// constraining. `turns` is the catalog rotation in quarter turns.
     pub fn refit_crop(&self, settings: &mut Settings, turns: usize) {
         let Some(base) = &self.base else { return };
-        let canvas = edit::canvas_size(settings.get(Control::STRAIGHTEN), base.width() as f32, base.height() as f32);
+        let canvas = edit::canvas_size(
+            settings.get(Control::STRAIGHTEN),
+            base.width() as f32,
+            base.height() as f32,
+        );
         let [left, top, right, bottom] = settings.crop();
         let ratio = self
             .aspect_ratio(canvas, turns)
@@ -288,7 +305,11 @@ impl PicassoApp {
         if self.edit.as_ref().map(|session| session.id) != Some(photo.id) {
             let held = self.edit.as_mut().and_then(|session| {
                 let until = Instant::now() + super::PANEL_HOLD;
-                session.histogram.take().map(|histogram| (histogram, until)).or(session.held_histogram.take())
+                session
+                    .histogram
+                    .take()
+                    .map(|histogram| (histogram, until))
+                    .or(session.held_histogram.take())
             });
             self.end_edit_session();
             let history = self
@@ -305,9 +326,17 @@ impl PicassoApp {
             self.edit = Some(session);
         }
         let pointer_down = ctx.input(|input| input.pointer.any_down());
-        let Some(session) = self.edit.as_mut() else { return };
-        let Some(base) = session.base.clone() else { return };
-        let wanted = (session.current(), session.options(), session.live.is_some() && pointer_down);
+        let Some(session) = self.edit.as_mut() else {
+            return;
+        };
+        let Some(base) = session.base.clone() else {
+            return;
+        };
+        let wanted = (
+            session.current(),
+            session.options(),
+            session.live.is_some() && pointer_down,
+        );
         if session.requested.as_ref() != Some(&wanted) {
             session.seq += 1;
             let _ = self.edit_tx.send(EditJob::Render {
@@ -345,7 +374,9 @@ impl PicassoApp {
     }
 
     pub(super) fn end_edit_session(&mut self) {
-        let Some(session) = self.edit.take() else { return };
+        let Some(session) = self.edit.take() else {
+            return;
+        };
         if session.changed {
             self.forget_display(session.id);
         }
@@ -356,7 +387,9 @@ impl PicassoApp {
     pub(super) fn on_edit_event(&mut self, event: UiEvent, ctx: &egui::Context) {
         match event {
             UiEvent::EditBase { id, image } => {
-                let Some(session) = self.edit.as_mut().filter(|session| session.id == id) else { return };
+                let Some(session) = self.edit.as_mut().filter(|session| session.id == id) else {
+                    return;
+                };
                 session.base = Some(image);
                 session.requested = None;
                 session.before_requested = None;
@@ -375,7 +408,9 @@ impl PicassoApp {
                 rgba,
                 histogram,
             } => {
-                let Some(session) = self.edit.as_mut().filter(|session| session.id == id) else { return };
+                let Some(session) = self.edit.as_mut().filter(|session| session.id == id) else {
+                    return;
+                };
                 let slot = purpose as usize;
                 if seq <= session.shown[slot] || rgba.len() < w * h * 4 {
                     return;
@@ -392,12 +427,21 @@ impl PicassoApp {
                 };
                 match texture.as_mut() {
                     Some(texture) => texture.set(image, egui::TextureOptions::LINEAR),
-                    None => *texture = Some(ctx.load_texture(format!("edit-{id}-{slot}"), image, egui::TextureOptions::LINEAR)),
+                    None => {
+                        *texture = Some(ctx.load_texture(
+                            format!("edit-{id}-{slot}"),
+                            image,
+                            egui::TextureOptions::LINEAR,
+                        ))
+                    }
                 }
             }
             UiEvent::Exported(result) => {
                 self.activity = match result {
-                    Ok(path) => trf("Exported {}", &[&crate::types::folder_label(&path.to_string_lossy())]),
+                    Ok(path) => trf(
+                        "Exported {}",
+                        &[&crate::types::folder_label(&path.to_string_lossy())],
+                    ),
                     Err(err) => trf("Couldn't export: {}", &[&err]),
                 };
             }
@@ -414,7 +458,9 @@ impl PicassoApp {
     }
 
     pub(super) fn edit_history(&mut self, change: impl FnOnce(&mut History)) {
-        let Some(session) = self.edit.as_mut() else { return };
+        let Some(session) = self.edit.as_mut() else {
+            return;
+        };
         let before = session.history.clone();
         session.live = None;
         change(&mut session.history);
@@ -425,7 +471,9 @@ impl PicassoApp {
 
     /// Records `settings` as a step of `kind`.
     pub(super) fn edit_commit(&mut self, kind: Kind, settings: &Settings, amend: bool) {
-        let Some(session) = self.edit.as_mut() else { return };
+        let Some(session) = self.edit.as_mut() else {
+            return;
+        };
         session.live = None;
         let changed = if amend {
             session.history.amend(kind, settings)
@@ -442,14 +490,18 @@ impl PicassoApp {
         if ctx.input(|input| input.pointer.any_down()) {
             return;
         }
-        let Some(live) = self.edit.as_mut().and_then(|session| session.live.take()) else { return };
+        let Some(live) = self.edit.as_mut().and_then(|session| session.live.take()) else {
+            return;
+        };
         self.edit_commit(live.kind, &live.settings, live.amend);
         ctx.request_repaint();
     }
 
     /// Saves the steps and refreshes everything drawn from them.
     fn edit_changed(&mut self) {
-        let Some(session) = self.edit.as_mut() else { return };
+        let Some(session) = self.edit.as_mut() else {
+            return;
+        };
         session.changed = true;
         let id = session.id;
         let history = session.history.clone();
@@ -457,8 +509,12 @@ impl PicassoApp {
     }
 
     fn store_history(&mut self, id: i64, history: &History) {
-        self.db
-            .save_edit_history(id, &history.steps_json(), history.steps().len(), history.applied());
+        self.db.save_edit_history(
+            id,
+            &history.steps_json(),
+            history.steps().len(),
+            history.applied(),
+        );
         let settings = history.settings();
         if settings.is_identity() {
             self.edits.remove(&id);
@@ -487,10 +543,17 @@ impl PicassoApp {
 
     pub(super) fn set_tool(&mut self, tool: Tool) {
         if let Some(session) = self.edit.as_mut() {
-            session.tool = if session.tool == tool { Tool::Adjust } else { tool };
+            session.tool = if session.tool == tool {
+                Tool::Adjust
+            } else {
+                tool
+            };
             session.picker = false;
             session.drag = None;
-            if session.tool == Tool::Mask && session.mask.is_none() && !session.current().masks.is_empty() {
+            if session.tool == Tool::Mask
+                && session.mask.is_none()
+                && !session.current().masks.is_empty()
+            {
                 session.mask = Some(0);
             }
         }
@@ -499,7 +562,9 @@ impl PicassoApp {
     /// Esc inside the editor: leaves a tool or the eyedropper first.
     /// Returns whether the key was used.
     pub(super) fn edit_escape(&mut self) -> bool {
-        let Some(session) = self.edit.as_mut() else { return false };
+        let Some(session) = self.edit.as_mut() else {
+            return false;
+        };
         if session.picker {
             session.picker = false;
             return true;
@@ -556,8 +621,12 @@ impl PicassoApp {
     }
 
     pub(super) fn auto_tone(&mut self) {
-        let Some(session) = self.edit.as_ref() else { return };
-        let Some(base) = session.base.clone() else { return };
+        let Some(session) = self.edit.as_ref() else {
+            return;
+        };
+        let Some(base) = session.base.clone() else {
+            return;
+        };
         let mut settings = session.current();
         for (control, value) in edit::auto_tone(&base) {
             settings.set(control, value);
@@ -566,14 +635,21 @@ impl PicassoApp {
     }
 
     pub(super) fn white_balance_preset(&mut self, name: &str) {
-        let Some(session) = self.edit.as_ref() else { return };
+        let Some(session) = self.edit.as_ref() else {
+            return;
+        };
         let mut settings = session.current();
         let (kind, temperature, tint) = if name == "Auto" {
-            let Some(base) = session.base.clone() else { return };
+            let Some(base) = session.base.clone() else {
+                return;
+            };
             let (temperature, tint) = edit::auto_white_balance(&base);
             (Kind::AutoWhiteBalance, temperature, tint)
         } else {
-            let Some((_, temperature, tint)) = presets::WHITE_BALANCE.iter().find(|(preset, _, _)| *preset == name) else {
+            let Some((_, temperature, tint)) = presets::WHITE_BALANCE
+                .iter()
+                .find(|(preset, _, _)| *preset == name)
+            else {
                 return;
             };
             (Kind::WhiteBalance(name.to_string()), *temperature, *tint)
@@ -585,13 +661,18 @@ impl PicassoApp {
 
     /// Neutralizes the color under a click on the canvas, given in fractions.
     pub(super) fn pick_white_balance(&mut self, at: [f32; 2]) {
-        let Some(session) = self.edit.as_mut() else { return };
+        let Some(session) = self.edit.as_mut() else {
+            return;
+        };
         session.picker = false;
-        let Some(base) = session.base.clone() else { return };
+        let Some(base) = session.base.clone() else {
+            return;
+        };
         let mut settings = session.current();
         let (w, h) = (base.width() as f32, base.height() as f32);
         let [cw, ch] = edit::canvas_size(settings.get(Control::STRAIGHTEN), w, h);
-        let (x, y) = Geometry::from_settings(&settings).canvas_to_source(at[0] * cw, at[1] * ch, cw, ch);
+        let (x, y) =
+            Geometry::from_settings(&settings).canvas_to_source(at[0] * cw, at[1] * ch, cw, ch);
         let (temperature, tint) = edit::white_balance_for(edit::sample(&base, x / w, y / h, 3));
         settings.set(Control::TEMPERATURE, temperature);
         settings.set(Control::TINT, tint);
@@ -599,7 +680,10 @@ impl PicassoApp {
     }
 
     /// The patch of a built-in or saved preset.
-    pub(super) fn preset_patch(&self, name: &str) -> Option<serde_json::Map<String, serde_json::Value>> {
+    pub(super) fn preset_patch(
+        &self,
+        name: &str,
+    ) -> Option<serde_json::Map<String, serde_json::Value>> {
         if let Some(preset) = self.user_presets.iter().find(|preset| preset.name == name) {
             return Some(preset.patch.clone());
         }
@@ -607,15 +691,21 @@ impl PicassoApp {
     }
 
     pub(super) fn apply_preset(&mut self, name: &str) {
-        let Some(patch) = self.preset_patch(name) else { return };
-        let Some(session) = self.edit.as_mut() else { return };
+        let Some(patch) = self.preset_patch(name) else {
+            return;
+        };
+        let Some(session) = self.edit.as_mut() else {
+            return;
+        };
         session.preset_amount = 1.0;
         let settings = presets::apply(&session.current(), &patch, 1.0);
         self.edit_commit(Kind::Preset(name.to_string()), &settings, false);
     }
 
     pub(super) fn save_user_preset(&mut self, name: String) {
-        let Some(session) = self.edit.as_ref() else { return };
+        let Some(session) = self.edit.as_ref() else {
+            return;
+        };
         let name = name.trim().to_string();
         if name.is_empty() {
             return;
@@ -623,23 +713,34 @@ impl PicassoApp {
         let preset = presets::UserPreset::new(name.clone(), &session.current());
         self.user_presets.retain(|existing| existing.name != name);
         self.user_presets.push(preset);
-        self.db.set_setting("user_presets", &presets::user_presets_to_json(&self.user_presets));
+        self.db.set_setting(
+            "user_presets",
+            &presets::user_presets_to_json(&self.user_presets),
+        );
         self.activity = trf("Saved preset {}", &[&name]);
     }
 
     pub(super) fn delete_user_preset(&mut self, index: usize) {
         if index < self.user_presets.len() {
             self.user_presets.remove(index);
-            self.db.set_setting("user_presets", &presets::user_presets_to_json(&self.user_presets));
+            self.db.set_setting(
+                "user_presets",
+                &presets::user_presets_to_json(&self.user_presets),
+            );
         }
     }
 
     pub(super) fn export_edit(&mut self, ctx: &egui::Context) {
-        let Some(session) = self.edit.as_ref() else { return };
-        let Some(photo) = self.db.photo(session.id) else { return };
+        let Some(session) = self.edit.as_ref() else {
+            return;
+        };
+        let Some(photo) = self.db.photo(session.id) else {
+            return;
+        };
         let settings = session.current();
         let options = session.export;
-        let (format, extension) = EXPORT_FORMATS[session.export_format.min(EXPORT_FORMATS.len() - 1)];
+        let (format, extension) =
+            EXPORT_FORMATS[session.export_format.min(EXPORT_FORMATS.len() - 1)];
         let source = PathBuf::from(&photo.path);
         let folder = PathBuf::from(photo.path.trim_start_matches(r"\\?\"));
         let name = PathBuf::from(edit::export_name(&source)).with_extension(extension);
@@ -650,16 +751,24 @@ impl PicassoApp {
         if let Some(dir) = folder.parent() {
             dialog = dialog.set_directory(dir);
         }
-        let Some(target) = dialog.save_file() else { return };
-        self.activity = trf("Exporting {}…", &[&crate::types::folder_label(&target.to_string_lossy())]);
+        let Some(target) = dialog.save_file() else {
+            return;
+        };
+        self.activity = trf(
+            "Exporting {}…",
+            &[&crate::types::folder_label(&target.to_string_lossy())],
+        );
         let events = self.events_tx.clone();
         let ctx = ctx.clone();
         let rotation = photo.rotation;
-        let _ = std::thread::Builder::new().name("picasso-export".into()).spawn(move || {
-            let result = edit::export(&source, &target, &settings, rotation, options).map(|()| target);
-            let _ = events.send(UiEvent::Exported(result));
-            ctx.request_repaint();
-        });
+        let _ = std::thread::Builder::new()
+            .name("picasso-export".into())
+            .spawn(move || {
+                let result =
+                    edit::export(&source, &target, &settings, rotation, options).map(|()| target);
+                let _ = events.send(UiEvent::Exported(result));
+                ctx.request_repaint();
+            });
     }
 
     pub(super) fn forget_thumb(&mut self, id: i64) {

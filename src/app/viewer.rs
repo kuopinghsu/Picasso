@@ -4,7 +4,9 @@ use eframe::egui::{self, Align2, Color32, FontId, Pos2, Rect, Sense, Stroke, Vec
 
 use crate::i18n::{tr, trf};
 use crate::photo_info::Histogram;
-use crate::types::{displayed_size, folder_label, format_bytes, format_duration, format_timestamp, Photo};
+use crate::types::{
+    displayed_size, folder_label, format_bytes, format_duration, format_timestamp, Photo,
+};
 use crate::video::Player;
 
 use super::theme::{self, WHITE};
@@ -30,7 +32,9 @@ impl PicassoApp {
         let photo = self.photos.get(self.viewer_index).cloned();
         let current = photo.clone().filter(|photo| photo.is_video() && !slideshow);
         self.sync_video(ui.ctx(), current.as_ref());
-        let editable = photo.clone().filter(|photo| !photo.is_video() && !slideshow);
+        let editable = photo
+            .clone()
+            .filter(|photo| !photo.is_video() && !slideshow);
         self.sync_edit(ui.ctx(), editable.as_ref());
         self.viewer_bar(ui, slideshow);
         let film_h = 96.0;
@@ -45,10 +49,15 @@ impl PicassoApp {
         };
         let stage_h = (ui.available_height() - film_h - controls_h).max(120.0);
         ui.horizontal(|ui| {
-            let gap = if side_w > 0.0 { ui.spacing().item_spacing.x } else { 0.0 };
+            let gap = if side_w > 0.0 {
+                ui.spacing().item_spacing.x
+            } else {
+                0.0
+            };
             let stage_w = (ui.available_width() - side_w - gap).max(80.0);
             ui.vertical(|ui| {
-                let (stage_rect, _) = ui.allocate_exact_size(Vec2::new(stage_w, stage_h), Sense::hover());
+                let (stage_rect, _) =
+                    ui.allocate_exact_size(Vec2::new(stage_w, stage_h), Sense::hover());
                 self.paint_stage(ui, stage_rect, slideshow);
                 if self.video.is_some() {
                     ui.allocate_ui(Vec2::new(stage_w, controls_h), |ui| self.video_controls(ui));
@@ -79,13 +88,20 @@ impl PicassoApp {
             });
         }
         let mixer = self.audio_out.as_ref().map(|sink| sink.mixer());
-        let Some(view) = self.video.as_mut() else { return };
+        let Some(view) = self.video.as_mut() else {
+            return;
+        };
         if let Some(frame) = view.player.tick(mixer) {
-            let image = egui::ColorImage::from_rgba_unmultiplied([frame.width, frame.height], &frame.rgba);
+            let image =
+                egui::ColorImage::from_rgba_unmultiplied([frame.width, frame.height], &frame.rgba);
             match view.texture.as_mut() {
                 Some(texture) => texture.set(image, egui::TextureOptions::LINEAR),
                 None => {
-                    view.texture = Some(ctx.load_texture(format!("video-{}", photo.id), image, egui::TextureOptions::LINEAR));
+                    view.texture = Some(ctx.load_texture(
+                        format!("video-{}", photo.id),
+                        image,
+                        egui::TextureOptions::LINEAR,
+                    ));
                 }
             }
         }
@@ -98,22 +114,35 @@ impl PicassoApp {
     pub(super) fn open_audio(&mut self) {
         if !self.audio_tried {
             self.audio_tried = true;
-            self.audio_out = rodio::DeviceSinkBuilder::open_default_sink().ok().map(|mut sink| {
-                sink.log_on_drop(false);
-                sink
-            });
+            self.audio_out = rodio::DeviceSinkBuilder::open_default_sink()
+                .ok()
+                .map(|mut sink| {
+                    sink.log_on_drop(false);
+                    sink
+                });
         }
     }
 
     fn video_controls(&mut self, ui: &mut egui::Ui) {
-        let Some(view) = self.video.as_mut() else { return };
-        let bar = egui::Frame::new().fill(theme::toolbar()).inner_margin(egui::Margin::symmetric(12, 6));
+        let Some(view) = self.video.as_mut() else {
+            return;
+        };
+        let bar = egui::Frame::new()
+            .fill(theme::toolbar())
+            .inner_margin(egui::Margin::symmetric(12, 6));
         bar.show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.horizontal(|ui| {
                 let playing = view.player.playing();
-                let icon = if playing { Control::Pause } else { Control::Play };
-                if control_button(ui, icon).on_hover_text(tr("Play / Pause (Space)")).clicked() {
+                let icon = if playing {
+                    Control::Pause
+                } else {
+                    Control::Play
+                };
+                if control_button(ui, icon)
+                    .on_hover_text(tr("Play / Pause (Space)"))
+                    .clicked()
+                {
                     view.player.toggle();
                 }
                 let duration = view.player.duration();
@@ -124,11 +153,21 @@ impl PicassoApp {
                     if view.player.has_audio() {
                         ui.spacing_mut().slider_width = 80.0;
                         let mut volume = view.player.volume();
-                        if ui.add(egui::Slider::new(&mut volume, 0.0..=1.0).show_value(false)).changed() {
+                        if ui
+                            .add(egui::Slider::new(&mut volume, 0.0..=1.0).show_value(false))
+                            .changed()
+                        {
                             view.player.set_volume(volume);
                         }
-                        let icon = if view.player.muted() { Control::Muted } else { Control::Sound };
-                        if control_button(ui, icon).on_hover_text(tr("Mute (M)")).clicked() {
+                        let icon = if view.player.muted() {
+                            Control::Muted
+                        } else {
+                            Control::Sound
+                        };
+                        if control_button(ui, icon)
+                            .on_hover_text(tr("Mute (M)"))
+                            .clicked()
+                        {
                             view.player.toggle_mute();
                         }
                     }
@@ -142,19 +181,34 @@ impl PicassoApp {
     }
 
     fn viewer_bar(&mut self, ui: &mut egui::Ui, slideshow: bool) {
-        let bar = egui::Frame::new().fill(theme::toolbar()).inner_margin(egui::Margin::symmetric(12, 8));
+        let bar = egui::Frame::new()
+            .fill(theme::toolbar())
+            .inner_margin(egui::Margin::symmetric(12, 8));
         bar.show(ui, |ui| {
             ui.horizontal(|ui| {
-                if ui.button(tr("‹  Library")).on_hover_text(tr("Return to organized thumbnails")).clicked() {
+                if ui
+                    .button(tr("‹  Library"))
+                    .on_hover_text(tr("Return to organized thumbnails"))
+                    .clicked()
+                {
                     self.close_viewer();
                 }
                 ui.add_space(6.0);
                 let heading = self.viewer_heading();
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let dark = theme::is_dark();
-                    let tip = if dark { "Switch to the light theme" } else { "Switch to the dark theme" };
+                    let tip = if dark {
+                        "Switch to the light theme"
+                    } else {
+                        "Switch to the dark theme"
+                    };
                     let toggle = ui.button("     ");
-                    theme::paint_theme_icon(ui.painter(), toggle.rect.center(), !dark, theme::text());
+                    theme::paint_theme_icon(
+                        ui.painter(),
+                        toggle.rect.center(),
+                        !dark,
+                        theme::text(),
+                    );
                     if toggle.on_hover_text(tr(tip)).clicked() {
                         self.toggle_theme(ui.ctx());
                     }
@@ -164,31 +218,53 @@ impl PicassoApp {
                         self.modal = super::Modal::Help;
                     }
                     self.viewer_more_menu(ui);
-                    if ui.button(tr(if slideshow { "Exit Slideshow" } else { "Slideshow" })).clicked() {
+                    if ui
+                        .button(tr(if slideshow {
+                            "Exit Slideshow"
+                        } else {
+                            "Slideshow"
+                        }))
+                        .clicked()
+                    {
                         if slideshow {
                             self.slideshow = None;
                         } else {
                             self.start_slideshow();
                         }
                     }
-                    if ui.button(tr("Info")).on_hover_text(tr("Details, histogram, and EXIF (I)")).clicked() {
+                    if ui
+                        .button(tr("Info"))
+                        .on_hover_text(tr("Details, histogram, and EXIF (I)"))
+                        .clicked()
+                    {
                         self.toggle_info();
                     }
-                    let video = self.photos.get(self.viewer_index).is_some_and(Photo::is_video);
+                    let video = self
+                        .photos
+                        .get(self.viewer_index)
+                        .is_some_and(Photo::is_video);
                     if !slideshow && !video {
                         let edit = ui
                             .add(egui::Button::new(tr("Edit")).selected(self.editing))
-                            .on_hover_text(tr("Adjust light and color without changing the original (E)"));
+                            .on_hover_text(tr(
+                                "Adjust light and color without changing the original (E)",
+                            ));
                         if edit.clicked() {
                             self.toggle_editing();
                         }
                     }
                     let rotate = theme::icon_button(ui, theme::Icon::RotateRight, true, false);
-                    if rotate.on_hover_text(tr("Rotate clockwise (Ctrl+])")).clicked() {
+                    if rotate
+                        .on_hover_text(tr("Rotate clockwise (Ctrl+])"))
+                        .clicked()
+                    {
                         self.rotate_current(90);
                     }
                     let rotate = theme::icon_button(ui, theme::Icon::RotateLeft, true, false);
-                    if rotate.on_hover_text(tr("Rotate counterclockwise (Ctrl+[)")).clicked() {
+                    if rotate
+                        .on_hover_text(tr("Rotate counterclockwise (Ctrl+[)"))
+                        .clicked()
+                    {
                         self.rotate_current(-90);
                     }
                     if let Some(photo) = self.photos.get(self.viewer_index) {
@@ -200,29 +276,49 @@ impl PicassoApp {
                             Some(ZoomPick::Out) => self.zoom_keys(1.0 / 1.25),
                             Some(ZoomPick::In) => self.zoom_keys(1.25),
                             Some(ZoomPick::Switch) => {
-                                self.zoom = if fit { Zoom::Scale(1.0 / ui.ctx().pixels_per_point()) } else { Zoom::Fit };
+                                self.zoom = if fit {
+                                    Zoom::Scale(1.0 / ui.ctx().pixels_per_point())
+                                } else {
+                                    Zoom::Fit
+                                };
                                 self.pan = Vec2::ZERO;
                             }
                             None => {}
                         }
                     }
-                    let starred = self.photos.get(self.viewer_index).map(|p| p.starred).unwrap_or(false);
-                    let star = egui::RichText::new(if starred { "★" } else { "☆" }).color(if starred { theme::STAR } else { theme::text() });
-                    if ui.button(star).on_hover_text(tr("Add/Remove Star")).clicked() {
+                    let starred = self
+                        .photos
+                        .get(self.viewer_index)
+                        .map(|p| p.starred)
+                        .unwrap_or(false);
+                    let star = egui::RichText::new(if starred { "★" } else { "☆" })
+                        .color(if starred { theme::STAR } else { theme::text() });
+                    if ui
+                        .button(star)
+                        .on_hover_text(tr("Add/Remove Star"))
+                        .clicked()
+                    {
                         if let Some(id) = self.photos.get(self.viewer_index).map(|p| p.id) {
                             self.toggle_star(id);
                         }
                     }
                     if slideshow {
                         let playing = self.slideshow.as_ref().map(|s| s.playing).unwrap_or(false);
-                        if ui.button(tr(if playing { "Pause" } else { "Play" })).clicked() {
+                        if ui
+                            .button(tr(if playing { "Pause" } else { "Play" }))
+                            .clicked()
+                        {
                             if let Some(show) = self.slideshow.as_mut() {
                                 show.playing = !show.playing;
                                 show.last = std::time::Instant::now();
                             }
                         }
                         let mut interval = self.slideshow_interval;
-                        let response = ui.add(egui::Slider::new(&mut interval, 1.0..=15.0).suffix(" s").fixed_decimals(0));
+                        let response = ui.add(
+                            egui::Slider::new(&mut interval, 1.0..=15.0)
+                                .suffix(" s")
+                                .fixed_decimals(0),
+                        );
                         self.set_slideshow_interval(interval, &response);
                         let shuffle = ui
                             .add(egui::Button::new(tr("Shuffle")).selected(self.slideshow_shuffle))
@@ -234,7 +330,8 @@ impl PicassoApp {
                     // The title takes what the buttons leave, shortened with "…".
                     ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                         let title = egui::RichText::new(&heading).color(theme::text()).strong();
-                        ui.add(egui::Label::new(title).truncate()).on_hover_text(&heading);
+                        ui.add(egui::Label::new(title).truncate())
+                            .on_hover_text(&heading);
                     });
                 });
             });
@@ -254,11 +351,16 @@ impl PicassoApp {
             if ui.button(tr("Show on map")).clicked() {
                 self.show_on_map(photo.id);
             }
-            if ui.button(tr("Open in OpenStreetMap")).on_hover_text(tr("Open this photo in OpenStreetMap")).clicked() {
-                let (lat, lon, zoom) = photo
-                    .place()
-                    .map(|(lat, lon)| (lat, lon, 14))
-                    .unwrap_or((self.map_lat, self.map_lon, self.map_zoom.max(2)));
+            if ui
+                .button(tr("Open in OpenStreetMap"))
+                .on_hover_text(tr("Open this photo in OpenStreetMap"))
+                .clicked()
+            {
+                let (lat, lon, zoom) = photo.place().map(|(lat, lon)| (lat, lon, 14)).unwrap_or((
+                    self.map_lat,
+                    self.map_lon,
+                    self.map_zoom.max(2),
+                ));
                 super::places::open_osm(lat, lon, zoom);
             }
             if ui.button(tr("Open with default app")).clicked() {
@@ -309,29 +411,68 @@ fn zoom_control(ui: &mut egui::Ui, pct: f32, fit: bool) -> Option<ZoomPick> {
     let (rect, _) = ui.allocate_exact_size(Vec2::new(SIDE * 2.0 + LEVEL, height), Sense::hover());
     let painter = ui.painter().clone();
     let widgets = ui.visuals().widgets.clone();
-    painter.rect(rect, theme::RADIUS, widgets.inactive.weak_bg_fill, widgets.inactive.bg_stroke, egui::StrokeKind::Inside);
+    painter.rect(
+        rect,
+        theme::RADIUS,
+        widgets.inactive.weak_bg_fill,
+        widgets.inactive.bg_stroke,
+        egui::StrokeKind::Inside,
+    );
     let parts = [
-        (Rect::from_min_size(rect.min, Vec2::new(SIDE, height)), ZoomPick::Out, "−".to_string(), "Zoom out"),
+        (
+            Rect::from_min_size(rect.min, Vec2::new(SIDE, height)),
+            ZoomPick::Out,
+            "−".to_string(),
+            "Zoom out",
+        ),
         (
             Rect::from_min_size(rect.min + Vec2::new(SIDE, 0.0), Vec2::new(LEVEL, height)),
             ZoomPick::Switch,
             format!("{pct:.0}%"),
             if fit { "Actual size" } else { "Fit" },
         ),
-        (Rect::from_min_size(rect.min + Vec2::new(SIDE + LEVEL, 0.0), Vec2::new(SIDE, height)), ZoomPick::In, "+".to_string(), "Zoom in"),
+        (
+            Rect::from_min_size(
+                rect.min + Vec2::new(SIDE + LEVEL, 0.0),
+                Vec2::new(SIDE, height),
+            ),
+            ZoomPick::In,
+            "+".to_string(),
+            "Zoom in",
+        ),
     ];
     let mut picked = None;
     for (index, (part, pick, label, hint)) in parts.into_iter().enumerate() {
-        let response = ui.interact(part, egui::Id::unique(("zoom-control", index)), Sense::click());
+        let response = ui.interact(
+            part,
+            egui::Id::unique(("zoom-control", index)),
+            Sense::click(),
+        );
         if response.hovered() {
-            painter.rect_filled(part.shrink(2.0), theme::RADIUS - 2, widgets.hovered.weak_bg_fill);
+            painter.rect_filled(
+                part.shrink(2.0),
+                theme::RADIUS - 2,
+                widgets.hovered.weak_bg_fill,
+            );
         }
         if index > 0 {
             let x = part.left();
-            painter.line_segment([Pos2::new(x, part.top() + 5.0), Pos2::new(x, part.bottom() - 5.0)], Stroke::new(1.0, theme::hairline()));
+            painter.line_segment(
+                [
+                    Pos2::new(x, part.top() + 5.0),
+                    Pos2::new(x, part.bottom() - 5.0),
+                ],
+                Stroke::new(1.0, theme::hairline()),
+            );
         }
         let size = if index == 1 { 12.5 } else { 15.0 };
-        painter.text(part.center(), Align2::CENTER_CENTER, label, FontId::proportional(size), theme::text());
+        painter.text(
+            part.center(),
+            Align2::CENTER_CENTER,
+            label,
+            FontId::proportional(size),
+            theme::text(),
+        );
         if response.on_hover_text(tr(hint)).clicked() {
             picked = Some(pick);
         }
@@ -353,10 +494,14 @@ impl PicassoApp {
         let response = ui.interact(stage, egui::Id::unique("stage"), Sense::click_and_drag());
         let video = self.video.as_ref().filter(|view| view.id == photo.id);
         let video_frame = video.and_then(|view| view.texture.clone());
-        let editing = self.edit.as_ref().is_some_and(|session| session.id == photo.id);
+        let editing = self
+            .edit
+            .as_ref()
+            .is_some_and(|session| session.id == photo.id);
         self.drop_sharp(Some(photo.id));
         if !editing && !slideshow {
-            let (ppp, max_side) = ui.input(|input| (input.pixels_per_point, input.max_texture_side));
+            let (ppp, max_side) =
+                ui.input(|input| (input.pixels_per_point, input.max_texture_side));
             self.request_sharp(self.viewer_index, size * ppp, max_side);
         }
         // A zoomed photo is larger than the stage; keep it off the toolbar,
@@ -387,7 +532,8 @@ impl PicassoApp {
 
         if response.hovered() {
             // Ctrl+wheel and trackpad pinches arrive as a zoom factor.
-            let (scroll, pinch) = ui.input(|input| (input.smooth_scroll_delta.y, input.zoom_delta()));
+            let (scroll, pinch) =
+                ui.input(|input| (input.smooth_scroll_delta.y, input.zoom_delta()));
             let mut factor = pinch;
             if scroll.abs() > 0.1 {
                 factor *= (scroll * 0.002).exp();
@@ -404,7 +550,8 @@ impl PicassoApp {
         if let Some(view) = self.video.as_mut().filter(|view| view.id == photo.id) {
             if let Some(error) = view.player.error() {
                 let painter = ui.painter();
-                let galley = painter.layout_no_wrap(error.to_string(), FontId::proportional(14.0), WHITE);
+                let galley =
+                    painter.layout_no_wrap(error.to_string(), FontId::proportional(14.0), WHITE);
                 let pill = Rect::from_center_size(
                     Pos2::new(stage.center().x, stage.bottom() - 40.0),
                     galley.size() + Vec2::new(28.0, 16.0),
@@ -436,12 +583,20 @@ impl PicassoApp {
         // The arrows take the hover from the stage once the pointer is on
         // them, so they key off the pointer position rather than `hovered`.
         let handles = self.edit.as_ref().is_some_and(|session| {
-            session.id == photo.id && matches!(session.tool, super::editor::Tool::Crop | super::editor::Tool::Transform | super::editor::Tool::Mask)
+            session.id == photo.id
+                && matches!(
+                    session.tool,
+                    super::editor::Tool::Crop
+                        | super::editor::Tool::Transform
+                        | super::editor::Tool::Mask
+                )
         });
         if (ui.rect_contains_pointer(stage) && !handles) || slideshow {
             let mid_y = stage.center().y;
-            let left = Rect::from_center_size(Pos2::new(stage.left() + 36.0, mid_y), Vec2::splat(44.0));
-            let right = Rect::from_center_size(Pos2::new(stage.right() - 36.0, mid_y), Vec2::splat(44.0));
+            let left =
+                Rect::from_center_size(Pos2::new(stage.left() + 36.0, mid_y), Vec2::splat(44.0));
+            let right =
+                Rect::from_center_size(Pos2::new(stage.right() - 36.0, mid_y), Vec2::splat(44.0));
             if self.viewer_index > 0 && chevron(ui, left, "‹") {
                 self.viewer_step(-1);
             }
@@ -459,13 +614,24 @@ impl PicassoApp {
         if from == current || t >= 1.0 {
             return None;
         }
-        let photo = self.index_of(from).and_then(|index| self.photos.get(index))?.clone();
-        let (texture, ..) = self.display_texture(from).or_else(|| self.thumb_texture(from))?;
+        let photo = self
+            .index_of(from)
+            .and_then(|index| self.photos.get(index))?
+            .clone();
+        let (texture, ..) = self
+            .display_texture(from)
+            .or_else(|| self.thumb_texture(from))?;
         let (w, h) = self.shown_size(&photo);
         let scale = self.scale_for(w, h, stage.size());
         let mut faded = painter.clone();
         faded.set_opacity(1.0 - t);
-        theme::paint_image(&faded, &texture, Rect::from_center_size(stage.center(), Vec2::new(w * scale, h * scale)), full_uv(), photo.rotation);
+        theme::paint_image(
+            &faded,
+            &texture,
+            Rect::from_center_size(stage.center(), Vec2::new(w * scale, h * scale)),
+            full_uv(),
+            photo.rotation,
+        );
         Some(t)
     }
 
@@ -482,7 +648,9 @@ impl PicassoApp {
     }
 
     fn info_panel(&mut self, ui: &mut egui::Ui, height: f32) {
-        let frame = egui::Frame::new().fill(theme::sidebar()).inner_margin(egui::Margin::same(12));
+        let frame = egui::Frame::new()
+            .fill(theme::sidebar())
+            .inner_margin(egui::Margin::same(12));
         frame.show(ui, |ui| {
             ui.set_min_size(Vec2::new(256.0, height - 24.0));
             ui.set_max_width(256.0);
@@ -492,7 +660,9 @@ impl PicassoApp {
                 .auto_shrink([false, false])
                 .max_height((height - 24.0 - super::side::ACTION_BAR).max(80.0))
                 .show(ui, |ui| {
-                    ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| self.info_contents(ui));
+                    ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
+                        self.info_contents(ui)
+                    });
                 });
             if let Some(photo) = self.photos.get(self.viewer_index).cloned() {
                 self.photo_actions(ui, &photo);
@@ -514,18 +684,35 @@ impl PicassoApp {
         let mut rows = vec![
             ("File", photo.filename.clone()),
             ("Taken", format_timestamp(photo.taken_at)),
-            ("Size", format!("{} × {}   {}", w as u32, h as u32, format_bytes(photo.bytes))),
+            (
+                "Size",
+                format!(
+                    "{} × {}   {}",
+                    w as u32,
+                    h as u32,
+                    format_bytes(photo.bytes)
+                ),
+            ),
         ];
         if photo.modified_at != photo.taken_at {
             rows.insert(2, ("Modified", format_timestamp(photo.modified_at)));
         }
         if photo.rotation != 0 {
-            rows.push(("Rotated", trf("{}° clockwise in Picasso", &[&photo.rotation])));
+            rows.push((
+                "Rotated",
+                trf("{}° clockwise in Picasso", &[&photo.rotation]),
+            ));
         }
-        if let Some(folder) = self.folders.iter().find(|folder| folder.id == photo.folder_id) {
+        if let Some(folder) = self
+            .folders
+            .iter()
+            .find(|folder| folder.id == photo.folder_id)
+        {
             rows.push(("Folder", folder_label(&folder.path)));
         }
-        super::photo_meta::card(ui, tr("Details"), |ui| super::photo_meta::grid(ui, ("details", photo.id, ""), &rows));
+        super::photo_meta::card(ui, tr("Details"), |ui| {
+            super::photo_meta::grid(ui, ("details", photo.id, ""), &rows)
+        });
 
         let exif = info.as_ref().map(|(_, rows)| rows.as_slice());
         super::side::exif_card(ui, &photo, exif);
@@ -534,7 +721,13 @@ impl PicassoApp {
 
         let mut changed = false;
         super::photo_meta::card(ui, tr("Caption"), |ui| {
-            changed = ui.add(egui::TextEdit::multiline(&mut self.caption_buf).desired_rows(3).desired_width(f32::INFINITY)).changed();
+            changed = ui
+                .add(
+                    egui::TextEdit::multiline(&mut self.caption_buf)
+                        .desired_rows(3)
+                        .desired_width(f32::INFINITY),
+                )
+                .changed();
         });
         if changed {
             self.db.set_caption(photo.id, &self.caption_buf);
@@ -546,14 +739,18 @@ impl PicassoApp {
     }
 
     fn filmstrip(&mut self, ui: &mut egui::Ui, height: f32) {
-        let bg = egui::Frame::new().fill(theme::toolbar()).inner_margin(egui::Margin::same(8));
+        let bg = egui::Frame::new()
+            .fill(theme::toolbar())
+            .inner_margin(egui::Margin::same(8));
         bg.show(ui, |ui| {
             let cell = 72.0;
             let gap = 6.0;
             let count = self.photos.len();
             let current = self.viewer_index;
             let step = cell + gap;
-            let mut area = egui::ScrollArea::horizontal().id_salt("filmstrip").auto_shrink([false, false]);
+            let mut area = egui::ScrollArea::horizontal()
+                .id_salt("filmstrip")
+                .auto_shrink([false, false]);
             // Scrolled only when another photo becomes current and is not
             // already in full view, so a click on a thumbnail leaves the
             // strip where it is.
@@ -562,7 +759,8 @@ impl PicassoApp {
                 self.film_shown = current_id;
                 let (left, width) = (current as f32 * step, ui.available_width());
                 if left < self.film_offset || left + cell > self.film_offset + width {
-                    area = area.horizontal_scroll_offset((left + cell / 2.0 - width / 2.0).max(0.0));
+                    area =
+                        area.horizontal_scroll_offset((left + cell / 2.0 - width / 2.0).max(0.0));
                 }
             }
             let output = area.show_viewport(ui, |ui, viewport| {
@@ -572,15 +770,26 @@ impl PicassoApp {
                 let last = ((viewport.max.x / step).ceil() as usize + 1).min(count);
                 let origin = ui.min_rect().min;
                 for index in first..last {
-                    let rect = Rect::from_min_size(origin + Vec2::new(index as f32 * step, 0.0), Vec2::new(cell, cell * 0.75));
+                    let rect = Rect::from_min_size(
+                        origin + Vec2::new(index as f32 * step, 0.0),
+                        Vec2::new(cell, cell * 0.75),
+                    );
                     let id = self.photos[index].id;
                     let path = self.photos[index].path.clone();
                     let rotation = self.photos[index].rotation;
                     let is_video = self.photos[index].is_video();
                     self.ensure_thumb(id, &path);
-                    let response = ui.interact(rect, egui::Id::unique(("film", id)), Sense::click());
+                    let response =
+                        ui.interact(rect, egui::Id::unique(("film", id)), Sense::click());
                     if let Some((texture, w, h)) = self.thumb_texture(id) {
-                        theme::paint_image_rounded(ui.painter(), &texture, rect, theme::cover_uv(w, h), rotation, 5.0);
+                        theme::paint_image_rounded(
+                            ui.painter(),
+                            &texture,
+                            rect,
+                            theme::cover_uv(w, h),
+                            rotation,
+                            5.0,
+                        );
                     } else {
                         ui.painter().rect_filled(rect, 5, theme::placeholder());
                     }
@@ -588,13 +797,23 @@ impl PicassoApp {
                         paint_play_button(ui.painter(), rect.center(), 11.0);
                     }
                     if index != current && !response.hovered() {
-                        ui.painter().rect_filled(rect, 5, Color32::from_black_alpha(110));
+                        ui.painter()
+                            .rect_filled(rect, 5, Color32::from_black_alpha(110));
                     }
                     if self.edits.contains_key(&id) {
-                        theme::paint_edit_mark(ui.painter(), rect.right_top() + Vec2::new(-10.0, 10.0), 7.5);
+                        theme::paint_edit_mark(
+                            ui.painter(),
+                            rect.right_top() + Vec2::new(-10.0, 10.0),
+                            7.5,
+                        );
                     }
                     if index == current {
-                        ui.painter().rect_stroke(rect, 6, egui::Stroke::new(2.0, theme::accent()), egui::StrokeKind::Outside);
+                        ui.painter().rect_stroke(
+                            rect,
+                            6,
+                            egui::Stroke::new(2.0, theme::accent()),
+                            egui::StrokeKind::Outside,
+                        );
                     }
                     if response.clicked() {
                         self.set_index(index, true);
@@ -617,7 +836,14 @@ impl PicassoApp {
         }
     }
 
-    pub(super) fn zoom_at(&mut self, factor: f32, pointer: Pos2, stage: Rect, img_w: f32, img_h: f32) {
+    pub(super) fn zoom_at(
+        &mut self,
+        factor: f32,
+        pointer: Pos2,
+        stage: Rect,
+        img_w: f32,
+        img_h: f32,
+    ) {
         let old = self.scale_for(img_w, img_h, stage.size()).max(0.0001);
         let new = (old * factor).clamp(0.02, 12.0);
         let rel = (pointer - stage.center()) - self.pan;
@@ -656,16 +882,24 @@ impl PicassoApp {
         } else {
             photo.caption.clone()
         };
-        format!("{name}    {}", trf("{} of {}", &[&(self.viewer_index + 1), &self.photos.len()]))
+        format!(
+            "{name}    {}",
+            trf("{} of {}", &[&(self.viewer_index + 1), &self.photos.len()])
+        )
     }
 }
 
 fn chevron(ui: &mut egui::Ui, rect: Rect, glyph: &str) -> bool {
     let response = ui
-        .interact(rect, egui::Id::unique(("chev", glyph, rect.left() as i32)), Sense::click())
+        .interact(
+            rect,
+            egui::Id::unique(("chev", glyph, rect.left() as i32)),
+            Sense::click(),
+        )
         .on_hover_cursor(egui::CursorIcon::PointingHand);
     let alpha = if response.hovered() { 170 } else { 90 };
-    ui.painter().circle_filled(rect.center(), 20.0, Color32::from_black_alpha(alpha));
+    ui.painter()
+        .circle_filled(rect.center(), 20.0, Color32::from_black_alpha(alpha));
     ui.painter().text(
         rect.center() + Vec2::new(0.0, -2.0),
         Align2::CENTER_CENTER,
@@ -698,12 +932,20 @@ pub(super) fn control_button(ui: &mut egui::Ui, control: Control) -> egui::Respo
         Control::Play => paint_triangle(painter, c, 7.0, ink),
         Control::Pause => {
             for dx in [-3.5, 3.5] {
-                painter.rect_filled(Rect::from_center_size(c + Vec2::new(dx, 0.0), Vec2::new(3.5, 13.0)), 1, ink);
+                painter.rect_filled(
+                    Rect::from_center_size(c + Vec2::new(dx, 0.0), Vec2::new(3.5, 13.0)),
+                    1,
+                    ink,
+                );
             }
         }
         Control::Sound | Control::Muted => {
             let speaker = c + Vec2::new(-4.0, 0.0);
-            painter.rect_filled(Rect::from_center_size(speaker + Vec2::new(-3.0, 0.0), Vec2::new(4.0, 6.0)), 1, ink);
+            painter.rect_filled(
+                Rect::from_center_size(speaker + Vec2::new(-3.0, 0.0), Vec2::new(4.0, 6.0)),
+                1,
+                ink,
+            );
             painter.add(egui::Shape::convex_polygon(
                 vec![
                     speaker + Vec2::new(-1.0, -3.0),
@@ -749,16 +991,34 @@ fn paint_triangle(painter: &egui::Painter, center: Pos2, size: f32, color: Color
 
 pub(super) fn paint_play_button(painter: &egui::Painter, center: Pos2, radius: f32) {
     painter.circle_filled(center, radius, Color32::from_black_alpha(140));
-    painter.circle_stroke(center, radius, egui::Stroke::new(2.0, Color32::from_white_alpha(200)));
-    paint_triangle(painter, center + Vec2::new(radius * 0.08, 0.0), radius * 0.38, WHITE);
+    painter.circle_stroke(
+        center,
+        radius,
+        egui::Stroke::new(2.0, Color32::from_white_alpha(200)),
+    );
+    paint_triangle(
+        painter,
+        center + Vec2::new(radius * 0.08, 0.0),
+        radius * 0.38,
+        WHITE,
+    );
 }
 
 /// Time line of the video. Returns where to seek once the user clicks or
 /// lets go of the knob.
-fn seek_bar(ui: &mut egui::Ui, width: f32, position: f64, duration: f64, scrub: &mut Option<f64>) -> Option<f64> {
+fn seek_bar(
+    ui: &mut egui::Ui,
+    width: f32,
+    position: f64,
+    duration: f64,
+    scrub: &mut Option<f64>,
+) -> Option<f64> {
     let (rect, response) = ui.allocate_exact_size(Vec2::new(width, 24.0), Sense::click_and_drag());
     let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
-    let track = Rect::from_center_size(rect.center(), Vec2::new((rect.width() - 14.0).max(10.0), 4.0));
+    let track = Rect::from_center_size(
+        rect.center(),
+        Vec2::new((rect.width() - 14.0).max(10.0), 4.0),
+    );
     let at = |x: f32| ((x - track.left()) / track.width()).clamp(0.0, 1.0) as f64 * duration;
     let pointer = response.interact_pointer_pos();
     if response.dragged() {
@@ -773,10 +1033,17 @@ fn seek_bar(ui: &mut egui::Ui, width: f32, position: f64, duration: f64, scrub: 
         seek = pointer.map(|pos| at(pos.x));
     }
     let shown = scrub.unwrap_or(position);
-    let fraction = if duration > 0.0 { (shown / duration).clamp(0.0, 1.0) as f32 } else { 0.0 };
+    let fraction = if duration > 0.0 {
+        (shown / duration).clamp(0.0, 1.0) as f32
+    } else {
+        0.0
+    };
     let painter = ui.painter();
     painter.rect_filled(track, 2, theme::overlay(50));
-    let played = Rect::from_min_max(track.min, Pos2::new(track.left() + track.width() * fraction, track.bottom()));
+    let played = Rect::from_min_max(
+        track.min,
+        Pos2::new(track.left() + track.width() * fraction, track.bottom()),
+    );
     painter.rect_filled(played, 2, theme::accent());
     let knob = Pos2::new(played.right(), track.center().y);
     let grow = response.hovered() || scrub.is_some();
@@ -792,7 +1059,8 @@ const HISTOGRAM_H: f32 = 96.0;
 /// Draws luminance as a filled gray area with the red, green, and blue
 /// channels as lines on top, plus the share of clipped shadows and highlights.
 pub(super) fn paint_histogram(ui: &mut egui::Ui, histogram: &Histogram) {
-    let (rect, response) = ui.allocate_exact_size(Vec2::new(ui.available_width(), HISTOGRAM_H), Sense::hover());
+    let (rect, response) =
+        ui.allocate_exact_size(Vec2::new(ui.available_width(), HISTOGRAM_H), Sense::hover());
     let painter = ui.painter_at(rect);
     painter.rect_filled(rect, 2, theme::well());
     let plot = rect.shrink2(Vec2::new(3.0, 4.0));
@@ -801,7 +1069,11 @@ pub(super) fn paint_histogram(ui: &mut egui::Ui, histogram: &Histogram) {
     let y_at = |count: u32| plot.bottom() - plot.height() * (count as f32 / peak).min(1.0);
 
     let mut mesh = egui::Mesh::default();
-    let fill = if theme::is_dark() { Color32::from_gray(0x9A) } else { Color32::from_gray(0xB4) };
+    let fill = if theme::is_dark() {
+        Color32::from_gray(0x9A)
+    } else {
+        Color32::from_gray(0xB4)
+    };
     for (bin, &count) in histogram.bins[Histogram::LUMA].iter().enumerate() {
         let index = mesh.vertices.len() as u32;
         mesh.colored_vertex(Pos2::new(x_at(bin), plot.bottom()), fill);
@@ -814,9 +1086,18 @@ pub(super) fn paint_histogram(ui: &mut egui::Ui, histogram: &Histogram) {
     painter.add(egui::Shape::mesh(mesh));
 
     let channels = [
-        (Histogram::RED, Color32::from_rgba_unmultiplied(0xFF, 0x5A, 0x50, 0xE0)),
-        (Histogram::GREEN, Color32::from_rgba_unmultiplied(0x5C, 0xD6, 0x5C, 0xE0)),
-        (Histogram::BLUE, Color32::from_rgba_unmultiplied(0x5A, 0x9C, 0xFF, 0xE0)),
+        (
+            Histogram::RED,
+            Color32::from_rgba_unmultiplied(0xFF, 0x5A, 0x50, 0xE0),
+        ),
+        (
+            Histogram::GREEN,
+            Color32::from_rgba_unmultiplied(0x5C, 0xD6, 0x5C, 0xE0),
+        ),
+        (
+            Histogram::BLUE,
+            Color32::from_rgba_unmultiplied(0x5A, 0x9C, 0xFF, 0xE0),
+        ),
     ];
     for (channel, color) in channels {
         let points: Vec<Pos2> = histogram.bins[channel]
@@ -837,11 +1118,20 @@ pub(super) fn paint_histogram(ui: &mut egui::Ui, histogram: &Histogram) {
     let (shadows, highlights) = histogram.clipping();
     let summary = trf(
         "Shadows clipped {}%   Highlights clipped {}%",
-        &[&format!("{:.1}", shadows * 100.0), &format!("{:.1}", highlights * 100.0)],
+        &[
+            &format!("{:.1}", shadows * 100.0),
+            &format!("{:.1}", highlights * 100.0),
+        ],
     );
-    ui.label(egui::RichText::new(summary).color(theme::muted()).size(11.0));
+    ui.label(
+        egui::RichText::new(summary)
+            .color(theme::muted())
+            .size(11.0),
+    );
     if let Some(pos) = response.hover_pos() {
-        let bin = (((pos.x - plot.left()) / plot.width()) * 255.0).round().clamp(0.0, 255.0) as usize;
+        let bin = (((pos.x - plot.left()) / plot.width()) * 255.0)
+            .round()
+            .clamp(0.0, 255.0) as usize;
         let total = histogram.total().max(1) as f32;
         let share = |channel: usize| histogram.bins[channel][bin] as f32 / total * 100.0;
         let pct = |channel: usize| format!("{:.2}", share(channel));
@@ -861,10 +1151,17 @@ pub(super) fn paint_histogram(ui: &mut egui::Ui, histogram: &Histogram) {
 /// The space [`paint_histogram`] takes, empty, with "Loading…" in it when
 /// `loading`.
 pub(super) fn paint_histogram_placeholder(ui: &mut egui::Ui, loading: bool) {
-    let (rect, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), HISTOGRAM_H), Sense::hover());
+    let (rect, _) =
+        ui.allocate_exact_size(Vec2::new(ui.available_width(), HISTOGRAM_H), Sense::hover());
     ui.painter().rect_filled(rect, 2, theme::well());
     if loading {
-        ui.painter().text(rect.center(), Align2::CENTER_CENTER, tr("Loading…"), FontId::proportional(12.0), theme::muted());
+        ui.painter().text(
+            rect.center(),
+            Align2::CENTER_CENTER,
+            tr("Loading…"),
+            FontId::proportional(12.0),
+            theme::muted(),
+        );
     }
     // Where the clipping summary goes, so what follows stays put.
     ui.label(egui::RichText::new(" ").size(11.0));
@@ -873,4 +1170,3 @@ pub(super) fn paint_histogram_placeholder(ui: &mut egui::Ui, loading: bool) {
 fn full_uv() -> Rect {
     Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0))
 }
-

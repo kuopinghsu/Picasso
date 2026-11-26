@@ -1,0 +1,4 @@
+# Only docker/appimage builds with the repository as its context, and it copies
+# just this script; the rest (target/ above all) stays out of the build.
+*
+!scripts/dnf-install.sh

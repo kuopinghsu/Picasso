@@ -26,6 +26,16 @@ for dir in "$here"/usr/lib/picasso/*/; do
         *) bundled=$bundled${bundled:+:}$dir ;;
     esac
 done
+# libxkbcommon-x11 reaches into libxkbcommon's internals, so the two must
+# come from the same build: a bundled libxkbcommon-x11 with the system's
+# libxkbcommon crashes when the window opens. If either is taken from the
+# AppImage, take both.
+xkb=$here/usr/lib/picasso/libxkbcommon.so.0
+xkb_x11=$here/usr/lib/picasso/libxkbcommon-x11.so.0
+case :$bundled: in
+    *":$xkb_x11:"*) case :$bundled: in *":$xkb:"*) ;; *) bundled=$bundled:$xkb ;; esac ;;
+    *":$xkb:"*) [ -d "$xkb_x11" ] && bundled=$bundled:$xkb_x11 ;;
+esac
 if [ -n "$bundled" ]; then
     export LD_LIBRARY_PATH="${LD_LIBRARY_PATH:+$LD_LIBRARY_PATH:}$bundled"
 fi

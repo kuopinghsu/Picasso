@@ -1351,6 +1351,121 @@ mod tests {
     }
 
     #[test]
+    fn the_sort_list_keeps_less_used_orders_in_a_submenu() {
+        use crate::types::Sort;
+        let (_scratch, mut window) = library("sort-menu", 3);
+        window.ctx.enable_accesskit();
+        settle(&mut window, 3);
+        // Where the control called `wanted` is, and whether it is there.
+        let find = |window: &Headless, wanted: &str| -> Option<Pos2> {
+            let tree = window.access.as_ref().expect("the tree");
+            tree.nodes
+                .iter()
+                .find(|(_, node)| name(node) == Some(wanted))
+                .and_then(|(_, node)| node.bounds())
+                .map(center)
+        };
+        let list = find(&window, "Sort by Date").expect("the sort list");
+        click(&mut window, list);
+        settle(&mut window, 5);
+        for wanted in [
+            "Sort by Date, oldest",
+            "Sort by Name",
+            "Sort by Size",
+            "More sorts",
+        ] {
+            assert!(find(&window, wanted).is_some(), "{wanted} not in the list");
+        }
+        assert!(
+            find(&window, "Sort by File type").is_none(),
+            "the submenu is closed until pointed at"
+        );
+        let more = find(&window, "More sorts").unwrap();
+        for _ in 0..5 {
+            window.draw(vec![Event::PointerMoved(more)]);
+            std::thread::sleep(REFRESH);
+        }
+        settle(&mut window, 5);
+        for wanted in [
+            "Sort by Size, smallest",
+            "Sort by Date modified",
+            "Sort by Date modified, oldest",
+        ] {
+            assert!(
+                find(&window, wanted).is_some(),
+                "{wanted} not in the submenu"
+            );
+        }
+        let kind = find(&window, "Sort by File type").expect("the submenu");
+        // Along the row first, then down, so the pointer stays on the submenu.
+        window.draw(vec![Event::PointerMoved(Pos2::new(kind.x, more.y))]);
+        click(&mut window, kind);
+        settle(&mut window, 5);
+        assert_eq!(window.app.sort, Sort::Type);
+        // The list is closed and named for the order chosen.
+        assert!(find(&window, "More sorts").is_none());
+        assert!(nodes_of(&window, Role::ComboBox)
+            .iter()
+            .any(|(node, _)| name(node) == Some("Sort by File type")));
+
+        // On a touch screen nothing points at More sorts before it is
+        // tapped: the tap opens the submenu and leaves the list open.
+        let list = find(&window, "Sort by File type").expect("the sort list");
+        click(&mut window, list);
+        settle(&mut window, 5);
+        let more = find(&window, "More sorts").expect("the list");
+        let button = |pressed: bool| Event::PointerButton {
+            pos: more,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        };
+        window.draw(vec![Event::PointerMoved(more), button(true)]);
+        window.draw(vec![button(false)]);
+        settle(&mut window, 5);
+        let smallest = find(&window, "Sort by Size, smallest").expect("the submenu after a tap");
+        window.draw(vec![Event::PointerMoved(Pos2::new(smallest.x, more.y))]);
+        click(&mut window, smallest);
+        settle(&mut window, 5);
+        assert_eq!(window.app.sort, Sort::SizeSmallest);
+
+        // With the keyboard: Enter opens the list, ↓ goes to More sorts, →
+        // opens it, and Enter picks an order there.
+        window.draw(vec![Event::PointerGone]);
+        assert!(
+            tab_to(&mut window, 40, |name| name == "Sort by Size, smallest"),
+            "Tab reaches the sort list"
+        );
+        press(&mut window, egui::Key::Enter, Modifiers::NONE);
+        settle(&mut window, 3);
+        let mut moves = 0;
+        while focused(&window).as_deref() != Some("More sorts") {
+            moves += 1;
+            assert!(
+                moves < 10,
+                "↓ never reached More sorts: {:?}",
+                focused(&window)
+            );
+            press(&mut window, egui::Key::ArrowDown, Modifiers::NONE);
+        }
+        press(&mut window, egui::Key::ArrowRight, Modifiers::NONE);
+        settle(&mut window, 3);
+        let mut moves = 0;
+        while focused(&window).as_deref() != Some("Sort by Date modified") {
+            moves += 1;
+            assert!(
+                moves < 10,
+                "↓ never reached the order: {:?}",
+                focused(&window)
+            );
+            press(&mut window, egui::Key::ArrowDown, Modifiers::NONE);
+        }
+        press(&mut window, egui::Key::Enter, Modifiers::NONE);
+        settle(&mut window, 3);
+        assert_eq!(window.app.sort, Sort::ModifiedNewest);
+    }
+
+    #[test]
     fn the_library_grids_own_scroll_bar_keeps_clear_of_its_photos() {
         use crate::types::Sort;
         // Sorted by name there is no date strip, so the grid shows its bar.

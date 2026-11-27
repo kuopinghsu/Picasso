@@ -7,7 +7,9 @@ use std::time::Instant;
 use eframe::egui::{self, Align2, Color32, FontId, Pos2, Rect, Sense, Vec2};
 
 use crate::i18n::{tr, trf};
-use crate::types::{day_key, folder_label, format_day, format_month, Nav, Photo, Sort};
+use crate::types::{
+    day_key, file_extension, folder_label, format_bytes, format_day, format_month, Nav, Photo, Sort,
+};
 
 use super::theme::{self, ACCENT, STAR, THUMB_RADIUS, WHITE};
 use super::PicassoApp;
@@ -57,7 +59,8 @@ pub(super) struct GridLayout {
     /// Whether file names are written under the tiles rather than shown
     /// over them on hover.
     labels: bool,
-    /// First day heading of each month, in grid order. Empty when sorted by name.
+    /// First day heading of each month, in grid order. Empty unless sorted by
+    /// date.
     months: Vec<MonthMark>,
     /// Top of the "Unknown date" heading and how many photos are under it.
     undated: Option<(f32, usize)>,
@@ -104,17 +107,17 @@ impl GridLayout {
     }
 
     /// Where the view is when its top edge is at `top`: the date heading
-    /// above the first visible row, or with `Sort::Name` the file name of the
-    /// first photo in that row.
+    /// above the first visible row, or in any order but by date what that
+    /// order goes by for the first photo in that row.
     fn position_label(&self, photos: &[Photo], sort: Sort, top: f32) -> Option<String> {
         let first = self
             .rows
             .partition_point(|row| Self::row_y(row) + Self::row_height(row) <= top + 1.0);
-        if sort.by_name() {
+        if !sort.by_date() {
             self.rows.get(first..)?.iter().find_map(|row| match row {
                 GridRow::Photos { indices, .. } => photos
                     .get(indices.start)
-                    .map(|photo| photo.filename.clone()),
+                    .map(|photo| sorted_by(photo, sort)),
                 GridRow::Header { .. } | GridRow::Tracks { .. } => None,
             })
         } else {
@@ -235,7 +238,7 @@ impl PicassoApp {
             return;
         }
         let full = ui.available_rect_before_wrap();
-        let strip_w = if self.sort.by_name() { 0.0 } else { STRIP_W };
+        let strip_w = if !self.sort.by_date() { 0.0 } else { STRIP_W };
         let grid_rect = Rect::from_min_max(full.min, Pos2::new(full.max.x - strip_w, full.max.y));
         // The date strip, which scrolls the grid itself, needs a photo with a
         // date to mark. Without it the grid shows its own bar, floating at its
@@ -679,7 +682,7 @@ impl PicassoApp {
             return;
         }
         let offset = output.state.clamped_offset().y;
-        let Some(text) = layout.position_label(&self.photos, self.sort, offset) else {
+        let Some(text) = layout.position_label(&self.photos, self.label_order(), offset) else {
             return;
         };
 
@@ -698,6 +701,13 @@ impl PicassoApp {
             view,
             alpha,
         );
+    }
+
+    /// The order the scroll bar labels the photos by. A Trip's Day, or its
+    /// photos on some dates, keep their own order whatever the sort list
+    /// says, so there only the file name means anything.
+    fn label_order(&self) -> Sort {
+        label_order(&self.nav, &self.trip_filter, self.sort)
     }
 
     fn ensure_layout(&mut self, width: f32, tracks: usize) {
@@ -762,11 +772,18 @@ impl PicassoApp {
             .collect();
         let start = |index: &usize| self.tracks[*index].time_span.map(|(start, _)| start);
         match self.sort {
-            Sort::Name => {
-                found.sort_by_key(|index| folder_label(&self.tracks[*index].path).to_lowercase())
-            }
             Sort::DateNewest => found.sort_by_key(|index| std::cmp::Reverse(start(index))),
             Sort::DateOldest => found.sort_by_key(start),
+            // Tracks have no size or file time of their own in the catalog,
+            // so the other orders list them by name.
+            Sort::Name
+            | Sort::SizeLargest
+            | Sort::SizeSmallest
+            | Sort::ModifiedNewest
+            | Sort::ModifiedOldest
+            | Sort::Type => {
+                found.sort_by_key(|index| folder_label(&self.tracks[*index].path).to_lowercase())
+            }
         }
         found
     }
@@ -943,15 +960,24 @@ impl PicassoApp {
                     self.select_starred();
                 }
                 let mut sort = self.sort;
-                let shown = tr(match sort {
-                    Sort::DateNewest => "Sort by Date",
-                    Sort::DateOldest => "Sort by Date, oldest",
-                    Sort::Name => "Sort by Name",
-                });
+                let shown = sort_name(sort);
+                // The orders used most are in the list itself, the rest in a
+                // submenu below them.
                 let picker = egui::ComboBox::from_id_salt("sort").selected_text(shown).show_ui(ui, |ui| {
-                    ui.selectable_value(&mut sort, Sort::DateNewest, tr("Sort by Date"));
-                    ui.selectable_value(&mut sort, Sort::DateOldest, tr("Sort by Date, oldest"));
-                    ui.selectable_value(&mut sort, Sort::Name, tr("Sort by Name"));
+                    for choice in COMMON_SORTS {
+                        ui.selectable_value(&mut sort, choice, sort_name(choice));
+                    }
+                    ui.separator();
+                    let more = !COMMON_SORTS.contains(&sort);
+                    let submenu = ui.menu_button(tr("More sorts"), |ui| {
+                        for choice in MORE_SORTS {
+                            ui.selectable_value(&mut sort, choice, sort_name(choice));
+                        }
+                    });
+                    // Lit like a chosen item while one of its orders is.
+                    if more {
+                        submenu.response.highlight();
+                    }
                 });
                 theme::name_picker(&picker.response, shown, shown.to_owned());
                 if sort != self.sort {
@@ -1451,11 +1477,66 @@ fn grid_columns(width: f32, thumb: f32, gap: f32) -> (usize, f32) {
     (cols, tile.min(thumb * 1.3))
 }
 
+/// The sort orders in the sort list itself, most used first.
+const COMMON_SORTS: [Sort; 4] = [
+    Sort::DateNewest,
+    Sort::DateOldest,
+    Sort::Name,
+    Sort::SizeLargest,
+];
+
+/// The sort orders in the list's More sorts submenu.
+const MORE_SORTS: [Sort; 4] = [
+    Sort::SizeSmallest,
+    Sort::ModifiedNewest,
+    Sort::ModifiedOldest,
+    Sort::Type,
+];
+
+/// The name the sort list shows for `sort`, translated.
+fn sort_name(sort: Sort) -> &'static str {
+    tr(match sort {
+        Sort::DateNewest => "Sort by Date",
+        Sort::DateOldest => "Sort by Date, oldest",
+        Sort::Name => "Sort by Name",
+        Sort::SizeLargest => "Sort by Size",
+        Sort::SizeSmallest => "Sort by Size, smallest",
+        Sort::ModifiedNewest => "Sort by Date modified",
+        Sort::ModifiedOldest => "Sort by Date modified, oldest",
+        Sort::Type => "Sort by File type",
+    })
+}
+
+/// See [`PicassoApp::label_order`]. The sorts by date label by day heading,
+/// which the grid only has in date order, so they are kept as they are.
+fn label_order(nav: &Nav, filter: &crate::trip::MemberQuery, sort: Sort) -> Sort {
+    if matches!(nav, Nav::Trip(_)) && filter.keeps_own_order() && !sort.by_date() {
+        Sort::Name
+    } else {
+        sort
+    }
+}
+
+/// What `sort` orders `photo` by, as the scroll bar shows it while dragged
+/// in an order with no day headings: its size, the day its file was changed,
+/// its extension, or else its name.
+fn sorted_by(photo: &Photo, sort: Sort) -> String {
+    match sort {
+        Sort::SizeLargest | Sort::SizeSmallest => format_bytes(photo.bytes),
+        Sort::ModifiedNewest | Sort::ModifiedOldest => format_day(photo.modified_at),
+        Sort::Type => match file_extension(&photo.filename) {
+            Some(extension) if !extension.is_empty() => extension.to_uppercase(),
+            _ => photo.filename.clone(),
+        },
+        Sort::DateNewest | Sort::DateOldest | Sort::Name => photo.filename.clone(),
+    }
+}
+
 /// Rows of `tracks` GPS tracks under their own heading, then rows of the
-/// photos: under a heading per day, or when sorted by name under one
+/// photos: under a heading per day, or in any order but by date under one
 /// heading, which is left out when there are no tracks.
 fn build_layout(photos: &[Photo], tracks: usize, sort: Sort, width: f32, thumb: f32) -> GridLayout {
-    let labels = sort.by_name();
+    let labels = !sort.by_date();
     let gap = if labels { GAP } else { TIGHT_GAP };
     let (cols, tile) = grid_columns(width, thumb, gap);
     let row_h = tile + if labels { LABEL_H } else { 0.0 } + gap;
@@ -1478,7 +1559,7 @@ fn build_layout(photos: &[Photo], tracks: usize, sort: Sort, width: f32, thumb: 
             });
             y += row_h;
         }
-        if sort.by_name() && !photos.is_empty() {
+        if !sort.by_date() && !photos.is_empty() {
             rows.push(GridRow::Header {
                 title: tr("Photos").to_string(),
                 y,
@@ -1487,7 +1568,7 @@ fn build_layout(photos: &[Photo], tracks: usize, sort: Sort, width: f32, thumb: 
             y += HEADER_H;
         }
     }
-    if sort.by_name() {
+    if !sort.by_date() {
         let mut offset = 0;
         for chunk in photos.chunks(cols) {
             let indices = offset..offset + chunk.len();
@@ -1800,6 +1881,113 @@ mod tests {
             Some("c")
         );
         assert_eq!(named.position_label(&photos, Sort::Name, 10_000.0), None);
+
+        // Every order but by date is one list with names under the photos,
+        // labelled by what the order goes by for the first photo in view.
+        let third = &photos[2];
+        for (sort, label) in [
+            (Sort::SizeLargest, format_bytes(third.bytes)),
+            (Sort::SizeSmallest, format_bytes(third.bytes)),
+            (Sort::ModifiedNewest, format_day(third.modified_at)),
+            (Sort::ModifiedOldest, format_day(third.modified_at)),
+            // Named without an extension, so only the name is left.
+            (Sort::Type, "c".to_string()),
+        ] {
+            let flat = build_layout(&photos, 0, sort, 218.0, 100.0);
+            assert_eq!((flat.cols, flat.labels), (2, true), "{sort:?}");
+            assert!(flat.months.is_empty(), "{sort:?}");
+            assert_eq!(flat.height, named.height, "{sort:?}");
+            assert_eq!(flat.position_label(&photos, sort, 150.0), Some(label));
+        }
+    }
+
+    #[test]
+    fn the_scroll_label_names_what_the_order_goes_by() {
+        let mut shot = photo("IMG_1.heic", 0);
+        (shot.bytes, shot.modified_at) = (2_500_000, 1_780_000_000);
+        assert_eq!(sorted_by(&shot, Sort::Name), "IMG_1.heic");
+        assert_eq!(sorted_by(&shot, Sort::SizeLargest), format_bytes(2_500_000));
+        assert_eq!(
+            sorted_by(&shot, Sort::ModifiedOldest),
+            format_day(1_780_000_000)
+        );
+        assert_eq!(sorted_by(&shot, Sort::Type), "HEIC");
+        // Without an extension there is only the name to show.
+        for name in ["README", ".jpg"] {
+            assert_eq!(sorted_by(&photo(name, 0), Sort::Type), name);
+        }
+    }
+
+    #[test]
+    fn the_sort_list_has_every_order_once() {
+        let all: Vec<Sort> = COMMON_SORTS.into_iter().chain(MORE_SORTS).collect();
+        assert_eq!(COMMON_SORTS[0], Sort::DateNewest, "the default comes first");
+        // Every order, by a match with no catch-all, so a new one fails to
+        // build here until it is added to this list and to one of the two.
+        let every = |sort: Sort| match sort {
+            Sort::DateNewest
+            | Sort::DateOldest
+            | Sort::Name
+            | Sort::SizeLargest
+            | Sort::SizeSmallest
+            | Sort::ModifiedNewest
+            | Sort::ModifiedOldest
+            | Sort::Type => sort,
+        };
+        let orders = [
+            Sort::DateNewest,
+            Sort::DateOldest,
+            Sort::Name,
+            Sort::SizeLargest,
+            Sort::SizeSmallest,
+            Sort::ModifiedNewest,
+            Sort::ModifiedOldest,
+            Sort::Type,
+        ]
+        .map(every);
+        for sort in orders {
+            let listed = all.iter().filter(|listed| **listed == sort).count();
+            assert_eq!(listed, 1, "{sort:?} is in the sort list {listed} times");
+        }
+        assert_eq!(all.len(), orders.len());
+        // Each with a name of its own.
+        let names: std::collections::HashSet<&str> =
+            all.iter().map(|sort| sort_name(*sort)).collect();
+        assert_eq!(names.len(), all.len());
+    }
+
+    #[test]
+    fn a_trip_day_keeps_its_order_so_the_scroll_bar_names_files() {
+        use crate::trip::{DayFilter, MemberQuery};
+        let day = MemberQuery {
+            day: DayFilter::Day(1),
+            ..MemberQuery::default()
+        };
+        let dates = MemberQuery {
+            day: DayFilter::Dates(
+                chrono::NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
+                chrono::NaiveDate::from_ymd_opt(2026, 1, 3).unwrap(),
+            ),
+            ..MemberQuery::default()
+        };
+        let any = MemberQuery::default();
+        for sort in [
+            Sort::SizeLargest,
+            Sort::ModifiedOldest,
+            Sort::Type,
+            Sort::Name,
+        ] {
+            assert_eq!(label_order(&Nav::Trip(1), &day, sort), Sort::Name);
+            assert_eq!(label_order(&Nav::Trip(1), &dates, sort), Sort::Name);
+            // The whole Trip, and the Library, go by the sort chosen.
+            assert_eq!(label_order(&Nav::Trip(1), &any, sort), sort);
+            assert_eq!(label_order(&Nav::Library, &day, sort), sort);
+        }
+        // The day headings still name the place in a Day sorted by date.
+        assert_eq!(
+            label_order(&Nav::Trip(1), &day, Sort::DateOldest),
+            Sort::DateOldest
+        );
     }
 
     #[test]

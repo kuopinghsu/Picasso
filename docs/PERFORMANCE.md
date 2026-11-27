@@ -61,6 +61,12 @@ Apple M2 Max (12 cores, 32 GB), internal SSD, macOS, warm cache, release build o
 | Library file size | 4.6 MB | 45.6 MB | 229 MB |
 | Peak memory | — | 117 MB | 555 MB |
 
+Sorting by size, date modified, or file type has no index of its own, so SQLite sorts every row
+for it. These lists are not in the table above: on an Apple M5 Max with a release build of
+the changes after 0.9.5, at 500,000 photos they took 321 ms, 415 ms, and 584 ms, against 216 ms
+for newest first on the same machine. `make bench-check` holds each list to one second at
+20,000 photos, as CI runs it; `make bench` times them at any size.
+
 | Files | 2,000 | 10,000 |
 | --- | ---: | ---: |
 | First scan | 46 ms (43,000 photos/s) | 372 ms (27,000 photos/s) |

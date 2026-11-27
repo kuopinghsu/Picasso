@@ -1691,6 +1691,19 @@ fn order_sql(sort: Sort) -> &'static str {
         Sort::DateNewest => "p.taken_at DESC, p.filename COLLATE NOCASE ASC",
         Sort::DateOldest => "p.taken_at ASC, p.filename COLLATE NOCASE ASC",
         Sort::Name => "p.filename COLLATE NOCASE ASC",
+        Sort::SizeLargest => "p.bytes DESC, p.filename COLLATE NOCASE ASC",
+        Sort::SizeSmallest => "p.bytes ASC, p.filename COLLATE NOCASE ASC",
+        Sort::ModifiedNewest => "p.modified_at DESC, p.filename COLLATE NOCASE ASC",
+        Sort::ModifiedOldest => "p.modified_at ASC, p.filename COLLATE NOCASE ASC",
+        // The text after the last dot, as `types::file_extension` finds it:
+        // trimming every other character off the end leaves the name up to
+        // the dot, which is then taken off the front. A name with no dot
+        // after its first character has no extension and comes first.
+        Sort::Type => {
+            "CASE WHEN instr(substr(p.filename, 2), '.') = 0 THEN '' \
+             ELSE lower(substr(p.filename, length(rtrim(p.filename, replace(p.filename, '.', ''))) + 1)) END, \
+             p.filename COLLATE NOCASE ASC"
+        }
     }
 }
 
@@ -2456,6 +2469,76 @@ mod tests {
         std::fs::create_dir_all(&folder).unwrap();
         let id = db.add_folder(&folder).unwrap();
         (db, id, folder.canonicalize().unwrap())
+    }
+
+    #[test]
+    fn sorts_by_size_time_changed_and_file_type() {
+        let (db, folder_id, folder) = library("sorts");
+        // Name, size, time changed. Two share a size and two a time, so the
+        // name decides between them.
+        let files = [
+            ("b.PNG", 300, 20),
+            ("a.jpg", 100, 40),
+            ("README", 500, 10),
+            ("c.tar.gz", 100, 30),
+            ("d.heic", 200, 40),
+            (".jpg", 50, 50),
+        ];
+        let records: Vec<_> = files
+            .iter()
+            .map(|(name, bytes, modified)| {
+                let mut found = record(folder_id, &folder, name, *modified);
+                found.photo.bytes = *bytes;
+                found
+            })
+            .collect();
+        db.write_batch(&records).unwrap();
+        let names = |photos: Vec<crate::types::Photo>| -> Vec<String> {
+            photos.into_iter().map(|photo| photo.filename).collect()
+        };
+        let order = |sort: Sort| names(db.photos(&Nav::Library, "", sort));
+        assert_eq!(
+            order(Sort::SizeLargest),
+            ["README", "b.PNG", "d.heic", "a.jpg", "c.tar.gz", ".jpg"]
+        );
+        assert_eq!(
+            order(Sort::SizeSmallest),
+            [".jpg", "a.jpg", "c.tar.gz", "d.heic", "b.PNG", "README"]
+        );
+        assert_eq!(
+            order(Sort::ModifiedNewest),
+            [".jpg", "a.jpg", "d.heic", "c.tar.gz", "b.PNG", "README"]
+        );
+        assert_eq!(
+            order(Sort::ModifiedOldest),
+            ["README", "b.PNG", "c.tar.gz", "a.jpg", "d.heic", ".jpg"]
+        );
+        // No extension first, a name that only starts with a dot among them,
+        // then by the text after the last dot, whatever its case: the same
+        // extension the app finds.
+        let by_type = order(Sort::Type);
+        assert_eq!(
+            by_type,
+            [".jpg", "README", "c.tar.gz", "d.heic", "a.jpg", "b.PNG"]
+        );
+        let extensions: Vec<String> = by_type
+            .iter()
+            .map(|name| {
+                crate::types::file_extension(name)
+                    .unwrap_or("")
+                    .to_lowercase()
+            })
+            .collect();
+        assert!(extensions.is_sorted(), "{extensions:?}");
+        // The same orders in a search and in a folder.
+        assert_eq!(
+            names(db.photos(&Nav::Folder(folder_id), "", Sort::Type)),
+            order(Sort::Type)
+        );
+        assert_eq!(
+            names(db.photos(&Nav::Library, "TestCam", Sort::SizeLargest)),
+            order(Sort::SizeLargest)
+        );
     }
 
     #[test]

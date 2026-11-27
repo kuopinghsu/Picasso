@@ -830,7 +830,8 @@ impl Database {
 
     /// The catalog photos of the members matching `query`, for the photo
     /// grid: in a Day, in its order; on some dates, in the order they were
-    /// taken; otherwise in `sort` order. Unavailable members have none.
+    /// taken; otherwise in `sort` order (see [`MemberQuery::keeps_own_order`]).
+    /// Unavailable members have none.
     pub fn trip_photos(&self, trip_id: i64, query: &MemberQuery, sort: Sort) -> Vec<Photo> {
         let order = match query.day {
             DayFilter::Day(_) => "tm.day_position, tm.position",

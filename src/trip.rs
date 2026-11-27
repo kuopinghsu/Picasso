@@ -477,6 +477,15 @@ pub struct MemberQuery {
     pub place: Option<i64>,
 }
 
+impl MemberQuery {
+    /// Whether the members come in an order of their own, whatever the sort
+    /// list says: a Day's in its order, some dates' in the order they were
+    /// taken.
+    pub fn keeps_own_order(&self) -> bool {
+        matches!(self.day, DayFilter::Day(_) | DayFilter::Dates(..))
+    }
+}
+
 /// Members used by the Trip's Stories.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum StoryFilter {

@@ -163,11 +163,22 @@ pub enum Sort {
     DateNewest,
     DateOldest,
     Name,
+    /// Largest file first.
+    SizeLargest,
+    SizeSmallest,
+    /// The file's modification time, newest first.
+    ModifiedNewest,
+    ModifiedOldest,
+    /// By file extension, then by name.
+    Type,
 }
 
 impl Sort {
-    pub fn by_name(self) -> bool {
-        self == Sort::Name
+    /// Whether the grid goes in days by when the photos were taken, with the
+    /// date strip beside it. Any other order is one list of photos with their
+    /// file names under them.
+    pub fn by_date(self) -> bool {
+        matches!(self, Sort::DateNewest | Sort::DateOldest)
     }
 }
 
@@ -370,6 +381,14 @@ pub fn displayed_size(photo: &Photo) -> (f32, f32) {
     } else {
         (w, h)
     }
+}
+
+/// The text after the last dot of a file name, as `Path::extension` finds
+/// it: a name that only starts with a dot, such as `.jpg`, has none. Sort by
+/// File type orders by the same text in `db.rs`.
+pub fn file_extension(name: &str) -> Option<&str> {
+    let (stem, extension) = name.rsplit_once('.')?;
+    (!stem.is_empty()).then_some(extension)
 }
 
 pub fn format_bytes(bytes: u64) -> String {
@@ -737,10 +756,32 @@ mod tests {
     }
 
     #[test]
-    fn only_name_sort_uses_filename_labels() {
-        assert!(Sort::Name.by_name());
-        assert!(!Sort::DateNewest.by_name());
-        assert!(!Sort::DateOldest.by_name());
+    fn file_extensions_match_paths() {
+        for name in [
+            "a.jpg", "b.tar.gz", "README", ".jpg", "..jpg", "a.", ".a.PNG", ".",
+        ] {
+            assert_eq!(
+                file_extension(name),
+                Path::new(name).extension().and_then(|ext| ext.to_str()),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn only_date_sorts_go_in_days() {
+        assert!(Sort::DateNewest.by_date());
+        assert!(Sort::DateOldest.by_date());
+        for sort in [
+            Sort::Name,
+            Sort::SizeLargest,
+            Sort::SizeSmallest,
+            Sort::ModifiedNewest,
+            Sort::ModifiedOldest,
+            Sort::Type,
+        ] {
+            assert!(!sort.by_date(), "{sort:?}");
+        }
     }
 
     #[test]

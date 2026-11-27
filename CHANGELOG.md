@@ -165,6 +165,11 @@ section of this file as the release notes.
   the photo. Picasso still publishes to any theme.
 - `make appimage-docker` builds the Linux AppImage with only Docker installed, in an
   AlmaLinux 8 container as CI does, so it runs on RHEL 8.4 and newer from any build machine.
+- More ways to sort the Library: Sort by Size, largest first, is in the sort list with the
+  date and name orders, and its More sorts submenu has Sort by Size, smallest, Sort by Date
+  modified, newest or oldest first, and Sort by File type, which goes by the extension and
+  then the name. Sorted any way but by date, the photos are one list with their names, and
+  dragging the scroll bar shows the size, the day changed, the file type or the name in view.
 
 ### Changed
 

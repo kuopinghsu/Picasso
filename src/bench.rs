@@ -263,6 +263,15 @@ fn catalog(report: &mut Report, count: usize) {
     report.time_within("List the library by name", second, || {
         reader.photos(&Nav::Library, "", Sort::Name)
     });
+    report.time_within("List the library by size", second, || {
+        reader.photos(&Nav::Library, "", Sort::SizeLargest)
+    });
+    report.time_within("List the library by date modified", second, || {
+        reader.photos(&Nav::Library, "", Sort::ModifiedNewest)
+    });
+    report.time_within("List the library by file type", second, || {
+        reader.photos(&Nav::Library, "", Sort::Type)
+    });
     report.time_within("List starred photos", second, || {
         reader.photos(&Nav::Starred, "", Sort::DateNewest)
     });

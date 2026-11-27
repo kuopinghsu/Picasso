@@ -120,7 +120,7 @@ Above the grid are the title and photo count, the sort order, and buttons that a
 The grid::
 Thumbnails grouped by the day they were taken.
 When the photos are sorted by date, a strip beside the grid lists the years, with the months of the year in view; click one to jump there.
-Dragging the scroll bar shows the date in view.
+Dragging the scroll bar shows the date in view; sorted another way, it shows what that order goes by, such as the size or the file type.
 
 The status bar::
 Scanning progress, the *Photo Tray* with the selected photos, and a link to files that couldn't be read, when there are any.
@@ -141,6 +141,15 @@ The sort menu in the toolbar offers:
 
 * *Sort by Date*, newest first, or *Sort by Date, oldest*
 * *Sort by Name*
+* *Sort by Size*, largest first
+
+The orders used less often are in its *More sorts* submenu:
+
+* *Sort by Size, smallest*
+* *Sort by Date modified*, newest first, or *Sort by Date modified, oldest*: when the file was last changed
+* *Sort by File type*: by the extension of the file name, then by name
+
+Sorted any way but by date, the photos are one list with their file names under them.
 
 Use the separate *Edited only* checkbox to show photos with edits.
 It works with any sort order. Clear the checkbox to show all photos in the current view.

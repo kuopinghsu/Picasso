@@ -1081,12 +1081,14 @@ fn listable(
 }
 
 /// A folder's modification time in nanoseconds since 1970, when it is on
-/// `device`, the drive of the added folder whose file system was checked.
-/// A drive mounted below it, such as a memory card, may not keep its
-/// folder times, so its folders are listed every time.
-fn dir_stamp(dir: &Path, device: Option<u64>) -> Option<i64> {
+/// `device`, the drive of the added folder whose file system was checked,
+/// or on another drive that `kept` says keeps folder times too. A drive
+/// mounted below the added folder may be a memory card that doesn't, and
+/// on Btrfs and ZFS each subvolume counts as a drive of its own.
+fn dir_stamp(dir: &Path, device: Option<u64>, kept: impl FnOnce(u64) -> bool) -> Option<i64> {
     let meta = std::fs::metadata(dir).ok()?;
-    if device_of(&meta) != device {
+    let here = device_of(&meta);
+    if here != device && !here.is_some_and(kept) {
         return None;
     }
     let modified = meta.modified().ok()?;
@@ -1180,6 +1182,8 @@ impl Stamps {
 struct Walk<'a> {
     /// The drive of the added folder; see [`dir_stamp`].
     device: Option<u64>,
+    /// Whether each other drive met in the walk keeps folder times.
+    drives: Mutex<HashMap<u64, bool>>,
     /// The last complete scan's subfolders; empty unless this is a check.
     stamps: Stamps,
     /// A subfolder modified after this, in nanoseconds, is listed again
@@ -1231,6 +1235,17 @@ impl Walk<'_> {
         if let Ok(mut found) = self.found.lock() {
             found.push((dir.to_string_lossy().into_owned(), stamp));
         }
+    }
+
+    /// Whether `device`, another drive than the added folder's, keeps
+    /// folder times, asked of `dir` on it once per walk.
+    fn drive_kept(&self, device: u64, dir: &Path) -> bool {
+        let Ok(mut drives) = self.drives.lock() else {
+            return false;
+        };
+        *drives
+            .entry(device)
+            .or_insert_with(|| crate::files::folder_times_kept(dir))
     }
 
     fn unreadable(&self, path: &Path, reason: impl std::fmt::Display, folder: bool) {
@@ -1301,6 +1316,7 @@ fn walk_folder(
         device: std::fs::metadata(root)
             .ok()
             .and_then(|meta| device_of(&meta)),
+        drives: Mutex::new(HashMap::new()),
         stamps: Stamps::new(stamps, &snapshot, &known_tracks),
         fresh_after,
         found: Mutex::new(Vec::new()),
@@ -1357,7 +1373,7 @@ fn walk_dir<'s>(scope: &rayon::Scope<'s>, dir: PathBuf, root: bool, walk: &'s Wa
     if walk.cancel.load(Ordering::Relaxed) || left_out(&walk.excluded, &dir) {
         return;
     }
-    let stamp = dir_stamp(&dir, walk.device);
+    let stamp = dir_stamp(&dir, walk.device, |device| walk.drive_kept(device, &dir));
     if let Some(stamp) = stamp.filter(|&stamp| walk.stamps.unchanged(&dir, stamp)) {
         walk.skip(scope, dir, stamp);
         return;
@@ -2418,12 +2434,19 @@ mod tests {
     }
 
     #[test]
-    fn a_folder_on_another_drive_than_its_added_folder_has_no_time_kept() {
+    fn a_folder_on_another_drive_keeps_its_time_only_if_that_drive_does() {
         let dir = std::env::temp_dir();
         let device = device_of(&std::fs::metadata(&dir).unwrap());
-        assert!(dir_stamp(&dir, device).is_some());
+        let unasked = |_| -> bool { panic!("the added folder's own drive is not asked about") };
+        assert!(dir_stamp(&dir, device, unasked).is_some());
         #[cfg(unix)]
-        assert_eq!(dir_stamp(&dir, device.map(|device| device + 1)), None);
+        {
+            // As if the added folder were on another drive than this one:
+            // a memory card's file system, or a Btrfs subvolume's.
+            let other = device.map(|device| device + 1);
+            assert_eq!(dir_stamp(&dir, other, |_| false), None);
+            assert!(dir_stamp(&dir, other, |_| true).is_some());
+        }
     }
 
     #[test]

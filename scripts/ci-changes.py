@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Select CI jobs from the complete push/PR diff; tags and manual runs validate all.
+"""Select daily CI jobs since the last successful daily run; tags/manual runs validate all.
 
 Use git rather than GitHub's path filters so large diffs, deletions and renames
 are included, and keep the workflow running to provide a final required check.
@@ -12,6 +12,8 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import urllib.parse
+import urllib.request
 
 
 JOBS = ("rust", "wordpress", "deny", "guide", "windows", "linux", "appimage", "macos", "bench")
@@ -84,18 +86,38 @@ def git(*args):
     return subprocess.check_output(["git", *args], stderr=subprocess.PIPE)
 
 
-def changed_paths(event_name, event, head):
-    """Pushes use their before SHA; PRs use the base/head merge-base."""
-    base = (event.get("pull_request", {}).get("base", {}).get("sha")
-            if event_name == "pull_request" else event.get("before"))
+def changed_paths(base, head):
+    """Compare the last successfully checked daily snapshot with today's head."""
     for revision in (base, head):
         if not isinstance(revision, str) or not re.fullmatch(r"[0-9a-fA-F]{40,64}", revision) or not revision.strip("0"):
             raise ValueError("missing or invalid comparison revision")
-    if event_name == "pull_request":
-        base = git("merge-base", base, head).decode().strip()
+    try:
+        git("cat-file", "-e", base + "^{commit}")
+    except subprocess.CalledProcessError:
+        # A two-snapshot comparison needs no complete history. Fetch only
+        # the previous successful snapshot when checkout's shallow clone lacks it.
+        git("fetch", "--no-tags", "--depth=1", "origin", base)
     return git("diff", "--name-only", "--no-renames", "-z", base, head, "--").decode(
         "utf-8", errors="surrogateescape"
     ).split("\0")[:-1]
+
+
+def scheduled_base(repository, branch, token, api_url="https://api.github.com"):
+    """Failed/cancelled runs never advance the last validated snapshot."""
+    if not repository or not branch or not token:
+        raise ValueError("missing repository, branch or token for the scheduled baseline")
+    query = urllib.parse.urlencode({"event": "schedule", "status": "success", "branch": branch, "per_page": 1})
+    url = f"{api_url.rstrip('/')}/repos/{repository}/actions/workflows/ci.yml/runs?{query}"
+    request = urllib.request.Request(url, headers={
+        "Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "Picasso-CI",
+    })
+    with urllib.request.urlopen(request, timeout=15) as response:
+        runs = json.load(response).get("workflow_runs", [])
+    for run in runs:
+        if run.get("conclusion") == "success" and run.get("event") == "schedule" and run.get("head_branch") == branch:
+            return run.get("head_sha")
+    return None
 
 
 def main():
@@ -104,15 +126,20 @@ def main():
     paths = []
     if not full:
         try:
-            if event_name not in {"push", "pull_request"}:
+            if event_name != "schedule":
                 raise ValueError("unknown event")
             event = json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text())
-            head = os.environ.get("SOURCE_COMMIT") or event.get("after") or event.get("pull_request", {}).get("head", {}).get("sha")
-            paths = changed_paths(event_name, event, head)
-        except (OSError, KeyError, ValueError, subprocess.CalledProcessError) as error:
+            repository = os.environ.get("GITHUB_REPOSITORY", "")
+            branch = event.get("repository", {}).get("default_branch") or os.environ.get("GITHUB_REF_NAME", "")
+            base = scheduled_base(repository, branch, os.environ.get("GH_TOKEN", ""),
+                                  os.environ.get("GITHUB_API_URL", "https://api.github.com"))
+            paths = changed_paths(base, os.environ.get("SOURCE_COMMIT") or os.environ.get("GITHUB_SHA"))
+        except (OSError, KeyError, ValueError, TypeError, AttributeError, subprocess.CalledProcessError) as error:
             print(f"Unable to compare changes; selecting full validation: {error}", file=sys.stderr)
             full = True
     plan = select(paths, full)
+    if event_name == "schedule":
+        plan["deny"] = True  # New advisories do not require a repository change.
     output = "".join(f"{key}={str(value).lower()}\n" for key, value in plan.items())
     print(output, end="")
     if os.environ.get("GITHUB_OUTPUT"):

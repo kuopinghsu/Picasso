@@ -168,11 +168,12 @@ section of this file as the release notes.
 
 ### Changed
 
-- CI selects checks from changed files: ordinary Rust changes run Linux x64 formatting
-  and tests, while docs, WordPress, dependencies, guides and packaging use their own
-  checks. Tags and manual runs retain full native validation. A final CI checks result
-  rejects failed, cancelled or unexpectedly skipped work; docs-only runs retain bilingual
-  document checks without compiling Rust.
+- CI runs daily at 17:00 Taiwan time instead of on every commit or pull request, selecting
+  checks from changes since the last successful daily run. Rust changes run Linux x64
+  formatting and tests; docs, WordPress, guides and packaging use their own checks, and
+  dependencies are audited every day. Tags and manual runs retain full native validation.
+  A final CI checks result rejects failed, cancelled or unexpectedly skipped work;
+  docs-only runs retain bilingual document checks without compiling Rust.
 - Exporting and publishing a Story render three photos at a time, as exporting photos
   from the Library does: about three times faster, for more memory while they run.
   Publishing a Story again doesn't render the photos the site already has, unless

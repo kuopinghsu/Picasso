@@ -76,15 +76,28 @@ class SelectionTests(unittest.TestCase):
         self.assertEqual(self.selected(*paths), {'rust'})
 
     def test_missing_comparison_falls_back_to_all_checks(self):
+        cases = [
+            ('first-run', None, None, None),
+            ('api-error', None, OSError('API unavailable'), None),
+            ('fetch-error', 'a' * 40, None, subprocess.CalledProcessError(128, ['git', 'fetch'])),
+        ]
         with tempfile.TemporaryDirectory() as directory:
             event = Path(directory) / 'event.json'
-            output = Path(directory) / 'output'
-            event.write_text(json.dumps({'before': '0' * 40, 'after': 'a' * 40}))
-            with patch.dict(os.environ, {'GITHUB_EVENT_NAME': 'push', 'GITHUB_EVENT_PATH': str(event),
-                                         'GITHUB_OUTPUT': str(output)}, clear=True):
-                with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            event.write_text(json.dumps({'repository': {'default_branch': 'main'}}))
+            for name, base, api_error, diff_error in cases:
+                output = Path(directory) / name
+                env = {'GITHUB_EVENT_NAME': 'schedule', 'GITHUB_EVENT_PATH': str(event),
+                       'GITHUB_OUTPUT': str(output), 'SOURCE_COMMIT': 'b' * 40,
+                       'GITHUB_REPOSITORY': 'owner/repo', 'GH_TOKEN': 'test-token'}
+                with contextlib.ExitStack() as stack:
+                    stack.enter_context(patch.dict(os.environ, env, clear=True))
+                    stack.enter_context(patch.object(ci, 'scheduled_base', return_value=base, side_effect=api_error))
+                    if diff_error:
+                        stack.enter_context(patch.object(ci, 'changed_paths', side_effect=diff_error))
+                    stack.enter_context(contextlib.redirect_stdout(io.StringIO()))
+                    stack.enter_context(contextlib.redirect_stderr(io.StringIO()))
                     ci.main()
-            self.assertEqual(set(output.read_text().splitlines()), {f'{name}=true' for name in ('full', *ci.JOBS)})
+                self.assertEqual(set(output.read_text().splitlines()), {f'{key}=true' for key in ('full', *ci.JOBS)})
 
     def test_tags_and_manual_runs_do_not_need_comparison_history(self):
         for event, ref in [('push', 'refs/tags/v0.9.6'), ('workflow_dispatch', 'refs/heads/main')]:
@@ -93,6 +106,43 @@ class SelectionTests(unittest.TestCase):
                 with contextlib.redirect_stdout(output):
                     ci.main()
             self.assertEqual(set(output.getvalue().splitlines()), {f'{name}=true' for name in ('full', *ci.JOBS)})
+
+
+class ScheduledRunTests(unittest.TestCase):
+    def test_baseline_uses_only_successful_scheduled_runs_on_the_default_branch(self):
+        response = io.BytesIO(json.dumps({'workflow_runs': [
+            {'conclusion': 'success', 'event': 'schedule', 'head_branch': 'main', 'head_sha': 'a' * 40},
+        ]}).encode())
+        with patch.object(ci.urllib.request, 'urlopen', return_value=response) as opened:
+            base = ci.scheduled_base('owner/repo', 'main', 'test-token')
+        self.assertEqual(base, 'a' * 40)
+        request = opened.call_args.args[0]
+        query = ci.urllib.parse.parse_qs(ci.urllib.parse.urlparse(request.full_url).query)
+        self.assertEqual(query, {'event': ['schedule'], 'status': ['success'], 'branch': ['main'], 'per_page': ['1']})
+        self.assertEqual(request.get_header('Authorization'), 'Bearer test-token')
+
+    def test_no_successful_run_returns_no_baseline(self):
+        response = io.BytesIO(b'{"workflow_runs": []}')
+        with patch.object(ci.urllib.request, 'urlopen', return_value=response):
+            self.assertIsNone(ci.scheduled_base('owner/repo', 'main', 'test-token'))
+
+    def test_daily_run_without_changes_only_audits_dependencies(self):
+        with tempfile.TemporaryDirectory() as directory:
+            event = Path(directory) / 'event.json'
+            event.write_text(json.dumps({'repository': {'default_branch': 'main'}}))
+            output = io.StringIO()
+            env = {'GITHUB_EVENT_NAME': 'schedule', 'GITHUB_EVENT_PATH': str(event),
+                   'GITHUB_REPOSITORY': 'owner/repo', 'SOURCE_COMMIT': 'b' * 40, 'GH_TOKEN': 'test-token'}
+            with patch.dict(os.environ, env, clear=True), patch.object(ci, 'scheduled_base', return_value='a' * 40):
+                with patch.object(ci, 'changed_paths', return_value=[]) as compared:
+                    with contextlib.redirect_stdout(output):
+                        ci.main()
+            compared.assert_called_once_with('a' * 40, 'b' * 40)
+            plan = dict(line.split('=') for line in output.getvalue().splitlines())
+            self.assertEqual(plan['deny'], 'true')
+            self.assertEqual(plan['full'], 'false')
+            self.assertEqual(plan['rust'], 'false')
+            self.assertEqual(plan['appimage'], 'false')
 
 
 class GitComparisonTests(unittest.TestCase):
@@ -120,28 +170,30 @@ class GitComparisonTests(unittest.TestCase):
     def sha(self):
         return self.git('rev-parse', 'HEAD').decode().strip()
 
-    def test_push_includes_all_commits_in_the_push(self):
+    def test_daily_diff_includes_all_commits_since_success(self):
         self.write('src/new.rs', 'fn main() {}\n')
         self.commit()
         self.write('docs/new.md', 'Docs\n')
         self.commit()
         with patch.object(ci, 'git', self.git):
-            paths = ci.changed_paths('push', {'before': self.initial}, self.sha())
+            paths = ci.changed_paths(self.initial, self.sha())
         self.assertEqual(set(paths), {'src/new.rs', 'docs/new.md'})
         self.assertTrue(ci.select(paths)['rust'])
 
-    def test_pr_excludes_changes_that_only_happened_on_the_base_branch(self):
-        self.git('checkout', '-qb', 'feature')
-        self.write('README.md', 'Feature documentation\n')
+    def test_shallow_checkout_fetches_only_the_previous_successful_snapshot(self):
+        self.write('src/new.rs', 'fn main() {}\n')
         self.commit()
         head = self.sha()
-        self.git('checkout', '-q', 'main')
-        self.write('src/base-only.rs', 'fn main() {}\n')
-        self.commit()
-        with patch.object(ci, 'git', self.git):
-            paths = ci.changed_paths('pull_request', {'pull_request': {'base': {'sha': self.sha()}}}, head)
-        self.assertEqual(paths, ['README.md'])
-        self.assertFalse(ci.select(paths)['rust'])
+        clone = self.root / 'shallow-clone'
+        self.git('clone', '-q', '--depth=1', self.root.as_uri(), str(clone))
+
+        def cloned_git(*args):
+            return subprocess.check_output(['git', *args], cwd=clone, stderr=subprocess.PIPE)
+
+        with patch.object(ci, 'git', side_effect=cloned_git) as called:
+            paths = ci.changed_paths(self.initial, head)
+        called.assert_any_call('fetch', '--no-tags', '--depth=1', 'origin', self.initial)
+        self.assertEqual(paths, ['src/new.rs'])
 
     def test_rename_includes_the_removed_rust_path_and_odd_filenames(self):
         self.write('src/old.rs', 'fn main() {}\n')
@@ -153,7 +205,7 @@ class GitComparisonTests(unittest.TestCase):
             self.write('docs/a\nfile.md', 'An unusual filename\n')
         self.commit()
         with patch.object(ci, 'git', self.git):
-            paths = ci.changed_paths('push', {'before': base}, self.sha())
+            paths = ci.changed_paths(base, self.sha())
         expected = {'src/old.rs', 'docs/renamed.md'}
         if os.name != 'nt':
             expected.add('docs/a\nfile.md')

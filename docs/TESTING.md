@@ -42,7 +42,11 @@ The last line puts every photo in a folder of your own and its subfolders (HEIC,
 | Screens and accessibility | `src/app/headless.rs` | The library, the Trips page, a Trip with a long title and a Story, the Geotag dialog for a folder and for a Trip with a track beside the photos, and Publish to WordPress with the Story's Places shown and a Journey, drawn at 1280 × 800 and the smallest window, 880 × 560, at 1× and 2×, in light and dark: every control that can be clicked or reached by the keyboard has a name for screen readers, none is named by a long tooltip, and none reaches past the window's right edge. The smallest window is drawn again in German, the longest labels, and in Traditional Chinese. Tab goes from the search field through the top bar, the sidebar and the photos, and each control it reaches has a name. Another test uses only the keyboard: it chooses, stars, opens and steps through photos; asks to trash one and cancels; moves the selection and the focus together from a photo reached with Tab; opens Help with F1 and All trips with Enter while a button has the focus; then opens a Trip, puts a photo in a Day with Alt+1, and opens and leaves a Story. A third makes a Trip from a Shift-click selection through New trip, typing its name and time zone and reaching Create with Tab; puts all its photos in a Day with Alt+1, moves one to another Day and takes that back with Ctrl+Z; then, with a Day shown, opens a photo in the editor and leaves with Escape twice, and goes to the Library and back. The same Trip, Day and photo are still chosen. |
 | Performance | `src/bench.rs`, `src/app/headless.rs` | Catalog queries, a year-long Trip, the window's frames while scrolling that Trip without a window, scanning, thumbnails, exporting and publishing a 300-photo Story, and memory, with limits in CI. |
 
-For normal pushes and pull requests, CI selects work using `scripts/ci-changes.py`.
+CI runs daily at 17:00 Asia/Taipei (09:00 UTC) using `scripts/ci-changes.py` to
+select work since the last successful scheduled run on the default branch. Ordinary
+commits and pull requests do not trigger it. An initial run without a successful
+baseline, or a baseline that cannot be fetched, selects full validation. Dependency
+advisories are checked every day, even when no files have changed.
 Rust changes run formatting and `cargo test --release --locked` on Linux x64.
 Documentation-only changes retain bilingual outline, command, shortcut and Traditional
 Chinese wording checks through `make check-docs`, without compiling Rust. WordPress,
@@ -63,14 +67,16 @@ when a pattern is missing, inaccessible or malformed. These tests use HTTP fixtu
 they do not publish to or delete media from a live WordPress site.
 
 Run `make check-ci` to test job selection and the final result gate locally. These
-stdlib-only tests cover multi-commit pushes, PR merge-bases, renames and deleted paths,
-large diffs, missing history, release/manual overrides and failed or unexpectedly skipped
+stdlib-only tests cover changes across multiple commits, shallow baseline fetching,
+renames and deleted paths, large diffs, missing history, release/manual overrides and failed or unexpectedly skipped
 jobs. If a comparison is unavailable or an unknown build input changes, CI selects full
 validation. Workflow/build-policy changes also select full validation.
 
-**CI checks** is the stable result for branch protection. Configure it as the required
-check when replacing individual platform requirements; it remains present on docs-only
+**CI checks** is the stable daily aggregate result. It remains present on docs-only
 runs and fails when any selected job fails, is cancelled or is unexpectedly skipped.
+Because CI is scheduled rather than triggered per commit, remove any per-commit CI
+requirements from PR branch protection, or run manual full validation for a candidate
+commit when needed.
 
 ## Before a release, by hand
 

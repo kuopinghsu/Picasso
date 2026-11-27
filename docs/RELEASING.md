@@ -12,9 +12,10 @@ as pre-releases.
 
 For release-candidate packages, start the CI workflow manually from the Actions tab.
 Manual runs and version tags run the full native test, packaging, AppImage compatibility,
-benchmark and guide matrix. Normal pushes and pull requests select only checks affected
-by their changed files; their successful result does not imply every release package was
-built. The **CI checks** job provides the stable aggregate status for branch protection.
+benchmark and guide matrix. Daily runs at 17:00 Asia/Taipei select only checks affected
+since the last successful daily run; their successful result does not imply every
+release package was built. Ordinary commits and pull requests do not start CI. The
+**CI checks** job provides the aggregate status of the selected checks.
 
 Release preparation and verification are separate tasks. Successful CI builds do
 not replace the manual application checks in [TESTING.md](TESTING.md).
@@ -98,9 +99,10 @@ git push origin v0.9.5
 
 Pushing the tag starts another CI run for that commit. Runs targeting a version
 tag can publish a release, including manual workflow runs targeting that tag.
-Pushes to `main`, pull requests and manual runs targeting branches produce build
-artifacts without publishing a release. Non-tag artifact names include the short
-source commit after the version.
+Daily runs produce artifacts only for the selected packaging or guide checks.
+Manual runs targeting branches build the full set of artifacts without publishing
+a release. Ordinary commits and pull requests do not start CI. Non-tag artifact
+names include the short source commit after the version.
 
 ## What CI checks and publishes
 
@@ -128,9 +130,10 @@ compression pass; Windows artifacts retain compression for the bare executable.
 
 Linux and AppImage builds intentionally remain separate: the Ubuntu packages target
 glibc 2.35, while AppImage is built on AlmaLinux 8 for glibc 2.28 compatibility.
-All native architecture tests and the AppImage startup matrix remain enabled for
-pull requests, main-branch builds and version tags. These changes reduce avoidable
-work; actual elapsed-time savings depend on cache hits and runner availability.
+Version tags and manual runs retain all native architecture tests and the AppImage
+startup matrix. Daily runs select only the affected checks since the previous
+successful daily run; dependency advisories are always checked. Actual elapsed-time
+savings depend on changed inputs, cache hits and runner availability.
 
 Before publication, CI checks that a GitHub release for the tag does not already
 exist and that the required application packages and guides are present and

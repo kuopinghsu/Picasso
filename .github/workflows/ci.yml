@@ -1,4 +1,5 @@
-# Normal pushes and pull requests select checks from the changed files.
+# Daily CI runs at 17:00 Asia/Taipei (09:00 UTC) and selects checks from
+# changes since the last successful scheduled run.
 # Rust changes run tests/formatting on Linux x64; docs, dependencies,
 # WordPress and guide PDFs have their own checks. Packaging changes select
 # only the affected platform jobs. Tags and workflow_dispatch run the full
@@ -8,10 +9,10 @@
 name: CI
 
 on:
+  schedule:
+    - cron: "0 9 * * *" # Daily 17:00 Asia/Taipei (UTC+8).
   push:
-    branches: [main]
     tags: ["v*"]
-  pull_request:
   workflow_dispatch:
 
 permissions:
@@ -25,10 +26,8 @@ env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
   # The commit built, tested, and named in package names and `picasso
-  # --version` (build.rs). For a pull request it is the branch's own commit
-  # rather than the merge GitHub would test, which is in no branch; main is
-  # tested again once the pull request is merged.
-  SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+  # --version` (build.rs). Scheduled runs use the latest default-branch commit.
+  SOURCE_COMMIT: ${{ github.sha }}
 
 jobs:
   # Select jobs and run inexpensive docs/version checks before starting runners.
@@ -40,6 +39,9 @@ jobs:
   # the version for a tag or the version and short commit otherwise.
   changelog:
     name: Changelog and docs
+    permissions:
+      contents: read
+      actions: read # Read the last successful scheduled run as the comparison base.
     runs-on: ubuntu-24.04
     outputs:
       version: ${{ steps.check.outputs.version }}
@@ -58,10 +60,11 @@ jobs:
       - uses: actions/checkout@v6
         with:
           ref: ${{ env.SOURCE_COMMIT }}
-          fetch-depth: 0
 
       - name: Select necessary checks
         id: changes
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: python3 scripts/ci-changes.py
 
       - name: Check CI selection rules
@@ -106,8 +109,8 @@ jobs:
           echo "label=$label" >> "$GITHUB_OUTPUT"
 
   # Security advisories, licenses, and sources of the dependencies (deny.toml).
-  # Run for dependency/policy changes and full validation. Release tags always
-  # check current advisories, even when the lockfile has not changed.
+  # Scheduled runs always check current advisories, even without file changes.
+  # Version tags and manual full validation also require this check.
   deny:
     name: Dependencies
     needs: changelog
@@ -784,7 +787,10 @@ jobs:
   release:
     name: GitHub release
     needs: [changelog, checks, deny, windows, linux, appimage, appimage-test, macos, guide]
-    if: startsWith(github.ref, 'refs/tags/v')
+    # The ordinary test job is skipped when Linux packages already run tests.
+    # A status function avoids inheriting that skipped ancestor; checks still
+    # requires every selected build, test and package check to succeed.
+    if: ${{ !cancelled() && startsWith(github.ref, 'refs/tags/v') && needs.checks.result == 'success' }}
     runs-on: ubuntu-24.04
     permissions:
       contents: write

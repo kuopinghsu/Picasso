@@ -293,7 +293,7 @@ CI 建置的發行版本仍以臨時（ad hoc）方式簽署，除非已設定 D
 
 - `make guide` 與 `make guide-pdf`：將兩種語言的使用手冊建置為 HTML 或 PDF，需要 Asciidoctor 或 Asciidoctor PDF，以及 Makefile 說明的字型。
 
-一般推送與合併請求會依變更檔案選擇 CI 檢查。Rust 變更會在 Linux x64 檢查格式並執行測試；文件、WordPress、相依套件與 PDF 手冊各有對應檢查，打包相關變更則會驗證受影響的平台。版本標籤與手動執行會進行完整的 Windows、Linux x64／Arm64 測試、macOS 通用版本建置、基準測試、套件啟動檢查與手冊建置。最終的 **CI checks** 結果會確認所選工作是否全部通過。完整檢查請參閱[工作流程](.github/workflows/ci.yml)。
+CI 預定每天台灣時間下午 5:00（UTC 09:00）執行，依上一次成功的每日執行之後的變更選擇檢查；一般提交與合併請求不會觸發 CI。Rust 變更會在 Linux x64 檢查格式並執行測試；文件、WordPress 與 PDF 手冊各有對應檢查，相依套件則每天檢查，打包相關變更則會驗證受影響的平台。版本標籤與手動執行會進行完整的 Windows、Linux x64／Arm64 測試、macOS 通用版本建置、基準測試、套件啟動檢查與手冊建置。最終的 **CI checks** 結果會確認所選工作是否全部通過。完整檢查請參閱[工作流程](.github/workflows/ci.yml)。
 
 ## 版本發行
 

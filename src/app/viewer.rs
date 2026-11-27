@@ -654,10 +654,12 @@ impl PicassoApp {
         frame.show(ui, |ui| {
             ui.set_min_size(Vec2::new(256.0, height - 24.0));
             ui.set_max_width(256.0);
-            // The details scroll; the actions stay pinned at the bottom.
+            // The details scroll; the actions stay pinned at the bottom. The
+            // bar always shown, so they keep one width from photo to photo.
             egui::ScrollArea::vertical()
                 .id_salt("info-panel")
                 .auto_shrink([false, false])
+                .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
                 .max_height((height - 24.0 - super::side::ACTION_BAR).max(80.0))
                 .show(ui, |ui| {
                     ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
@@ -748,6 +750,8 @@ impl PicassoApp {
             let count = self.photos.len();
             let current = self.viewer_index;
             let step = cell + gap;
+            // A bar beside the strip would take height from the thumbnails.
+            theme::floating_scroll_bar(ui);
             let mut area = egui::ScrollArea::horizontal()
                 .id_salt("filmstrip")
                 .auto_shrink([false, false]);

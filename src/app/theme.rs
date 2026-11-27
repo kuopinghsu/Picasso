@@ -224,8 +224,19 @@ pub fn apply(ctx: &egui::Context, dark: bool) {
         style.spacing.interact_size.y = 28.0;
         style.spacing.menu_margin = egui::Margin::same(6);
         style.spacing.window_margin = egui::Margin::same(18);
+        // Scroll bars in a strip of their own beside the content. egui's
+        // default bar floats over the content, where it covers the right
+        // end of full-width controls such as sliders and takes their clicks.
+        style.spacing.scroll = egui::style::ScrollStyle::solid();
     });
     set_dark(ctx, dark);
+}
+
+/// Gives the scroll areas `ui` shows next a thin bar floating over the
+/// content instead of one beside it, for content that leaves room for the
+/// bar itself or has no controls where it floats.
+pub fn floating_scroll_bar(ui: &mut egui::Ui) {
+    ui.spacing_mut().scroll = egui::style::ScrollStyle::floating();
 }
 
 /// Switches every page to the light or dark palette.

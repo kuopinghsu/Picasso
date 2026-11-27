@@ -106,6 +106,7 @@ pub struct BatchResult {
 
 impl Database {
     pub fn open(path: &Path) -> Result<Self, String> {
+        crate::raise_open_file_limit();
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|err| err.to_string())?;
         }
@@ -2096,6 +2097,79 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn opening_a_database_raises_the_open_file_limit() {
+        // Run again in a process of its own started with the 256 that macOS
+        // gives apps started from Finder, the Dock or some shells, so the
+        // test means the same wherever it runs, and no other test has
+        // raised the limit first.
+        const CHILD: &str = "PICASSO_FILE_LIMIT_TEST";
+        const NAME: &str = "db::tests::opening_a_database_raises_the_open_file_limit";
+        fn open_files() -> libc::rlimit {
+            let mut limit = libc::rlimit {
+                rlim_cur: 0,
+                rlim_max: 0,
+            };
+            // SAFETY: getrlimit only writes `limit`, which lives for the call.
+            assert_eq!(
+                unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit) },
+                0
+            );
+            limit
+        }
+        if std::env::var_os(CHILD).is_none() {
+            use std::os::unix::process::CommandExt;
+            let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+            command
+                .args(["--exact", NAME, "--test-threads=1"])
+                .env(CHILD, "1");
+            // SAFETY: runs in the new process between fork and exec, where
+            // only code that neither allocates nor takes a lock is safe.
+            // POSIX doesn't promise that of getrlimit and setrlimit, but on
+            // macOS and Linux each is a single system call that does
+            // neither, as is reading errno for an error. Call nothing else
+            // here.
+            unsafe {
+                command.pre_exec(|| {
+                    let mut limit = libc::rlimit {
+                        rlim_cur: 0,
+                        rlim_max: 0,
+                    };
+                    if libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit) != 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    limit.rlim_cur = limit.rlim_max.min(256);
+                    if libc::setrlimit(libc::RLIMIT_NOFILE, &limit) != 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    Ok(())
+                });
+            }
+            let output = command.output().unwrap();
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            assert!(
+                output.status.success() && stdout.contains("1 passed"),
+                "under a limit of 256:\n{stdout}\n{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+        let before = open_files();
+        assert_eq!(before.rlim_cur, before.rlim_max.min(256));
+        let dir = temp_dir("file-limit");
+        let _db = Database::open(&dir.join("picasso.db")).unwrap();
+        let limit = open_files();
+        // At least 1,024, or the hard limit if lower.
+        assert!(
+            limit.rlim_cur >= limit.rlim_max.min(1_024),
+            "the soft limit is {} of {}",
+            limit.rlim_cur,
+            limit.rlim_max
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     pub(super) fn record(

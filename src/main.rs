@@ -51,6 +51,7 @@ pub const ICON_SIZE: usize = 256;
 pub static ICON_RGBA: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/icon-256.rgba"));
 
 fn main() -> eframe::Result {
+    raise_open_file_limit();
     let args: Vec<std::path::PathBuf> = std::env::args_os()
         .skip(1)
         .map(std::path::PathBuf::from)
@@ -101,6 +102,77 @@ fn attach_console() {
 
 #[cfg(not(windows))]
 fn attach_console() {}
+
+/// Lets the program have as many files open at once as the system allows,
+/// up to 10,240, once. macOS starts an app from Finder or the Dock, and some
+/// shells start commands, with a limit of 256. The test suite, which opens
+/// many libraries and photos at once in one process, ran out of it, and
+/// SQLite then reported "unable to open database file". Called before
+/// anything is opened, and again by [`db::Database::open`], which the tests
+/// reach without `main`.
+pub fn raise_open_file_limit() {
+    #[cfg(unix)]
+    {
+        static ONCE: std::sync::Once = std::sync::Once::new();
+        ONCE.call_once(|| {
+            let mut limit = libc::rlimit {
+                rlim_cur: 0,
+                rlim_max: 0,
+            };
+            // SAFETY: getrlimit only writes `limit`, which lives for the call.
+            if unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit) } != 0 {
+                return;
+            }
+            let reached = raised_file_limit(limit.rlim_cur, limit.rlim_max, |soft| {
+                let raised = libc::rlimit {
+                    rlim_cur: soft,
+                    rlim_max: limit.rlim_max,
+                };
+                // SAFETY: setrlimit only reads `raised`, which lives for the
+                // call, and leaves the limit as it was when it refuses.
+                unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &raised) == 0 }
+            });
+            if reached < 1_024 {
+                eprintln!(
+                    "Picasso can have only {reached} files open at once; opening photos may fail."
+                );
+            }
+        });
+    }
+}
+
+/// Raises a soft limit on open files of `current`, under a hard limit of
+/// `hard`, through `try_set`, which sets the soft limit it is given or
+/// refuses and leaves it. Returns the limit it ends at: the most `try_set`
+/// accepts, up to 10,240, or `current` if it accepts nothing higher.
+#[cfg(unix)]
+fn raised_file_limit(
+    current: libc::rlim_t,
+    hard: libc::rlim_t,
+    mut try_set: impl FnMut(libc::rlim_t) -> bool,
+) -> libc::rlim_t {
+    // macOS refuses more than OPEN_MAX, 10,240, even when the hard limit is
+    // unlimited.
+    const MOST: libc::rlim_t = 10_240;
+    let wanted = hard.min(MOST);
+    if current >= wanted || try_set(wanted) {
+        return current.max(wanted);
+    }
+    // macOS also refuses more than kern.maxfilesperproc, which can be set
+    // lower. The most it accepts lies between the current limit, accepted,
+    // and `wanted`, refused; each attempt halves the gap, and the limit set
+    // is the last accepted.
+    let (mut accepted, mut refused) = (current, wanted);
+    while refused - accepted > 1 {
+        let soft = accepted + (refused - accepted) / 2;
+        if try_set(soft) {
+            accepted = soft;
+        } else {
+            refused = soft;
+        }
+    }
+    accepted
+}
 
 /// WSLg exposes the GPU through `/dev/dxg`. Its Wayland EGL path binds the
 /// dummy `/dev/dri` device, then the compositor closes the socket
@@ -254,6 +326,43 @@ fn symbol_font(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The soft limits `raised_file_limit` reaches from 256 under `hard`
+    /// on a system that accepts up to `system`, and the limit it leaves set.
+    #[cfg(unix)]
+    fn raise_from_256(hard: libc::rlim_t, system: libc::rlim_t) -> (libc::rlim_t, libc::rlim_t) {
+        let mut set = 256;
+        let reached = raised_file_limit(256, hard, |soft| {
+            let accepted = soft <= system && soft <= hard;
+            if accepted {
+                set = soft;
+            }
+            accepted
+        });
+        (reached, set)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_open_file_limit_rises_to_the_most_the_system_accepts() {
+        // macOS's unlimited hard limit, as far as OPEN_MAX.
+        assert_eq!(
+            raise_from_256(libc::RLIM_INFINITY, 1 << 20),
+            (10_240, 10_240)
+        );
+        // A lower hard limit, as on Linux.
+        assert_eq!(raise_from_256(4_096, 1 << 20), (4_096, 4_096));
+        // kern.maxfilesperproc set below 10,240: all it allows, not half.
+        assert_eq!(raise_from_256(libc::RLIM_INFINITY, 1_200), (1_200, 1_200));
+        // Nothing higher allowed: the limit stays.
+        assert_eq!(raise_from_256(libc::RLIM_INFINITY, 256), (256, 256));
+        assert_eq!(raise_from_256(256, 1 << 20), (256, 256));
+        // Already higher: never lowered.
+        assert_eq!(
+            raised_file_limit(65_536, libc::RLIM_INFINITY, |_| panic!("set")),
+            65_536
+        );
+    }
 
     #[test]
     fn the_star_has_a_font_where_the_system_has_a_symbol_font() {

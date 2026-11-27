@@ -435,6 +435,68 @@ mod tests {
         (reached, unnamed)
     }
 
+    /// Where a control is on screen, as screen readers are told.
+    type Bounds = egui::accesskit::Rect;
+
+    /// The nodes of `role` in the last frame's tree, with their bounds.
+    fn nodes_of(window: &Headless, role: Role) -> Vec<(&Node, Bounds)> {
+        let tree = window.access.as_ref().expect("the tree");
+        tree.nodes
+            .iter()
+            .filter(|(_, node)| node.role() == role)
+            .filter_map(|(_, node)| Some((node, node.bounds()?)))
+            .collect()
+    }
+
+    /// The bounds of the nodes of `role` in the last frame's tree.
+    fn bounds_of(window: &Headless, role: Role) -> Vec<Bounds> {
+        nodes_of(window, role)
+            .into_iter()
+            .map(|(_, bounds)| bounds)
+            .collect()
+    }
+
+    fn center(rect: Bounds) -> Pos2 {
+        Pos2::new(
+            ((rect.x0 + rect.x1) / 2.0) as f32,
+            ((rect.y0 + rect.y1) / 2.0) as f32,
+        )
+    }
+
+    /// Draws `frames` frames a refresh apart, so animations run their time.
+    fn settle(window: &mut Headless, frames: usize) {
+        for _ in 0..frames {
+            window.draw(Vec::new());
+            std::thread::sleep(REFRESH);
+        }
+    }
+
+    /// Moves the pointer to `at`, rests it there, and clicks.
+    fn click(window: &mut Headless, at: Pos2) {
+        let button = |pressed: bool| Event::PointerButton {
+            pos: at,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        };
+        for _ in 0..5 {
+            window.draw(vec![Event::PointerMoved(at)]);
+            std::thread::sleep(REFRESH);
+        }
+        window.draw(vec![button(true)]);
+        window.draw(vec![button(false)]);
+    }
+
+    /// Opens the first photo in the editor, with screen readers told what
+    /// is drawn, and draws only the frame E is pressed in.
+    fn open_editor(window: &mut Headless) {
+        window.ctx.enable_accesskit();
+        window.draw(Vec::new());
+        window.app.select_click(0, Modifiers::NONE);
+        window.draw(vec![key(egui::Key::E, Modifiers::NONE)]);
+        assert!(window.app.editing);
+    }
+
     /// The app on a library of `photos` small JPEGs in one folder, under a
     /// temporary folder named after `name`, once its first scan has listed
     /// them.
@@ -1141,6 +1203,228 @@ mod tests {
         window.draw(Vec::new());
         window.app.set_nav(Nav::Trip(trip));
         assert_eq!(window.app.trip_filter.day, DayFilter::Day(arrival));
+    }
+
+    #[test]
+    fn the_edit_panels_scroll_bar_keeps_clear_of_its_sliders() {
+        use super::super::editor::Tool;
+        let (_scratch, mut window) = library("edit-scroll-bar", 2);
+        // Tall enough for Transform's controls, and Mask's before its first
+        // mask, to fit without a bar, though not Adjust's sections.
+        window.size = Vec2::new(1280.0, 1000.0);
+        // Every page's scroll bars sit beside what they scroll, not over it.
+        for theme in [egui::Theme::Light, egui::Theme::Dark] {
+            let style = window.ctx.style_of(theme);
+            assert!(!style.spacing.scroll.floating, "floating bars in {theme:?}");
+        }
+        open_editor(&mut window);
+        // Each slider and the scroll bar beside it, nearest on its right:
+        // the slider ends before the bar, or the bar takes the clicks on its
+        // right end. Sliders with no bar beside them are left out.
+        let pairs = |window: &Headless| -> Vec<_> {
+            let bars = bounds_of(window, Role::ScrollBar);
+            bounds_of(window, Role::Slider)
+                .into_iter()
+                .filter_map(|slider| {
+                    bars.iter()
+                        .filter(|bar| bar.x0 > slider.x0)
+                        .filter(|bar| slider.y0 < bar.y1 && slider.y1 > bar.y0)
+                        .min_by(|a, b| a.x0.total_cmp(&b.x0))
+                        .map(|bar| (slider, *bar))
+                })
+                .collect()
+        };
+        let check = |window: &Headless, when: &str| {
+            let found = pairs(window);
+            assert!(!found.is_empty(), "{when}: no slider beside a scroll bar");
+            for (slider, bar) in found {
+                assert!(
+                    slider.x1 <= bar.x0,
+                    "{when}: a slider at {slider:?} runs under the scroll bar at {bar:?}"
+                );
+            }
+        };
+        // The first frame the sliders are drawn beside a bar, before it could
+        // slide in.
+        let first = |window: &mut Headless, when: &str| {
+            let mut frames = 0;
+            while pairs(window).is_empty() {
+                assert!(frames < 10, "{when}: no slider beside a scroll bar");
+                window.draw(Vec::new());
+                frames += 1;
+            }
+            check(window, when);
+        };
+        first(&mut window, "opening the editor");
+        settle(&mut window, 30);
+        check(&window, "half a second on");
+        // The Edit panel's bars: right of where Adjust's sliders start.
+        let panel_left = pairs(&window)
+            .iter()
+            .map(|(slider, _)| slider.x0)
+            .fold(f64::MAX, f64::min);
+        let panel_bars = |window: &Headless| {
+            bounds_of(window, Role::ScrollBar)
+                .into_iter()
+                .filter(|bar| bar.x0 > panel_left)
+                .count()
+        };
+        // Crop's straighten slider keeps clear of its bar too.
+        window.app.set_tool(Tool::Crop);
+        window.draw(Vec::new());
+        first(&mut window, "Crop");
+        // To Transform, which has no sliders and fits without a bar, and back
+        // to Adjust.
+        window.app.set_tool(Tool::Transform);
+        settle(&mut window, 30);
+        assert_eq!(panel_bars(&window), 0, "Transform fits without a bar");
+        window.app.set_tool(Tool::Adjust);
+        window.draw(Vec::new());
+        first(&mut window, "back from Transform");
+        // Mask before its first mask has no sliders, and no bar beside its
+        // buttons.
+        window.app.set_tool(Tool::Mask);
+        settle(&mut window, 30);
+        assert_eq!(panel_bars(&window), 0, "Mask without a mask has no bar");
+        // With a mask, its sliders are below the list of masks.
+        let add = nodes_of(&window, Role::Button)
+            .into_iter()
+            .find(|(node, _)| node.label() == Some("+ Linear gradient"))
+            .map(|(_, rect)| center(rect))
+            .expect("Mask's + Linear gradient");
+        click(&mut window, add);
+        settle(&mut window, 30);
+        check(&window, "Mask with a mask");
+        window.app.set_tool(Tool::Transform);
+        settle(&mut window, 30);
+        window.app.set_tool(Tool::Mask);
+        window.draw(Vec::new());
+        first(&mut window, "Mask from Transform");
+    }
+
+    #[test]
+    fn a_click_at_the_right_end_of_an_edit_slider_takes_it_to_its_top_value() {
+        // The steps of issue 2: open the editor, find a slider beside the
+        // panel's scroll bar, and click at its far-right end. The slider
+        // takes the click and goes to its top value; under a bar floating
+        // over it, the bar took the click and the slider stayed.
+        let (_scratch, mut window) = library("edit-slider-end", 2);
+        open_editor(&mut window);
+        settle(&mut window, 30);
+        let bars = bounds_of(&window, Role::ScrollBar);
+        // A slider in full view beside a bar to its right, below its top.
+        let (id, slider, before, top) = {
+            let tree = window.access.as_ref().expect("the tree");
+            tree.nodes
+                .iter()
+                .filter(|(_, node)| node.role() == Role::Slider)
+                .filter_map(|(id, node)| {
+                    Some((
+                        *id,
+                        node.bounds()?,
+                        node.numeric_value()?,
+                        node.max_numeric_value()?,
+                    ))
+                })
+                .find(|(_, slider, value, top)| {
+                    value < top
+                        && bars.iter().any(|bar| {
+                            bar.x0 > slider.x0 && slider.y0 >= bar.y0 && slider.y1 <= bar.y1
+                        })
+                })
+                .expect("a slider in view beside the Edit panel's scroll bar")
+        };
+        let at = Pos2::new(slider.x1 as f32 - 2.0, center(slider).y);
+        click(&mut window, at);
+        window.draw(Vec::new());
+        let tree = window.access.as_ref().expect("the tree");
+        let after = tree
+            .nodes
+            .iter()
+            .find(|(node, _)| *node == id)
+            .and_then(|(_, node)| node.numeric_value())
+            .expect("the same slider");
+        assert!(
+            (after - top).abs() < 1e-6,
+            "a click at {at:?}, the right end of the slider at {slider:?}, took it from {before} to {after}, not its top value {top}"
+        );
+    }
+
+    #[test]
+    fn the_library_grids_own_scroll_bar_keeps_clear_of_its_photos() {
+        use crate::types::Sort;
+        // Sorted by name there is no date strip, so the grid shows its bar.
+        let (_scratch, mut window) = library("grid-scroll-bar", 80);
+        window.ctx.enable_accesskit();
+        window.app.sort = Sort::Name;
+        window.app.reload_view();
+        // Scrolled a little, so the heading is pinned at the bar's top.
+        window.app.jump_to = Some(100.0);
+        settle(&mut window, 30);
+        // The photos drawn, by name, and the grid's bar, nearest right of
+        // them and beside one.
+        let shown = |window: &Headless| {
+            let photos: Vec<(String, Bounds)> = nodes_of(window, Role::Button)
+                .into_iter()
+                .filter_map(|(node, rect)| {
+                    let name = node.label().filter(|name| name.starts_with("IMG_"))?;
+                    Some((name.to_owned(), rect))
+                })
+                .collect();
+            let left = photos
+                .iter()
+                .map(|(_, rect)| rect.x0)
+                .fold(f64::MAX, f64::min);
+            let bar = bounds_of(window, Role::ScrollBar)
+                .into_iter()
+                .filter(|bar| bar.x0 > left)
+                .filter(|bar| {
+                    photos
+                        .iter()
+                        .any(|(_, rect)| rect.y0 < bar.y1 && rect.y1 > bar.y0)
+                })
+                .min_by(|a, b| a.x0.total_cmp(&b.x0));
+            (photos, bar)
+        };
+        let (photos, bar) = shown(&window);
+        let bar = bar.expect("the grid's scroll bar beside its photos");
+        for (name, rect) in &photos {
+            assert!(
+                rect.x1 <= bar.x0,
+                "{name} at {rect:?} runs under the scroll bar at {bar:?}"
+            );
+        }
+
+        // Further down, the bar's handle is clear of its top, where the pinned
+        // heading is drawn. A click on the bar there still scrolls the grid
+        // back up. (egui gives the click to the bar however wide the heading
+        // is; that the heading isn't painted over the bar isn't checked.)
+        window.app.jump_to = Some(1200.0);
+        for _ in 0..10 {
+            window.draw(Vec::new());
+        }
+        let (photos, _) = shown(&window);
+        let top_photo = photos
+            .iter()
+            .filter(|(_, rect)| rect.y0 >= bar.y0)
+            .min_by(|a, b| a.1.y0.total_cmp(&b.1.y0))
+            .cloned()
+            .expect("a photo in view");
+        let at = Pos2::new(center(bar).x, bar.y0 as f32 + 10.0);
+        click(&mut window, at);
+        for _ in 0..10 {
+            window.draw(Vec::new());
+        }
+        let (after, _) = shown(&window);
+        let moved = after
+            .iter()
+            .find(|(name, _)| *name == top_photo.0)
+            .is_none_or(|(_, rect)| (rect.y0 - top_photo.1.y0).abs() > 1.0);
+        assert!(
+            moved,
+            "a click on the bar at {at:?}, under the pinned heading, left {} where it was",
+            top_photo.0
+        );
     }
 
     #[test]

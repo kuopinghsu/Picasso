@@ -1126,9 +1126,12 @@ impl PicassoApp {
             ui.label(egui::RichText::new(text).size(12.0).color(theme::muted()));
             ui.add_space(4.0);
         }
+        // The bar always shown, so the details keep one width from photo to
+        // photo, as beside the Library.
         egui::ScrollArea::vertical()
             .id_salt("places-photo")
             .auto_shrink([false, false])
+            .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
             .show(ui, |ui| self.side_info(ui, &photo));
     }
 

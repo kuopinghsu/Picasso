@@ -305,9 +305,29 @@ fn panel_contents(
         .ctx()
         .data(|data| data.get_temp::<f32>(tail_id))
         .unwrap_or(EXPORT_H);
+    // A tool with sliders always shows its bar, so the sliders keep one
+    // width as sections open and close instead of narrowing while a bar
+    // slides in over their right ends: Adjust, almost always taller than the
+    // panel; Crop, with its straighten slider, which scrolls in a window of
+    // the size Picasso opens at; and Mask once it has a mask, whose sliders
+    // grow with each. Transform, and Mask before its first mask, have none
+    // and show a bar only when they scroll. Each tool's area is its own, so
+    // coming from one without a bar doesn't slide a bar in, and each keeps
+    // its place.
+    let sliders = match session.tool {
+        Tool::Adjust | Tool::Crop => true,
+        Tool::Mask => !draft.settings.masks.is_empty(),
+        Tool::Transform => false,
+    };
+    let bar = if sliders {
+        egui::scroll_area::ScrollBarVisibility::AlwaysVisible
+    } else {
+        egui::scroll_area::ScrollBarVisibility::VisibleWhenNeeded
+    };
     egui::ScrollArea::vertical()
-        .id_salt("edit-panel")
+        .id_salt(("edit-panel", session.tool as u8))
         .auto_shrink([false, false])
+        .scroll_bar_visibility(bar)
         .max_height((height - used - tail_h).max(100.0))
         .show(ui, |ui| {
             ui.spacing_mut().item_spacing.y = 3.0;

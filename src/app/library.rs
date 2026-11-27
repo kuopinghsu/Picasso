@@ -237,7 +237,23 @@ impl PicassoApp {
         let full = ui.available_rect_before_wrap();
         let strip_w = if self.sort.by_name() { 0.0 } else { STRIP_W };
         let grid_rect = Rect::from_min_max(full.min, Pos2::new(full.max.x - strip_w, full.max.y));
-        self.ensure_layout(grid_rect.width(), tracks.len());
+        // The date strip, which scrolls the grid itself, needs a photo with a
+        // date to mark. Without it the grid shows its own bar, floating at its
+        // right edge: the rows end short of it, so it takes no clicks meant
+        // for the photos in the last column. Decided before the layout, which
+        // is made to the width this leaves.
+        let scrubber = strip_w > 0.0
+            && self
+                .photos
+                .iter()
+                .any(|photo| day_key(photo.taken_at).is_some());
+        let bar_room = if scrubber {
+            0.0
+        } else {
+            let bar = egui::style::ScrollStyle::floating();
+            bar.bar_width + bar.bar_outer_margin
+        };
+        self.ensure_layout(grid_rect.width() - bar_room, tracks.len());
         let layout = Rc::clone(&self.layout.as_ref().unwrap().layout);
         self.grid_cols = layout.cols;
         let pending = self
@@ -253,9 +269,7 @@ impl PicassoApp {
         let mut area = egui::ScrollArea::vertical()
             .id_salt("library-grid")
             .auto_shrink([false, false]);
-        // The date strip scrolls the grid itself, so a scroll bar beside it
-        // would only repeat it.
-        let scrubber = strip_w > 0.0 && !layout.months.is_empty();
+        // A scroll bar beside the date strip would only repeat it.
         if scrubber {
             area = area.scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden);
         }
@@ -263,6 +277,9 @@ impl PicassoApp {
             area = area.vertical_scroll_offset(y.max(0.0));
         }
         let mut grid = ui.new_child(egui::UiBuilder::new().max_rect(grid_rect));
+        // The thin floating bar, not the solid one: `bar_room` above and the
+        // date bubble in `scroll_hint` are both measured from it.
+        theme::floating_scroll_bar(&mut grid);
         let output = area.show_viewport(&mut grid, |ui, viewport| {
             ui.set_height(layout.height);
             let first = layout.rows.partition_point(|row| {
@@ -336,9 +353,10 @@ impl PicassoApp {
         let view = output.inner_rect;
         if let Some((title, y)) = layout.pinned_heading(output.state.clamped_offset().y) {
             let top = view.top() + y - output.state.clamped_offset().y;
+            // Short of the bar, which it would otherwise paint over.
             let band = Rect::from_min_max(
                 Pos2::new(view.left(), top),
-                Pos2::new(view.right(), top + HEADER_H),
+                Pos2::new(view.right() - bar_room, top + HEADER_H),
             );
             grid.interact(band, egui::Id::unique("pinned-heading"), Sense::click());
             let painter = grid.painter().with_clip_rect(view);
@@ -368,7 +386,7 @@ impl PicassoApp {
                 .and_then(|index| self.photos.get(index))
                 .map(|photo| photo.id);
         }
-        self.scroll_hint(ui, &layout, &output);
+        self.scroll_hint(&grid, &layout, &output);
         if scrubber {
             let strip = Rect::from_min_max(Pos2::new(grid_rect.max.x, full.min.y), full.max);
             self.date_strip(

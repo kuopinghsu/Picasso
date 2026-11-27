@@ -232,6 +232,17 @@ section of this file as the release notes.
   beside the grid, with the month in view; the Help and Settings buttons; the thumbnail
   size slider; the sort menu; and a Trip's lists of days and places. The search field is
   named Search photos instead of by its whole tooltip.
+- Scroll bars, such as the one in the Edit panel, sit beside what they scroll instead of over
+  it, so the right end of a slider can be clicked and dragged again. The Edit panel's tools
+  with sliders (Adjust, Crop, and Mask once it has a mask) and a photo's details, beside the
+  Library, in the viewer and in Places, always show theirs, so they keep one width. The Story
+  editor's rows of photos to choose from show theirs below the photos. The Library grid and
+  the viewer's filmstrip keep their thin bar; the grid's last column now ends before it, and
+  its pinned day heading no longer hides the top of it.
+- On macOS, an app opened from Finder or the Dock, or a command from some shells, may have
+  only 256 files open at once, and the test suite failed with "unable to open database
+  file" when it ran out. Picasso now raises its own limit as far as the system allows, up
+  to 10,240, so many photos and databases can be open at once.
 - At the smallest window size, the Settings button no longer falls off the end of the top bar,
   and a Trip's All stories link moves to the next line whole instead of breaking in two.
 - Shortcuts such as S, Delete and F1 no longer stop working once Tab has moved the keyboard

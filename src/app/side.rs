@@ -122,9 +122,12 @@ impl PicassoApp {
             ui.add_space(4.0);
         }
         // The details scroll; the actions stay pinned at the bottom.
+        // The bar always shown, so the details keep one width from photo to
+        // photo, whether or not they scroll.
         egui::ScrollArea::vertical()
             .id_salt("side-panel")
             .auto_shrink([false, false])
+            .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
             .max_height((ui.available_height() - ACTION_BAR).max(80.0))
             .show(ui, |ui| match self.side {
                 SidePanel::Map => self.side_map(ui, &photo),

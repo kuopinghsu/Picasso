@@ -154,9 +154,10 @@ The window draws on one thread, so anything slow there shows as a stutter. Each 
 ## Storage
 
 - **Internal SSD:** what the baselines measure.
-- **External drives (USB, Thunderbolt):** supported. A drive that is unplugged keeps its photos, stars, and edits in the library; its folder is scanned again when it is back, at the next start or with **F5**. Moving a photo to the trash on a disconnected drive reports it rather than removing it from the library. Hard disks are much slower for a first scan and for thumbnails, which read every file in full.
+- **External drives (USB, Thunderbolt):** supported. A drive that is unplugged keeps its photos, stars, and edits in the library; its folder is scanned again when it is back, at the next start or with **F5**. Moving a photo to the trash on a disconnected drive reports it rather than removing it from the library. Hard disks are much slower for a first scan and for thumbnails, which read every file in full. The check at each start passes over subfolders unchanged since the last scan only on file systems that mark a folder changed when a file in it is added, removed or renamed (APFS, HFS+, NTFS, ReFS, ext4, Btrfs, XFS, ZFS, F2FS, SMB and NFS); on FAT and exFAT, as on memory cards and many USB drives, and in another drive mounted inside an added folder, it checks every file.
 - **Network drives (SMB, NFS, NAS):** supported for reading, with these limits:
   - Folders are listed with a few threads at once to hide network latency, but a first scan and the thumbnails still read every photo over the network.
+  - The check at each start passes over subfolders whose modification time hasn't changed since the last complete scan, so it asks the share about each folder rather than each file. **F5** checks every file.
   - Changes made from another computer may not be noticed while Picasso runs, because many network file systems don't report them. Press **F5** to rescan.
   - A share that drops out during a scan keeps its photos rather than removing them.
   - The library itself (`picasso.db`) must stay on a local disk. SQLite, which keeps it, can't lock files reliably over a network.

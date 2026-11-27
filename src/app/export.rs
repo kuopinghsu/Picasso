@@ -365,7 +365,7 @@ impl PicassoApp {
         let small = |text: String| RichText::new(text).size(12.0);
         ui.label(small("·".into()).color(theme::muted()));
         let Some(at) = run.finished else {
-            ui.add(egui::Spinner::new().size(12.0));
+            theme::spinner(ui, 12.0);
             let note = trf(
                 "Exporting {} of {}…",
                 &[&(run.exported + run.failed + 1).min(run.total), &run.total],

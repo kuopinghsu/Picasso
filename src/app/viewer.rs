@@ -519,7 +519,7 @@ impl PicassoApp {
             theme::paint_image(&clipped, &texture, image_rect, full_uv(), photo.rotation);
         } else if let Some((texture, _w, _h)) = self.thumb_texture(photo.id) {
             theme::paint_image(&clipped, &texture, image_rect, full_uv(), photo.rotation);
-        } else {
+        } else if !self.display_failed.contains_key(&photo.id) {
             self.ensure_thumb(photo.id, &photo.path);
             ui.painter().text(
                 stage.center(),
@@ -528,6 +528,18 @@ impl PicassoApp {
                 FontId::proportional(16.0),
                 theme::muted(),
             );
+        }
+        // A photo that couldn't be shown says why: not found, its drive not
+        // connected, or a file that can't be read.
+        if !photo.is_video() {
+            if let Some((reason, _)) = self.display_failed.get(&photo.id).cloned() {
+                paint_notice(ui, stage, &reason);
+            }
+            // Tried again in a while, as its drive may be plugged back in.
+            if let Some(retry) = self.display_retry(photo.id) {
+                let wait = retry.saturating_duration_since(std::time::Instant::now());
+                ui.ctx().request_repaint_after(wait);
+            }
         }
 
         if response.hovered() {
@@ -549,15 +561,8 @@ impl PicassoApp {
         }
         if let Some(view) = self.video.as_mut().filter(|view| view.id == photo.id) {
             if let Some(error) = view.player.error() {
-                let painter = ui.painter();
-                let galley =
-                    painter.layout_no_wrap(error.to_string(), FontId::proportional(14.0), WHITE);
-                let pill = Rect::from_center_size(
-                    Pos2::new(stage.center().x, stage.bottom() - 40.0),
-                    galley.size() + Vec2::new(28.0, 16.0),
-                );
-                painter.rect_filled(pill, 8, Color32::from_black_alpha(180));
-                painter.galley(pill.center() - galley.size() / 2.0, galley, WHITE);
+                let error = error.to_string();
+                paint_notice(ui, stage, &error);
             } else if !view.player.playing() {
                 paint_play_button(ui.painter(), stage.center(), 36.0);
             }
@@ -1169,6 +1174,21 @@ pub(super) fn paint_histogram_placeholder(ui: &mut egui::Ui, loading: bool) {
     }
     // Where the clipping summary goes, so what follows stays put.
     ui.label(egui::RichText::new(" ").size(11.0));
+}
+
+/// `text` in a dark pill near the bottom of the viewer's `stage`, read
+/// out by screen readers too.
+fn paint_notice(ui: &egui::Ui, stage: Rect, text: &str) {
+    let painter = ui.painter();
+    let galley = painter.layout_no_wrap(text.to_string(), FontId::proportional(14.0), WHITE);
+    let pill = Rect::from_center_size(
+        Pos2::new(stage.center().x, stage.bottom() - 40.0),
+        galley.size() + Vec2::new(28.0, 16.0),
+    );
+    painter.rect_filled(pill, 8, Color32::from_black_alpha(180));
+    painter.galley(pill.center() - galley.size() / 2.0, galley, WHITE);
+    let response = ui.interact(pill, egui::Id::unique("viewer-notice"), Sense::hover());
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, text));
 }
 
 fn full_uv() -> Rect {

@@ -170,13 +170,26 @@ section of this file as the release notes.
   modified, newest or oldest first, and Sort by File type, which goes by the extension and
   then the name. Sorted any way but by date, the photos are one list with their names, and
   dragging the scroll bar shows the size, the day changed, the file type or the name in view.
+- Stacks in the photo grid: turn on Stack photos taken within, with how many seconds apart, or
+  Stack look-alikes, beside Edited only, to show photos taken one after another, such as a
+  burst, as one tile with how many photos it holds; photos taken together that look very
+  different, such as a sign and then the view, stay apart. Click the number to open the stack
+  in place and again to close it. Look-alikes are photos taken the same day that look alike;
+  Picasso finds how each looks from its thumbnail in the background. Stacks show when sorted by
+  date, the settings are kept, and nothing in the library changes.
 
 ### Changed
 
+- Picasso checks large folders much faster when it starts, above all on network drives:
+  subfolders unchanged since the last complete scan are passed over instead of having each
+  file checked. FAT and exFAT drives, which don't always mark a folder changed, still have
+  every file checked, and F5 checks every file anywhere. Busy spinners redraw about 15 times a second
+  instead of at the display's full rate, so a long scan takes far less CPU.
 - CI runs daily at 17:00 Taiwan time instead of on every commit or pull request, selecting
   checks from changes since the last successful daily run. Rust changes run Linux x64
-  formatting and tests; docs, WordPress, guides and packaging use their own checks, and
-  dependencies are audited every day. Tags and manual runs retain full native validation.
+  formatting and tests; docs, WordPress and guides use their own checks, and dependencies
+  are audited every day. Daily runs never build packages: only tags and manual runs build
+  and test them on every platform.
   A final CI checks result rejects failed, cancelled or unexpectedly skipped work;
   docs-only runs retain bilingual document checks without compiling Rust.
 - Exporting and publishing a Story render three photos at a time, as exporting photos
@@ -212,6 +225,12 @@ section of this file as the release notes.
 
 ### Fixed
 
+- PNGs saved by older iPhones and iOS apps in Apple's CgBI format, such as screenshots, are
+  shown with their true colors instead of being listed as files that couldn't be read. A
+  scan tries such files again without waiting a week.
+- Excluding a folder while a refresh is scanning it stops the scan reading that folder at
+  once, and the scan goes on with the rest. Before, the scan kept reading the folder and
+  its subfolders to the end, and put the photos it found there back in the library.
 - WordPress publishing now checks recovered posts for remote edits and public status
   before updating them, and finds scheduled posts after a lost response instead of
   creating duplicates.

@@ -30,9 +30,10 @@ Picasso also reads the `.picasa.ini` files Picasa left in photo folders, for sta
 | `albums`, `album_photos` | Album, and photo in an album | |
 | `edits` | Edited photo | `steps` is the edit history as JSON, `applied` how many of them are in effect, so Undo and Redo survive a restart. |
 | `photo_archive` | Photo that left the library in the last 90 days | Its stars, caption, rotation, place, date, albums, and edits as JSON, keyed by path, size, modification time, and date taken, so they come back if the file does. |
-| `unreadable` | File or folder a scan couldn't read | With the reason. A file is tried again when it changes, or after 7 days. |
+| `unreadable` | File or folder a scan couldn't read | With the reason. A file is tried again when it changes, after 7 days, or when `indexed_version` is below `DECODER_VERSION`, which goes up when the decoders learn a new kind of file. |
 | `excluded` | Folder left out of scanning | |
 | `tracks` | GPX or KML file | `points` is the track in the compact form of `Track::encode`. |
+| `dir_stamps` | Subfolder of an added folder that its last complete scan walked | `modified_ns` is the subfolder's modification time in nanoseconds, or -1 when the next check has to list it again: it changed moments before that scan, couldn't be listed in full, or holds a file that couldn't be read. Kept only on file systems that update folder times (not FAT or exFAT). The check at each start passes over a subfolder whose time is unchanged, counting the photos and tracks known there as found, and goes on to the subfolders stored under it. |
 | `settings` | Value kept with the library | `user_presets` (your edit presets), `side_panel`, `viewer_info`, and `seeded` (the Pictures folder was added on the first start). Settings of older versions that now live in `settings.json` are read from here once. |
 | `id_floor` | | The highest photo id ever used, kept by a trigger, so an id is never given to another photo and nothing cached under it is shown for the wrong one. |
 | `media_refs` | Photo a Trip or Story uses | Its catalog row in `photo_id` while it is in the library, emptied when the row goes, and the path, file name, size, modification time, and file date to find it again; `unlinked_at` is when the row went. Kept as long as anything uses it, past the 90 days of `photo_archive`. Triggers keep the hints current. `clock_kind`, `clock`, `clock_offset`, and `clock_utc` hold what the file says about when it was taken, read for `clock_read_for`, the file's modification time then. |
@@ -63,7 +64,7 @@ Indexes cover the orders and lookups the window uses: by folder, by date taken a
 | --- | --- | --- |
 | 0 | up to 0.9.4 | Libraries made before the version was kept. They are recognized by their tables and columns and upgraded in place. |
 | 1 | 0.9.5 | The version is kept. |
-| 2 | 0.9.6 | Trips and Stories: `media_refs`, `trips`, `trip_days`, `trip_media`, `trip_tracks`, `trip_places`, `trip_resources`, `stories`, `story_blocks`, `story_media` ([TRAVEL.md](TRAVEL.md)); WordPress: `publish_sites`, `publish_media`, `publications`, `publication_terms`, `publish_pending`, `publish_log`, `publication_media`, `publication_places`, `publish_journeys`. |
+| 2 | 0.9.6 | Trips and Stories: `media_refs`, `trips`, `trip_days`, `trip_media`, `trip_tracks`, `trip_places`, `trip_resources`, `stories`, `story_blocks`, `story_media` ([TRAVEL.md](TRAVEL.md)); subfolder times for the launch check: `dir_stamps`; WordPress: `publish_sites`, `publish_media`, `publications`, `publication_terms`, `publish_pending`, `publish_log`, `publication_media`, `publication_places`, `publish_journeys`. |
 
 ## How a library is upgraded
 
@@ -83,6 +84,7 @@ A library from a newer Picasso opens too, and keeps its number. Changes to the l
 - Add tables with `CREATE TABLE IF NOT EXISTS` and columns with `ensure_column`, giving every new column a default. Never rename or remove a column, and never change what an existing one means: an older Picasso still reads it.
 - Data that has to be converted goes in `upgrade()` as an `UPDATE` that does nothing when run twice.
 - Raise `SCHEMA_VERSION`, add a row to the table above, and add a test beside `upgrades_an_older_library` that starts from the previous layout.
-- When the scanner reads something new from files, raise `INDEX_VERSION` instead, so existing rows are read again on the next scan.
+- When the scanner reads something new from files, raise `INDEX_VERSION` instead, so existing rows are read again on the next scan, and keep `DECODER_VERSION` at least as high.
+- When the decoders learn to read files they refused, raise `DECODER_VERSION`, so only the files that failed are tried again.
 
 The tests in `src/db.rs` and `src/db/trips.rs` cover an upgrade from version 1, an upgrade from an old layout, one that fails halfway (the library is unchanged and its version stays 0, or 1 for a failed upgrade to version 2), that every table and column of version 1 keeps its type and default so an older Picasso still reads it, opening a library twice, and opening one from a newer version.

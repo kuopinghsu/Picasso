@@ -146,7 +146,7 @@ impl PicassoApp {
                 self.check_for_update(ui.ctx(), true);
             }
             if checking {
-                ui.spinner();
+                theme::spinner(ui, 28.0);
             } else if let Some(release) = self
                 .updates
                 .available

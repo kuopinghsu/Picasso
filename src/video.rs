@@ -150,6 +150,9 @@ pub struct VideoInfo {
 }
 
 pub fn info(path: &Path) -> Result<VideoInfo, String> {
+    if let Some(missing) = crate::files::missing(path) {
+        return Err(missing);
+    }
     let tools = tools().ok_or(tr("Install FFmpeg to read and play videos"))?;
     let output = command(&tools.ffprobe)
         .args([

@@ -91,7 +91,7 @@ impl PicassoApp {
         let state = &self.settings.publishing;
         if state.checking.is_some() {
             ui.horizontal(|ui| {
-                ui.add(egui::Spinner::new().size(13.0));
+                theme::spinner(ui, 13.0);
                 ui.label(RichText::new(tr("Checking…")).color(theme::muted()));
             });
         }

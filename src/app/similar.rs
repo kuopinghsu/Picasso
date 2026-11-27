@@ -161,7 +161,7 @@ impl PicassoApp {
                 );
                 let Some((shots, photos)) = &scan.found else {
                     ui.horizontal(|ui| {
-                        ui.spinner();
+                        theme::spinner(ui, 28.0);
                         ui.label(trf("Looking at {} of {} photos…", &[&scan.done, &scan.total]));
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                             if ui.button(tr("Cancel")).clicked() {

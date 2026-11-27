@@ -492,7 +492,7 @@ pub(super) fn exif_card(ui: &mut egui::Ui, photo: &Photo, exif: Option<&[(&'stat
         |ui| match exif {
             None => {
                 ui.horizontal(|ui| {
-                    ui.add(egui::Spinner::new().size(12.0));
+                    theme::spinner(ui, 12.0);
                     ui.label(
                         egui::RichText::new(tr("Reading EXIF…"))
                             .size(12.0)

@@ -18,6 +18,12 @@ use crate::types::{
 /// rows written by an older build are probed once more on the next scan.
 pub const INDEX_VERSION: i64 = 3;
 
+/// Kept with each file a scan couldn't read, and bumped whenever the
+/// decoders learn to read files they refused, such as Apple's CgBI PNGs, so
+/// those are tried again on the next scan without waiting for a week. It
+/// never goes below [`INDEX_VERSION`], which reads every file again anyway.
+pub const DECODER_VERSION: i64 = 4;
+
 /// Layout of the library, kept in `PRAGMA user_version`. 0 is any library
 /// from before the number was kept; `docs/DATABASE.md` lists each change.
 pub const SCHEMA_VERSION: i64 = 2;
@@ -100,8 +106,14 @@ pub struct ScanRecord {
 pub struct BatchResult {
     pub inserted: usize,
     pub updated: usize,
-    /// Row id of each record, in the order the records were given.
+    /// Row id of each record, in the order the records were given; 0 for
+    /// a record left out because its folder is excluded from scanning.
     pub ids: Vec<i64>,
+}
+
+/// Whether `path` is one of `dirs` or under one, by whole path components.
+pub fn under_any(path: &Path, dirs: &[PathBuf]) -> bool {
+    dirs.iter().any(|dir| path.starts_with(dir))
 }
 
 impl Database {
@@ -268,6 +280,16 @@ impl Database {
                     points BLOB NOT NULL
                 );
                 CREATE INDEX IF NOT EXISTS idx_tracks_folder ON tracks(folder_id);
+                -- Each subfolder a complete scan walked, with its
+                -- modification time in nanoseconds, or -1 when it has to be
+                -- listed again. A launch scan skips a subfolder whose time
+                -- is unchanged and walks the subfolders listed under it.
+                CREATE TABLE IF NOT EXISTS dir_stamps (
+                    folder_id INTEGER NOT NULL REFERENCES folders(id) ON DELETE CASCADE,
+                    path TEXT NOT NULL,
+                    modified_ns INTEGER NOT NULL,
+                    PRIMARY KEY (folder_id, path)
+                );
                 DROP TABLE IF EXISTS faces;
                 DROP TABLE IF EXISTS people;
                 ",
@@ -718,6 +740,39 @@ impl Database {
         rows.into_iter().collect()
     }
 
+    /// The subfolders the last complete scan of `folder_id` walked, with
+    /// their modification times in nanoseconds (-1 for one to list again).
+    pub fn dir_stamps(&self, folder_id: i64) -> HashMap<String, i64> {
+        self.map_rows(
+            "SELECT path, modified_ns FROM dir_stamps WHERE folder_id=?1",
+            [folder_id],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+        )
+        .into_iter()
+        .collect()
+    }
+
+    /// Replaces the subfolders stored for `folder_id` with those a complete
+    /// scan just walked.
+    pub fn store_dir_stamps(&self, folder_id: i64, stamps: &[(String, i64)]) {
+        let write = || -> rusqlite::Result<()> {
+            let tx = self.conn.unchecked_transaction()?;
+            tx.execute("DELETE FROM dir_stamps WHERE folder_id=?1", [folder_id])?;
+            {
+                let mut insert = tx.prepare(
+                    "INSERT OR REPLACE INTO dir_stamps(path, folder_id, modified_ns) VALUES(?1, ?2, ?3)",
+                )?;
+                for (path, stamp) in stamps {
+                    insert.execute(params![path, folder_id, stamp])?;
+                }
+            }
+            tx.commit()
+        };
+        if let Err(err) = write() {
+            eprintln!("picasso index: {err}");
+        }
+    }
+
     /// What the scans could not read, with the id of the folder each was in.
     pub fn unreadable(&self) -> Vec<(i64, Unreadable)> {
         self.map_rows(
@@ -745,7 +800,7 @@ impl Database {
         let rows = self.map_rows(
             "SELECT path, reason, bytes, modified_at FROM unreadable
              WHERE folder_id=?1 AND is_folder=0 AND checked_at >= ?2 AND indexed_version=?3",
-            params![folder_id, since, INDEX_VERSION],
+            params![folder_id, since, DECODER_VERSION],
             |row| {
                 Ok(Unreadable {
                     path: row.get(0)?,
@@ -800,7 +855,7 @@ impl Database {
                         item.bytes as i64,
                         item.modified_at,
                         at,
-                        INDEX_VERSION
+                        DECODER_VERSION
                     ])?;
                 }
             }
@@ -1006,12 +1061,23 @@ impl Database {
     }
 
     /// Writes probed files in one transaction. Existing rows get fresh file
-    /// metadata while stars, captions, albums, and pins stay untouched.
+    /// metadata while stars, captions, albums, and pins stay untouched. A
+    /// file under a folder excluded from scanning is left out, even when the
+    /// folder was excluded while the scan that found it was running.
     pub fn write_batch(&self, records: &[ScanRecord]) -> Result<BatchResult, String> {
         let tx = self
             .conn
             .unchecked_transaction()
             .map_err(|err| err.to_string())?;
+        let excluded: Vec<PathBuf> = {
+            let mut stmt = tx
+                .prepare_cached("SELECT path FROM excluded")
+                .map_err(|err| err.to_string())?;
+            let rows = stmt
+                .query_map([], |row| row.get::<_, String>(0))
+                .map_err(|err| err.to_string())?;
+            rows.filter_map(Result::ok).map(PathBuf::from).collect()
+        };
         let mut result = BatchResult::default();
         {
             let mut update = tx
@@ -1046,6 +1112,10 @@ impl Database {
             let now = unix_now();
             for record in records {
                 let photo = &record.photo;
+                if under_any(Path::new(&photo.path), &excluded) {
+                    result.ids.push(0);
+                    continue;
+                }
                 let version = if record.complete { INDEX_VERSION } else { 0 };
                 match record.existing {
                     Some(id) => {
@@ -2539,6 +2609,38 @@ mod tests {
             names(db.photos(&Nav::Library, "TestCam", Sort::SizeLargest)),
             order(Sort::SizeLargest)
         );
+    }
+
+    #[test]
+    fn photos_found_in_a_folder_excluded_since_are_not_written() {
+        let (db, folder_id, folder) = library("excluded-write");
+        std::fs::create_dir_all(folder.join("skip")).unwrap();
+        db.exclude_dir(&folder.join("skip")).unwrap();
+        // Read by a scan that started before the folder was excluded.
+        let written = db
+            .write_batch(&[
+                record(folder_id, &folder, "skip/a.jpg", 1),
+                record(folder_id, &folder, "skipped.jpg", 1),
+            ])
+            .unwrap();
+        assert_eq!(written.ids[0], 0, "left out");
+        assert!(written.ids[1] > 0);
+        assert_eq!(written.inserted, 1);
+        let names: Vec<String> = db
+            .photos(&Nav::Library, "", Sort::Name)
+            .into_iter()
+            .map(|photo| photo.filename)
+            .collect();
+        // A folder whose name only starts the same is not excluded.
+        assert_eq!(names, ["skipped.jpg"]);
+        assert!(under_any(
+            &folder.join("skip/x/y.jpg"),
+            &[folder.join("skip")]
+        ));
+        assert!(!under_any(
+            &folder.join("skipped.jpg"),
+            &[folder.join("skip")]
+        ));
     }
 
     #[test]

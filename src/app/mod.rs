@@ -24,6 +24,7 @@ mod settings;
 mod share;
 mod side;
 mod similar;
+mod stacks;
 mod stats;
 mod story;
 mod theme;
@@ -109,6 +110,9 @@ struct Slideshow {
 
 /// Seconds one slideshow photo takes to fade into the next.
 const SLIDE_FADE: f32 = 0.7;
+/// How long a photo whose file is missing waits before it is tried again
+/// while it is in or beside the viewer.
+const DISPLAY_RETRY: Duration = Duration::from_secs(3);
 /// Seconds a slideshow waits past its interval for the next photo to load.
 const SLIDE_WAIT: f32 = 3.0;
 
@@ -330,6 +334,9 @@ pub struct PicassoApp {
     sort: Sort,
     /// Visible filter independent of the photo ordering.
     edited_only: bool,
+    /// Stacks of photos taken close together or looking alike, and whether
+    /// the grid shows them.
+    stacking: stacks::Stacking,
     search: String,
     /// When the typed search runs.
     search_due: Option<Instant>,
@@ -389,7 +396,11 @@ pub struct PicassoApp {
     displays: Vec<DisplayTex>,
     display_nonce: HashMap<i64, u64>,
     display_inflight: HashMap<i64, u64>,
-    display_failed: HashSet<i64>,
+    /// Photos that couldn't be shown: why, in words, and when to try again,
+    /// for one whose file is missing, as its drive may be plugged back in. A
+    /// file that is there but can't be read is only tried again on coming
+    /// back to it.
+    display_failed: HashMap<i64, (String, Option<Instant>)>,
     /// Photo whose full-resolution view was asked for, at most one at a time.
     sharp: Option<i64>,
     nonce_seq: u64,
@@ -650,6 +661,7 @@ impl PicassoApp {
         })
         .ok();
         let travel = travel::Travel::load(&config);
+        let stacking = stacks::Stacking::load(&database, ctx);
 
         let mut app = Self {
             db: database,
@@ -689,6 +701,7 @@ impl PicassoApp {
             nav: Nav::Library,
             sort: Sort::DateNewest,
             edited_only: false,
+            stacking,
             search: String::new(),
             search_due: None,
             focus_search: false,
@@ -725,7 +738,7 @@ impl PicassoApp {
             displays: Vec::new(),
             display_nonce: HashMap::new(),
             display_inflight: HashMap::new(),
-            display_failed: HashSet::new(),
+            display_failed: HashMap::new(),
             sharp: None,
             nonce_seq: 1,
             video: None,
@@ -845,9 +858,10 @@ impl PicassoApp {
         if seeded {
             // The index thread resumes unfinished folders on its own; every
             // other folder is checked for files that changed while Picasso
-            // was closed. Unchanged files are skipped by size and date.
+            // was closed. Subfolders whose modification time hasn't changed
+            // are skipped, and unchanged files by size and date.
             for folder in app.db.folders() {
-                let _ = app.cmd_tx.send(Command::Scan(folder.id));
+                let _ = app.cmd_tx.send(Command::Check(folder.id));
             }
         }
         for (id, steps, applied) in app.db.edit_histories() {
@@ -969,8 +983,8 @@ impl PicassoApp {
     /// Takes `ids` out of the view at once, ahead of the reload that follows.
     fn drop_from_view(&mut self, ids: &[i64]) {
         let gone: HashSet<i64> = ids.iter().copied().collect();
-        let mut photos = std::mem::take(&mut self.photos);
-        let keep = photos.get(self.viewer_index).map(|photo| photo.id);
+        let keep = self.photos.get(self.viewer_index).map(|photo| photo.id);
+        let mut photos = self.all_photos();
         photos.retain(|photo| !gone.contains(&photo.id));
         self.show_photos(photos, keep);
     }
@@ -990,6 +1004,7 @@ impl PicassoApp {
             self.photos
                 .retain(|photo| self.edits.contains_key(&photo.id) == edited);
         }
+        self.stack_photos(keep);
         self.index_of = self
             .photos
             .iter()
@@ -1016,6 +1031,11 @@ impl PicassoApp {
         if self.mode == Mode::View {
             self.sync_caption();
         }
+    }
+
+    /// How many photos the view holds, closed stacks' included.
+    fn photos_in_view(&self) -> usize {
+        self.photos.len() + self.stacking.hidden_count()
     }
 
     /// Position of photo `id` in the current view.
@@ -1141,6 +1161,8 @@ impl PicassoApp {
                 self.scans = self.scans.saturating_sub(1);
                 if self.scans == 0 {
                     self.activity.clear();
+                    // Photos left for the scan's thumbnails get their looks now.
+                    self.stacking.later.clear();
                 }
                 if unreadable.is_empty() {
                     self.unreadable.remove(&folder);
@@ -1150,6 +1172,7 @@ impl PicassoApp {
                 self.library_dirty = true;
             }
             UiEvent::Library => self.library_dirty = true,
+            UiEvent::Changed(ids) => self.stacking.forget(&ids),
             UiEvent::Tracks(tracks) => self.tracks = tracks,
             UiEvent::Restored(ids) => {
                 for id in ids {
@@ -1211,6 +1234,7 @@ impl PicassoApp {
                     return;
                 }
                 self.display_inflight.remove(&id);
+                self.display_failed.remove(&id);
                 if edit != self.edit_settings(id) {
                     return;
                 }
@@ -1251,12 +1275,18 @@ impl PicassoApp {
                     tex.asked = 0;
                 }
             }
-            UiEvent::DisplayFailed { id, nonce } => {
+            UiEvent::DisplayFailed {
+                id,
+                nonce,
+                reason,
+                missing,
+            } => {
                 if self.display_nonce.get(&id) == Some(&nonce) {
                     self.display_inflight.remove(&id);
                     // A full-resolution decode that fails leaves the usual view.
                     if !(self.sharp == Some(id) && self.display_texture(id).is_some()) {
-                        self.display_failed.insert(id);
+                        let retry = missing.then(|| Instant::now() + DISPLAY_RETRY);
+                        self.display_failed.insert(id, (reason, retry));
                     }
                 }
             }
@@ -1290,6 +1320,14 @@ impl PicassoApp {
                 total,
                 found,
             } => self.on_similar(run, done, total, found),
+            UiEvent::Looks {
+                run,
+                looks,
+                no_look,
+                later,
+                done,
+                finished,
+            } => self.on_looks(run, looks, no_look, later, done, finished),
             UiEvent::Duplicates {
                 run,
                 checked,
@@ -1422,7 +1460,7 @@ impl PicassoApp {
         let ready = self.photos.get(next).is_some_and(|photo| {
             photo.is_video()
                 || self.display_texture(photo.id).is_some()
-                || self.display_failed.contains(&photo.id)
+                || self.display_failed.contains_key(&photo.id)
         });
         if elapsed < interval || (!ready && elapsed < interval + SLIDE_WAIT) {
             return;
@@ -2070,7 +2108,7 @@ impl PicassoApp {
                 self.open_export(&ids);
             }
         }
-        let mut text = photo_count(self.photos.len());
+        let mut text = photo_count(self.photos_in_view());
         if !self.activity.is_empty() {
             text.push_str("  ·  ");
             text.push_str(&self.activity);
@@ -2112,7 +2150,7 @@ impl PicassoApp {
             }
         }
         if self.scans > 0 {
-            ui.add(egui::Spinner::new().size(12.0));
+            theme::spinner(ui, 12.0);
         }
         rest += ui.cursor().min.x - notes;
         // The scan's progress changes the width many times a second, so a
@@ -2765,6 +2803,8 @@ impl PicassoApp {
     /// library. The files stay.
     fn exclude_dir(&mut self, dir: &Path) -> Result<(), String> {
         let (folder, dir) = self.db.exclude_dir(dir)?;
+        // A scan running there stops reading the folder and goes on.
+        let _ = self.cmd_tx.send(Command::Excluded);
         self.excluded = self.db.excluded_dirs();
         if let Some(list) = self.unreadable.get_mut(&folder) {
             list.retain(|item| !Path::new(&item.path).starts_with(&dir));
@@ -2851,6 +2891,8 @@ impl PicassoApp {
         self.mode = Mode::View;
         self.set_index(index, true);
         let id = self.photos[self.viewer_index].id;
+        // One that couldn't be shown is tried again, as its drive may be back.
+        self.retry_display_now(id);
         self.browse_selection = Some((std::mem::take(&mut self.selection), self.anchor));
         self.selection.clear();
         self.selection.insert(id);
@@ -2890,6 +2932,11 @@ impl PicassoApp {
         let index = index.min(self.photos.len() - 1);
         let changed = index != self.viewer_index;
         self.viewer_index = index;
+        if changed {
+            // Coming back to a photo that couldn't be shown tries it again.
+            let id = self.photos[index].id;
+            self.retry_display_now(id);
+        }
         if reset_zoom {
             self.zoom = Zoom::Fit;
             self.pan = Vec2::ZERO;
@@ -3300,13 +3347,35 @@ impl PicassoApp {
         }
     }
 
+    /// Lets photo `id`, if it couldn't be shown, be tried again at once.
+    fn retry_display_now(&mut self, id: i64) {
+        if let Some((_, retry)) = self.display_failed.get_mut(&id) {
+            *retry = Some(Instant::now());
+        }
+    }
+
+    /// When the photo `id` that couldn't be shown is next tried, if it is
+    /// one and isn't being tried now.
+    pub(super) fn display_retry(&self, id: i64) -> Option<Instant> {
+        if self.display_inflight.contains_key(&id) {
+            return None;
+        }
+        self.display_failed.get(&id).and_then(|(_, retry)| *retry)
+    }
+
     fn request_display(&mut self, index: usize) {
         let Some(photo) = self.photos.get(index) else {
             return;
         };
+        // One that couldn't be shown keeps saying why while it is tried
+        // again, once its wait is over.
+        let waiting = self
+            .display_failed
+            .get(&photo.id)
+            .is_some_and(|(_, retry)| retry.is_none_or(|retry| Instant::now() < retry));
         if self.displays.iter().any(|item| item.id == photo.id)
             || self.display_inflight.contains_key(&photo.id)
-            || self.display_failed.contains(&photo.id)
+            || waiting
         {
             return;
         }

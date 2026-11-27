@@ -8,12 +8,14 @@ mod backup;
 #[cfg(test)]
 mod bench;
 mod burst;
+mod cgbi;
 mod config;
 #[cfg(test)]
 mod corpus;
 mod db;
 mod edit;
 mod elevation;
+mod files;
 mod geo;
 mod geocode;
 mod geotag;

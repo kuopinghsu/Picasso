@@ -19,7 +19,7 @@ const HEAD_BYTES: usize = 256 * 1024;
 
 /// The first `limit` bytes of `path` in one read, and the file's length.
 fn read_head(path: &Path, limit: usize) -> Result<(Vec<u8>, u64), String> {
-    let file = File::open(path).map_err(|err| err.to_string())?;
+    let file = File::open(path).map_err(|err| crate::files::read_error(path, &err))?;
     let len = file.metadata().map_err(|err| err.to_string())?.len();
     let mut head = Vec::with_capacity(limit.min(len as usize));
     file.take(limit as u64)
@@ -63,7 +63,8 @@ pub fn probe(path: &Path, modified_at: i64) -> Result<Probe, String> {
     let dimensions = ImageReader::new(Cursor::new(&head))
         .with_guessed_format()
         .ok()
-        .and_then(|reader| reader.into_dimensions().ok());
+        .and_then(|reader| reader.into_dimensions().ok())
+        .or_else(|| crate::cgbi::dimensions(&head));
     let (width, height) = match dimensions {
         Some(size) => size,
         None => image::image_dimensions(path).map_err(|err| err.to_string())?,
@@ -84,7 +85,7 @@ pub fn load_oriented(path: &Path) -> Result<DynamicImage, String> {
     if is_raw_path(path) {
         return load_raw(path);
     }
-    let bytes = std::fs::read(path).map_err(|err| err.to_string())?;
+    let bytes = std::fs::read(path).map_err(|err| crate::files::read_error(path, &err))?;
     decode_oriented(path, &bytes)
 }
 
@@ -128,10 +129,10 @@ fn load_reduced(path: &Path, edge: u32, side: Side) -> Result<DynamicImage, Stri
         if let Some(image) = heic_thumbnail_from_file(path, edge) {
             return Ok(image);
         }
-        let bytes = std::fs::read(path).map_err(|err| err.to_string())?;
+        let bytes = std::fs::read(path).map_err(|err| crate::files::read_error(path, &err))?;
         return heic_image(&bytes);
     }
-    let bytes = std::fs::read(path).map_err(|err| err.to_string())?;
+    let bytes = std::fs::read(path).map_err(|err| crate::files::read_error(path, &err))?;
     if let Some(image) = jpeg_scaled(&bytes, edge, side) {
         return Ok(image);
     }
@@ -141,6 +142,9 @@ fn load_reduced(path: &Path, edge: u32, side: Side) -> Result<DynamicImage, Stri
 /// Decodes a whole file already in memory, falling back to the decoder the
 /// extension names when the content is not recognized.
 fn decode_oriented(path: &Path, bytes: &[u8]) -> Result<DynamicImage, String> {
+    if crate::cgbi::is_cgbi(bytes) {
+        return crate::cgbi::decode(bytes);
+    }
     let decoded = ImageReader::new(Cursor::new(bytes))
         .with_guessed_format()
         .ok()
@@ -546,7 +550,7 @@ fn probe_heic(path: &Path, modified_at: i64) -> Result<Probe, String> {
     let bytes = if head.len() as u64 >= len {
         head
     } else {
-        std::fs::read(path).map_err(|err| err.to_string())?
+        std::fs::read(path).map_err(|err| crate::files::read_error(path, &err))?
     };
     let info = heic_rs::probe(&bytes).map_err(|err| err.to_string())?;
     let bits = heic_exif(&bytes).unwrap_or_else(ExifBits::empty);
@@ -601,7 +605,7 @@ fn heic_probe(info: &heic_rs::ImageInfo, bits: ExifBits, modified_at: i64) -> Pr
 }
 
 fn load_heic(path: &Path) -> Result<DynamicImage, String> {
-    let bytes = std::fs::read(path).map_err(|err| err.to_string())?;
+    let bytes = std::fs::read(path).map_err(|err| crate::files::read_error(path, &err))?;
     heic_image(&bytes)
 }
 
@@ -867,6 +871,9 @@ fn load_raw(path: &Path) -> Result<DynamicImage, String> {
 }
 
 fn raw_picture(path: &Path) -> Result<(DynamicImage, ExifBits), String> {
+    if let Some(missing) = crate::files::missing(path) {
+        return Err(missing);
+    }
     let source = rawler::rawsource::RawSource::new(path).map_err(|err| err.to_string())?;
     let decoder = match rawler::get_decoder(&source) {
         Ok(decoder) => decoder,

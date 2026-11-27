@@ -167,7 +167,7 @@ impl PicassoApp {
             egui::Frame::new().inner_margin(Margin::symmetric(20, 14)).show(ui, |ui| {
                 let Some(groups) = &scan.groups else {
                     ui.horizontal(|ui| {
-                        ui.add(egui::Spinner::new().size(14.0));
+                        theme::spinner(ui, 14.0);
                         let note = if scan.total == 0 {
                             tr("Looking for files of the same size…").to_string()
                         } else {

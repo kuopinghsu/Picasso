@@ -257,7 +257,7 @@ impl PicassoApp {
                 });
                 if let Some(run) = &dialog.run {
                     ui.horizontal(|ui| {
-                        ui.add(egui::Spinner::new().size(14.0));
+                        theme::spinner(ui, 14.0);
                         let (done, total) = (run.done.load(Ordering::Relaxed), run.total.load(Ordering::Relaxed));
                         ui.label(trf("Reading photos… {} of {}", &[&done, &total]));
                     });

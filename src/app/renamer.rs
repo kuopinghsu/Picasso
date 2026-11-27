@@ -217,7 +217,7 @@ impl PicassoApp {
                 let renames = match dialog.plan.as_ref().map(|(_, plan)| plan) {
                     _ if reading => {
                         ui.horizontal(|ui| {
-                            ui.add(egui::Spinner::new());
+                            theme::spinner(ui, 28.0);
                             ui.label(RichText::new(tr("Reading the folder…")).color(theme::muted()));
                         });
                         0
@@ -259,7 +259,7 @@ impl PicassoApp {
                     }
                     if working {
                         ui.label(RichText::new(tr("Renaming…")).color(theme::muted()));
-                        ui.add(egui::Spinner::new());
+                        theme::spinner(ui, 28.0);
                     }
                 });
             });

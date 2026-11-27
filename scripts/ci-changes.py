@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """Select daily CI jobs since the last successful daily run; tags/manual runs validate all.
 
+Daily runs only check: they never build packages. Release tags and manual runs
+build and test every package.
+
 Use git rather than GitHub's path filters so large diffs, deletions and renames
 are included, and keep the workflow running to provide a final required check.
 An unavailable comparison or an unknown input selects full validation.
@@ -23,6 +26,8 @@ FULL_INPUTS = {
     "scripts/release-notes.sh",
 }
 NOTICE_INPUTS = {"scripts/third-party-notices.py"}
+# Jobs that build installable packages, which only manual runs and release tags do.
+PACKAGE_JOBS = ("windows", "linux", "appimage", "macos")
 
 
 def select(paths, full=False):
@@ -140,6 +145,10 @@ def main():
     plan = select(paths, full)
     if event_name == "schedule":
         plan["deny"] = True  # New advisories do not require a repository change.
+        # Daily runs check and never package, even when every check is selected:
+        # the Linux x64 job tests the Rust code instead of the package jobs.
+        for job in PACKAGE_JOBS:
+            plan[job] = False
     output = "".join(f"{key}={str(value).lower()}\n" for key, value in plan.items())
     print(output, end="")
     if os.environ.get("GITHUB_OUTPUT"):
@@ -149,6 +158,8 @@ def main():
         with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as stream:
             chosen = ", ".join(job for job in JOBS if plan[job]) or "documentation/version checks only"
             stream.write(f"### CI selection\n\nChanged files: {len(paths)}. Full validation: {plan['full']}.\n\nSelected: {chosen}.\n")
+            if event_name == "schedule":
+                stream.write("\nPackages are built only by manual runs and release tags.\n")
 
 
 if __name__ == "__main__":

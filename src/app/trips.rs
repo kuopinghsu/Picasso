@@ -1695,7 +1695,7 @@ impl PicassoApp {
         let Some(progress) = &self.suggest_progress else {
             return;
         };
-        ui.add(egui::Spinner::new().size(13.0));
+        theme::spinner(ui, 13.0);
         let (done, total) = (
             progress.done.load(Ordering::Relaxed),
             progress.total.load(Ordering::Relaxed),
@@ -2308,7 +2308,7 @@ impl PicassoApp {
                     ui.label(RichText::new(format!("{:.5}, {:.5}", dialog.position.0, dialog.position.1)).color(theme::muted()));
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         if dialog.looking_up {
-                            ui.spinner();
+                            theme::spinner(ui, 28.0);
                         }
                         let hint = if allowed {
                             tr("Sends this position, rounded to about 100 m, to OpenStreetMap Nominatim and fills in the names. Answers are kept on this computer.")

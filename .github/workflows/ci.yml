@@ -1,9 +1,10 @@
 # Daily CI runs at 17:00 Asia/Taipei (09:00 UTC) and selects checks from
 # changes since the last successful scheduled run.
 # Rust changes run tests/formatting on Linux x64; docs, dependencies,
-# WordPress and guide PDFs have their own checks. Packaging changes select
-# only the affected platform jobs. Tags and workflow_dispatch run the full
-# native build/test/package matrix and AppImage compatibility checks.
+# WordPress and guide PDFs have their own checks. Daily runs never build
+# packages, even when every check is selected (scripts/ci-changes.py).
+# Tags and workflow_dispatch run the full native build/test/package matrix
+# and AppImage compatibility checks.
 # The final CI checks job remains present even when optional jobs are skipped.
 # docs/RELEASING.md has the release checklist.
 name: CI

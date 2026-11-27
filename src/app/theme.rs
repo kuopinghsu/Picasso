@@ -578,6 +578,38 @@ pub fn trailing<R>(ui: &mut egui::Ui, id: &str, add: impl FnOnce(&mut egui::Ui) 
     .inner
 }
 
+/// How often a spinner moves: smooth enough to read as turning, where
+/// egui's own spinner asks for every frame the display can show and keeps
+/// the CPU busy through a long scan.
+const SPIN_STEP: std::time::Duration = std::time::Duration::from_millis(66);
+
+/// A busy spinner `size` points across, drawn like egui's but redrawn
+/// about 15 times a second instead of at the display's full rate.
+pub fn spinner(ui: &mut egui::Ui, size: f32) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(Vec2::splat(size), egui::Sense::hover());
+    response.widget_info(|| egui::WidgetInfo::new(egui::Role::ProgressIndicator));
+    if ui.is_rect_visible(rect) {
+        ui.ctx().request_repaint_after(SPIN_STEP);
+        let color = ui.visuals().strong_text_color();
+        let radius = rect.height().min(rect.width()) * 0.5 - 2.0;
+        let points = (radius.round() as u32).clamp(8, 128);
+        let step = SPIN_STEP.as_secs_f64();
+        let time = (ui.input(|input| input.time) / step).floor() * step;
+        let start = time * std::f64::consts::TAU;
+        let end = start + 240f64.to_radians() * time.sin();
+        let line: Vec<Pos2> = (0..points)
+            .map(|i| {
+                let angle = egui::lerp(start..=end, i as f64 / points as f64);
+                let (sin, cos) = angle.sin_cos();
+                rect.center() + radius * egui::vec2(cos as f32, sin as f32)
+            })
+            .collect();
+        ui.painter()
+            .add(egui::Shape::line(line, Stroke::new(3.0, color)));
+    }
+    response
+}
+
 /// The keyboard focus ring around `rect`, drawn while `response` has focus,
 /// for areas that draw themselves instead of being a widget.
 pub fn focus_ring(ui: &egui::Ui, response: &egui::Response, rect: egui::Rect) {

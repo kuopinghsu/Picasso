@@ -97,7 +97,9 @@ class SelectionTests(unittest.TestCase):
                     stack.enter_context(contextlib.redirect_stdout(io.StringIO()))
                     stack.enter_context(contextlib.redirect_stderr(io.StringIO()))
                     ci.main()
-                self.assertEqual(set(output.read_text().splitlines()), {f'{key}=true' for key in ('full', *ci.JOBS)})
+                # Every check, but no package: only manual runs and tags build them.
+                expected = {f'{key}={str(key not in ci.PACKAGE_JOBS).lower()}' for key in ('full', *ci.JOBS)}
+                self.assertEqual(set(output.read_text().splitlines()), expected, name)
 
     def test_tags_and_manual_runs_do_not_need_comparison_history(self):
         for event, ref in [('push', 'refs/tags/v0.9.6'), ('workflow_dispatch', 'refs/heads/main')]:
@@ -143,6 +145,26 @@ class ScheduledRunTests(unittest.TestCase):
             self.assertEqual(plan['full'], 'false')
             self.assertEqual(plan['rust'], 'false')
             self.assertEqual(plan['appimage'], 'false')
+
+    def test_daily_runs_never_build_packages(self):
+        changes = [['build/AppRun'], ['build/picasso.png'], ['scripts/third-party-notices.py'],
+                   ['build/picasso.ico'], ['Makefile'], ['.github/workflows/ci.yml'], ['src/publish.rs']]
+        with tempfile.TemporaryDirectory() as directory:
+            event = Path(directory) / 'event.json'
+            event.write_text(json.dumps({'repository': {'default_branch': 'main'}}))
+            env = {'GITHUB_EVENT_NAME': 'schedule', 'GITHUB_EVENT_PATH': str(event),
+                   'GITHUB_REPOSITORY': 'owner/repo', 'SOURCE_COMMIT': 'b' * 40, 'GH_TOKEN': 'test-token'}
+            for paths in changes:
+                output = io.StringIO()
+                with patch.dict(os.environ, env, clear=True), patch.object(ci, 'scheduled_base', return_value='a' * 40):
+                    with patch.object(ci, 'changed_paths', return_value=paths), contextlib.redirect_stdout(output):
+                        ci.main()
+                plan = dict(line.split('=') for line in output.getvalue().splitlines())
+                for job in ci.PACKAGE_JOBS:
+                    self.assertEqual(plan[job], 'false', (paths, job))
+                # Rust changes, and changes that select every check, still test on Linux x64.
+                if paths in (['build/picasso.ico'], ['Makefile'], ['.github/workflows/ci.yml'], ['src/publish.rs']):
+                    self.assertEqual(plan['rust'], 'true', paths)
 
 
 class GitComparisonTests(unittest.TestCase):
@@ -214,8 +236,10 @@ class GitComparisonTests(unittest.TestCase):
 
 
 class ResultGateTests(unittest.TestCase):
-    def gate(self, paths, overrides=None, full=False):
+    def gate(self, paths, overrides=None, full=False, daily=False):
         plan = ci.select(paths, full=full)
+        if daily:
+            plan.update(dict.fromkeys(ci.PACKAGE_JOBS, False))
         names = ['changelog', 'test', 'deny', 'windows', 'linux', 'appimage', 'appimage-test', 'macos', 'guide']
         results = {name: {'result': 'skipped'} for name in names}
         results['changelog'] = {'result': 'success', 'outputs': {key: str(value).lower() for key, value in plan.items()}}
@@ -236,6 +260,9 @@ class ResultGateTests(unittest.TestCase):
         for paths in [[], ['README.md'], ['src/publish.rs'], ['build/AppRun']]:
             self.assertEqual(self.gate(paths).returncode, 0, paths)
         self.assertEqual(self.gate([], full=True).returncode, 0)
+        # A daily run selecting every check skips the packages and still passes.
+        self.assertEqual(self.gate([], full=True, daily=True).returncode, 0)
+        self.assertNotEqual(self.gate([], {'test': 'skipped'}, full=True, daily=True).returncode, 0)
 
     def test_failed_cancelled_and_unexpectedly_skipped_checks_fail(self):
         for status in ['failure', 'cancelled', 'skipped']:

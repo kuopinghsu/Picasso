@@ -13,8 +13,8 @@ as pre-releases.
 For release-candidate packages, start the CI workflow manually from the Actions tab.
 Manual runs and version tags run the full native test, packaging, AppImage compatibility,
 benchmark and guide matrix. Daily runs at 17:00 Asia/Taipei select only checks affected
-since the last successful daily run; their successful result does not imply every
-release package was built. Ordinary commits and pull requests do not start CI. The
+since the last successful daily run and never build packages, so their successful
+result does not mean any release package was built. Ordinary commits and pull requests do not start CI. The
 **CI checks** job provides the aggregate status of the selected checks.
 
 Release preparation and verification are separate tasks. Successful CI builds do
@@ -99,7 +99,8 @@ git push origin v0.9.5
 
 Pushing the tag starts another CI run for that commit. Runs targeting a version
 tag can publish a release, including manual workflow runs targeting that tag.
-Daily runs produce artifacts only for the selected packaging or guide checks.
+Daily runs build no packages; their only artifact is the User Guide PDF when the
+guide changed.
 Manual runs targeting branches build the full set of artifacts without publishing
 a release. Ordinary commits and pull requests do not start CI. Non-tag artifact
 names include the short source commit after the version.
@@ -132,7 +133,8 @@ Linux and AppImage builds intentionally remain separate: the Ubuntu packages tar
 glibc 2.35, while AppImage is built on AlmaLinux 8 for glibc 2.28 compatibility.
 Version tags and manual runs retain all native architecture tests and the AppImage
 startup matrix. Daily runs select only the affected checks since the previous
-successful daily run; dependency advisories are always checked. Actual elapsed-time
+successful daily run and skip every package job; dependency advisories are always
+checked. Actual elapsed-time
 savings depend on changed inputs, cache hits and runner availability.
 
 Before publication, CI checks that a GitHub release for the tag does not already

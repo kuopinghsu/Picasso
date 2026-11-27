@@ -439,12 +439,12 @@ fn extension(path: &Path) -> String {
 /// [`MAX_BYTES`] are refused.
 pub(crate) fn read_text(path: &Path) -> Result<String, String> {
     let bytes = std::fs::metadata(path)
-        .map_err(|err| err.to_string())?
+        .map_err(|err| crate::files::read_error(path, &err))?
         .len();
     if bytes > MAX_BYTES {
         return Err(tr("The track file is too large").to_string());
     }
-    let mut data = std::fs::read(path).map_err(|err| err.to_string())?;
+    let mut data = std::fs::read(path).map_err(|err| crate::files::read_error(path, &err))?;
     if extension(path) == "kmz" {
         data = kmz_document(&data)?;
     }
@@ -945,6 +945,14 @@ mod tests {
         assert!(
             untimed.passes(48.0, 2.0, 0),
             "a track without times only asks for the place"
+        );
+    }
+
+    #[test]
+    fn a_missing_track_file_says_it_was_not_found() {
+        assert_eq!(
+            read_text(Path::new("picasso-no-such-track.gpx")).unwrap_err(),
+            "The file wasn't found"
         );
     }
 

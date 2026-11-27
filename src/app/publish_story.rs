@@ -2095,7 +2095,7 @@ fn terms_picker(
         ui.label(RichText::new(&site.error).color(theme::DANGER));
     }
     if site.reading.is_some() || site.making.is_some() {
-        ui.add(egui::Spinner::new().size(14.0));
+        theme::spinner(ui, 14.0);
         return read;
     }
     if site.found.is_none() {

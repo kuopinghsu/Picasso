@@ -23,7 +23,7 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
 use crate::db::{Database, Known, ScanRecord};
@@ -55,13 +55,34 @@ const BATCH_SIZE: usize = 200;
 const BATCH_INTERVAL: Duration = Duration::from_millis(250);
 
 pub enum Command {
+    /// Reads every file of a folder that is new or has changed.
     Scan(i64),
+    /// Like [`Command::Scan`], but a subfolder whose modification time is
+    /// the same as at the last complete scan isn't listed again. Sent at
+    /// launch, so a large folder on a slow or network drive is checked in
+    /// a fraction of the time. A file changed in place, without the folder
+    /// changing, is found by the next full scan.
+    Check(i64),
     RefreshTrack {
         folder_id: i64,
         path: String,
     },
+    /// A folder was excluded from scanning: a scan running in its added
+    /// folder stops reading it at once and goes on with the rest.
+    Excluded,
     /// Ask the index thread to finish. Sent when the window closes.
     Stop,
+}
+
+/// The folders excluded from scanning, shared by a scan's walk and probes,
+/// and brought up to date while it runs by [`Command::Excluded`].
+type Excluded = Arc<RwLock<Vec<PathBuf>>>;
+
+/// Whether `path` is in or under a folder of `excluded`.
+fn left_out(excluded: &Excluded, path: &Path) -> bool {
+    excluded
+        .read()
+        .is_ok_and(|dirs| crate::db::under_any(path, &dirs))
 }
 
 pub enum ThumbJob {
@@ -113,6 +134,9 @@ pub enum UiEvent {
     /// archive.
     Restored(Vec<i64>),
     Library,
+    /// Photos whose files changed since they were last read, so what was
+    /// worked out from their old pixels is out of date.
+    Changed(Vec<i64>),
     Thumb {
         id: i64,
         w: usize,
@@ -127,9 +151,13 @@ pub enum UiEvent {
     ThumbSkipped {
         id: i64,
     },
+    /// A photo that couldn't be shown, and why, in words; `missing` when
+    /// its file isn't there, as on a drive that may be plugged back in.
     DisplayFailed {
         id: i64,
         nonce: u64,
+        reason: String,
+        missing: bool,
     },
     Display {
         id: i64,
@@ -178,7 +206,18 @@ pub enum UiEvent {
         error: Option<String>,
         finished: bool,
     },
-    /// Progress of duplicate search `run`; `groups` once it is done.
+    /// Looks of photos found for stacking look-alikes in the grid, `done`
+    /// photos so far; the last batch is `finished`.
+    Looks {
+        run: u64,
+        looks: Vec<(i64, u64)>,
+        /// Photos whose look couldn't be found.
+        no_look: Vec<i64>,
+        /// Photos with no thumbnail yet, left until no scan is running.
+        later: Vec<i64>,
+        done: usize,
+        finished: bool,
+    },
     /// How far a search for similar photos is, and what it found once done.
     Similar {
         run: u64,
@@ -189,6 +228,7 @@ pub enum UiEvent {
             std::collections::HashMap<i64, Photo>,
         )>,
     },
+    /// Progress of duplicate search `run`; `groups` once it is done.
     Duplicates {
         run: u64,
         checked: usize,
@@ -291,6 +331,9 @@ struct ProbeResult {
 
 struct WalkSummary {
     seen: Vec<String>,
+    /// Each subfolder walked, with its modification time in nanoseconds,
+    /// or -1 when the next check has to list it again.
+    stamps: Vec<(String, i64)>,
     unreadable: Vec<Unreadable>,
     complete: bool,
     /// Track files that are new or changed.
@@ -318,6 +361,9 @@ struct Indexer {
     events: Sender<UiEvent>,
     ctx: eframe::egui::Context,
     pending: VecDeque<i64>,
+    /// Queued folders whose scan may skip unchanged subfolders: those only
+    /// [`Command::Check`] asked for.
+    quick: HashSet<i64>,
     /// Disk thumbnails for photos found by the scans in progress. Making
     /// them reads each whole file, which would compete with the scan for the
     /// disk, so they are queued once every pending folder is done. Photos on
@@ -360,6 +406,7 @@ pub fn index_loop(
         events,
         ctx,
         pending,
+        quick: HashSet::new(),
         deferred: Vec::new(),
         backfilled: false,
         not_tracks: RefCell::new(HashMap::new()),
@@ -386,9 +433,12 @@ impl Indexer {
             }
             match self.commands.recv() {
                 Ok(Command::Scan(id)) => self.queue(id),
+                Ok(Command::Check(id)) => self.queue_check(id),
                 Ok(Command::RefreshTrack { folder_id, path }) => {
                     self.refresh_track(folder_id, path)
                 }
+                // No scan is running; the next one reads the list itself.
+                Ok(Command::Excluded) => {}
                 Ok(Command::Stop) | Err(_) => return,
             }
         }
@@ -421,7 +471,16 @@ impl Indexer {
     }
 
     fn queue(&mut self, id: i64) {
+        self.quick.remove(&id);
         if !self.pending.contains(&id) {
+            self.pending.push_back(id);
+        }
+    }
+
+    /// Queues a quick check of `id`, unless a full scan of it is queued.
+    fn queue_check(&mut self, id: i64) {
+        if !self.pending.contains(&id) {
+            self.quick.insert(id);
             self.pending.push_back(id);
         }
     }
@@ -500,6 +559,7 @@ impl Indexer {
     }
 
     fn scan_folder(&mut self, folder_id: i64) -> Outcome {
+        let quick = self.quick.remove(&folder_id);
         let Some(path) = self.db.folder_path(folder_id) else {
             return Outcome::Finished;
         };
@@ -540,13 +600,15 @@ impl Indexer {
                 .map(|(path, stamp)| (path.clone(), *stamp)),
         );
         let remembered = self.db.unreadable_snapshot(folder_id);
+        // Kept only where the file system updates folder times.
+        let times_kept = crate::files::folder_times_kept(&root);
+        let stamps = if quick && times_kept {
+            self.db.dir_stamps(folder_id)
+        } else {
+            HashMap::new()
+        };
         let remembered_paths: HashSet<String> = remembered.keys().cloned().collect();
-        let excluded: HashSet<PathBuf> = self
-            .db
-            .excluded_dirs()
-            .into_iter()
-            .map(|(dir, _)| PathBuf::from(dir))
-            .collect();
+        let excluded: Excluded = Arc::new(RwLock::new(self.excluded_dirs()));
         let cancel = Arc::new(AtomicBool::new(false));
         let checked = Arc::new(AtomicUsize::new(0));
         // The walk's files pass through here on their way to the probes, so
@@ -559,6 +621,7 @@ impl Indexer {
         let walker = {
             let cancel = cancel.clone();
             let checked = checked.clone();
+            let excluded = excluded.clone();
             std::thread::Builder::new()
                 .name("picasso-walk".into())
                 .spawn(move || {
@@ -567,6 +630,7 @@ impl Indexer {
                         snapshot,
                         known_tracks,
                         remembered,
+                        stamps,
                         excluded,
                         list_tx,
                         &cancel,
@@ -578,6 +642,18 @@ impl Indexer {
             Ok(handle) => handle,
             Err(err) => {
                 eprintln!("picasso index: {err}");
+                // The window counts the scans running, so it hears this one
+                // end too; the files that failed before are still listed.
+                let mut unreadable: Vec<Unreadable> = self
+                    .db
+                    .unreadable_snapshot(folder_id)
+                    .into_values()
+                    .collect();
+                unreadable.sort_by(|a, b| a.path.cmp(&b.path));
+                self.notify(UiEvent::ScanFinished {
+                    folder: folder_id,
+                    unreadable,
+                });
                 return Outcome::Finished;
             }
         };
@@ -585,9 +661,10 @@ impl Indexer {
             let jobs = job_rx.clone();
             let done = done_tx.clone();
             let cancel = cancel.clone();
+            let excluded = excluded.clone();
             let _ = std::thread::Builder::new()
                 .name(format!("picasso-probe-{index}"))
-                .spawn(move || probe_loop(jobs, done, &cancel));
+                .spawn(move || probe_loop(jobs, done, &cancel, &excluded));
         }
         drop(job_rx);
         drop(done_tx);
@@ -610,8 +687,16 @@ impl Indexer {
                 match self.commands.try_recv() {
                     Ok(Command::Scan(id)) if id == folder_id => again = true,
                     Ok(Command::Scan(id)) => self.queue(id),
+                    // This scan reads everything a check would.
+                    Ok(Command::Check(id)) if id == folder_id => {}
+                    Ok(Command::Check(id)) => self.queue_check(id),
                     Ok(Command::RefreshTrack { folder_id, path }) => {
                         self.refresh_track(folder_id, path)
+                    }
+                    Ok(Command::Excluded) => {
+                        if let Ok(mut dirs) = excluded.write() {
+                            *dirs = self.excluded_dirs();
+                        }
                     }
                     Ok(Command::Stop) | Err(TryRecvError::Disconnected) => {
                         stopped = true;
@@ -629,6 +714,8 @@ impl Indexer {
             let mut finished = false;
             match select.select_timeout(BATCH_INTERVAL) {
                 Ok(op) if Some(op.index()) == listing => match op.recv(&list_rx) {
+                    // Listed before its folder was excluded: not read.
+                    Ok(job) if left_out(&excluded, &job.path) => {}
                     Ok(job) => {
                         let moved = if job.existing.is_none() {
                             self.db
@@ -664,6 +751,7 @@ impl Indexer {
                     }
                 },
                 Ok(op) if op.index() == probed => match op.recv(&done_rx) {
+                    Ok(result) if left_out(&excluded, &result.job.path) => {}
                     Ok(result) => {
                         match self.record(folder_id, result, &mut ini_cache, &mut claimed) {
                             Ok(record) => batch.push(record),
@@ -706,12 +794,28 @@ impl Indexer {
                 .map(|walker| join_walk(walker, &path))
                 .unwrap_or_else(|| failed_walk(&path))
         });
-        let mut tracks_changed = self.read_tracks(folder_id, &summary.tracks, &mut unreadable);
+        // Folders excluded while the scan ran keep nothing it found there.
+        if let Ok(mut dirs) = excluded.write() {
+            *dirs = self.excluded_dirs();
+        }
+        let tracks: Vec<TrackFile> = summary
+            .tracks
+            .into_iter()
+            .filter(|file| !left_out(&excluded, Path::new(&file.path)))
+            .collect();
+        let mut tracks_changed = self.read_tracks(folder_id, &tracks, &mut unreadable);
         unreadable.extend(summary.unreadable);
+        unreadable.retain(|item| !left_out(&excluded, Path::new(&item.path)));
         unreadable.sort_by(|a, b| a.path.cmp(&b.path));
         self.db
             .store_unreadable(folder_id, &unreadable, summary.complete, &remembered_paths);
         if summary.complete {
+            let stamps = if times_kept {
+                listable(summary.stamps, &unreadable, &excluded)
+            } else {
+                Vec::new()
+            };
+            self.db.store_dir_stamps(folder_id, &stamps);
             self.db.remove_missing(folder_id, &summary.seen);
             tracks_changed |= self
                 .db
@@ -738,8 +842,23 @@ impl Indexer {
         Outcome::Finished
     }
 
-    /// Gives the photos of renamed and moved files their new paths.
+    /// The folders excluded from scanning, as the library has them now.
+    fn excluded_dirs(&self) -> Vec<PathBuf> {
+        self.db
+            .excluded_dirs()
+            .into_iter()
+            .map(|(dir, _)| PathBuf::from(dir))
+            .collect()
+    }
+
+    /// Gives the photos of renamed and moved files their new paths. A file
+    /// moved into an excluded folder isn't followed there.
     fn apply_moves(&self, moves: &mut Vec<(i64, String, String, i64)>) {
+        if moves.is_empty() {
+            return;
+        }
+        let excluded = self.excluded_dirs();
+        moves.retain(|(_, path, ..)| !crate::db::under_any(Path::new(path), &excluded));
         if moves.is_empty() {
             return;
         }
@@ -871,12 +990,20 @@ impl Indexer {
                 return 0;
             }
         };
+        let mut count = 0;
+        let mut changed = Vec::new();
         for (record, id) in batch.iter().zip(&written.ids) {
+            // Left out: its folder was excluded while it was being read.
+            if *id == 0 {
+                continue;
+            }
+            count += 1;
             let (id, path) = (*id, record.photo.path.clone());
             // A changed file's old thumbnail may be on screen, so it is sent
             // again; new photos only need their disk thumbnail.
             let job = if record.existing.is_some() {
                 self.thumb_store.remove(id);
+                changed.push(id);
                 ThumbJob::Thumb {
                     id,
                     path,
@@ -892,8 +1019,10 @@ impl Indexer {
                 let _ = self.thumbs.send(job);
             }
         }
-        let count = batch.len();
         batch.clear();
+        if !changed.is_empty() {
+            self.notify(UiEvent::Changed(changed));
+        }
         self.notify(UiEvent::Library);
         count
     }
@@ -917,11 +1046,147 @@ fn failed_walk(path: &str) -> WalkSummary {
         complete: false,
         tracks: Vec::new(),
         tracks_seen: Vec::new(),
+        stamps: Vec::new(),
+    }
+}
+
+/// `stamps` as they are stored, with -1 for each subfolder that holds a file
+/// or folder that couldn't be read, so the next check lists it again and
+/// tries those once more. Those excluded during the scan are dropped.
+fn listable(
+    stamps: Vec<(String, i64)>,
+    unreadable: &[Unreadable],
+    excluded: &Excluded,
+) -> Vec<(String, i64)> {
+    let mut failed: HashSet<&Path> = HashSet::new();
+    for item in unreadable {
+        let path = Path::new(&item.path);
+        failed.insert(path);
+        if let Some(parent) = path.parent() {
+            failed.insert(parent);
+        }
+    }
+    stamps
+        .into_iter()
+        .filter(|(dir, _)| !left_out(excluded, Path::new(dir)))
+        .map(|(dir, stamp)| {
+            let stamp = if failed.contains(Path::new(&dir)) {
+                -1
+            } else {
+                stamp
+            };
+            (dir, stamp)
+        })
+        .collect()
+}
+
+/// A folder's modification time in nanoseconds since 1970, when it is on
+/// `device`, the drive of the added folder whose file system was checked.
+/// A drive mounted below it, such as a memory card, may not keep its
+/// folder times, so its folders are listed every time.
+fn dir_stamp(dir: &Path, device: Option<u64>) -> Option<i64> {
+    let meta = std::fs::metadata(dir).ok()?;
+    if device_of(&meta) != device {
+        return None;
+    }
+    let modified = meta.modified().ok()?;
+    let since = modified.duration_since(std::time::UNIX_EPOCH).ok()?;
+    i64::try_from(since.as_nanos()).ok()
+}
+
+/// The drive a file is on. Windows walks into no other drive, as a drive
+/// mounted in a folder is listed as a link, so it needs none.
+#[cfg(unix)]
+fn device_of(meta: &std::fs::Metadata) -> Option<u64> {
+    Some(std::os::unix::fs::MetadataExt::dev(meta))
+}
+
+#[cfg(not(unix))]
+fn device_of(_meta: &std::fs::Metadata) -> Option<u64> {
+    None
+}
+
+/// A folder changed this close to the walk may change again within the
+/// same tick of a coarse clock, as on a FAT drive, without its time moving.
+const STAMP_MARGIN: Duration = Duration::from_secs(3);
+
+/// What the last complete scan knew of each subfolder, for a quick check.
+#[derive(Default)]
+struct Stamps {
+    /// Modification time of each subfolder walked, -1 to list it again.
+    time: HashMap<PathBuf, i64>,
+    /// The subfolders walked inside each one.
+    children: HashMap<PathBuf, Vec<PathBuf>>,
+    /// Photos and tracks known in each subfolder, not below it.
+    files: HashMap<PathBuf, Vec<String>>,
+    tracks: HashMap<PathBuf, Vec<String>>,
+    /// Subfolders with a photo an older build read, to be read again.
+    stale: HashSet<PathBuf>,
+}
+
+impl Stamps {
+    fn new(
+        stored: HashMap<String, i64>,
+        snapshot: &HashMap<String, Known>,
+        known_tracks: &HashMap<String, (u64, i64)>,
+    ) -> Stamps {
+        if stored.is_empty() {
+            return Stamps::default();
+        }
+        let mut stamps = Stamps::default();
+        for (dir, stamp) in stored {
+            let dir = PathBuf::from(dir);
+            if let Some(parent) = dir.parent() {
+                stamps
+                    .children
+                    .entry(parent.to_path_buf())
+                    .or_default()
+                    .push(dir.clone());
+            }
+            stamps.time.insert(dir, stamp);
+        }
+        for (path, known) in snapshot {
+            let Some(parent) = Path::new(path).parent() else {
+                continue;
+            };
+            if known.version < crate::db::INDEX_VERSION {
+                stamps.stale.insert(parent.to_path_buf());
+            }
+            stamps
+                .files
+                .entry(parent.to_path_buf())
+                .or_default()
+                .push(path.clone());
+        }
+        for path in known_tracks.keys() {
+            if let Some(parent) = Path::new(path).parent() {
+                stamps
+                    .tracks
+                    .entry(parent.to_path_buf())
+                    .or_default()
+                    .push(path.clone());
+            }
+        }
+        stamps
+    }
+
+    /// Whether `dir` is as the last complete scan left it.
+    fn unchanged(&self, dir: &Path, stamp: i64) -> bool {
+        stamp >= 0 && self.time.get(dir) == Some(&stamp) && !self.stale.contains(dir)
     }
 }
 
 /// Shared state of one folder walk.
 struct Walk<'a> {
+    /// The drive of the added folder; see [`dir_stamp`].
+    device: Option<u64>,
+    /// The last complete scan's subfolders; empty unless this is a check.
+    stamps: Stamps,
+    /// A subfolder modified after this, in nanoseconds, is listed again
+    /// next time.
+    fresh_after: i64,
+    /// Each subfolder walked, with the time stored for it.
+    found: Mutex<Vec<(String, i64)>>,
     snapshot: HashMap<String, Known>,
     /// Size and modification time of the stored tracks, by path.
     known_tracks: HashMap<String, (u64, i64)>,
@@ -929,8 +1194,9 @@ struct Walk<'a> {
     tracks_seen: Mutex<Vec<String>>,
     /// Files that failed before, skipped while they are unchanged.
     remembered: HashMap<String, Unreadable>,
-    /// Folders the user left out, skipped with everything below them.
-    excluded: HashSet<PathBuf>,
+    /// Folders the user left out, skipped with everything below them, as
+    /// they are now: one excluded while the walk runs stops being read.
+    excluded: Excluded,
     jobs: Sender<ProbeJob>,
     cancel: &'a AtomicBool,
     checked: &'a AtomicUsize,
@@ -945,6 +1211,28 @@ struct Walk<'a> {
 }
 
 impl Walk<'_> {
+    /// Takes `dir`, unchanged since the last complete scan, to hold the
+    /// photos and tracks known there, and walks the subfolders it had.
+    fn skip<'s>(&'s self, scope: &rayon::Scope<'s>, dir: PathBuf, stamp: i64) {
+        let files = self.stamps.files.get(&dir).cloned().unwrap_or_default();
+        self.checked.fetch_add(files.len(), Ordering::Relaxed);
+        if let Ok(mut seen) = self.seen.lock() {
+            seen.extend(files);
+        }
+        if let Some(tracks) = self.stamps.tracks.get(&dir) {
+            if let Ok(mut seen) = self.tracks_seen.lock() {
+                seen.extend(tracks.iter().cloned());
+            }
+        }
+        for child in self.stamps.children.get(&dir).into_iter().flatten() {
+            let child = child.clone();
+            scope.spawn(move |scope| walk_dir(scope, child, false, self));
+        }
+        if let Ok(mut found) = self.found.lock() {
+            found.push((dir.to_string_lossy().into_owned(), stamp));
+        }
+    }
+
     fn unreadable(&self, path: &Path, reason: impl std::fmt::Display, folder: bool) {
         self.push(Unreadable {
             path: path.to_string_lossy().into_owned(),
@@ -998,12 +1286,24 @@ fn walk_folder(
     snapshot: HashMap<String, Known>,
     known_tracks: HashMap<String, (u64, i64)>,
     remembered: HashMap<String, Unreadable>,
-    excluded: HashSet<PathBuf>,
+    stamps: HashMap<String, i64>,
+    excluded: Excluded,
     jobs: Sender<ProbeJob>,
     cancel: &AtomicBool,
     checked: &AtomicUsize,
 ) -> WalkSummary {
+    let fresh_after = std::time::SystemTime::now()
+        .checked_sub(STAMP_MARGIN)
+        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+        .and_then(|since| i64::try_from(since.as_nanos()).ok())
+        .unwrap_or(0);
     let walk = Walk {
+        device: std::fs::metadata(root)
+            .ok()
+            .and_then(|meta| device_of(&meta)),
+        stamps: Stamps::new(stamps, &snapshot, &known_tracks),
+        fresh_after,
+        found: Mutex::new(Vec::new()),
         seen: Mutex::new(Vec::with_capacity(snapshot.len())),
         snapshot,
         known_tracks,
@@ -1041,6 +1341,7 @@ fn walk_folder(
         complete,
         tracks: walk.tracks.into_inner().unwrap_or_default(),
         tracks_seen,
+        stamps: walk.found.into_inner().unwrap_or_default(),
     }
 }
 
@@ -1052,7 +1353,13 @@ fn walk_threads() -> usize {
 }
 
 fn walk_dir<'s>(scope: &rayon::Scope<'s>, dir: PathBuf, root: bool, walk: &'s Walk<'s>) {
-    if walk.cancel.load(Ordering::Relaxed) {
+    // A folder excluded after it was queued isn't read.
+    if walk.cancel.load(Ordering::Relaxed) || left_out(&walk.excluded, &dir) {
+        return;
+    }
+    let stamp = dir_stamp(&dir, walk.device);
+    if let Some(stamp) = stamp.filter(|&stamp| walk.stamps.unchanged(&dir, stamp)) {
+        walk.skip(scope, dir, stamp);
         return;
     }
     let entries = match std::fs::read_dir(&dir) {
@@ -1088,7 +1395,7 @@ fn walk_dir<'s>(scope: &rayon::Scope<'s>, dir: PathBuf, root: bool, walk: &'s Wa
             }
         };
         if file_type.is_dir() {
-            if !walk.excluded.contains(&path) {
+            if !left_out(&walk.excluded, &path) {
                 scope.spawn(move |scope| walk_dir(scope, path, false, walk));
             }
             continue;
@@ -1154,11 +1461,21 @@ fn walk_dir<'s>(scope: &rayon::Scope<'s>, dir: PathBuf, root: bool, walk: &'s Wa
             existing: known.map(|known| known.id),
         });
     }
+    // Excluded while it was being listed: what was found stays out.
+    if left_out(&walk.excluded, &dir) {
+        return;
+    }
     if !listed {
         if root {
             walk.complete.store(false, Ordering::Relaxed);
         }
         walk.unreadable(&dir, tr("The folder could only be listed in part"), true);
+    }
+    let stamp = stamp
+        .filter(|&stamp| listed && stamp < walk.fresh_after)
+        .unwrap_or(-1);
+    if let Ok(mut found) = walk.found.lock() {
+        found.push((dir.to_string_lossy().into_owned(), stamp));
     }
     if let Ok(mut all) = walk.seen.lock() {
         all.extend(seen);
@@ -1177,10 +1494,19 @@ fn walk_dir<'s>(scope: &rayon::Scope<'s>, dir: PathBuf, root: bool, walk: &'s Wa
     }
 }
 
-fn probe_loop(jobs: Receiver<ProbeJob>, done: Sender<ProbeResult>, cancel: &AtomicBool) {
+fn probe_loop(
+    jobs: Receiver<ProbeJob>,
+    done: Sender<ProbeResult>,
+    cancel: &AtomicBool,
+    excluded: &Excluded,
+) {
     for job in jobs.iter() {
         if cancel.load(Ordering::Relaxed) {
             return;
+        }
+        // Waiting when its folder was excluded: not opened.
+        if left_out(excluded, &job.path) {
+            continue;
         }
         let probe = std::panic::catch_unwind(|| image_io::probe(&job.path, job.modified_at))
             .unwrap_or_else(|_| Err("decoder fault".into()));
@@ -1415,7 +1741,17 @@ fn run_thumb(store: &ThumbStore, gate: &DisplayGate, job: ThumbJob) -> Option<Ui
                 return None;
             }
             let Ok((mut rgba, rows)) = decoded else {
-                return Some(UiEvent::DisplayFailed { id, nonce });
+                // Worked out here, off the window's thread, as a file on a
+                // share that stopped answering can take long to look at.
+                let gone = crate::files::missing(file);
+                let missing = gone.is_some();
+                let reason = gone.unwrap_or_else(|| tr("This photo can't be shown").to_string());
+                return Some(UiEvent::DisplayFailed {
+                    id,
+                    nonce,
+                    reason,
+                    missing,
+                });
             };
             if !is_video_path(file) {
                 edit::apply(&mut rgba, &edit);
@@ -1458,8 +1794,13 @@ fn make_thumb(path: &Path) -> Result<RgbaImage, String> {
 }
 
 /// The unedited thumbnail, made and stored first if it is missing.
+/// The photo's thumbnail as stored, if there is one.
+pub(crate) fn stored_thumb(store: &ThumbStore, id: i64) -> Option<RgbaImage> {
+    store.get(id).and_then(|jpeg| decode_jpeg(&jpeg))
+}
+
 pub(crate) fn plain_thumb(store: &ThumbStore, id: i64, file: &Path) -> Option<RgbaImage> {
-    if let Some(rgba) = store.get(id).and_then(|jpeg| decode_jpeg(&jpeg)) {
+    if let Some(rgba) = stored_thumb(store, id) {
         return Some(rgba);
     }
     let rgba = make_thumb(file).ok()?;
@@ -1535,9 +1876,12 @@ fn decode_jpeg(jpeg: &[u8]) -> Option<RgbaImage> {
         .map(|image| image.to_rgba8())
 }
 
+/// Stores a new thumbnail and how it looks, so look-alikes can be stacked
+/// without reading it again.
 fn save_thumb(store: &ThumbStore, id: i64, rgba: &RgbaImage) {
     if let Ok(jpeg) = image_io::encode_jpeg(rgba, 80) {
         store.put(id, &jpeg);
+        store.put_look(id, crate::burst::look(rgba));
     }
 }
 
@@ -1593,11 +1937,12 @@ mod tests {
         let drain =
             std::thread::spawn(move || rx.iter().map(|job| job.filename).collect::<Vec<_>>());
         let (cancel, checked) = (AtomicBool::new(false), AtomicUsize::new(0));
-        let excluded = HashSet::from([root.join("skip")]);
+        let excluded: Excluded = Arc::new(RwLock::new(vec![root.join("skip")]));
         let summary = walk_folder(
             &root,
             snapshot,
             known_tracks,
+            HashMap::new(),
             HashMap::new(),
             excluded,
             tx,
@@ -1677,6 +2022,7 @@ mod tests {
                 events,
                 ctx: eframe::egui::Context::default(),
                 pending: VecDeque::new(),
+                quick: HashSet::new(),
                 deferred: Vec::new(),
                 backfilled: true,
                 not_tracks: RefCell::new(HashMap::new()),
@@ -1727,6 +2073,79 @@ mod tests {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.dir);
         }
+    }
+
+    #[test]
+    fn a_folder_excluded_during_a_scan_stops_being_read_and_the_scan_goes_on() {
+        // The scan is quick, so it may be over before the folder is
+        // excluded; it is tried again until the exclusion lands mid-scan.
+        let mut attempt = 0;
+        let (mut lib, folder) = loop {
+            attempt += 1;
+            let (lib, folder, written) = scan_excluding_midway(attempt);
+            if written < 600 {
+                break (lib, folder);
+            }
+            assert!(attempt < 5, "the scan always ended before the exclusion");
+        };
+        let photos = lib.photos();
+        assert!(
+            !photos.keys().any(|path| path.starts_with("pics/big/")),
+            "nothing found in the excluded folder comes back: {} photos",
+            photos
+                .keys()
+                .filter(|path| path.starts_with("pics/big/"))
+                .count()
+        );
+        // The rest of the folder is scanned, and the scan reaches its end.
+        assert!(photos.contains_key("pics/a.png"));
+        assert!(photos.contains_key("pics/other/b.png"));
+        assert!(lib.indexer.db.pending_folders().is_empty());
+        // And the next scan leaves the folder out too.
+        lib.scan(folder);
+        assert_eq!(lib.photos(), photos);
+    }
+
+    /// Scans a folder of 602 photos, 600 of them in `big/`, which is
+    /// excluded once the scan has written its first photos. Returns how many
+    /// of `big/` were written by then.
+    fn scan_excluding_midway(attempt: usize) -> (Library, i64, usize) {
+        let mut lib = Library::new(&format!("excluded-mid-scan-{attempt}"));
+        let many: Vec<String> = (0..600).map(|n| format!("big/{n:03}.png")).collect();
+        let mut names: Vec<&str> = many.iter().map(String::as_str).collect();
+        names.extend(["a.png", "other/b.png"]);
+        let folder = lib.add("pics", &names);
+        let big = lib.dir.join("pics/big");
+        // Once the scan has written its first photos, the folder with most
+        // of them is excluded, from the window's own connection.
+        let helper = {
+            let (events, commands) = (lib.events.clone(), lib.commands.clone());
+            let db_path = lib.dir.join("picasso.db");
+            let big = big.clone();
+            std::thread::spawn(move || {
+                for event in events.iter() {
+                    if matches!(event, UiEvent::ScanProgress { indexed, .. } if indexed > 0) {
+                        let db = Database::open(&db_path).unwrap();
+                        let real = big.canonicalize().unwrap();
+                        let written = db
+                            .photos(&crate::types::Nav::Library, "", crate::types::Sort::Name)
+                            .iter()
+                            .filter(|photo| {
+                                let path = Path::new(&photo.path);
+                                path.starts_with(&big) || path.starts_with(&real)
+                            })
+                            .count();
+                        db.exclude_dir(&big).unwrap();
+                        commands.send(Command::Excluded).unwrap();
+                        return written;
+                    }
+                }
+                usize::MAX
+            })
+        };
+        lib.scan(folder);
+        let written = helper.join().unwrap();
+        (lib, folder, written)
     }
 
     #[test]
@@ -1929,6 +2348,101 @@ mod tests {
         assert_eq!(photos["photos/a.png"], a);
         assert!(photos.contains_key("photos/sub/b.png"));
         assert_eq!(lib.caption(a), "home");
+    }
+
+    /// Sets the modification time of folder `dir` to `when`.
+    fn set_dir_time(dir: &Path, when: std::time::SystemTime) {
+        let mut options = std::fs::OpenOptions::new();
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::OpenOptionsExt;
+            // FILE_WRITE_ATTRIBUTES, and FILE_FLAG_BACKUP_SEMANTICS to open a folder.
+            options.access_mode(0x100).custom_flags(0x0200_0000);
+        }
+        #[cfg(not(windows))]
+        options.read(true);
+        options.open(dir).unwrap().set_modified(when).unwrap();
+    }
+
+    #[test]
+    fn a_launch_check_skips_unchanged_folders_and_reads_changed_ones() {
+        let mut lib = Library::new("check");
+        let folder = lib.add(
+            "pics",
+            &["a.png", "trip/b.png", "trip/day/c.png", "keep/d.png"],
+        );
+        if !crate::files::folder_times_kept(&lib.dir) {
+            eprintln!("skipped: this file system's folder times aren't trusted");
+            return;
+        }
+        lib.scan(folder);
+        let long_ago = std::time::SystemTime::now() - Duration::from_secs(3600);
+        let dirs = ["pics", "pics/trip", "pics/trip/day", "pics/keep"];
+        for dir in dirs {
+            set_dir_time(&lib.dir.join(dir), long_ago);
+        }
+        // Folders changed moments before a scan are listed again next time;
+        // these were changed long ago, so this scan keeps their times.
+        lib.scan(folder);
+        let stamps = lib.indexer.db.dir_stamps(folder);
+        assert_eq!(stamps.len(), dirs.len());
+        assert!(stamps.values().all(|&stamp| stamp > 0), "{stamps:?}");
+
+        // A file written in place leaves its folder's time as it was, so a
+        // check doesn't see it; a file added or deleted changes the folder.
+        image::RgbaImage::new(4, 3)
+            .save(lib.dir.join("pics/trip/hidden.png"))
+            .unwrap();
+        set_dir_time(&lib.dir.join("pics/trip"), long_ago);
+        image::RgbaImage::new(4, 3)
+            .save(lib.dir.join("pics/trip/day/new.png"))
+            .unwrap();
+        std::fs::remove_file(lib.dir.join("pics/keep/d.png")).unwrap();
+        lib.indexer.quick.insert(folder);
+        lib.scan(folder);
+        let mut found: Vec<String> = lib.photos().into_keys().collect();
+        found.sort();
+        assert_eq!(
+            found,
+            [
+                "pics/a.png",
+                "pics/trip/b.png",
+                "pics/trip/day/c.png",
+                "pics/trip/day/new.png"
+            ]
+        );
+
+        // A full scan reads every file.
+        lib.scan(folder);
+        assert!(lib.photos().contains_key("pics/trip/hidden.png"));
+    }
+
+    #[test]
+    fn a_folder_on_another_drive_than_its_added_folder_has_no_time_kept() {
+        let dir = std::env::temp_dir();
+        let device = device_of(&std::fs::metadata(&dir).unwrap());
+        assert!(dir_stamp(&dir, device).is_some());
+        #[cfg(unix)]
+        assert_eq!(dir_stamp(&dir, device.map(|device| device + 1)), None);
+    }
+
+    #[test]
+    fn a_folder_with_a_file_that_could_not_be_read_is_listed_by_every_check() {
+        let mut lib = Library::new("check-unreadable");
+        let folder = lib.add("pics", &["a.png", "bad/b.png"]);
+        if !crate::files::folder_times_kept(&lib.dir) {
+            eprintln!("skipped: this file system's folder times aren't trusted");
+            return;
+        }
+        std::fs::write(lib.dir.join("pics/bad/broken.jpg"), b"not a photo").unwrap();
+        let long_ago = std::time::SystemTime::now() - Duration::from_secs(3600);
+        set_dir_time(&lib.dir.join("pics"), long_ago);
+        set_dir_time(&lib.dir.join("pics/bad"), long_ago);
+        lib.scan(folder);
+        let stamps = lib.indexer.db.dir_stamps(folder);
+        let path = |dir: &str| lib.dir.join(dir).to_string_lossy().into_owned();
+        assert!(stamps[&path("pics")] > 0);
+        assert_eq!(stamps[&path("pics/bad")], -1);
     }
 
     #[test]

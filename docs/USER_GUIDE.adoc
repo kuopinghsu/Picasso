@@ -155,6 +155,26 @@ Use the separate *Edited only* checkbox to show photos with edits.
 It works with any sort order. Clear the checkbox to show all photos in the current view.
 When a search has no results, use *Clear search*; an empty edited view offers *Show all photos*.
 
+=== Stacks
+
+Photos taken one after another, such as a burst, can show as one tile, a stack, so a few moments don't fill the grid.
+Turn on either kind, or both, in the same row as *Edited only*:
+
+* *Stack photos taken within*, with how many seconds apart, from 1 to 60 (3 at first); photos that look very different, such as a sign and then the view, stay apart
+* *Stack look-alikes*: photos taken one after another on the same day that look alike
+
+A stack shows its first photo with a number, how many photos it holds.
+Click the number, or choose it in the photo's right-click menu, to open the stack in place, and again to close it.
+A closed stack keeps its other photos out of the grid, so what you do to its tile applies to that photo alone; open the stack to work with the others.
+The photo count above the grid counts every photo.
+Viewing a photo, the arrows step over the other photos of closed stacks.
+A stack holding a selected photo stays open while Picasso stacks the grid again; closing it yourself takes its other photos out of the selection.
+
+Stacks show only when the photos are sorted by date, and not in Places, Statistics or the Travel Map.
+To compare how photos look, Picasso first looks at each photo's thumbnail, which it does in the background and shows next to the setting; after that it remembers how each photo looks.
+Picasso keeps these settings for the next start.
+Nothing in the library changes.
+
 === Searching
 
 Type in *Search photos* at the top of the window to find photos that match every word you type.
@@ -848,6 +868,7 @@ Folders::
 The folders Picasso watches, each with buttons to open it, rescan it, or remove it from Picasso.
 Removing a folder leaves its files on disk.
 *Excluded folders* lists subfolders Picasso skips; *Exclude a folder…* adds one and *Include again* brings it back.
+A folder excluded while it is being scanned stops being read at once, and the scan goes on with the rest.
 
 File types::
 Which files Picasso adds: JPEG, PNG, GIF, WebP, BMP, TIFF, HEIC/HEIF, camera RAW, and videos.
@@ -919,12 +940,12 @@ Restoring a backup returns the library to the state recorded in that backup.
 
 === Moving and renaming folders
 
-Picasso rescans your folders when it starts and watches them while it runs; kbd:[F5] rescans them now.
+When it starts, Picasso checks your folders for photos added, removed or renamed while it was closed, passing over subfolders that haven't changed since the last scan, and it watches them while it runs. kbd:[F5] rescans every file now, which also finds a photo another app changed without changing its folder.
 
 * Moving photos between folders Picasso already watches needs nothing; the next scan finds them.
 * To move a whole folder somewhere new, move it, remove the old place in *Settings → Folders*, and add the new one with *+ Import*.
 Picasso can restore their stars, captions, albums and edits when file size, modification time and capture date still match the earlier records.
-* A folder on a drive that isn't plugged in keeps its photos until the drive is back.
+* A folder on a drive that isn't plugged in keeps its photos and tracks until the drive is back. Opening one of them meanwhile, or exporting it, asks whether its drive is connected; a file deleted or moved outside Picasso says it wasn't found.
 
 When a photo is removed from the library, Picasso retains its stars, caption, albums and edits for 90 days so they can be restored if the file returns.
 

@@ -821,7 +821,7 @@ impl PicassoApp {
                 self.clear_cache(ui.ctx());
             }
             if self.settings.clearing {
-                ui.add(egui::Spinner::new().size(14.0));
+                theme::spinner(ui, 14.0);
                 ui.label(RichText::new(tr("Clearing…")).color(theme::muted()));
             }
         });
@@ -895,7 +895,7 @@ impl PicassoApp {
             );
             ui.label(RichText::new(last).color(theme::muted()));
             if busy {
-                ui.add(egui::Spinner::new().size(14.0));
+                theme::spinner(ui, 14.0);
             } else if !self.settings.backup_note.is_empty() {
                 ui.label(RichText::new(&self.settings.backup_note).color(theme::muted()));
             }

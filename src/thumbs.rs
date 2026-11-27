@@ -99,6 +99,19 @@ impl ThumbStore {
         }
     }
 
+    /// Every look stored, by photo id, for stacking look-alikes in the grid.
+    pub fn looks(&self) -> std::collections::HashMap<i64, u64> {
+        self.conn
+            .prepare("SELECT id, look FROM looks")
+            .and_then(|mut stmt| {
+                stmt.query_map([], |row| {
+                    Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)? as u64))
+                })?
+                .collect()
+            })
+            .unwrap_or_default()
+    }
+
     /// JPEG bytes of the photo's edited thumbnail, if it was made for `edit`.
     pub fn get_edited(&self, id: i64, edit: &str) -> Option<Vec<u8>> {
         self.conn
@@ -323,8 +336,17 @@ mod tests {
         assert_eq!(store.ids(), HashSet::from([8]));
         store.remove(8);
         assert!(store.ids().is_empty());
+        store.put_look(9, u64::MAX);
+        store.put_look(10, 5);
+        assert_eq!(
+            store.looks(),
+            std::collections::HashMap::from([(9, u64::MAX), (10, 5)])
+        );
+        store.remove(10);
+        assert_eq!(store.looks().len(), 1);
         store.put(9, &[7; 20_000]);
         store.clear();
+        assert!(store.looks().is_empty());
         assert!(store.ids().is_empty());
         drop(store);
         let _ = std::fs::remove_dir_all(&cache);

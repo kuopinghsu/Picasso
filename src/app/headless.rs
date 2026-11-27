@@ -1466,6 +1466,110 @@ mod tests {
     }
 
     #[test]
+    fn photos_taken_together_stack_and_open_from_their_number() {
+        // The photos are written together, so they were taken within a
+        // second of each other by their file times.
+        let (_scratch, mut window) = library("stacks", 4);
+        window.ctx.enable_accesskit();
+        settle(&mut window, 3);
+        assert_eq!(window.app.photos.len(), 4, "no stacks until asked for");
+        let find = |window: &Headless, wanted: &str| -> Option<Pos2> {
+            let tree = window.access.as_ref().expect("the tree");
+            tree.nodes
+                .iter()
+                .find(|(_, node)| name(node) == Some(wanted))
+                .and_then(|(_, node)| node.bounds())
+                .map(center)
+        };
+        let check = find(&window, "Stack photos taken within").expect("the stack setting");
+        click(&mut window, check);
+        settle(&mut window, 5);
+        assert_eq!(window.app.photos.len(), 1, "one stack of four");
+        assert!(
+            find(&window, "Show the 4 photos of this stack").is_some(),
+            "the stack's number, named"
+        );
+        // The count still says how many photos the view holds.
+        assert_eq!(window.app.photos_in_view(), 4);
+        let number = find(&window, "Show the 4 photos of this stack").unwrap();
+        click(&mut window, number);
+        settle(&mut window, 5);
+        assert_eq!(window.app.photos.len(), 4, "the stack opens in place");
+        // A selected photo keeps its stack open, until it is closed.
+        let member = window.app.photos[2].id;
+        window.app.selection = std::collections::HashSet::from([member]);
+        window.app.anchor = Some(member);
+        window.app.restack();
+        assert_eq!(window.app.photos.len(), 4);
+        let number = find(&window, "Stack these 4 photos again").expect("open stack's number");
+        click(&mut window, number);
+        settle(&mut window, 5);
+        assert_eq!(window.app.photos.len(), 1, "and closes again");
+        assert!(
+            window.app.selection.is_empty(),
+            "with its photos out of the selection"
+        );
+        assert_eq!(
+            window.app.anchor,
+            Some(window.app.photos[0].id),
+            "and Shift-click going from the photo on top"
+        );
+        // A stack opened only for a selected photo closes once it isn't.
+        window.app.selection = std::collections::HashSet::from([member]);
+        window.app.restack();
+        assert_eq!(window.app.photos.len(), 4);
+        window.app.selection.clear();
+        window.app.restack();
+        assert_eq!(window.app.photos.len(), 1);
+        // Everything Tab reaches has a name, the stack's number among them.
+        let (reached, unnamed) = tab_through(&mut window, 30);
+        assert!(unnamed.is_empty(), "unnamed: {unnamed:?}");
+        assert!(
+            reached
+                .iter()
+                .any(|name| name == "Show the 4 photos of this stack"),
+            "Tab reaches the stack's number: {reached:?}"
+        );
+        // An open stack whose photo on top leaves stays open.
+        let number = find(&window, "Show the 4 photos of this stack").unwrap();
+        click(&mut window, number);
+        settle(&mut window, 5);
+        let top = window.app.photos[0].id;
+        window.app.drop_from_view(&[top]);
+        assert_eq!(window.app.photos.len(), 3, "the other three stay open");
+        // Sorted by name the photos show one by one again.
+        window.app.sort = crate::types::Sort::Name;
+        window.app.reload_view();
+        settle(&mut window, 10);
+        assert_eq!(window.app.photos.len(), 4);
+        // The setting is kept in the library for the next start.
+        assert_eq!(window.app.db.setting("stack_time").as_deref(), Some("1"));
+    }
+
+    #[test]
+    fn look_alikes_stack_once_their_looks_are_found() {
+        // Three copies of one picture, taken the same day.
+        let (_scratch, mut window) = library("look-alikes", 3);
+        window.ctx.enable_accesskit();
+        settle(&mut window, 3);
+        let tree = window.access.as_ref().expect("the tree");
+        let check = tree
+            .nodes
+            .iter()
+            .find(|(_, node)| name(node) == Some("Stack look-alikes"))
+            .and_then(|(_, node)| node.bounds())
+            .map(center)
+            .expect("the look-alike setting");
+        click(&mut window, check);
+        window.draw_until("the look-alikes stacked", Duration::from_secs(30), |app| {
+            app.photos.len() == 1
+        });
+        assert_eq!(window.app.photos_in_view(), 3);
+        assert_eq!(window.app.db.setting("stack_alike").as_deref(), Some("1"));
+        assert_eq!(window.app.db.setting("stack_time").as_deref(), Some("0"));
+    }
+
+    #[test]
     fn the_library_grids_own_scroll_bar_keeps_clear_of_its_photos() {
         use crate::types::Sort;
         // Sorted by name there is no date strip, so the grid shows its bar.
@@ -1675,6 +1779,60 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_photo_whose_file_is_gone_says_so_in_the_viewer_and_shows_once_back() {
+        let (_scratch, mut window) = library("gone", 3);
+        window.ctx.enable_accesskit();
+        let said = |window: &Headless, words: &str| {
+            let tree = window.access.as_ref().expect("the tree");
+            tree.nodes.iter().any(|(_, node)| name(node) == Some(words))
+        };
+        // As when its drive is unplugged after the library read it.
+        let gone = window.app.photos[1].clone();
+        let bytes = std::fs::read(&gone.path).unwrap();
+        std::fs::remove_file(&gone.path).unwrap();
+        let broken = window.app.photos[2].clone();
+        std::fs::write(&broken.path, b"not a picture").unwrap();
+        window.app.open_at(1);
+        window.draw_until(
+            "the photo shown as missing",
+            Duration::from_secs(30),
+            |app| app.display_failed.contains_key(&gone.id),
+        );
+        settle(&mut window, 3);
+        assert!(
+            said(&window, "The file wasn't found"),
+            "the viewer says why"
+        );
+        // Its drive is back while the viewer stays on it: it shows.
+        std::fs::write(&gone.path, bytes).unwrap();
+        window.draw_until("the photo shown again", Duration::from_secs(30), |app| {
+            app.displays.iter().any(|item| item.id == gone.id)
+        });
+        settle(&mut window, 3);
+        assert!(!said(&window, "The file wasn't found"));
+        // A file that is there but can't be read says so too, and isn't
+        // read again and again while the viewer stays on it.
+        window.app.viewer_step(1);
+        window.draw_until("the broken photo", Duration::from_secs(30), |app| {
+            app.display_failed.contains_key(&broken.id)
+        });
+        settle(&mut window, 3);
+        assert!(said(&window, "This photo can't be shown"));
+        assert_eq!(window.app.display_retry(broken.id), None);
+        let nonce = window.app.display_nonce[&broken.id];
+        let until = Instant::now() + Duration::from_secs(4);
+        while Instant::now() < until {
+            window.draw(Vec::new());
+            std::thread::sleep(REFRESH);
+        }
+        assert_eq!(
+            window.app.display_nonce[&broken.id], nonce,
+            "not asked for again"
+        );
+        assert!(said(&window, "This photo can't be shown"));
+    }
+
     #[cfg(unix)]
     #[test]
     fn a_photo_whose_file_never_answers_holds_up_neither_the_window_nor_the_photo_beside_it() {
@@ -1704,7 +1862,7 @@ mod tests {
             window.app.display_inflight.contains_key(&stuck.id),
             "its decoder is still waiting"
         );
-        assert!(!window.app.display_failed.contains(&stuck.id));
+        assert!(!window.app.display_failed.contains_key(&stuck.id));
 
         // The file answers with nothing, each time it is opened: the photo shows as one that can't be read.
         window.draw_until(
@@ -1715,6 +1873,6 @@ mod tests {
                 !app.display_inflight.contains_key(&stuck.id)
             },
         );
-        assert!(window.app.display_failed.contains(&stuck.id));
+        assert!(window.app.display_failed.contains_key(&stuck.id));
     }
 }

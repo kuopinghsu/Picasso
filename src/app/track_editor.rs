@@ -1696,7 +1696,7 @@ fn track_header(ui: &mut egui::Ui, editor: &mut TrackEditor, close: &mut bool) {
                 ui.label(RichText::new(folder).size(11.5).color(theme::muted()));
             });
             if editor.busy() {
-                ui.add(egui::Spinner::new().size(14.0));
+                theme::spinner(ui, 14.0);
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let ready = !editor.busy() && editor.error.is_none();
@@ -1773,7 +1773,7 @@ fn track_message(ui: &mut egui::Ui, rect: Rect, text: &str, loading: bool) -> bo
     );
     ui.spacing_mut().item_spacing.y = 10.0;
     if loading {
-        ui.add(egui::Spinner::new().size(28.0));
+        theme::spinner(&mut ui, 28.0);
         ui.label(RichText::new(text).color(theme::muted()));
         return false;
     }
@@ -2121,7 +2121,7 @@ fn height_lookup(ui: &mut egui::Ui, editor: &mut TrackEditor, cache: &Path, prim
             progress.total.load(Ordering::Relaxed),
         );
         ui.horizontal(|ui| {
-            ui.add(egui::Spinner::new().size(13.0));
+            theme::spinner(ui, 13.0);
             note(
                 ui,
                 &trf(

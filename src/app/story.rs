@@ -889,7 +889,7 @@ impl PicassoApp {
                 });
                 tool_divider(ui);
                 if let Some(job) = &editor.job {
-                    ui.add(egui::Spinner::new().size(13.0));
+                    theme::spinner(ui, 13.0);
                     ui.add_space(4.0);
                     let (done, total) = (job.done.load(Ordering::Relaxed), job.total.load(Ordering::Relaxed));
                     let status = match job.converting.load(Ordering::Relaxed) {
@@ -2986,7 +2986,7 @@ impl PicassoApp {
         actions: &mut Vec<Action>,
     ) {
         let Some((w, h)) = self.cover_size(media_id) else {
-            ui.spinner();
+            theme::spinner(ui, 28.0);
             return;
         };
         let Some(mut framing) = self.story.as_ref().and_then(|editor| editor.framing) else {

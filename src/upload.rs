@@ -218,6 +218,15 @@ pub fn has_transparency(path: &Path) -> bool {
     if !matches!(kind.as_str(), "png" | "webp" | "gif" | "tif" | "tiff") {
         return false;
     }
+    // Apple's CgBI PNGs, which the PNG reader refuses, say it in the chunks
+    // before their image data: a palette's tRNS is at most about 1 KB in.
+    let mut head = [0u8; 2048];
+    let read = std::fs::File::open(path)
+        .and_then(|mut file| std::io::Read::read(&mut file, &mut head))
+        .unwrap_or(0);
+    if let Some(alpha) = crate::cgbi::has_alpha(&head[..read]) {
+        return alpha;
+    }
     image::ImageReader::open(path)
         .ok()
         .and_then(|reader| reader.with_guessed_format().ok())
@@ -269,6 +278,22 @@ mod tests {
             .unwrap();
         assert!(super::has_transparency(&clear));
         assert!(!super::has_transparency(&solid) && !super::has_transparency(&jpeg));
+        // An iPhone's CgBI PNG, which the PNG reader refuses, by its header:
+        // RGBA (colour type 6), then RGB (2). Only the start is read.
+        let cgbi = dir.join("screenshot.png");
+        let header = |colour: u8| {
+            let mut bytes = b"\x89PNG\r\n\x1a\n".to_vec();
+            bytes.extend_from_slice(&[0, 0, 0, 4]);
+            bytes.extend_from_slice(b"CgBI\x50\x00\x20\x02\0\0\0\0");
+            bytes.extend_from_slice(&[0, 0, 0, 13]);
+            bytes.extend_from_slice(b"IHDR\0\0\0\x04\0\0\0\x04\x08");
+            bytes.extend_from_slice(&[colour, 0, 0, 0, 0, 0, 0, 0]);
+            bytes
+        };
+        std::fs::write(&cgbi, header(6)).unwrap();
+        assert!(super::has_transparency(&cgbi));
+        std::fs::write(&cgbi, header(2)).unwrap();
+        assert!(!super::has_transparency(&cgbi));
         let _ = std::fs::remove_dir_all(dir);
     }
 

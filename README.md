@@ -291,7 +291,7 @@ The [Makefile](Makefile) provides build, test, benchmark, documentation and pack
 
 - `make guide` and `make guide-pdf`: build both user guides as HTML or PDF. Require Asciidoctor or Asciidoctor PDF and the fonts described in the Makefile.
 
-CI runs daily at 17:00 Taiwan time (09:00 UTC), selecting checks from changes since the last successful daily run. Ordinary commits and pull requests do not trigger CI. Rust changes run formatting and tests on Linux x64. Documentation, WordPress and guide PDFs have separate checks; dependencies are audited every day, and packaging changes select the affected platforms. Version tags and manual runs perform the full Windows and Linux x64/Arm64 tests, macOS universal build, benchmarks, package startup checks and guide builds. The final **CI checks** result reports whether all selected jobs passed. See the [workflow](.github/workflows/ci.yml) for the complete checks.
+CI runs daily at 17:00 Taiwan time (09:00 UTC), selecting checks from changes since the last successful daily run. Ordinary commits and pull requests do not trigger CI. Rust changes run formatting and tests on Linux x64. Documentation, WordPress and guide PDFs have separate checks; dependencies are audited every day. Daily runs never build packages: only version tags and manual runs do, and they perform the full Windows and Linux x64/Arm64 tests, macOS universal build, benchmarks, package startup checks and guide builds. The final **CI checks** result reports whether all selected jobs passed. See the [workflow](.github/workflows/ci.yml) for the complete checks.
 
 ## Releases
 

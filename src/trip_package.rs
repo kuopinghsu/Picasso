@@ -121,15 +121,16 @@ fn photo_bytes(source: &(PathBuf, Settings, i32)) -> Result<(Vec<u8>, String), S
     let unedited = *settings == Settings::default() && *rotation == 0;
     if unedited && (ext == "jpg" || ext == "jpeg") {
         return Ok((
-            std::fs::read(path).map_err(|err| err.to_string())?,
+            std::fs::read(path).map_err(|err| crate::files::read_error(path, &err))?,
             "jpg".into(),
         ));
     }
     match crate::edit::render_edited(path, settings, *rotation, None) {
         Ok(rgba) => Ok((crate::image_io::encode_jpeg(&rgba, 95)?, "jpg".into())),
-        Err(_) if unedited && !ext.is_empty() => {
-            Ok((std::fs::read(path).map_err(|err| err.to_string())?, ext))
-        }
+        Err(_) if unedited && !ext.is_empty() => Ok((
+            std::fs::read(path).map_err(|err| crate::files::read_error(path, &err))?,
+            ext,
+        )),
         Err(err) => Err(err),
     }
 }
@@ -298,7 +299,8 @@ fn header(package: &Package) -> Value {
 pub fn read_package(path: &Path) -> Result<(Package, u64), String> {
     let damaged =
         || crate::i18n::tr("This file isn't a Trip package, or it is damaged.").to_string();
-    let mut file = BufReader::new(File::open(path).map_err(|err| err.to_string())?);
+    let mut file =
+        BufReader::new(File::open(path).map_err(|err| crate::files::read_error(path, &err))?);
     let mut magic = vec![0; MAGIC.len()];
     file.read_exact(&mut magic).map_err(|_| damaged())?;
     if magic != MAGIC {

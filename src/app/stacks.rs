@@ -1,5 +1,5 @@
-//! Stacks in the photo grid: photos taken a few seconds apart, or one after
-//! another on the same day looking alike, shown as one tile with how many
+//! Stacks in the photo grid: photos taken a few seconds apart unless they
+//! look very different, or one after another on the same day looking alike, shown as one tile with how many
 //! photos it holds (`crate::burst::stacks`). A stack opens in place and
 //! closes again from its number. Each kind can be turned on or off, and the
 //! choice is kept. Nothing is changed in the library: a closed stack only
@@ -39,8 +39,9 @@ pub(super) struct Stacking {
     looks: HashMap<i64, u64>,
     /// Photos whose look couldn't be found, so they aren't tried again.
     no_look: HashSet<i64>,
-    /// The stacks shown open, by the photo on top.
-    open: HashSet<i64>,
+    /// The photos of the stacks shown open, every one of them, so a stack
+    /// that splits or loses its photo on top stays open.
+    open: OpenStacks,
     /// The photo on top of each stack in view: how many photos the stack
     /// holds and whether it is open.
     tops: HashMap<i64, (usize, bool)>,
@@ -49,11 +50,33 @@ pub(super) struct Stacking {
     hidden: HashMap<i64, Vec<Photo>>,
     /// A stack to open or close before the next frame is drawn.
     toggle: Option<i64>,
+    /// A setting changed that isn't saved or shown yet, while the seconds
+    /// are being dragged.
+    unsaved: bool,
+    /// Photos with no thumbnail yet while a scan runs: their thumbnails are
+    /// being made, with their looks, so they wait for the scan to end.
+    pub later: HashSet<i64>,
     /// Looks being found in the background, and a way to stop it.
     finding: Option<Finding>,
     run: u64,
     /// The window, woken when looks arrive.
     ctx: egui::Context,
+}
+
+/// Looks found so far, sent back to the window in batches.
+#[derive(Default)]
+struct Found {
+    looks: Vec<(i64, u64)>,
+    /// Photos whose look couldn't be found.
+    no_look: Vec<i64>,
+    /// Photos with no thumbnail yet while a scan runs.
+    later: Vec<i64>,
+}
+
+impl Found {
+    fn len(&self) -> usize {
+        self.looks.len() + self.no_look.len() + self.later.len()
+    }
 }
 
 struct Finding {
@@ -81,10 +104,12 @@ impl Stacking {
             alike: on("stack_alike"),
             looks: HashMap::new(),
             no_look: HashSet::new(),
-            open: HashSet::new(),
+            open: OpenStacks::default(),
             tops: HashMap::new(),
             hidden: HashMap::new(),
             toggle: None,
+            unsaved: false,
+            later: HashSet::new(),
             finding: None,
             run: 0,
             ctx: ctx.clone(),
@@ -96,6 +121,15 @@ impl Stacking {
         db.set_setting("stack_time", flag(self.by_time));
         db.set_setting("stack_seconds", &self.seconds.to_string());
         db.set_setting("stack_alike", flag(self.alike));
+    }
+
+    /// Forgets the looks of photos whose files changed, so they are found
+    /// again from their new thumbnails.
+    pub(super) fn forget(&mut self, ids: &[i64]) {
+        for id in ids {
+            self.looks.remove(id);
+            self.no_look.remove(id);
+        }
     }
 
     /// How many photos are kept out of the grid in closed stacks.
@@ -113,6 +147,60 @@ pub(super) fn shown_for(nav: &Nav) -> bool {
     )
 }
 
+/// The stacks opened by hand: each one's photos, all of them, under a
+/// number of its own. A stack is open while any of its photos is, so it stays
+/// open when it splits, loses its photo on top, or some of its photos are
+/// filtered out of view; closing it forgets every one of its photos, those
+/// out of view too, and no other stack's.
+#[derive(Default)]
+struct OpenStacks {
+    stack_of: HashMap<i64, u64>,
+    last: u64,
+}
+
+impl OpenStacks {
+    fn contains(&self, id: i64) -> bool {
+        self.stack_of.contains_key(&id)
+    }
+
+    /// Opens the stack with `top` on top.
+    fn open(&mut self, top: i64) {
+        self.last += 1;
+        self.stack_of.insert(top, self.last);
+    }
+
+    /// Notes that all of `ids`, a stack open because some of them are, are
+    /// open: one stack, even when they were in several.
+    fn hold(&mut self, ids: &[i64]) {
+        let stacks: HashSet<u64> = ids
+            .iter()
+            .filter_map(|id| self.stack_of.get(id).copied())
+            .collect();
+        let Some(&stack) = stacks.iter().min() else {
+            return;
+        };
+        if stacks.len() > 1 {
+            for number in self.stack_of.values_mut() {
+                if stacks.contains(number) {
+                    *number = stack;
+                }
+            }
+        }
+        for id in ids {
+            self.stack_of.insert(*id, stack);
+        }
+    }
+
+    /// Closes the stacks `ids` are in, forgetting all their photos.
+    fn close(&mut self, ids: &[i64]) {
+        let stacks: HashSet<u64> = ids
+            .iter()
+            .filter_map(|id| self.stack_of.get(id).copied())
+            .collect();
+        self.stack_of.retain(|_, stack| !stacks.contains(stack));
+    }
+}
+
 /// What [`fold`] makes of the view.
 type Folded = (
     Vec<Photo>,
@@ -121,19 +209,23 @@ type Folded = (
 );
 
 /// `photos` in grid order with the stacks `ranges` found in them: each
-/// stack's photo on top, then its other photos when the stack is open or
-/// `keep` is one of them, else kept aside under the photo on top. Returns
+/// stack's photo on top, then its other photos when one of its photos is
+/// in `open` or is one of `keep`, else kept aside under the photo on top. Returns
 /// the photos to show, the stacks by the photo on top, and those kept aside.
 fn fold(
     photos: Vec<Photo>,
     ranges: &[std::ops::Range<usize>],
-    open: &HashSet<i64>,
-    keep: Option<i64>,
+    open: impl Fn(i64) -> bool,
+    keep: impl Fn(i64) -> bool,
 ) -> Folded {
+    let opened: Vec<bool> = ranges
+        .iter()
+        .map(|range| photos[range.clone()].iter().any(|photo| open(photo.id)))
+        .collect();
     let mut shown = Vec::with_capacity(photos.len());
     let mut tops = HashMap::new();
-    let mut hidden = HashMap::new();
-    let mut ranges = ranges.iter().peekable();
+    let mut hidden: HashMap<i64, Vec<Photo>> = HashMap::new();
+    let mut ranges = ranges.iter().zip(opened).peekable();
     let mut stack: Option<(i64, usize, bool)> = None;
     for (index, photo) in photos.into_iter().enumerate() {
         if let Some((top, end, is_open)) = stack {
@@ -141,32 +233,38 @@ fn fold(
                 if is_open {
                     shown.push(photo);
                 } else {
-                    hidden.entry(top).or_insert_with(Vec::new).push(photo);
+                    hidden.entry(top).or_default().push(photo);
                 }
                 continue;
             }
             stack = None;
         }
-        if let Some(range) = ranges.next_if(|range| range.start == index) {
+        if let Some((range, is_open)) = ranges.next_if(|(range, _)| range.start == index) {
             let top = photo.id;
             tops.insert(top, (range.len(), false));
-            stack = Some((top, range.end, open.contains(&top)));
+            stack = Some((top, range.end, is_open));
         }
         shown.push(photo);
     }
-    // A stack holding the photo open in the viewer opens, so the viewer can
-    // stay on it; its photos go back after the one on top.
-    if let Some(keep) = keep {
-        let holder = hidden
-            .iter()
-            .find(|(_, members)| members.iter().any(|photo: &Photo| photo.id == keep))
-            .map(|(top, _)| *top);
-        if let Some(top) = holder {
-            let members = hidden.remove(&top).unwrap_or_default();
-            if let Some(at) = shown.iter().position(|photo| photo.id == top) {
-                shown.splice(at + 1..at + 1, members);
-            }
+    // A stack holding the photo open in the viewer or a selected one opens,
+    // so the viewer stays on it and the selection keeps it; its photos go
+    // back after the one on top.
+    let holders: HashSet<i64> = hidden
+        .iter()
+        .filter(|(_, members)| members.iter().any(|photo| keep(photo.id)))
+        .map(|(top, _)| *top)
+        .collect();
+    if !holders.is_empty() {
+        let mut all = Vec::with_capacity(shown.len() + holders.len());
+        for photo in shown {
+            let members = holders
+                .contains(&photo.id)
+                .then(|| hidden.remove(&photo.id))
+                .flatten();
+            all.push(photo);
+            all.extend(members.into_iter().flatten());
         }
+        shown = all;
     }
     for (top, (_, is_open)) in tops.iter_mut() {
         *is_open = !hidden.contains_key(top);
@@ -214,10 +312,7 @@ impl PicassoApp {
         if !rules.any() {
             return;
         }
-        if rules.alike {
-            self.find_looks();
-        }
-        let tiles: Vec<Tile> = self
+        let mut tiles: Vec<Tile> = self
             .photos
             .iter()
             .map(|photo| Tile {
@@ -227,16 +322,52 @@ impl PicassoApp {
                 video: photo.is_video(),
             })
             .collect();
+        // Both kinds compare looks: photos taken close together that look
+        // very different don't stack. Stacking by time alone only needs the
+        // looks of photos the time puts together.
+        let only = (!rules.alike).then(|| {
+            for tile in &mut tiles {
+                tile.look = None;
+            }
+            let by_time = burst::stacks(&tiles, rules);
+            let ids: HashSet<i64> = by_time
+                .into_iter()
+                .flatten()
+                .map(|index| self.photos[index].id)
+                .collect();
+            for (tile, photo) in tiles.iter_mut().zip(&self.photos) {
+                tile.look = self.stacking.looks.get(&photo.id).copied();
+            }
+            ids
+        });
+        self.find_looks(only.as_ref());
         let ranges = burst::stacks(&tiles, rules);
         if ranges.is_empty() {
             return;
         }
-        let keep = keep.filter(|_| self.mode == super::Mode::View);
+        // Selected photos stay in view: a stack closes on them only when
+        // asked to, which leaves them out of the selection first.
+        let viewed = keep.filter(|_| self.mode == super::Mode::View);
+        let selection = &self.selection;
         let photos = std::mem::take(&mut self.photos);
-        let (shown, tops, hidden) = fold(photos, &ranges, &self.stacking.open, keep);
-        for (top, (_, open)) in &tops {
-            if *open {
-                self.stacking.open.insert(*top);
+        let open = &self.stacking.open;
+        let (shown, tops, hidden) = fold(
+            photos,
+            &ranges,
+            |id| open.contains(id),
+            |id| Some(id) == viewed || selection.contains(&id),
+        );
+        // Every photo of a stack opened by hand keeps it open, whichever
+        // ends up on top after the next change. One open only for the photo
+        // selected or viewed closes again once that photo is not.
+        let open = &mut self.stacking.open;
+        for (at, photo) in shown.iter().enumerate() {
+            if let Some(&(count, true)) = tops.get(&photo.id) {
+                let members = &shown[at..(at + count).min(shown.len())];
+                if members.iter().any(|photo| open.contains(photo.id)) {
+                    let ids: Vec<i64> = members.iter().map(|photo| photo.id).collect();
+                    open.hold(&ids);
+                }
             }
         }
         self.photos = shown;
@@ -245,7 +376,7 @@ impl PicassoApp {
     }
 
     /// Stacks the view again, after a setting, a stack, or a look changed.
-    fn restack(&mut self) {
+    pub(super) fn restack(&mut self) {
         let keep = self.photos.get(self.viewer_index).map(|photo| photo.id);
         let photos = self.all_photos();
         self.show_photos(photos, keep);
@@ -257,8 +388,28 @@ impl PicassoApp {
         let Some(top) = self.stacking.toggle.take() else {
             return;
         };
-        if !self.stacking.open.remove(&top) {
-            self.stacking.open.insert(top);
+        // A stack gone since its number was clicked is left as it is.
+        let Some(&(count, open)) = self.stacking.tops.get(&top) else {
+            return;
+        };
+        if open {
+            // Closing: its photos are no longer open, those filtered out of
+            // view too, and those going out of view leave the selection, the
+            // anchor moving to the one on top.
+            let Some(at) = self.index_of(top) else {
+                return;
+            };
+            let end = (at + count).min(self.photos.len());
+            let ids: Vec<i64> = self.photos[at..end].iter().map(|photo| photo.id).collect();
+            self.stacking.open.close(&ids);
+            for id in &ids[1..] {
+                self.selection.remove(id);
+                if self.anchor == Some(*id) {
+                    self.anchor = Some(top);
+                }
+            }
+        } else {
+            self.stacking.open.open(top);
         }
         self.restack();
     }
@@ -270,7 +421,7 @@ impl PicassoApp {
             self.stacking.seconds,
             self.stacking.alike,
         );
-        let hint = tr("Photos taken one after another this close together show as one, with how many there are; click the number to see them all");
+        let hint = tr("Photos taken one after another this close together show as one, with how many there are, unless they look very different; click the number to see them all");
         let time = ui.checkbox(&mut self.stacking.by_time, tr("Stack photos taken within"));
         time.on_hover_text(hint);
         let seconds = ui.add_enabled(
@@ -279,13 +430,24 @@ impl PicassoApp {
                 .range(1..=MAX_SECONDS)
                 .suffix(" s"),
         );
-        theme::named(seconds, tr("Seconds apart"));
+        let dragging = seconds.dragged();
+        let value = self.stacking.seconds as f64;
+        seconds.widget_info(|| {
+            let mut info = egui::WidgetInfo::labeled(
+                egui::Role::SpinButton,
+                self.stacking.by_time,
+                tr("Seconds apart"),
+            );
+            info.value = Some(value);
+            info
+        });
+        seconds.on_hover_text(tr("Seconds apart"));
         let alike = ui.checkbox(&mut self.stacking.alike, tr("Stack look-alikes"));
         alike.on_hover_text(tr("Photos taken one after another on the same day that look alike show as one, with how many there are; click the number to see them all"));
         if let Some(finding) = &self.stacking.finding {
             ui.label(
                 egui::RichText::new(trf(
-                    "Finding look-alikes: {} of {}",
+                    "Comparing photos: {} of {}",
                     &[&finding.done, &finding.total],
                 ))
                 .color(theme::muted())
@@ -297,7 +459,12 @@ impl PicassoApp {
             self.stacking.seconds,
             self.stacking.alike,
         );
-        if after != before {
+        // While the seconds are dragged the grid waits for the last value.
+        self.stacking.unsaved |= after != before;
+        if self.stacking.unsaved && !dragging {
+            self.stacking.unsaved = false;
+            // Without look-alikes, only photos taken close together are
+            // compared, so a comparison of every photo stops.
             if !self.stacking.alike {
                 if let Some(finding) = self.stacking.finding.take() {
                     finding.cancel.store(true, Ordering::Relaxed);
@@ -382,7 +549,7 @@ impl PicassoApp {
     /// Starts finding the looks of the view's photos that have none yet, on
     /// a thread of its own, unless that is already running. The looks stored
     /// with the thumbnails come back first.
-    fn find_looks(&mut self) {
+    fn find_looks(&mut self, only: Option<&HashSet<i64>>) {
         if self.stacking.finding.is_some() {
             return;
         }
@@ -392,14 +559,18 @@ impl PicassoApp {
             .chain(self.stacking.hidden.values().flatten())
             .filter(|photo| {
                 !photo.is_video()
+                    && only.is_none_or(|only| only.contains(&photo.id))
                     && !self.stacking.looks.contains_key(&photo.id)
                     && !self.stacking.no_look.contains(&photo.id)
+                    && !self.stacking.later.contains(&photo.id)
             })
             .map(|photo| (photo.id, photo.path.clone()))
             .collect();
         if wanted.is_empty() {
             return;
         }
+        // While a scan runs, its own thumbnails bring new photos' looks.
+        let make = self.scans == 0;
         self.stacking.run += 1;
         let run = self.stacking.run;
         let cancel = Arc::new(AtomicBool::new(false));
@@ -413,58 +584,63 @@ impl PicassoApp {
         let cache = self.cache_dir.clone();
         let events = self.events_tx.clone();
         let ctx = self.stacking.ctx.clone();
-        let _ = std::thread::Builder::new()
+        let spawned = std::thread::Builder::new()
             .name("picasso-looks".into())
             .spawn(move || {
                 let store = crate::thumbs::ThumbStore::open(&cache);
                 let stored = store.looks();
-                let send =
-                    |looks: Vec<(i64, u64)>, no_look: Vec<i64>, done: usize, finished: bool| {
-                        let _ = events.send(UiEvent::Looks {
-                            run,
-                            looks,
-                            no_look,
-                            done,
-                            finished,
-                        });
-                        ctx.request_repaint();
-                    };
+                let send = |found: Found, done: usize, finished: bool| {
+                    let _ = events.send(UiEvent::Looks {
+                        run,
+                        looks: found.looks,
+                        no_look: found.no_look,
+                        later: found.later,
+                        done,
+                        finished,
+                    });
+                    ctx.request_repaint();
+                };
                 let (known, missing): (Vec<_>, Vec<_>) = wanted
                     .into_iter()
                     .partition(|(id, _)| stored.contains_key(id));
                 let mut done = known.len();
                 send(
-                    known.iter().map(|(id, _)| (*id, stored[id])).collect(),
-                    Vec::new(),
+                    Found {
+                        looks: known.iter().map(|(id, _)| (*id, stored[id])).collect(),
+                        ..Found::default()
+                    },
                     done,
                     missing.is_empty(),
                 );
-                let (mut looks, mut no_look) = (Vec::new(), Vec::new());
+                let mut found = Found::default();
                 let count = missing.len();
                 for (index, (id, path)) in missing.into_iter().enumerate() {
                     if cancel.load(Ordering::Relaxed) {
                         return;
                     }
-                    match crate::worker::plain_thumb(&store, id, Path::new(&path)) {
-                        Some(thumb) => {
-                            let look = burst::look(&thumb);
-                            store.put_look(id, look);
-                            looks.push((id, look));
+                    if let Some(thumb) = crate::worker::stored_thumb(&store, id) {
+                        let look = burst::look(&thumb);
+                        store.put_look(id, look);
+                        found.looks.push((id, look));
+                    } else if !make {
+                        found.later.push(id);
+                    } else {
+                        // Making the thumbnail stores its look too.
+                        match crate::worker::plain_thumb(&store, id, Path::new(&path)) {
+                            Some(thumb) => found.looks.push((id, burst::look(&thumb))),
+                            None => found.no_look.push(id),
                         }
-                        None => no_look.push(id),
                     }
                     done += 1;
                     let last = index + 1 == count;
-                    if last || looks.len() + no_look.len() >= LOOKS_EVERY {
-                        send(
-                            std::mem::take(&mut looks),
-                            std::mem::take(&mut no_look),
-                            done,
-                            last,
-                        );
+                    if last || found.len() >= LOOKS_EVERY {
+                        send(std::mem::take(&mut found), done, last);
                     }
                 }
             });
+        if spawned.is_err() {
+            self.stacking.finding = None;
+        }
     }
 
     /// Looks found in the background: the grid stacks again with the first
@@ -474,6 +650,7 @@ impl PicassoApp {
         run: u64,
         looks: Vec<(i64, u64)>,
         no_look: Vec<i64>,
+        later: Vec<i64>,
         done: usize,
         finished: bool,
     ) {
@@ -484,10 +661,14 @@ impl PicassoApp {
         finding.done = done;
         self.stacking.looks.extend(looks);
         self.stacking.no_look.extend(no_look);
+        // Unless the scan ended meanwhile, when they are found next time.
+        if self.scans > 0 {
+            self.stacking.later.extend(later);
+        }
         if finished {
             self.stacking.finding = None;
         }
-        if (first || finished) && self.stack_rules().alike {
+        if (first || finished) && self.stack_rules().any() {
             self.restack();
         }
     }
@@ -539,7 +720,7 @@ mod tests {
     fn a_closed_stack_shows_its_top_and_keeps_the_rest_aside() {
         let photos: Vec<Photo> = (1..=7).map(photo).collect();
         let ranges = [1..4, 5..7];
-        let (shown, tops, hidden) = fold(photos, &ranges, &HashSet::new(), None);
+        let (shown, tops, hidden) = fold(photos, &ranges, |_| false, |_| false);
         // Indices 1–3 are photos 2–4, indices 5–6 photos 6–7.
         assert_eq!(ids(&shown), [1, 2, 5, 6]);
         assert_eq!(tops, HashMap::from([(2, (3, false)), (6, (2, false))]));
@@ -551,17 +732,47 @@ mod tests {
     fn an_open_stack_and_the_photo_in_the_viewer_stay_in_view() {
         let photos: Vec<Photo> = (1..=6).map(photo).collect();
         let ranges = [0..2, 3..6];
-        let (shown, tops, hidden) = fold(photos.clone(), &ranges, &HashSet::from([1]), None);
+        let (shown, tops, hidden) = fold(photos.clone(), &ranges, |id| id == 1, |_| false);
         assert_eq!(ids(&shown), [1, 2, 3, 4]);
         assert_eq!(tops[&1], (2, true));
         assert_eq!(tops[&4], (3, false));
         assert_eq!(ids(&hidden[&4]), [5, 6]);
         // The viewer is on photo 6, in the closed stack: it opens.
-        let (shown, tops, hidden) = fold(photos, &ranges, &HashSet::new(), Some(6));
+        let (shown, tops, hidden) = fold(photos, &ranges, |_| false, |id| id == 6);
         assert_eq!(ids(&shown), [1, 3, 4, 5, 6]);
         assert_eq!(tops[&4], (3, true));
         assert!(!hidden.contains_key(&4));
         assert_eq!(ids(&hidden[&1]), [2]);
+        // Any photo of a stack keeps it open, not only the one on top.
+        let (shown, ..) = fold(
+            (1..=6).map(photo).collect(),
+            &ranges,
+            |id| id == 5,
+            |_| false,
+        );
+        assert_eq!(ids(&shown), [1, 3, 4, 5, 6]);
+    }
+
+    #[test]
+    fn closing_a_stack_forgets_all_its_photos_and_no_others() {
+        let mut open = OpenStacks::default();
+        open.open(1);
+        open.hold(&[1, 2, 3]);
+        open.open(7);
+        open.hold(&[7, 8]);
+        // Photo 3 is filtered out of view: the stack is closed from 1 and 2.
+        open.close(&[1, 2]);
+        assert!(!open.contains(3), "a photo out of view forgets it too");
+        assert!(
+            open.contains(7) && open.contains(8),
+            "another stack stays open"
+        );
+        // Two open stacks that join are one: closing it closes both.
+        open.open(4);
+        open.hold(&[4, 5]);
+        open.hold(&[4, 5, 7, 8]);
+        open.close(&[8]);
+        assert!(![4, 5, 7, 8].iter().any(|id| open.contains(*id)));
     }
 
     #[test]

@@ -201,6 +201,7 @@ impl PicassoApp {
             self.story_ui(ui);
             return;
         }
+        self.apply_stack_toggle();
         self.library_toolbar(ui);
         ui.add_space(4.0);
         if self.nav == Nav::Places {
@@ -226,7 +227,7 @@ impl PicassoApp {
             if self.loading {
                 ui.vertical_centered(|ui| {
                     ui.add_space(120.0);
-                    ui.add(egui::Spinner::new().size(28.0));
+                    theme::spinner(ui, 28.0);
                 });
             } else {
                 self.empty_library(ui);
@@ -901,7 +902,7 @@ impl PicassoApp {
             // count sits on the title's baseline.
             let mut title = egui::text::LayoutJob::default();
             title.append(&self.view_title(), 0.0, egui::TextFormat::simple(egui::FontId::proportional(22.0), theme::text()));
-            let mut count = super::photo_count(self.photos.len());
+            let mut count = super::photo_count(self.photos_in_view());
             let tracks = self.view_tracks().len();
             if tracks > 0 {
                 count = format!("{count} · {}", trf(if tracks == 1 { "{} track" } else { "{} tracks" }, &[&tracks]));
@@ -913,7 +914,7 @@ impl PicassoApp {
             }
             ui.label(title);
             if self.loading {
-                ui.add(egui::Spinner::new().size(13.0));
+                theme::spinner(ui, 13.0);
             }
             if matches!(self.nav, Nav::Statistics | Nav::TravelMap | Nav::Trips) {
                 return;
@@ -995,6 +996,10 @@ impl PicassoApp {
                     .changed()
                 {
                     self.reload_view();
+                }
+                if super::stacks::shown_for(&self.nav) {
+                    ui.add_space(12.0);
+                    self.stack_controls(ui);
                 }
             });
         }
@@ -1258,6 +1263,7 @@ impl PicassoApp {
                 self.select_click(index, modifiers);
             }
         }
+        self.stack_badge(ui, photo.id, image_rect);
         let path = photo.path.clone();
         let id = photo.id;
         response.context_menu(|ui| {
@@ -1265,6 +1271,7 @@ impl PicassoApp {
                 self.open_at(index);
                 ui.close();
             }
+            self.stack_menu_item(ui, id);
             if !photo.is_video() && ui.button(tr("Edit")).clicked() {
                 self.open_at(index);
                 self.editing = true;

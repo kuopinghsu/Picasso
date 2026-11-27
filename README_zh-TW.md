@@ -285,13 +285,15 @@ CI 建置的發行版本仍以臨時（ad hoc）方式簽署，除非已設定 D
 
 - `make test`：執行 正式模式測試；可用 `make test T=backup` 依名稱篩選。
 
-- `make check-docs`：依原始碼驗證文件連結、指令與設定。
+- `make check-ci`：測試 CI 工作選擇、Git 變更比對與最終狀態檢查。
 
-- `make ci`：檢查 Rust 格式、文件與相依套件、執行測試並檢查基準測試門檻，需要 cargo-deny。
+- `make check-docs`：依原始碼驗證文件連結、雙語結構、指令與設定。
+
+- `make ci`：檢查 Rust 格式、CI 工作選擇規則、文件與相依套件、執行測試並檢查基準測試門檻，需要 cargo-deny。
 
 - `make guide` 與 `make guide-pdf`：將兩種語言的使用手冊建置為 HTML 或 PDF，需要 Asciidoctor 或 Asciidoctor PDF，以及 Makefile 說明的字型。
 
-CI 使用原生 x64 與 Arm64 執行環境建置及測試 Windows、Linux 套件，並產生 macOS 通用應用程式。另會檢查 Linux 套件安裝與啟動、AppImage 相容性、文件及相依套件授權。完整檢查請參閱[工作流程](.github/workflows/ci.yml)。
+一般推送與合併請求會依變更檔案選擇 CI 檢查。Rust 變更會在 Linux x64 檢查格式並執行測試；文件、WordPress、相依套件與 PDF 手冊各有對應檢查，打包相關變更則會驗證受影響的平台。版本標籤與手動執行會進行完整的 Windows、Linux x64／Arm64 測試、macOS 通用版本建置、基準測試、套件啟動檢查與手冊建置。最終的 **CI checks** 結果會確認所選工作是否全部通過。完整檢查請參閱[工作流程](.github/workflows/ci.yml)。
 
 ## 版本發行
 

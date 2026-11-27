@@ -49,7 +49,8 @@ class SelectionTests(unittest.TestCase):
         self.assertEqual(self.selected('wordpress/picasso-places/inc/places.php'), {'wordpress'})
         self.assertEqual(self.selected('scripts/build-theme.py'), {'wordpress'})
         self.assertEqual(self.selected('wordpress/voyagelight/assets/css/theme.css'), {'wordpress', 'rust'})
-        self.assertEqual(self.selected('wordpress/tests/geo-cases.json'), {'wordpress', 'rust'})
+        self.assertEqual(self.selected('wordpress/tests/geo-cases.json'), {'wordpress'})
+        self.assertEqual(self.selected('wordpress/README.zh-TW.md'), set())
 
     def test_packaging_changes_select_only_their_platforms(self):
         self.assertEqual(self.selected('scripts/package-appimage.sh', 'build/AppRun'), {'appimage'})
@@ -199,6 +200,20 @@ class TranslationDocsTests(unittest.TestCase):
         self.assertEqual(docs.outline(en), docs.outline(zh))
         self.assertNotEqual(docs.outline(en), docs.outline(zh.replace('settings.json', 'setting.json')))
         self.assertNotEqual(docs.outline(en), docs.outline(zh.replace('# 指南', '## 指南')))
+
+    def test_traditional_chinese_wording_stays_checked_without_rust(self):
+        rules = docs.read('src/i18n.rs')
+        documents = {
+            'README.md': '# Guide\n',
+            'README_zh-TW.md': '# 指南\n視頻设\n',
+            'docs/USER_GUIDE.adoc': '== Guide\n',
+            'docs/USER_GUIDE_zh-TW.adoc': '== 指南\n',
+            'src/i18n.rs': rules,
+        }
+        with patch.object(docs, 'read', documents.__getitem__):
+            problems = docs.bilingual_problems()
+        self.assertTrue(any('視頻 should be 影片' in problem for problem in problems))
+        self.assertTrue(any('Simplified Chinese' in problem for problem in problems))
 
     def test_asciidoc_keyboard_shortcuts_are_compared(self):
         en = '[#start]\n== Start\nPress kbd:[Ctrl+F].\n'

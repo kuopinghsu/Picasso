@@ -46,7 +46,7 @@ endif
 # `make` alone builds the release binary; `make help` lists every target.
 .DEFAULT_GOAL := release
 
-.PHONY: help release debug run run-stats version fmt fmt-check check lint test corpus bench bench-check check-docs deny ci translations \
+.PHONY: help release debug run run-stats version fmt fmt-check check lint test corpus bench bench-check check-docs check-ci deny ci translations \
 	sign-identity notices release-notes guide guide-pdf user-guide-pdf theme appimage appimage-docker appimage-docker-check install uninstall world-map clean
 
 # Each target's `##` text is what `make help` prints; `##@` starts a section.
@@ -126,13 +126,16 @@ bench-check: ## A small benchmark that fails past its limits, as CI runs it
 check-docs: ## Check the docs' links, make targets, scripts, and settings
 	$(PYTHON) scripts/check-docs.py
 
+check-ci: ## Test CI job selection, comparisons, and result gating
+	$(PYTHON) -m unittest discover -s scripts -p test_ci_changes.py
+
 # Security advisories, licenses, and sources of the dependencies (deny.toml).
 # Needs cargo-deny: cargo install cargo-deny --locked
 deny: ## Check the dependencies' advisories and licenses (needs cargo-deny)
 	$(CARGO) deny --locked check
 
 # What CI checks before it packages, so a failure shows up before a push.
-ci: fmt-check check-docs deny test bench-check ## Run the checks CI runs: formatting, docs, deny, tests, bench-check (needs cargo-deny)
+ci: fmt-check check-ci check-docs deny test bench-check ## Run the checks CI runs: formatting, docs, deny, tests, bench-check (needs cargo-deny)
 
 ##@ Package
 

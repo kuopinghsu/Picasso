@@ -45,10 +45,12 @@ def select(paths, full=False):
                 plan["windows"] = True
             if path == "images/banner.jpg":
                 plan["guide"] = True
+        elif path.startswith("wordpress/") and path.endswith(".md"):
+            pass
         elif path.startswith("wordpress/") or path == "scripts/build-theme.py":
             plan["wordpress"] = True
-            # The application consumes these schemas/styles in Rust tests.
-            if path.endswith(("/geo-cases.json", "/assets/css/theme.css")):
+            # Rust inline-formatting tests consume this stylesheet directly.
+            if path == "wordpress/voyagelight/assets/css/theme.css":
                 plan["rust"] = True
         elif path.startswith("build/licenses/") or path in NOTICE_INPUTS:
             for job in ("windows", "linux", "appimage", "macos"):

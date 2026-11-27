@@ -776,6 +776,7 @@ fn publication(report: &mut Report, files: &[PathBuf]) {
         renders: crate::publish::Renders::default(),
         places: None,
         journey: None,
+        detached_journey: None,
     };
     let site = Site::default();
     let started = Instant::now();

@@ -1139,7 +1139,15 @@ impl PicassoApp {
         }
         // Every Story of a Trip writes the same Journey, which the site can't
         // change for two at once: each would make one, or undo the other's stops.
-        if places.journey && journeys {
+        if journeys
+            && self.story.as_ref().is_some_and(|editor| {
+                places.journey
+                    || self
+                        .db
+                        .journey_post(editor.story.trip_id, site.id)
+                        .is_some()
+            })
+        {
             if let Some(editor) = &self.story {
                 let (story_id, trip_id) = (editor.story.id, editor.story.trip_id);
                 let busy = self.publishing.iter().any(|(&(other, other_site), alive)| {
@@ -1164,8 +1172,7 @@ impl PicassoApp {
             return Err(tr("The story couldn't be saved").into());
         };
         self.db.save_post_terms(page.story.id, site.id, &terms)?;
-        // Places sent before and not now are taken off the posts.
-        let before = self.db.place_choice(page.story.id, site.id);
+        // Choices describe the desired state, not proof of a successful save.
         self.db.save_place_choice(page.story.id, site.id, &places)?;
         let trip_id = page.story.trip_id;
         let media: Vec<i64> = page
@@ -1174,11 +1181,16 @@ impl PicassoApp {
             .chain(page.videos.sources.keys())
             .copied()
             .collect();
-        let map_places = match (places.places, before.places) {
-            (true, _) => Some(self.map_places(trip_id, &media, &places)),
-            (false, true) => Some(MapPlaces::default()),
-            (false, false) => None,
-        };
+        // Always send the desired Places state. In particular, keep sending
+        // an explicit clear after a failed or partially completed save.
+        let map_places = Some(if places.places {
+            self.map_places(trip_id, &media, &places)
+        } else {
+            MapPlaces::default()
+        });
+        let detached_journey = (!places.journey && journeys)
+            .then(|| self.db.journey_post(trip_id, site.id))
+            .flatten();
         let journey = (places.journey && journeys).then(|| {
             let trip = self.db.trip(trip_id);
             Journey {
@@ -1251,6 +1263,7 @@ impl PicassoApp {
             renders: self.publish_renders.clone(),
             places: map_places,
             journey,
+            detached_journey,
         };
         let progress = self.start_story_job();
         let (story_id, site_id, revision, label) = (
@@ -1354,6 +1367,20 @@ impl PicassoApp {
                 };
                 self.db.save_day_post(&key, &publication)
             }
+            Event::Recovered { story_id, post } => self
+                .db
+                .save_publication(&Publication {
+                    story_id,
+                    site_id,
+                    post_id: post.post_id,
+                    remote_status: post.status,
+                    size: String::new(),
+                    revision: post.revision,
+                    synced_at: unix_now(),
+                    fingerprint: post.fingerprint,
+                    changed_on_site: post.changed_on_site,
+                })
+                .and_then(|_| self.db.clear_pending_draft(story_id, site_id)),
             Event::PartGone { story_id, key } => self.db.forget_day_post(story_id, site_id, &key),
             Event::Journey { trip_id, post_id } => {
                 self.db.set_journey_post(trip_id, site_id, post_id)

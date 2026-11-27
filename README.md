@@ -283,13 +283,15 @@ The [Makefile](Makefile) provides build, test, benchmark, documentation and pack
 
 - `make test`: run release-mode tests; use `make test T=backup` to select tests by name.
 
-- `make check-docs`: verify documentation links, commands and settings against the source.
+- `make check-ci`: test CI job selection, git comparisons and the final status check.
 
-- `make ci`: check Rust formatting, documentation and dependencies, run tests and check benchmark limits. Requires cargo-deny.
+- `make check-docs`: verify documentation links, bilingual structure, commands and settings against the source.
+
+- `make ci`: check Rust formatting, CI selection rules, documentation and dependencies, run tests and check benchmark limits. Requires cargo-deny.
 
 - `make guide` and `make guide-pdf`: build both user guides as HTML or PDF. Require Asciidoctor or Asciidoctor PDF and the fonts described in the Makefile.
 
-CI builds and tests Windows and Linux packages on native x64 and Arm64 runners and creates a universal macOS application. It also checks Linux package installation and startup, AppImage compatibility, documentation and dependency licenses. See the [workflow](.github/workflows/ci.yml) for the complete checks.
+For normal pushes and pull requests, CI selects checks from the changed files. Rust changes run formatting and tests on Linux x64. Documentation, WordPress, dependencies and guide PDFs have separate checks, and packaging changes select the affected platforms. Version tags and manual runs perform the full Windows and Linux x64/Arm64 tests, macOS universal build, benchmarks, package startup checks and guide builds. The final **CI checks** result reports whether all selected jobs passed. See the [workflow](.github/workflows/ci.yml) for the complete checks.
 
 ## Releases
 

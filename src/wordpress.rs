@@ -746,7 +746,7 @@ impl Client<'_> {
             .collect()
     }
 
-    /// The ids of the drafts and published posts titled exactly `title`
+    /// The ids of draft, published and scheduled posts titled exactly `title`
     /// changed on the site since `since` (Unix seconds), oldest first: how a
     /// post whose answer was lost is found.
     pub fn find_drafts(
@@ -766,7 +766,7 @@ impl Client<'_> {
         )
     }
 
-    /// The oldest draft or published post titled exactly `title`, if any:
+    /// The oldest draft, published or scheduled post titled exactly `title`, if any:
     /// [`Client::find_drafts`], stopping at the first page that has one.
     pub fn find_titled_post(
         &self,
@@ -809,7 +809,7 @@ impl Client<'_> {
         let (status, since_key) = if how.made_drafts {
             ("draft", "after")
         } else {
-            ("draft,publish", "modified_after")
+            ("draft,publish,future", "modified_after")
         };
         let mut found = Vec::new();
         for page in 1..=MAX_SEARCH_PAGES {
@@ -905,9 +905,10 @@ impl Client<'_> {
         &self,
         api: &Api,
         credentials: &Credentials,
-    ) -> Result<HashSet<i64>, Failure> {
+    ) -> Result<MediaReferences, Failure> {
         const PER_PAGE: usize = 20;
-        let mut referenced = HashSet::new();
+        let mut referenced = MediaReferences::default();
+        let mut patterns = Vec::new();
         for route in ["/wp/v2/posts", "/wp/v2/pages"] {
             let mut page = 1;
             let mut expected_total = None;
@@ -951,16 +952,41 @@ impl Client<'_> {
                         .and_then(Value::as_i64)
                         .ok_or(Failure::BadReply)?;
                     if id > 0 {
-                        referenced.insert(id);
+                        referenced.ids.insert(id);
                     }
                     let raw = item["content"]["raw"].as_str().ok_or(Failure::BadReply)?;
-                    shortcode_media(raw, &mut referenced);
+                    shortcode_media(raw, &mut referenced.ids);
+                    block_media(raw, &mut referenced.ids, &mut patterns)?;
                 }
                 if remaining <= PER_PAGE {
                     break;
                 }
                 page += 1;
             }
+        }
+        let mut visited = HashSet::new();
+        while let Some(id) = patterns.pop() {
+            if !visited.insert(id) {
+                continue;
+            }
+            // Bound work and fail closed if a site's reference graph is too large.
+            if visited.len() > 1000 {
+                return Err(Failure::CleanupAccess);
+            }
+            let item = self
+                .read_item(api, credentials, &format!("/wp/v2/blocks/{id}"))
+                .map_err(|failure| match failure {
+                    Failure::Unauthorized | Failure::Forbidden => Failure::CleanupAccess,
+                    other => other,
+                })?
+                .ok_or(Failure::CleanupAccess)?;
+            let raw = item["content"]["raw"]
+                .as_str()
+                .ok_or(Failure::CleanupAccess)?;
+            shortcode_media(raw, &mut referenced.ids);
+            block_media(raw, &mut referenced.ids, &mut patterns)?;
+            // Patterns can contain HTML with only a URL, not an attachment ID.
+            referenced.pattern_content.push(raw.to_string());
         }
         Ok(referenced)
     }
@@ -1336,6 +1362,13 @@ pub struct TravelSupport {
     pub journeys: bool,
 }
 
+/// References found in posts, pages and their recursively linked synced patterns.
+#[derive(Default)]
+pub struct MediaReferences {
+    pub ids: HashSet<i64>,
+    pub pattern_content: Vec<String>,
+}
+
 /// A post as the site has it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PostState {
@@ -1379,6 +1412,16 @@ pub struct DraftPost {
     /// Fields a theme or plugin registered, such as the VoyageLight
     /// theme's `_vl_lat`; a field set to null is taken off. `None` sends none.
     pub meta: Option<Value>,
+}
+
+impl DraftPost {
+    /// The managed text and featured image, compared with a recovered post.
+    pub fn fingerprint(&self) -> String {
+        fingerprint(&serde_json::json!({
+            "title": self.title, "excerpt": self.excerpt, "content": self.content,
+            "featured_media": self.featured.unwrap_or(0),
+        }))
+    }
 }
 
 /// The two kinds of term a post is filed under.
@@ -1509,9 +1552,57 @@ fn raw_title(item: &Value) -> &str {
         .unwrap_or_default()
 }
 
-/// `text` as one value of a query string.
-/// Gallery and playlist shortcodes can store a list of attachments without
-/// storing their URLs. Accept the quoted and unquoted attribute forms.
+/// Attachment IDs and synced patterns in Gutenberg block attributes.
+/// A malformed reference cannot establish that deleting an upload is safe.
+fn block_media(
+    content: &str,
+    referenced: &mut HashSet<i64>,
+    patterns: &mut Vec<i64>,
+) -> Result<(), Failure> {
+    for comment in content.split("<!-- wp:").skip(1) {
+        let comment = comment
+            .split_once("-->")
+            .ok_or(Failure::CleanupAccess)?
+            .0
+            .trim();
+        let (name, attrs) = comment
+            .split_once(char::is_whitespace)
+            .unwrap_or((comment, ""));
+        let name = name.strip_prefix("core/").unwrap_or(name);
+        if !matches!(
+            name,
+            "block" | "image" | "gallery" | "video" | "audio" | "file" | "cover" | "media-text"
+        ) {
+            continue;
+        }
+        let attrs = attrs.trim().trim_end_matches('/').trim();
+        let attrs: Value = if attrs.is_empty() {
+            Value::Null
+        } else {
+            serde_json::from_str(attrs).map_err(|_| Failure::CleanupAccess)?
+        };
+        if name == "block" {
+            let id = attrs
+                .get("ref")
+                .and_then(Value::as_i64)
+                .filter(|id| *id > 0)
+                .ok_or(Failure::CleanupAccess)?;
+            patterns.push(id);
+        } else {
+            for key in ["id", "mediaId"] {
+                if let Some(id) = attrs.get(key).and_then(Value::as_i64).filter(|id| *id > 0) {
+                    referenced.insert(id);
+                }
+            }
+            if let Some(ids) = attrs.get("ids").and_then(Value::as_array) {
+                referenced.extend(ids.iter().filter_map(Value::as_i64).filter(|id| *id > 0));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Gallery and playlist shortcodes can store IDs without their URLs.
 fn shortcode_media(content: &str, referenced: &mut HashSet<i64>) {
     let tags = ["[gallery", "[playlist"];
     let shortcodes = tags.into_iter().flat_map(|tag| {
@@ -1558,6 +1649,7 @@ fn shortcode_media(content: &str, referenced: &mut HashSet<i64>) {
     }
 }
 
+/// `text` as one value of a query string.
 fn query_value(text: &str) -> String {
     let mut out = String::new();
     for byte in text.bytes() {
@@ -2548,7 +2640,7 @@ pub(crate) mod tests {
                 r#"[{"id":40,"source_url":"https://example.com/x.jpg","title":{"raw":"picasso-ab12-2"}},{"id":41,"source_url":"https://example.com/a.jpg","title":{"raw":"picasso-ab12"}}]"#,
             )
             .answer(
-                "https://example.com/blog/wp-json/wp/v2/posts?search=Caf%C3%A9%20Valley&status=draft,publish&modified_after=2026-10-29T10%3A00%3A00Z*",
+                "https://example.com/blog/wp-json/wp/v2/posts?search=Caf%C3%A9%20Valley&status=draft,publish,future&modified_after=2026-10-29T10%3A00%3A00Z*",
                 200,
                 &[],
                 r#"[{"id":7,"title":{"raw":"Café Valley"}},{"id":8,"title":{"raw":"Café Valley 2"}}]"#,
@@ -2587,7 +2679,7 @@ pub(crate) mod tests {
             },
         );
         let page = |n: u32| {
-            format!("https://example.com/blog/wp-json/wp/v2/posts?search=Day%201&status=draft,publish&modified_after=1970-01-01T00%3A00%3A00Z&per_page=100&page={n}&orderby=id&order=asc&context=edit&_fields=id,title")
+            format!("https://example.com/blog/wp-json/wp/v2/posts?search=Day%201&status=draft,publish,future&modified_after=1970-01-01T00%3A00%3A00Z&per_page=100&page={n}&orderby=id&order=asc&context=edit&_fields=id,title")
         };
         // A hundred posts that only mention the words, then the one titled so.
         let first: Vec<Value> = (1..=100)

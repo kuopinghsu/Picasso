@@ -10,6 +10,12 @@ A release tag must match the version in [Cargo.toml](../Cargo.toml). For example
 pushing the tag. Tags containing a hyphen, such as `v1.0.0-beta.1`, are published
 as pre-releases.
 
+For release-candidate packages, start the CI workflow manually from the Actions tab.
+Manual runs and version tags run the full native test, packaging, AppImage compatibility,
+benchmark and guide matrix. Normal pushes and pull requests select only checks affected
+by their changed files; their successful result does not imply every release package was
+built. The **CI checks** job provides the stable aggregate status for branch protection.
+
 Release preparation and verification are separate tasks. Successful CI builds do
 not replace the manual application checks in [TESTING.md](TESTING.md).
 

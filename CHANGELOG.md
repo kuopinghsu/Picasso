@@ -168,6 +168,11 @@ section of this file as the release notes.
 
 ### Changed
 
+- CI selects checks from changed files: ordinary Rust changes run Linux x64 formatting
+  and tests, while docs, WordPress, dependencies, guides and packaging use their own
+  checks. Tags and manual runs retain full native validation. A final CI checks result
+  rejects failed, cancelled or unexpectedly skipped work; docs-only runs retain bilingual
+  document checks without compiling Rust.
 - Exporting and publishing a Story render three photos at a time, as exporting photos
   from the Library does: about three times faster, for more memory while they run.
   Publishing a Story again doesn't render the photos the site already has, unless
@@ -201,6 +206,14 @@ section of this file as the release notes.
 
 ### Fixed
 
+- WordPress publishing now checks recovered posts for remote edits and public status
+  before updating them, and finds scheduled posts after a lost response instead of
+  creating duplicates.
+- Turning off Places keeps sending the clear operation after failed saves. Unlinking a
+  Journey clears the post association and its itinerary rows, including for posts split
+  by Day, while preserving other stories and manual stops.
+- Media cleanup follows nested synced patterns before deleting uploads. Images referenced
+  by attachment ID or URL are kept; inaccessible or malformed patterns stop cleanup.
 - AppImage startup no longer mixes bundled libxkbcommon-x11 with the system’s
   libxkbcommon, which could crash before showing a window on Ubuntu 22.04.
 - AppImage filenames use `x86_64` and `aarch64` without a redundant `linux` label,

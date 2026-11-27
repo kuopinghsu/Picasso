@@ -9,9 +9,9 @@
 - The version in Cargo.toml has a section in CHANGELOG.md, and every
   section has its comparison link at the bottom.
 
-The two READMEs, and the two user guides, are compared with each other by
-`cargo test` (the_two_readmes_say_the_same_things and
-the_two_user_guides_say_the_same_things).
+The bilingual READMEs and guides are also compared here, so documentation-only
+CI retains their structure, command and shortcut checks without compiling Rust.
+Traditional Chinese wording rules are read from the existing Rust test constants.
 """
 
 import glob
@@ -30,6 +30,7 @@ def read(path):
 def documents():
     paths = glob.glob(os.path.join(ROOT, "*.md")) + glob.glob(os.path.join(ROOT, "docs", "*.md"))
     paths += glob.glob(os.path.join(ROOT, "docs", "*.adoc"))
+    paths += glob.glob(os.path.join(ROOT, "wordpress", "README*.md"))
     return sorted(os.path.relpath(path, ROOT) for path in paths)
 
 
@@ -86,8 +87,66 @@ def anchor_refs(text):
     return refs + re.findall(r"(?<![A-Za-z])xref:([\w-]+)\[", text)
 
 
-def main():
+def outline(text, asciidoc=False):
+    """The same bilingual document contract checked by src/i18n.rs."""
+    shape, spans = [], []
+    in_code = False
+    for line in text.splitlines():
+        fence = line == "----" if asciidoc else line.startswith("```")
+        if fence:
+            in_code = not in_code
+            shape.append("code block")
+            continue
+        if in_code:
+            continue
+        if line.startswith("=" if asciidoc else "#"):
+            shape.append(line.split(" ")[0])
+        elif asciidoc and line.startswith("[#"):
+            shape.append(line)
+        elif line.startswith(("* ", ". ") if asciidoc else "- "):
+            shape.append("list item")
+        elif asciidoc and line.endswith("::"):
+            shape.append("term")
+        elif asciidoc and line == "|===":
+            shape.append("table")
+        elif line.startswith("|"):
+            shape.append("table row of {} cells".format(line.count("|") - (not asciidoc)))
+        elif asciidoc and line.startswith("image::"):
+            shape.append("image")
+        elif asciidoc and line.startswith("NOTE:"):
+            shape.append("note")
+        spans.extend(line.split("`")[1::2])
+        if asciidoc:
+            spans.extend("kbd:[" + key + "]" for key in re.findall(r"kbd:\[([^]]*)\]", line))
+    return shape, sorted(spans)
+
+
+def bilingual_problems():
     problems = []
+    for en, zh, asciidoc in [("README.md", "README_zh-TW.md", False),
+                              ("docs/USER_GUIDE.adoc", "docs/USER_GUIDE_zh-TW.adoc", True)]:
+        if outline(read(en), asciidoc) != outline(read(zh), asciidoc):
+            problems.append(f"{en} and {zh}: sections, lists, code spans or shortcuts differ")
+    rules = read("src/i18n.rs")
+    terms = re.search(r"const ZH_HANT_TERMS\b.*?=\s*&\[(.*?)\];", rules, re.S)
+    simplified = re.search(r'const SIMPLIFIED_ONLY[^=]*=\s*"([^"\n]*)"', rules)
+    if not terms or not simplified:
+        return problems + ["Could not read Traditional Chinese wording rules from src/i18n.rs"]
+    terms = re.findall(r'\("([^"]+)",\s*"([^"]+)"\)', terms.group(1))
+    if not terms:
+        return problems + ["No Traditional Chinese wording rules were found in src/i18n.rs"]
+    for name in ["README_zh-TW.md", "docs/USER_GUIDE_zh-TW.adoc"]:
+        for number, line in enumerate(read(name).splitlines(), 1):
+            for word, standard in terms:
+                if word in line:
+                    problems.append(f"{name}:{number}: {word} should be {standard}")
+            if any(char in simplified.group(1) for char in line):
+                problems.append(f"{name}:{number}: unexpected Simplified Chinese character")
+    return problems
+
+
+def main():
+    problems = bilingual_problems()
     makefile = read("Makefile")
     targets = set(re.findall(r"^([A-Za-z][A-Za-z0-9_-]*):", makefile, flags=re.M))
     sources = ""

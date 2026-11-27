@@ -42,7 +42,35 @@ The last line puts every photo in a folder of your own and its subfolders (HEIC,
 | Screens and accessibility | `src/app/headless.rs` | The library, the Trips page, a Trip with a long title and a Story, the Geotag dialog for a folder and for a Trip with a track beside the photos, and Publish to WordPress with the Story's Places shown and a Journey, drawn at 1280 × 800 and the smallest window, 880 × 560, at 1× and 2×, in light and dark: every control that can be clicked or reached by the keyboard has a name for screen readers, none is named by a long tooltip, and none reaches past the window's right edge. The smallest window is drawn again in German, the longest labels, and in Traditional Chinese. Tab goes from the search field through the top bar, the sidebar and the photos, and each control it reaches has a name. Another test uses only the keyboard: it chooses, stars, opens and steps through photos; asks to trash one and cancels; moves the selection and the focus together from a photo reached with Tab; opens Help with F1 and All trips with Enter while a button has the focus; then opens a Trip, puts a photo in a Day with Alt+1, and opens and leaves a Story. A third makes a Trip from a Shift-click selection through New trip, typing its name and time zone and reaching Create with Tab; puts all its photos in a Day with Alt+1, moves one to another Day and takes that back with Ctrl+Z; then, with a Day shown, opens a photo in the editor and leaves with Escape twice, and goes to the Library and back. The same Trip, Day and photo are still chosen. |
 | Performance | `src/bench.rs`, `src/app/headless.rs` | Catalog queries, a year-long Trip, the window's frames while scrolling that Trip without a window, scanning, thumbnails, exporting and publishing a 300-photo Story, and memory, with limits in CI. |
 
-CI runs the tests (`cargo test --release --locked`, the command `make test` runs) on Windows and Linux, each on x64 and Arm64 machines, and on macOS, and `make bench-check` on both Linux machines. It installs, starts, and removes the `.deb` on Ubuntu 22.04, and starts the AppImage on AlmaLinux 8, the oldest system it supports, and Ubuntu 22.04 and 24.04, for both processors. The AppImage startup check requires a visible window that stays open. It also builds the User Guide as PDF in both languages with `make guide-pdf`, which fails when a character is in none of the fonts. Like the x64 ones, the Arm packages still need the checks below on a real machine, since CI draws without a graphics card.
+For normal pushes and pull requests, CI selects work using `scripts/ci-changes.py`.
+Rust changes run formatting and `cargo test --release --locked` on Linux x64.
+Documentation-only changes retain bilingual outline, command, shortcut and Traditional
+Chinese wording checks through `make check-docs`, without compiling Rust. WordPress,
+dependency-policy and guide inputs select their own checks. Packaging changes select
+only the affected native build/package jobs; unchanged Rust tests are skipped there.
+Benchmark changes run `make bench-check` on Linux x64.
+
+Version tags and manual CI runs select full validation: native Windows and Linux tests
+on x64 and Arm64, macOS tests and a universal build, and benchmarks on both Linux
+architectures. It installs, starts, and removes the `.deb` on Ubuntu 22.04, and starts the AppImage on AlmaLinux 8, the oldest system it supports, and Ubuntu 22.04 and 24.04, for both processors. The AppImage startup check requires a visible window that stays open. It also builds the User Guide as PDF in both languages with `make guide-pdf`, which fails when a character is in none of the fonts. Like the x64 ones, the Arm packages still need the checks below on a real machine, since CI draws without a graphics card.
+
+Publishing regression tests in `src/publish.rs` also cover recovered drafts edited or
+published on the site, recovering scheduled posts without duplicates, retrying a failed
+Places clear, and unlinking single and By Day posts without removing another story's
+itinerary or manual stops. Media cleanup tests follow nested and cyclic synced-pattern
+references, preserve images referenced by ID or URL, and stop before deleting anything
+when a pattern is missing, inaccessible or malformed. These tests use HTTP fixtures;
+they do not publish to or delete media from a live WordPress site.
+
+Run `make check-ci` to test job selection and the final result gate locally. These
+stdlib-only tests cover multi-commit pushes, PR merge-bases, renames and deleted paths,
+large diffs, missing history, release/manual overrides and failed or unexpectedly skipped
+jobs. If a comparison is unavailable or an unknown build input changes, CI selects full
+validation. Workflow/build-policy changes also select full validation.
+
+**CI checks** is the stable result for branch protection. Configure it as the required
+check when replacing individual platform requirements; it remains present on docs-only
+runs and fails when any selected job fails, is cancelled or is unexpectedly skipped.
 
 ## Before a release, by hand
 

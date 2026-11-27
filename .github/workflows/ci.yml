@@ -1,16 +1,10 @@
-# Builds and tests Picasso on Windows, Linux, and macOS for every push and
-# pull request, then packages it: picasso.exe plus a .zip for Windows, a
-# .tar.gz, a .deb, and an AppImage for Linux, each for x64 and Arm64, and
-# Picasso.app in a .dmg and a .zip for macOS, and the User Guide as PDF. Every
-# package but the bare .exe carries THIRD-PARTY-NOTICES.txt. The .deb is
-# installed, started, and removed, and the AppImage is started on Ubuntu and
-# RHEL-compatible systems, before they are published. Pushing a tag like
-# `v0.9.5` also publishes every package on a GitHub release, with the
-# version's section of CHANGELOG.md as the release notes. The tag must match
-# the version in Cargo.toml, CHANGELOG.md must have a dated section for it,
-# and a version is published only once. The first job checks that and
-# names the packages for the others.
-# docs/RELEASING.md has the checklist.
+# Normal pushes and pull requests select checks from the changed files.
+# Rust changes run tests/formatting on Linux x64; docs, dependencies,
+# WordPress and guide PDFs have their own checks. Packaging changes select
+# only the affected platform jobs. Tags and workflow_dispatch run the full
+# native build/test/package matrix and AppImage compatibility checks.
+# The final CI checks job remains present even when optional jobs are skipped.
+# docs/RELEASING.md has the release checklist.
 name: CI
 
 on:
@@ -37,8 +31,8 @@ env:
   SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
 
 jobs:
-  # Only the inexpensive docs/version check gates build jobs. Dependency
-  # auditing remains parallel, and release still requires every check below.
+  # Select jobs and run inexpensive docs/version checks before starting runners.
+  # Release tags and manual runs select every check below.
   # Fails in seconds, not after the builds, when a tag doesn't match
   # Cargo.toml, CHANGELOG.md has no dated section for it, or the documents
   # name links, make targets, scripts, or settings that don't exist.
@@ -50,15 +44,34 @@ jobs:
     outputs:
       version: ${{ steps.check.outputs.version }}
       label: ${{ steps.check.outputs.label }}
+      full: ${{ steps.changes.outputs.full }}
+      rust: ${{ steps.changes.outputs.rust }}
+      wordpress: ${{ steps.changes.outputs.wordpress }}
+      deny: ${{ steps.changes.outputs.deny }}
+      guide: ${{ steps.changes.outputs.guide }}
+      windows: ${{ steps.changes.outputs.windows }}
+      linux: ${{ steps.changes.outputs.linux }}
+      appimage: ${{ steps.changes.outputs.appimage }}
+      macos: ${{ steps.changes.outputs.macos }}
+      bench: ${{ steps.changes.outputs.bench }}
     steps:
       - uses: actions/checkout@v6
         with:
           ref: ${{ env.SOURCE_COMMIT }}
+          fetch-depth: 0
+
+      - name: Select necessary checks
+        id: changes
+        run: python3 scripts/ci-changes.py
+
+      - name: Check CI selection rules
+        run: make check-ci
 
       - name: Docs
         run: python3 scripts/check-docs.py
 
       - name: WordPress theme and plugin
+        if: steps.changes.outputs.wordpress == 'true'
         run: |
           set -euo pipefail
           for f in wordpress/voyagelight/*.php wordpress/voyagelight/inc/*.php wordpress/picasso-places/*.php wordpress/picasso-places/inc/*.php wordpress/tests/*.php; do php -l "$f"; done
@@ -93,10 +106,12 @@ jobs:
           echo "label=$label" >> "$GITHUB_OUTPUT"
 
   # Security advisories, licenses, and sources of the dependencies (deny.toml).
-  # A new advisory fails this job even without a change here, which is the
-  # point: a release waits until the dependency is updated.
+  # Run for dependency/policy changes and full validation. Release tags always
+  # check current advisories, even when the lockfile has not changed.
   deny:
     name: Dependencies
+    needs: changelog
+    if: needs.changelog.outputs.deny == 'true'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
@@ -108,11 +123,47 @@ jobs:
           command: check
           arguments: --locked
 
+  test:
+    name: Linux x64 checks
+    timeout-minutes: 30
+    needs: changelog
+    if: needs.changelog.outputs.rust == 'true' && needs.changelog.outputs.linux != 'true'
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ env.SOURCE_COMMIT }}
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Rust formatting
+        run: cargo fmt --check
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config libasound2-dev libxkbcommon-dev libgl1-mesa-dev
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: "true"
+          shared-key: linux-x64
+
+      - name: Test
+        run: cargo test --release --locked
+
+      - name: Performance check
+        if: needs.changelog.outputs.bench == 'true'
+        run: make bench-check
+
   # Each architecture builds and tests on its own kind of machine, so the
   # tests run on the processor the package is for.
   windows:
     name: Windows ${{ matrix.arch }}
     needs: changelog
+    if: needs.changelog.outputs.windows == 'true'
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -152,6 +203,7 @@ jobs:
           cache-on-failure: "true"
 
       - name: Test
+        if: needs.changelog.outputs.rust == 'true'
         run: cargo test --release --locked
 
       - name: Build
@@ -183,6 +235,7 @@ jobs:
   linux:
     name: Linux ${{ matrix.arch }}
     needs: changelog
+    if: needs.changelog.outputs.linux == 'true'
     # The oldest supported runners, so the binary runs on older glibc too.
     runs-on: ${{ matrix.runner }}
     strategy:
@@ -208,15 +261,24 @@ jobs:
           sudo apt-get install -y --no-install-recommends pkg-config libasound2-dev libxkbcommon-dev libgl1-mesa-dev
 
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Rust formatting
+        if: matrix.arch == 'x64' && needs.changelog.outputs.rust == 'true'
+        run: cargo fmt --check
 
       - uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: "true"
+          shared-key: linux-${{ matrix.arch }}
 
       - name: Test
+        if: needs.changelog.outputs.rust == 'true'
         run: cargo test --release --locked
 
       - name: Performance check
+        if: needs.changelog.outputs.bench == 'true'
         run: make bench-check
 
       - name: Build
@@ -315,6 +377,7 @@ jobs:
   appimage:
     name: Linux AppImage ${{ matrix.arch }}
     needs: changelog
+    if: needs.changelog.outputs.appimage == 'true'
     # AlmaLinux 8 has glibc 2.28, so the AppImage runs on RHEL 8, Ubuntu 20.04,
     # Debian 10, and newer.
     runs-on: ${{ matrix.runner }}
@@ -377,7 +440,8 @@ jobs:
 
   appimage-test:
     name: AppImage ${{ matrix.arch }} on ${{ matrix.system }}
-    needs: appimage
+    needs: [changelog, appimage]
+    if: needs.changelog.outputs.appimage == 'true'
     runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
     container: ${{ matrix.image }}
     # The oldest system the AppImage promises, the catalog’s Ubuntu version,
@@ -485,6 +549,7 @@ jobs:
   macos:
     name: macOS universal
     needs: changelog
+    if: needs.changelog.outputs.macos == 'true'
     runs-on: macos-15
     outputs:
       notarized: ${{ steps.package.outputs.notarized }}
@@ -506,6 +571,7 @@ jobs:
       # Match the explicit target used by the universal build so native
       # dependencies are compiled into the same target directory only once.
       - name: Test
+        if: needs.changelog.outputs.rust == 'true'
         run: |
           cargo test --release --locked --target "$(rustc -vV | sed -n 's/^host: //p')"
 
@@ -642,11 +708,12 @@ jobs:
           compression-level: 0
 
   # The User Guide as PDF in English and Traditional Chinese (make guide-pdf),
-  # kept with every run and published with each release. A character none of
+  # built when its inputs change or in full validation. A character none of
   # the fonts has fails the job rather than printing as a box.
   guide:
     name: User Guide PDF
     needs: changelog
+    if: needs.changelog.outputs.guide == 'true'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
@@ -680,9 +747,43 @@ jobs:
           if-no-files-found: error
           compression-level: 0
 
+  checks:
+    name: CI checks
+    needs: [changelog, test, deny, windows, linux, appimage, appimage-test, macos, guide]
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check selected job results
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          python3 - <<'PYTHON'
+          import json
+          import os
+          import sys
+
+          results = json.loads(os.environ["RESULTS"])
+          failed = [name for name, job in results.items() if job["result"] not in ("success", "skipped")]
+          if results["changelog"]["result"] != "success":
+              failed.append("changelog")
+          else:
+              plan = results["changelog"]["outputs"]
+              required = {name for name in ("deny", "windows", "linux", "appimage", "macos", "guide") if plan.get(name) == "true"}
+              if plan.get("rust") == "true" and plan.get("linux") != "true":
+                  required.add("test")
+              if plan.get("appimage") == "true":
+                  required.add("appimage-test")
+              failed.extend(name for name in required if results[name]["result"] != "success")
+              if any(plan.get(key) not in ("true", "false") for key in ("full", "rust", "wordpress", "deny", "guide", "windows", "linux", "appimage", "macos", "bench")):
+                  failed.append("invalid selection outputs")
+          if failed:
+              sys.exit("CI did not pass: " + ", ".join(sorted(set(failed))))
+          print("All selected checks passed.")
+          PYTHON
+
   release:
     name: GitHub release
-    needs: [changelog, deny, windows, linux, appimage, appimage-test, macos, guide]
+    needs: [changelog, checks, deny, windows, linux, appimage, appimage-test, macos, guide]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
     permissions:

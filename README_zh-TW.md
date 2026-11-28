@@ -254,7 +254,7 @@ CI 建置的發行版本仍以臨時（ad hoc）方式簽署，除非已設定 D
 
 只要安裝 Docker，就能在任何系統上執行 `make appimage-docker` 建置 Linux AppImage。它與 CI 一樣在 AlmaLinux 8 容器（glibc 2.28）中建置，因此 `dist/` 中的 AppImage 可在 RHEL 8.4 及更新版本上執行。設定 `APPIMAGE_PLATFORM=linux/arm64` 則改為建置 Arm64 版本。
 
-接著執行 `make appimage-docker-check`，會在精簡的 AlmaLinux 8.4 容器中檢查它所需的每個函式庫與 glibc 符號是否都存在。以 `make appimage` 建置的 AppImage 只能在與建置系統同樣新或更新的系統上執行。兩者都會嵌入指向 GitHub 發佈版本的更新資訊，並在 AppImage 旁寫出 AppImageUpdate 讀取的 `.zsync` 檔；設定 `UPDATE_INFORMATION=`（空值）則不嵌入。
+接著執行 `make appimage-docker-check`，會在精簡的 AlmaLinux 8.4 容器中檢查它所需的每個函式庫與 glibc 符號是否都存在。以 `make appimage` 建置的 AppImage 只能在與建置系統同樣新或更新的系統上執行。兩者預設都不嵌入更新資訊；設定 `UPDATE_INFORMATION=github` 才會嵌入指向 GitHub 發佈版本的更新資訊，並在 AppImage 旁寫出 AppImageUpdate 讀取的 `.zsync` 檔。CI 只對正式版本標籤這樣做：AppImageUpdate 比較的是檔案而非版本，會把較新的建置換成較舊的最新發佈版本。
 
 
 ### 繪圖後端

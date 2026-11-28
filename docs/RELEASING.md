@@ -174,19 +174,24 @@ The rawler filename uses **rawler's version from Cargo.lock**, not Picasso's
 version. GitHub may also display automatically generated source archives; these
 are separate from the files uploaded by the release workflow.
 
-Each AppImage carries update information pointing at the `.zsync` file of its
-architecture in the latest release, such as
+Each release AppImage carries update information pointing at the `.zsync` file
+of its architecture in the latest release, such as
 `gh-releases-zsync|kuopinghsu|Picasso|latest|picasso-*-x86_64.AppImage.zsync`.
 AppImageUpdate reads that file to download only the changed parts of a newer
 AppImage. Pre-releases are not the latest release, so AppImages never update to
-one.
+one. Only release tags embed this information, with
+`UPDATE_INFORMATION=github`. Pre-release tags (with a hyphen), builds of `main`,
+manual runs on a branch and local builds leave the update information and
+`.zsync` file out: AppImageUpdate compares files, not versions, so it would
+replace such a build with the older latest release. A pre-release therefore has
+16 files, without the two `.zsync` files.
 
 ## Verify the published release
 
 - [ ] The tag, Cargo.toml version and dated changelog heading agree.
 - [ ] All required jobs passed in the tag's CI run.
-- [ ] All twelve application packages, both AppImage `.zsync` files, both PDF
-  guides, the rawler source archive
+- [ ] All twelve application packages, both AppImage `.zsync` files (not in a
+  pre-release), both PDF guides, the rawler source archive
   and SHA256SUMS.txt are available with the expected names.
 - [ ] Downloaded files match their published checksums.
 - [ ] The release notes identify the source commit. **About Picasso** and

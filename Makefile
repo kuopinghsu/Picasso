@@ -220,9 +220,10 @@ endif
 # package cache, and appimagetool stay in target/docker-linux-<arch> between
 # runs; on Windows and macOS, where Docker Desktop's shared folders make a
 # Rust build several times slower, they stay in a Docker volume of that name
-# instead. The AppImage lands in dist/, with the .zsync file AppImageUpdate
-# reads. VERSION=... on the command line renames it, and UPDATE_INFORMATION=
-# (empty) builds it without update information. RUST_VERSION is the toolchain in the image, part of its tag so
+# instead. The AppImage lands in dist/. VERSION=... on the command line renames
+# it, and UPDATE_INFORMATION=github embeds the update information of the GitHub
+# releases and writes the .zsync file AppImageUpdate reads beside it, as CI
+# does for release tags only. RUST_VERSION is the toolchain in the image, part of its tag so
 # a new one builds a new image; keep it at least Cargo.toml's rust-version
 # (docs/RELEASING.md). The image's packages are cached with it, so
 # APPIMAGE_PULL=1 fetches AlmaLinux 8 anew and reinstalls them, for the
@@ -246,7 +247,7 @@ appimage-docker: ## Build the Linux AppImage for RHEL 8 and newer in Docker (nee
 	$(APPIMAGE_RUN) --platform $(APPIMAGE_PLATFORM) -v "$(CURDIR):/work" -w /work \
 		-e CARGO_TARGET_DIR=$(APPIMAGE_TARGET) -e CARGO_HOME=/work/$(APPIMAGE_TARGET)/cargo \
 		$(if $(filter command line,$(origin VERSION)),-e "VERSION=$(VERSION)") \
-		$(if $(filter command line,$(origin UPDATE_INFORMATION)),-e "UPDATE_INFORMATION=$(UPDATE_INFORMATION)") \
+		$(if $(filter-out undefined,$(origin UPDATE_INFORMATION)),-e "UPDATE_INFORMATION=$(UPDATE_INFORMATION)") \
 		$(APPIMAGE_IMAGE) bash -c "mkdir -p $(APPIMAGE_TARGET) && flock $(APPIMAGE_TARGET)/.build.lock \
 		bash -c 'cargo build --release --locked && bash scripts/package-appimage.sh'"
 

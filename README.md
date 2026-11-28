@@ -252,7 +252,7 @@ CI release builds use ad hoc signing unless Developer ID credentials are configu
 
 ### Linux AppImage packaging
 
-To build the Linux AppImage on any system with only Docker installed, run `make appimage-docker`. It builds in an AlmaLinux 8 container (glibc 2.28), as CI does, so the AppImage in `dist/` runs on RHEL 8.4 and newer. `APPIMAGE_PLATFORM=linux/arm64` builds the Arm64 one instead. `make appimage-docker-check` then checks it in a bare AlmaLinux 8.4 container: every library and glibc symbol it needs must be there. An AppImage from `make appimage` runs only on systems as new as the one that built it. Both embed the update information of the GitHub releases and write the `.zsync` file AppImageUpdate reads beside the AppImage; `UPDATE_INFORMATION=` (empty) leaves it out.
+To build the Linux AppImage on any system with only Docker installed, run `make appimage-docker`. It builds in an AlmaLinux 8 container (glibc 2.28), as CI does, so the AppImage in `dist/` runs on RHEL 8.4 and newer. `APPIMAGE_PLATFORM=linux/arm64` builds the Arm64 one instead. `make appimage-docker-check` then checks it in a bare AlmaLinux 8.4 container: every library and glibc symbol it needs must be there. An AppImage from `make appimage` runs only on systems as new as the one that built it. Neither embeds update information unless built with `UPDATE_INFORMATION=github`, which also writes the `.zsync` file AppImageUpdate reads beside the AppImage. CI does this for release tags only: AppImageUpdate compares files, not versions, so it would replace a newer build with the older latest release.
 
 
 ### Renderer

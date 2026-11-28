@@ -3,6 +3,16 @@
 All notable changes to Picasso are listed here, newest first. Each release on GitHub uses its
 section of this file as the release notes.
 
+## [0.9.7] - Unreleased
+
+### Added
+
+- Starting with this version, AppImages can be updated with AppImageUpdate and similar tools,
+  which download only the parts that changed. Each AppImage looks for a newer version in the
+  latest GitHub release, where each AppImage now has a `.zsync` file beside it; pre-releases are
+  never offered as updates, and pre-release AppImages do not update themselves. AppImages of
+  0.9.6 and earlier cannot update this way, so download this version once by hand.
+
 ## [0.9.6] - 2026-11-28
 
 ### Added
@@ -627,7 +637,8 @@ First release.
 - Light, dark or system theme, ten interface languages, and Help & Shortcuts.
 - Packages for Windows (`.exe` and `.zip`) and Linux (`.deb` and `.tar.gz`).
 
-[0.9.6]: https://github.com/kuopinghsu/picasso/compare/v0.9.5...HEAD
+[0.9.7]: https://github.com/kuopinghsu/picasso/compare/v0.9.6...HEAD
+[0.9.6]: https://github.com/kuopinghsu/picasso/compare/v0.9.5...v0.9.6
 [0.9.5]: https://github.com/kuopinghsu/picasso/compare/v0.9.4...v0.9.5
 [0.9.4]: https://github.com/kuopinghsu/picasso/compare/v0.9.3...v0.9.4
 [0.9.3]: https://github.com/kuopinghsu/picasso/compare/v0.9.2...v0.9.3

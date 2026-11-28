@@ -31,11 +31,17 @@ case "$(uname -s)-$(uname -m)" in
         ;;
 esac
 
-# Where AppImageUpdate and similar tools look for a newer AppImage: the .zsync
-# file of the same architecture in the latest GitHub release (pre-releases
-# are not "latest"). The .zsync is written beside the AppImage and published
-# with it. UPDATE_INFORMATION= (empty) builds one that cannot update itself.
-UPDATE_INFORMATION=${UPDATE_INFORMATION-gh-releases-zsync|kuopinghsu|Picasso|latest|picasso-*-$arch.AppImage.zsync}
+# Where AppImageUpdate and similar tools look for a newer AppImage. By default
+# nowhere: AppImageUpdate compares files, not versions, so a build of
+# unreleased code would be replaced with the older latest release.
+# UPDATE_INFORMATION=github, which CI sets for release tags only, points at the
+# .zsync file of the same architecture in the latest GitHub release
+# (pre-releases are not "latest"); the .zsync is written beside the AppImage
+# and published with it. Any other value is embedded as it is.
+UPDATE_INFORMATION=${UPDATE_INFORMATION:-}
+if [ "$UPDATE_INFORMATION" = github ]; then
+    UPDATE_INFORMATION="gh-releases-zsync|kuopinghsu|Picasso|latest|picasso-*-$arch.AppImage.zsync"
+fi
 
 if [ -z "${VERSION:-}" ]; then
     VERSION=$(cargo pkgid)

@@ -31,6 +31,12 @@ case "$(uname -s)-$(uname -m)" in
         ;;
 esac
 
+# Where AppImageUpdate and similar tools look for a newer AppImage: the .zsync
+# file of the same architecture in the latest GitHub release (pre-releases
+# are not "latest"). The .zsync is written beside the AppImage and published
+# with it. UPDATE_INFORMATION= (empty) builds one that cannot update itself.
+UPDATE_INFORMATION=${UPDATE_INFORMATION-gh-releases-zsync|kuopinghsu|Picasso|latest|picasso-*-$arch.AppImage.zsync}
+
 if [ -z "${VERSION:-}" ]; then
     VERSION=$(cargo pkgid)
     VERSION=${VERSION##*@}
@@ -142,7 +148,28 @@ fi
 # --appimage-extract works without FUSE. The extracted tool then packs the image.
 rm -rf "$work/squashfs-root"
 (cd "$work" && "./appimagetool-$arch.AppImage" --appimage-extract >/dev/null)
-rm -f "dist/$name.AppImage"
-ARCH=$arch VERSION="$VERSION" "$work/squashfs-root/AppRun" --no-appstream "$app" "dist/$name.AppImage"
+rm -f "dist/$name.AppImage" "dist/$name.AppImage.zsync"
+# With update information, appimagetool writes the .zsync file that
+# AppImageUpdate downloads beside the AppImage, into the current folder, so it
+# runs in dist/. The tool's own paths are made absolute first.
+tooldir=$(cd "$work/squashfs-root" && pwd)
+appdir=$(cd "$app" && pwd)
+update=()
+[ -z "$UPDATE_INFORMATION" ] || update=(-u "$UPDATE_INFORMATION")
+(cd dist && ARCH=$arch VERSION="$VERSION" "$tooldir/AppRun" --no-appstream "${update[@]}" "$appdir" "$name.AppImage")
 
-echo "Created dist/$name.AppImage"
+if [ -n "$UPDATE_INFORMATION" ]; then
+    if [ ! -s "dist/$name.AppImage.zsync" ]; then
+        echo "${GITHUB_ACTIONS:+::error::}appimagetool did not write dist/$name.AppImage.zsync" >&2
+        exit 1
+    fi
+    # The runtime reads the embedded string without mounting, so no FUSE.
+    embedded=$("dist/$name.AppImage" --appimage-updateinformation)
+    if [ "$embedded" != "$UPDATE_INFORMATION" ]; then
+        echo "${GITHUB_ACTIONS:+::error::}dist/$name.AppImage carries update information '$embedded', not '$UPDATE_INFORMATION'" >&2
+        exit 1
+    fi
+    echo "Created dist/$name.AppImage and dist/$name.AppImage.zsync, updating from: $UPDATE_INFORMATION"
+else
+    echo "Created dist/$name.AppImage without update information"
+fi

@@ -430,8 +430,12 @@ jobs:
           version=${{ needs.changelog.outputs.version }}
           label=${{ needs.changelog.outputs.label }}
           # Same script as `make appimage`; it builds for the machine it runs on.
+          # It embeds the update information and writes the .zsync file
+          # AppImageUpdate reads, which the release publishes beside it.
           VERSION=$label bash scripts/package-appimage.sh
-          test -s "dist/picasso-$label-${{ matrix.arch == 'arm64' && 'aarch64' || 'x86_64' }}.AppImage"
+          image="dist/picasso-$label-${{ matrix.arch == 'arm64' && 'aarch64' || 'x86_64' }}.AppImage"
+          test -s "$image"
+          test -s "$image.zsync"
           ls -l dist
           echo "artifact=picasso-$label-linux-${{ matrix.arch }}-appimage" >> "$GITHUB_OUTPUT"
 
@@ -832,7 +836,7 @@ jobs:
             suffixes="$suffixes windows-$arch.exe windows-$arch.zip linux-$arch.tar.gz linux-$arch.deb"
             appimage_arch=x86_64
             [ "$arch" != arm64 ] || appimage_arch=aarch64
-            suffixes="$suffixes $appimage_arch.AppImage"
+            suffixes="$suffixes $appimage_arch.AppImage $appimage_arch.AppImage.zsync"
           done
           for suffix in $suffixes; do
             file="picasso-$version-$suffix"
@@ -890,7 +894,7 @@ jobs:
             cat <<'EOF'
           **Windows:** download `picasso-*-windows-x64.exe` and run it, or unzip `picasso-*-windows-x64.zip`. On a Windows PC with an Arm processor, such as a Snapdragon laptop, use `picasso-*-windows-arm64.exe` or `picasso-*-windows-arm64.zip`.
 
-          **Linux:** `picasso-*-x86_64.AppImage` runs without installing anything on Ubuntu 20.04, RHEL 8, Debian 10, and newer: `chmod +x picasso-*-x86_64.AppImage`, then run it. It carries the libraries Picasso needs besides glibc and the graphics driver. Without FUSE, start it with `--appimage-extract-and-run`. On Ubuntu 22.04 or newer, `sudo apt install ./picasso-*-linux-x64.deb` installs Picasso instead, and `picasso-*-linux-x64.tar.gz` holds the bare program. On 64-bit Arm Linux, use `picasso-*-aarch64.AppImage` or the other packages named `linux-arm64`.
+          **Linux:** `picasso-*-x86_64.AppImage` runs without installing anything on Ubuntu 20.04, RHEL 8, Debian 10, and newer: `chmod +x picasso-*-x86_64.AppImage`, then run it. It carries the libraries Picasso needs besides glibc and the graphics driver. Without FUSE, start it with `--appimage-extract-and-run`. AppImageUpdate can update it to a newer release, downloading only the parts that changed. On Ubuntu 22.04 or newer, `sudo apt install ./picasso-*-linux-x64.deb` installs Picasso instead, and `picasso-*-linux-x64.tar.gz` holds the bare program. On 64-bit Arm Linux, use `picasso-*-aarch64.AppImage` or the other packages named `linux-arm64`.
 
           **macOS 11 or later (Apple silicon and Intel):** open `picasso-*-macos-universal.dmg` and drag Picasso to Applications. @@MAC_OPEN@@ `picasso-*-macos-universal.zip` holds the same app.
 

@@ -116,7 +116,7 @@ Check the release notes for signing and notarization status. If an unnotarized b
 
 ### Linux
 
-- **AppImage:** available for x64 and Arm64; targets Ubuntu 20.04, RHEL 8, Debian 10 and newer. Run `chmod +x <filename>.AppImage`, then open the file. If FUSE is unavailable, start it with `--appimage-extract-and-run`.
+- **AppImage:** available for x64 and Arm64; targets Ubuntu 20.04, RHEL 8, Debian 10 and newer. Run `chmod +x <filename>.AppImage`, then open the file. If FUSE is unavailable, start it with `--appimage-extract-and-run`. [AppImageUpdate](https://github.com/AppImageCommunity/AppImageUpdate) can update it to the latest release.
 
 - **Debian package:** for Ubuntu 22.04 and newer. Install with `sudo apt install ./<filename>.deb`.
 
@@ -252,7 +252,7 @@ CI release builds use ad hoc signing unless Developer ID credentials are configu
 
 ### Linux AppImage packaging
 
-To build the Linux AppImage on any system with only Docker installed, run `make appimage-docker`. It builds in an AlmaLinux 8 container (glibc 2.28), as CI does, so the AppImage in `dist/` runs on RHEL 8.4 and newer. `APPIMAGE_PLATFORM=linux/arm64` builds the Arm64 one instead. `make appimage-docker-check` then checks it in a bare AlmaLinux 8.4 container: every library and glibc symbol it needs must be there. An AppImage from `make appimage` runs only on systems as new as the one that built it.
+To build the Linux AppImage on any system with only Docker installed, run `make appimage-docker`. It builds in an AlmaLinux 8 container (glibc 2.28), as CI does, so the AppImage in `dist/` runs on RHEL 8.4 and newer. `APPIMAGE_PLATFORM=linux/arm64` builds the Arm64 one instead. `make appimage-docker-check` then checks it in a bare AlmaLinux 8.4 container: every library and glibc symbol it needs must be there. An AppImage from `make appimage` runs only on systems as new as the one that built it. Both embed the update information of the GitHub releases and write the `.zsync` file AppImageUpdate reads beside the AppImage; `UPDATE_INFORMATION=` (empty) leaves it out.
 
 
 ### Renderer

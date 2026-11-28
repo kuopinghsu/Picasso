@@ -47,7 +47,7 @@ chmod +x picasso-<version>-x86_64.AppImage
 ./picasso-<version>-x86_64.AppImage
 ----
 +
-在 Ubuntu 22.04 或更新版本，執行 `sudo apt install ./picasso-<version>-linux-x64.deb` 即可安裝 Picasso 及其選單項目。Arm 系統請改用 Arm64 檔名。沒有 FUSE 時，請加入 `--appimage-extract-and-run` 啟動 AppImage。`.tar.gz` 在 Ubuntu 22.04 建置，包含可手動安裝的執行檔、桌面項目與圖示。檔案對話框使用通常由桌面環境提供的 XDG 桌面入口服務。
+在 Ubuntu 22.04 或更新版本，執行 `sudo apt install ./picasso-<version>-linux-x64.deb` 即可安裝 Picasso 及其選單項目。Arm 系統請改用 Arm64 檔名。沒有 FUSE 時，請加入 `--appimage-extract-and-run` 啟動 AppImage。https://github.com/AppImageCommunity/AppImageUpdate[AppImageUpdate] 等工具可將 AppImage 更新為最新版本，只下載有變動的部分。`.tar.gz` 在 Ubuntu 22.04 建置，包含可手動安裝的執行檔、桌面項目與圖示。檔案對話框使用通常由桌面環境提供的 XDG 桌面入口服務。
 
 發行套件包含英文與繁體中文 PDF 手冊。若要驗證下載檔案，請將其 SHA-256 檢查碼與 `SHA256SUMS.txt` 中的對應項目比較。
 

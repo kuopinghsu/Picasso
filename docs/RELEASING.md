@@ -147,7 +147,7 @@ an automatic rollback mechanism if publication or asset upload fails.
 
 ### Expected release files
 
-Each release contains these 16 files (`<version>` is the Picasso version):
+Each release contains these 18 files (`<version>` is the Picasso version):
 
 ```text
 picasso-<version>-windows-x64.exe
@@ -157,9 +157,11 @@ picasso-<version>-windows-arm64.zip
 picasso-<version>-linux-x64.tar.gz
 picasso-<version>-linux-x64.deb
 picasso-<version>-x86_64.AppImage
+picasso-<version>-x86_64.AppImage.zsync
 picasso-<version>-linux-arm64.tar.gz
 picasso-<version>-linux-arm64.deb
 picasso-<version>-aarch64.AppImage
+picasso-<version>-aarch64.AppImage.zsync
 picasso-<version>-macos-universal.dmg
 picasso-<version>-macos-universal.zip
 picasso-<version>-user-guide.pdf
@@ -172,11 +174,19 @@ The rawler filename uses **rawler's version from Cargo.lock**, not Picasso's
 version. GitHub may also display automatically generated source archives; these
 are separate from the files uploaded by the release workflow.
 
+Each AppImage carries update information pointing at the `.zsync` file of its
+architecture in the latest release, such as
+`gh-releases-zsync|kuopinghsu|Picasso|latest|picasso-*-x86_64.AppImage.zsync`.
+AppImageUpdate reads that file to download only the changed parts of a newer
+AppImage. Pre-releases are not the latest release, so AppImages never update to
+one.
+
 ## Verify the published release
 
 - [ ] The tag, Cargo.toml version and dated changelog heading agree.
 - [ ] All required jobs passed in the tag's CI run.
-- [ ] All twelve application packages, both PDF guides, the rawler source archive
+- [ ] All twelve application packages, both AppImage `.zsync` files, both PDF
+  guides, the rawler source archive
   and SHA256SUMS.txt are available with the expected names.
 - [ ] Downloaded files match their published checksums.
 - [ ] The release notes identify the source commit. **About Picasso** and
